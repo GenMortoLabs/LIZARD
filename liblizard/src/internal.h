@@ -1,0 +1,132 @@
+// Shared by the receivers: image access, the projective map, and the registration result.
+#ifndef OB_INTERNAL_H
+#define OB_INTERNAL_H
+#include "ob.h"
+#include <math.h>
+
+typedef struct { const uint8_t *px; int w, h; float lut[256]; } image_t;
+
+static inline float sample(const image_t *im, float x, float y) {
+  x -= 0.5f; y -= 0.5f;
+  if (x < 0) x = 0; else if (x > im->w - 1.001f) x = im->w - 1.001f;
+  if (y < 0) y = 0; else if (y > im->h - 1.001f) y = im->h - 1.001f;
+  // ai: a NaN coordinate (it passes both clamps) indexes pixel 0, as arm64's fcvtzs and wasm's trunc_sat make it; x86's
+  // ai: cvttss2si gave INT_MIN, an out-of-bounds read (2026-10-03, for the library's x86 builds). fx stays NaN, so the
+  // ai: result is what those platforms already compute.
+  int xi = x >= 0 ? (int)x : 0, yi = y >= 0 ? (int)y : 0;
+  float fx = x - xi, fy = y - yi;
+  const uint8_t *p = im->px + yi * im->w + xi;
+  float a = im->lut[p[0]], b = im->lut[p[1]], c = im->lut[p[im->w]], d = im->lut[p[im->w + 1]];
+  return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+}
+
+#include "simd.h"
+#ifdef OB_SIMD
+// sample() for four points at once: the same operations in the same order, so the same floats.
+// The sixteen pixel reads stay scalar (wasm has no gather); the arithmetic around them is what is shared.
+static inline v128_t sample4(const image_t *im, v128_t x, v128_t y) {
+  const v128_t half = wasm_f32x4_splat(0.5f), zero = wasm_f32x4_splat(0), one = wasm_f32x4_splat(1);
+  x = wasm_f32x4_pmin(wasm_f32x4_pmax(wasm_f32x4_sub(x, half), zero), wasm_f32x4_splat(im->w - 1.001f));
+  y = wasm_f32x4_pmin(wasm_f32x4_pmax(wasm_f32x4_sub(y, half), zero), wasm_f32x4_splat(im->h - 1.001f));
+  const v128_t xi = wasm_i32x4_trunc_sat_f32x4(x), yi = wasm_i32x4_trunc_sat_f32x4(y);
+  const v128_t fx = wasm_f32x4_sub(x, wasm_f32x4_convert_i32x4(xi)), fy = wasm_f32x4_sub(y, wasm_f32x4_convert_i32x4(yi));
+  int32_t idx[4];
+  wasm_v128_store(idx, wasm_i32x4_add(wasm_i32x4_mul(yi, wasm_i32x4_splat(im->w)), xi));
+  const uint8_t *p0 = im->px + idx[0], *p1 = im->px + idx[1], *p2 = im->px + idx[2], *p3 = im->px + idx[3];
+  const float *lut = im->lut;
+  const int w = im->w;
+  const v128_t a = wasm_f32x4_make(lut[p0[0]], lut[p1[0]], lut[p2[0]], lut[p3[0]]), b = wasm_f32x4_make(lut[p0[1]], lut[p1[1]], lut[p2[1]], lut[p3[1]]);
+  const v128_t c = wasm_f32x4_make(lut[p0[w]], lut[p1[w]], lut[p2[w]], lut[p3[w]]), d = wasm_f32x4_make(lut[p0[w + 1]], lut[p1[w + 1]], lut[p2[w + 1]], lut[p3[w + 1]]);
+  const v128_t top = wasm_f32x4_add(a, wasm_f32x4_mul(wasm_f32x4_sub(b, a), fx)), bot = wasm_f32x4_add(c, wasm_f32x4_mul(wasm_f32x4_sub(d, c), fx));
+  return wasm_f32x4_add(wasm_f32x4_mul(top, wasm_f32x4_sub(one, fy)), wasm_f32x4_mul(bot, fy));
+}
+#endif
+
+typedef struct { float h[9]; } homo_t;
+
+static inline void project(const homo_t *H, float x, float y, float *u, float *v) {
+  const float *h = H->h;
+  float w = h[6] * x + h[7] * y + 1;
+  *u = (h[0] * x + h[1] * y + h[2]) / w;
+  *v = (h[3] * x + h[4] * y + h[5]) / w;
+}
+#ifdef OB_SIMD
+// project() for four points at once, the same operations in the same order.
+static inline void project4(const homo_t *H, v128_t x, v128_t y, v128_t *u, v128_t *v) {
+  const float *h = H->h;
+  const v128_t w = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[6]), x), wasm_f32x4_mul(wasm_f32x4_splat(h[7]), y)), wasm_f32x4_splat(1));
+  *u = wasm_f32x4_div(wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[0]), x), wasm_f32x4_mul(wasm_f32x4_splat(h[1]), y)), wasm_f32x4_splat(h[2])), w);
+  *v = wasm_f32x4_div(wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[3]), x), wasm_f32x4_mul(wasm_f32x4_splat(h[4]), y)), wasm_f32x4_splat(h[5])), w);
+}
+#endif
+
+typedef struct { float dx, dy, score; int done; } node_t;
+typedef struct { homo_t H; node_t *nodes; } ob_reg_t;
+
+// ai: State a decode leaves behind or keeps between its stages is each thread's own: a native receiver runs a decoder
+// ai: a thread (any.h). The wasm build has one thread, where this is a plain global.
+#define OB_TLS _Thread_local
+double ob_now_ms(void);
+// Stage timers for the benches (scripts/exp/focus_bench.mjs). A handful of clock reads per frame, left in. The slots by
+// index, as the JS and the native tools read them: 0 luma, 1 binarize, 2 finders, 3 mesh; 4 to 10 the picture's decoder
+// and encoder (sample, detrend, transform, LLR, LDPC, the encoder's transform and the rest of it); 11 to 16 inside the
+// thin frame's finder (points, turn, fit, score, the mark scan, the track read that judges a quad). Since 2026-10-25:
+// slots 4 to 12 were the binary grid code's until then, and every later slot sat 9 higher.
+enum { PROF_LUMA, PROF_BINARIZE, PROF_FINDERS, PROF_MESH,
+       PROF_F_SAMPLE, PROF_F_DETREND, PROF_F_FFT, PROF_F_LLR, PROF_F_LDPC, PROF_F_ENC_FFT, PROF_F_ENC_REST,   // F: the picture's decoder and encoder
+       PROF_FF_POINTS, PROF_FF_TURN, PROF_FF_FIT, PROF_FF_SCORE,   // FF: inside the thin frame's finder
+       PROF_FF_MARKS, PROF_FF_TRACK, PROF_N };   // the mark scan, and the track read that judges a quad
+extern OB_TLS double ob_prof_ms[PROF_N];
+#define PROF(i, stmt) do { double t_ = ob_now_ms(); stmt; ob_prof_ms[i] += ob_now_ms() - t_; } while (0)
+void ob_luma(const uint8_t *rgba, int n, uint8_t *out);
+void ob_image_init(image_t *im, const uint8_t *px, int w, int h, float gamma);
+
+// Finders, orientation, homography, then the mark mesh. mesh = 0 leaves every mark at zero
+// displacement, which is what a single global homography gives. Returns 1 when registered.
+int ob_acquire(const ob_layout_t *L, const image_t *im, int mesh, ob_reg_t *reg, ob_result_t *res);
+// The same when the symbol may be any of several layouts, which differ only in modules a side: the marks are
+// scanned once and each layout's spacing and track tried on them, the first first. *which is the one that registered.
+int ob_acquire_any(const ob_layout_t *const *Ls, int nL, const image_t *im, int mesh, ob_reg_t *reg, ob_result_t *res, int *which);
+// The same with the quad already found: the scan, the fit and the track scoring are skipped and the rest is
+// shared. quad is eight floats, image pixels, in the order find_frame reports.
+int ob_acquire_quad(const ob_layout_t *L, const image_t *im, int mesh, ob_reg_t *reg, ob_result_t *res,
+                    const float *quad, int orient, float score);
+int ob_test_mesh_tables(const ob_layout_t *L, int32_t *dims, float *nodeX, float *nodeY, uint8_t *kind, int32_t *mark);
+int ob_thin_fmt_plan(const ob_layout_t *L, int cells, float *pts, int32_t *meta, int32_t *widx);
+int ob_thin_score_plan(const ob_layout_t *L, float *pts, int32_t *meta, int32_t *signs);
+int ob_test_thin_score(const ob_layout_t *L, const uint8_t *img, int w, int h, const float *centres, int hyp, int merged, float *out);
+extern OB_TLS float ob_finder_info[8];
+// Mark geometry in modules, for a finder measured outside this file. See acquire.c.
+void ob_mark_geom(const ob_layout_t *L, float *out);
+void ob_reg_free(ob_reg_t *reg);
+// Module coordinates to image px through the homography and the mesh.
+void ob_map_point(const ob_layout_t *L, const ob_reg_t *reg, float mx, float my, float *u, float *v);
+// ai: The anchors (acquire.c, SPEC 6.13): a 7 x 7 grid's square side in modules (B / 32), and anchor i's first module
+// ai: along either axis; OB_ANCH_TS template points across one. OB_ANCH_PX_MIN: the drive pixels a square needs a side
+// ai: for its light middle (a quarter of the half-side) to land on a pixel, which sets a floor under pxm (focus.c init):
+// ai: at 4 (the 256 picture in the 64 and 128 rings at ceil(n / span)) a square paints as a dark dot.
+// ai: OB_ANCH_MIN: the anchors found that the geometry takes, at least the lens model's most terms (acquire.c LENS_P,
+// ai: 11): their 2n readings then leave as many as the model takes, so its robust rule can judge one. Fewer, a false reading (a
+// ai: blurred square's neighbourhood at 0.6) is fitted exactly and bends the map (the bench's 64 ring at 2.7 camera px
+// ai: a module, 8 found, one 2.3 modules off: 0 blocks of 23, 16 without the anchors).
+enum { OB_ANCH_K = 7, OB_ANCH_TS = 16, OB_ANCH_PX_MIN = 6, OB_ANCH_MIN = 12 };
+enum { OB_ANCH_MARGIN = 2 };   // ai: the samples erased round an anchor's square
+extern OB_TLS int ob_anch_found;   // ai: the anchors the last acquisition counted, -1 where no mesh was made (acquire.c)
+int ob_anchor_side(const ob_layout_t *L);
+int ob_anchor_m0(const ob_layout_t *L, int i);
+// The thin frame's format word as soft values, q[side * cells + i] in -0.5 .. 0.5, positive for
+// dark. Returns 0 where the border has no contrast. See fmt.h.
+int ob_thin_read_fmt(const ob_layout_t *L, const image_t *im, const ob_reg_t *reg, float *q, int cells);
+// A block of a regular grid in module coordinates: see acquire.c.
+void ob_sample_grid(const ob_layout_t *L, const image_t *im, const ob_reg_t *reg, float mx0, float my0, float step, int x0, int nx, int y0, int ny, float *out, int pitch);
+// What focus_acquire left for focus_finish (focus.h), for a caller that has to sample somewhere else. Valid
+// until the matching focus_finish takes it up.
+struct focus_s;
+const image_t *focus_held_image(const struct focus_s *f);
+const ob_reg_t *focus_held_reg(const struct focus_s *f);
+
+// The block CRC (test/vectors.mjs) and the decline gate (the GPU back half's is held to it), from src/focus.c.
+uint32_t ob_test_crc_hash(const uint8_t *p, int n);
+int ob_test_crc_gate(const struct focus_s *f, const float *est, float *blk_est, float *bar, uint8_t *declined);
+
+#endif

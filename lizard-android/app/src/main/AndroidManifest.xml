@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ai: The receiver app. configChanges: a rotation keeps the activity, the camera session
+     and the receiver; Compose relays out. singleTop: the launcher
+     shortcut (dynamic, MainActivity.publishShortcut: a static one is started with FLAG_ACTIVITY_CLEAR_TASK) and am
+     start with the extra screen=receive reach the running activity (onNewIntent). Received files land in Downloads
+     through MediaStore (Received.kt; no permission from Android 10); the FileProvider hands one Downloads did not take
+     (in the receive session's data folder) to the app that opens or shares it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- ai: the PC decoder's stream (2026-10-27; liblizard/core/rx/stream.h): a TCP server and a UDP beacon on the
+         phone's own links to a PC (USB tethering, Wi-Fi), the only sockets the app opens -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
+    <uses-feature android:name="android.hardware.usb.accessory" android:required="false" />
+    <application
+        android:label="${appLabel}"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:theme="@style/Theme.Lizard">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- ai: files shared to LIZARD from another app open Send with them (2026-10-01, MainActivity.handle; several
+                 since 2026-10-16, bundled as one transfer) -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <!-- ai: the PC's USB accessory (2026-10-27, PcLink; liblizard/core/cam/aoa.cpp): Android starts
+                 Receive for it with the accessory's permission given -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" android:resource="@xml/accessory_filter" />
+        </activity>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

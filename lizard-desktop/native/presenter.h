@@ -1,0 +1,105 @@
+// ai: The desktop sender's presenter (2026-10-04; its stack, 2026-10-03, for portability and vsync): the FIFO loop of the
+// ai: test sender lizard_present (2026-10-03 to 2026-10-25), which held every picture exactly one refresh on the 4090, as
+// ai: a class over the window it is handed (the app's AWT canvas through JAWT).
+// ai: One thread of its own does every Vulkan and window call: it opens its own X display connection on X11 (a window id
+// ai: is good on any connection, and Xlib stays off AWT's thread), makes the window's surface and a FIFO swapchain, and
+// ai: at every refresh clears the area white and blits the picture on screen into it, centred; a new picture is taken
+// ai: from the Sender's ring (core/tx; Sender::takeSlot, no copy) and expanded on the device into a slot image when one
+// ai: is due, since 2026-10-07 (each picture held round(refresh / fps)
+// ai: refreshes where that is whole within 1%, else a grid). Vulkan is reached through its own function tables (from its
+// ai: own instance and device), never through volk's globals, which the GPU painter's wg reloads for its instance.
+#pragma once
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+
+namespace wg { struct DeviceExtras; }
+
+namespace lizard {
+
+class Sender;
+
+// ai: The window the code goes in: one of them (X11: the drawable's id; Windows: the HWND; macOS: a CAMetalLayer over
+// ai: the canvas, macos.h).
+struct PresentTarget { unsigned long x11Window = 0; void* hwnd = nullptr; void* metalLayer = nullptr; };
+// ai: the window manager's window around an X11 window (the ancestor with WM_STATE), else the window itself
+unsigned long x11TopLevel(unsigned long window);
+// ai: the RandR output showing the centre of an X11 window ("DP-0"), "" where none does or off X11: the monitor a
+// ai: Fullscreen press takes (PresentOptions::direct)
+std::string x11OutputAt(unsigned long window);
+// ai: the window manager's own full screen for its window (x11TopLevel's), asked (true where the request went) and read
+bool x11Fullscreen(unsigned long top, bool on);
+bool x11IsFullscreen(unsigned long top);
+// ai: Windows' full screen for a top-level window (2026-10-24), as Windows apps make it: its frame and caption off and
+// ai: the monitor covered, then its style and placement (maximized or not) given back; set (false where it could not
+// ai: be: not Windows) and read. The window's own thread receives the changes; these may be called from any.
+bool win32Fullscreen(void* hwnd, bool on);
+bool win32IsFullscreen(void* hwnd);
+
+struct PresentOptions {
+  int fps = 60;            // ai: pictures a second asked; each held round(refreshHz / fps) refreshes where that is whole
+                           // ai: within 1%, else a grid
+  double size = 1.0;       // ai: the code's share of the area's room, 0.25 to 1 (the web's #size)
+  double edge = 0;         // ai: light kept at each edge of the area past the frame's own, a share of the frame's
+                           // ai: height (the Margin past the codec's quiet zone, SendState.kt), 0 to 1
+  bool vsync = false;      // ai: the monitor held at a refresh fps divides while presenting (setVsync)
+  std::function<void(const std::string&)> log;
+  std::string csv;         // ai: a CSV line a present into this file, a UTF-8 path (LIZ_PRESENT_CSV, tx_jni.cpp), "" none
+  // ai: The display itself (2026-10-31): the named output ("DP-0"; "" none) taken from the desktop for as long as the
+  // ai: presenter runs, the code alone on it, presented FIFO on the display's own surface (VK_KHR_display) at a mode of
+  // ai: its size the asked rate divides; X11 through VK_EXT_acquire_xlib_display. Where it cannot be taken (no such
+  // ai: output, the extension missing, the server refusing, another system) the window as before, and the log says why.
+  std::string direct;
+  bool mark = false;       // ai: present_check's: each present's picture count drawn in the image's top-left corner,
+                           // ai: 24 squares of 8 px in a row (12 bits, the count mod 4096, then their complement; dark
+                           // ai: a one), for a tool reading the screen back to say which picture each refresh showed
+};
+
+class Presenter {
+ public:
+  // ai: What the sender's device must carry for this presenter (2026-10-07: the code is shown from the painter's
+  // ai: device, one GPU for the frames and the presents): the window surface's instance extensions, the swapchain,
+  // ai: present_id and present_wait, a queue family that draws. Passed to Sender::prepareGpu before start.
+  static const wg::DeviceExtras& deviceExtras();
+  // ai: senderLock serializes every Sender call: take() here, configure() on the UI's thread (tx_jni.cpp holds it). The
+  // ai: sender (whose device this presents from: Sender::device(), made by prepareGpu with deviceExtras()) and the
+  // ai: window must outlive the presenter (stop it first). Null, with why in err, where it cannot start.
+  static std::unique_ptr<Presenter> start(const PresentTarget& target, Sender* sender, std::mutex* senderLock,
+                                          const PresentOptions& opt, std::string* err);
+  void setFps(int fps);
+  // ai: VSync (2026-10-23): where the monitor holding the window refreshes at a rate fps does not divide (165 Hz at 60:
+  // ai: pictures of 3, 3, 2 and 3 refreshes), its mode moved to one at the same size it does, the nearest 60 Hz; put
+  // ai: back when VSync goes off, fps divides the monitor's own refresh again, the window leaves that monitor, or the
+  // ai: presenter stops. X11 (XRandR), Windows (a CDS_FULLSCREEN mode, the system's to undo at exit) and macOS (the
+  // ai: main display, for this app alone); a mode left set by a killed process on X11 stays until the desktop sets one.
+  void setVsync(bool on);
+  void setSize(double size, double edge);
+  // ai: Paused: the last picture stays (no new pictures taken; presents go on a few times a second, uncounted).
+  void setPaused(bool on);
+  // ai: The last second's window, JSON (2026-10-31 beside the fields below: timing, true where the presents carry their
+  // ai: target refreshes (VK_EXT_present_timing) and held, late and errMs are the display's own first-pixel times;
+  // ai: late, pictures on screen a refresh or more after their target; slips, the schedule moved to the display's
+  // ai: times after late pictures in a row; errMs, the largest first-pixel time off its target, ms; direct, the
+  // ai: output taken, "" none): shownFps (fresh pictures on screen a second), presentsPerSec, hz (the refresh
+  // ai: measured, else the mode's, else 60), modeHz (XRandR's for the monitor holding the window, 0 unknown), held
+  // ai: ({"refreshes": pictures}), missed (refreshes the loop missed), behind (pictures due and not yet painted),
+  // ai: queued and queuedMin (presents between one submitted and the last on screen, the mean and the least: the
+  // ai: chain's slack; 0 without present_wait), images (the swapchain's), paused, surface and frame ("WxH": the
+  // ai: swapchain's, the picture on screen's), presentWait, device, error, secs (the window's length), vsync and
+  // ai: modeFrom (the monitor's refresh before VSync moved it, 0 where it did not).
+  std::string stats();
+  // ai: Stops and joins (again a no-op); the destructor calls it.
+  void stop();
+  ~Presenter();
+  Presenter(const Presenter&) = delete;
+  Presenter& operator=(const Presenter&) = delete;
+
+  struct Impl;
+
+ private:
+  explicit Presenter(std::unique_ptr<Impl> p);
+  std::unique_ptr<Impl> p_;
+};
+
+}  // namespace lizard

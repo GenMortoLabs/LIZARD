@@ -1,0 +1,233 @@
+// ai: The desktop app (2026-10-03; Home, Send and Receive since 2026-10-25): a native sender with the web sender's UI,
+// ai: painting on the CPU or on Vulkan, and a receiver reading a camera into the native decoders. Its
+// ai: stack, for portability and vsync: Kotlin on the JVM, the UI in Compose Multiplatform,
+// ai: the code drawn by the native presenter (lizard-desktop/native/presenter.cpp: its own Vulkan swapchain, FIFO, on the code
+// ai: area's AWT canvas, its window found through JAWT), the encoders liblizard/core's (as the Android app's) over JNI
+// ai: (lizard-desktop/native).
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.security.MessageDigest
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+
+plugins {
+    kotlin("jvm") version "2.1.20"
+    id("org.jetbrains.kotlin.plugin.compose") version "2.1.20"
+    id("org.jetbrains.compose") version "1.8.2"
+    // ai: the shared UI's (../lizard-ui, included as :lizard-ui by settings.gradle.kts): a Kotlin Multiplatform library with an
+    // ai: Android target beside this app's, which this build configures and never builds (no Android SDK needed here)
+    kotlin("multiplatform") version "2.1.20" apply false
+    id("com.android.library") version "8.11.0" apply false
+}
+
+kotlin { jvmToolchain(17) }
+
+dependencies {
+    // ai: the look both apps share: the theme, the icons and the parts drawn alike (../lizard-ui)
+    implementation(project(":lizard-ui"))
+    implementation(compose.desktop.currentOs)
+    implementation(compose.material3)
+}
+
+// ai: What the app carries as resources: the native library (lizard-desktop/build/native, CMake on native/) and the GPU
+// ai: tree (liblizard/out; ../lizard-android/build.sh gen): the painter's kernels and tables (setup/send.json, its TAB
+// ai: blob, spv/send_*.spv) and since the receiver (2026-10-25) the decoder's beside them, the Android app's LizardAssets
+// ai: rule: every setup, every blob, every module but the raw ones (about 17 MB). Native.kt extracts them at start to a
+// ai: folder named by their hash.
+val bundled = layout.buildDirectory.dir("bundled")
+val liblizardOut = rootDir.resolve("../liblizard/out")
+val hostOs = System.getProperty("os.name").lowercase()
+val onMac = hostOs.contains("mac")
+val nativeLib = rootDir.resolve("build/native/" + when {
+    hostOs.contains("win") -> "lizard_desktop.dll"
+    onMac -> "liblizard_desktop.dylib"
+    else -> "liblizard_desktop.so"
+})
+// ai: macOS (2026-10-23): MoltenVK, Vulkan over Metal, carried beside the library (its rpath is the library's own
+// ai: folder): build/native/libMoltenVK.dylib, from a MoltenVK release (the desktop workflow fetches it)
+val moltenVk = rootDir.resolve("build/native/libMoltenVK.dylib")
+// ai: the TAB blob send.json names (the paint's codes); a tree without liblizard/out or the native library (a fresh clone) still
+// ai: configures, and bundleInputs says what to run (a Sync with no files is skipped, its own actions too)
+val sendJson = liblizardOut.resolve("setup/send.json")
+val tab = if (sendJson.isFile) Regex("\"blob\"\\s*:\\s*\"([^\"]+)\"").find(sendJson.readText())?.groupValues?.get(1) else null
+// ai: the decoder's six variants (liblizard/core/dec/setup.cpp variantsFor: int8, f16, f32, each with and without
+// ai: subgroups), every one shipped whole: a variant missing a module fails at the receiver's create
+val decoderSetups = listOf("int8-sg", "int8", "f16-sg", "f16", "f32-sg", "f32")
+val bundleInputs by tasks.registering {
+    doLast {
+        if (!nativeLib.isFile) throw GradleException("no $nativeLib: cmake -S native -B build/native && cmake --build build/native")
+        if (onMac && !moltenVk.isFile) throw GradleException("no $moltenVk: libMoltenVK.dylib from a MoltenVK release (MoltenVK/dynamic/dylib/macOS)")
+        if (tab == null) throw GradleException("no GPU painter's files in ${liblizardOut.normalize()}: ../lizard-android/build.sh tools, then gen")
+        decoderSetups.filter { !liblizardOut.resolve("setup/$it.json").isFile }.let {
+            if (it.isNotEmpty()) throw GradleException("no decoder setup ${it.joinToString()} in ${liblizardOut.normalize()}: ../lizard-android/build.sh tools, then gen")
+        }
+    }
+}
+val bundle by tasks.registering(Sync::class) {
+    dependsOn(bundleInputs)
+    into(bundled)
+    from(nativeLib) { into("lizard/native") }
+    if (onMac) from(moltenVk) { into("lizard/native") }
+    from(liblizardOut) {
+        include("setup/*.json", "blobs/*.bin", "spv/*.spv")
+        exclude("spv/*.raw.spv")
+        into("lizard/assets")
+    }
+}
+// ai: the files' list, which Native.kt reads (a jar's folders cannot be listed), its first line "hash <h>": the folder
+// ai: Native.load extracts them to, the first 16 hex of SHA-256 over each name (UTF-8) then its bytes in the list's
+// ai: order. Made here since 2026-10-25, the same hash load() made at every launch before (the same folder for the
+// ai: same files), so a launch reads none of the bundle once that folder is whole (load() read and hashed all of it at
+// ai: every launch: 70 MB with a debug library, 22 MB with a release one).
+bundle.configure {
+    doLast {
+        val root = bundled.get().asFile.resolve("lizard")
+        val names = root.walkTopDown().filter { it.isFile && it.name != "files.txt" }.map { it.relativeTo(root).invariantSeparatorsPath }.toList()
+        val md = MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(1 shl 20)
+        for (n in names) {
+            md.update(n.toByteArray())
+            root.resolve(n).inputStream().use { s -> while (true) { val k = s.read(buf); if (k < 0) break; md.update(buf, 0, k) } }
+        }
+        val hash = md.digest().joinToString("") { "%02x".format(it) }.take(16)
+        root.resolve("files.txt").writeText((listOf("hash $hash") + names).joinToString("\n"))
+    }
+}
+// ai: the About line's build time (the web's about(): "Build 2026-10-04 12:00 UTC"), outside the bundle so the native
+// ai: files' hash, and the folder Native.kt extracts them to, stays the same from one build to the next
+val buildInfo by tasks.registering {
+    val dir = layout.buildDirectory.dir("buildinfo")
+    outputs.dir(dir)
+    outputs.upToDateWhen { false }
+    doLast {
+        dir.get().asFile.resolve("lizard-build.txt").apply { parentFile.mkdirs() }
+            .writeText(Instant.now().truncatedTo(ChronoUnit.SECONDS).toString())
+    }
+}
+// ai: The Kotlin binding's sources (liblizard/bindings/kotlin: dev.lizard.Session, the receive session; its natives are
+// ai: this app's library's, registered as it loads, so the binding's own liblizard is never loaded here).
+// ai: liblizard/kotlin's plain-JVM code (Tar.kt, Readout.kt, Pick.kt) comes compiled with the shared UI (:lizard-ui).
+sourceSets.main {
+    resources.srcDir(bundle); resources.srcDir(buildInfo)
+    kotlin.srcDir(layout.projectDirectory.dir("../liblizard/bindings/kotlin/lizard/src/main/kotlin"))
+}
+
+// ai: after packageDeb: the native library's own Depends added (packaging/deb-deps.sh says which and why)
+val debDeps by tasks.registering(Exec::class) {
+    commandLine("sh", project.file("packaging/deb-deps.sh").path, layout.buildDirectory.dir("compose/binaries/main/deb").get().asFile.path)
+}
+tasks.matching { it.name == "packageDeb" }.configureEach { finalizedBy(debDeps) }
+
+// ai: The packages' license text: the repository's LICENSE and NOTICE, then the licenses of the vendored code compiled into
+// ai: the native library and of the fonts the window draws in, each under its name (Wirehair's BSD 3-Clause asks for its notice wherever binaries go)
+abstract class LicenseText : DefaultTask() {
+    @get:Input abstract val titles: ListProperty<String>
+    @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val parts: ConfigurableFileCollection
+    @get:OutputFile abstract val out: RegularFileProperty
+    @TaskAction fun write() {
+        val rule = "\n\n" + "-".repeat(78) + "\n\n"
+        out.get().asFile.writeText(titles.get().zip(parts.files.toList()).joinToString(rule) { (t, f) ->
+            (if (t.isEmpty()) "" else "$t\n\n") + f.readText().trimEnd() } + "\n")
+    }
+}
+val licenseText by tasks.registering(LicenseText::class) {
+    val lib = rootDir.resolve("../liblizard")
+    titles.set(listOf("", "", "Wirehair (liblizard/vendor/wirehair)", "volk (liblizard/core/third_party/volk)",
+        "JSON for Modern C++ (liblizard/core/third_party/json.hpp)", "BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option",
+        "Skia (in Compose's skiko, which draws the window)", "Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1",
+        "JetBrains Mono (liblizard/vendor/fonts/jetbrains-mono), under the SIL Open Font License 1.1"))
+    parts.from(rootDir.resolve("../LICENSE"), rootDir.resolve("../NOTICE"), lib.resolve("vendor/wirehair/LICENSE"),
+        lib.resolve("core/third_party/volk/LICENSE.md"), lib.resolve("core/third_party/json.LICENSE.MIT"), lib.resolve("vendor/blake3/LICENSE_A2"),
+        project.file("packaging/skia.LICENSE"), lib.resolve("vendor/fonts/inter/LICENSE.txt"), lib.resolve("vendor/fonts/jetbrains-mono/OFL.txt"))
+    // ai: macOS: MoltenVK's (Apache 2.0), carried beside the library; its release's LICENSE at build/native
+    if (onMac) { titles.add("MoltenVK (Vulkan over Metal, macOS)"); parts.from(rootDir.resolve("build/native/MoltenVK.LICENSE")) }
+    out.set(layout.buildDirectory.file("license/copyright.txt"))
+}
+
+// ai: The packages' version (2026-10-23): the release's, the Android app's versionCode as the last number (1.0.4 for
+// ai: 0.4), since an MSI upgrades only to a higher version and a macOS bundle's must start at 1 or more; the releases'
+// ai: files carry the versionName (lizard-android/app/build.gradle.kts, the one place it is set).
+val androidGradle = rootDir.resolve("../lizard-android/app/build.gradle.kts").readText()
+val releaseCode = Regex("versionCode\\s*=\\s*(\\d+)").find(androidGradle)?.groupValues?.get(1) ?: "0"
+val releaseName = Regex("versionName\\s*=\\s*\"([^\"]+)\"").find(androidGradle)?.groupValues?.get(1) ?: "0"
+val releaseVersion by tasks.registering {
+    doLast { println(releaseName) }
+}
+
+// ai: macOS: the bundle signed ad hoc once jpackage has made it (no developer identity): a downloaded app whose
+// ai: signature is broken opens as "damaged", one signed ad hoc as an unverified developer's, which System Settings,
+// ai: Privacy & Security, lets through
+tasks.matching { it.name == "createDistributable" || it.name == "createReleaseDistributable" }.configureEach {
+    if (onMac) doLast {
+        outputs.files.files.flatMap { d -> d.walkTopDown().maxDepth(2).filter { it.name.endsWith(".app") }.toList() }.forEach { app ->
+            val code = ProcessBuilder("codesign", "--force", "--deep", "--sign", "-", app.path).inheritIO().start().waitFor()
+            if (code != 0) throw GradleException("codesign of ${app.name} exited $code")
+        }
+    }
+}
+
+// ai: macOS: the license text in the app's resources (Contents/app/resources/LICENSES.txt)
+val appLicense by tasks.registering(Copy::class) {
+    from(licenseText.flatMap { it.out }) { rename { "LICENSES.txt" } }
+    into(layout.buildDirectory.dir("appres/macos"))
+}
+tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(appLicense) }
+
+compose.desktop {
+    application {
+        mainClass = "dev.lizard.desktop.MainKt"
+        jvmArgs += listOf("-Dsun.java2d.uiScale.enabled=true")
+        // ai: The packages (2026-10-04): jpackage puts a Java runtime
+        // ai: in each, jlink's cut of the build JDK to the modules the app uses (suggestRuntimeModules: java.prefs the kept
+        // ai: settings, jdk.unsupported Compose's Skia, java.instrument), so nothing needs Java installed.
+        // ai: `./gradlew packageDeb` (debDeps after it adds the native library's own needs to Depends).
+        nativeDistributions {
+            targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)
+            // ai: the app's name as a user reads it: LIZARD, in capitals (the launcher bin/LIZARD, the menu entry)
+            packageName = "LIZARD"
+            packageVersion = "1.0.$releaseCode"
+            description = "LIZARD"
+            vendor = "LIZARD"
+            // ai: the repository's license, NOTICE and the vendored code's licenses (licenseText), which jpackage writes
+            // ai: into the package (the .deb's share/doc/copyright said "License: Unknown" without them; the MSI shows it
+            // ai: as its license page). macOS: inside the app as LICENSES.txt (appLicense), since jpackage makes a
+            // ai: license file the .dmg's click-through agreement
+            copyright = "Copyright 2026 The LIZARD authors"
+            if (onMac) appResourcesRootDir.set(layout.buildDirectory.dir("appres")) else licenseFile.set(licenseText.flatMap { it.out })
+            modules("java.instrument", "java.prefs", "jdk.unsupported")
+            linux {
+                packageName = "lizard-sender"
+                // ai: the project's public address (GitHub's private one for its account), never a person's email
+                debMaintainer = "262231965+FNWTalon@users.noreply.github.com"
+                iconFile.set(project.file("packaging/lizard.png"))
+                shortcut = true
+                menuGroup = "Utility"
+                appCategory = "utils"
+            }
+            // ai: Windows (2026-10-23): an MSI installed for the user alone (no administrator), its folder chosen, a
+            // ai: Start menu entry and a desktop shortcut; one upgrade code for every release, so a newer one replaces it
+            windows {
+                iconFile.set(project.file("packaging/lizard.ico"))
+                menuGroup = "LIZARD"
+                shortcut = true
+                dirChooser = true
+                perUserInstall = true
+                upgradeUuid = "5b0c1d6e-7f4a-4a7e-9a52-1c2f0e9d6b31"
+            }
+            // ai: macOS (2026-10-23): Apple Silicon, the mark on Apple's rounded body (packaging/lizard.icns). The
+            // ai: receiver's camera (2026-10-25): macOS ends an app that asks for the camera with no
+            // ai: NSCameraUsageDescription in its Info.plist; the sentence is the one the Android app shows. Signed ad
+            // ai: hoc (below), with no hardened runtime, the app needs no camera entitlement; a hardened runtime would
+            // ai: add com.apple.security.device.camera.
+            macOS {
+                bundleID = "dev.lizard.sender"
+                iconFile.set(project.file("packaging/lizard.icns"))
+                dockName = "LIZARD"
+                appCategory = "public.app-category.utilities"
+                minimumSystemVersion = "12.0"
+                infoPlist {
+                    extraKeysRawXml = "<key>NSCameraUsageDescription</key><string>LIZARD needs the camera to read the code on the other screen.</string>"
+                }
+            }
+        }
+    }
+}

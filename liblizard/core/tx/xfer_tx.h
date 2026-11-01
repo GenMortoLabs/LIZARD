@@ -1,0 +1,65 @@
+// ai: The transfer's sending end (2026-10-01): liblizard/sim/xfer.mjs XferSender ported name for name, over
+// ai: liblizard/src/xfer.c (the chunks' chaining values, their root, the header and the manifest) and Wirehair
+// ai: through the web's shim (liblizard/wirehair/shim.cpp), as the receiving end (rx/xfer_rx.h) takes them. A file
+// ai: goes in 2^chunk_log2 chunks (4 MiB), each zstd-compressed on its own where that is shorter (2026-10-05,
+// ai: liblizard/zstd/shim.c, the parameters pinned so the frame is the JS sender's), a fountain over each chunk's sent
+// ai: bytes; the header every other control slot and the manifest (each chunk's chaining value, bytes as sent and seed
+// ai: attempt) between, the control cycle within an eighth of a lap; data blocks by the schedule, shuffled in a frame
+// ai: by a generator seeded by the frame count. The same ids and bytes as the JS sender for the same file
+// ai: (tools/tx_check.cpp holds it to one).
+#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+
+extern "C" {
+#include "xfer.h"
+}
+
+namespace lizard {
+
+class XferTx {
+ public:
+  // ai: data: the file's bytes, alive as long as this (the app maps the file); name and type as the header carries them
+  // ai: (a name cut to 255 bytes at a character, a type kept only where it is printable ASCII of at most 158).
+  // ai: Throws std::runtime_error where the file cannot go (too many chunks, a chunk Wirehair seeded apart).
+  XferTx(const uint8_t* data, size_t length, const std::string& name, const std::string& type, int chunkLog2 = 22);
+  ~XferTx();
+  XferTx(const XferTx&) = delete;
+  XferTx& operator=(const XferTx&) = delete;
+
+  // ai: The ids of the next frame of n blocks (advances the schedule: a frame asked for twice is two frames).
+  void frameIds(uint32_t* out, int n);
+  // ai: What block `id` carries: 472 bytes into out.
+  void block(uint32_t id, uint8_t* out) const;
+
+  uint32_t chunks() const { return chunks_; }
+  uint32_t lap() const { return lap_; }           // ai: data blocks a lap of the schedule
+  uint64_t sentBytes() const { return sentBytes_; }   // ai: the file's bytes as they go (every chunk's frame, or its own)
+  const uint8_t* root() const { return root_; }   // ai: 32 bytes, b3sum's answer for the file
+  std::string rootHex() const;
+
+ private:
+  uint32_t next();   // ai: the schedule's next data id (sim/xfer.mjs Schedule.next)
+
+  size_t size_;
+  uint32_t chunks_ = 0;
+  uint64_t sentBytes_ = 0;
+  std::vector<size_t> len_;      // ai: a chunk's own bytes
+  std::vector<uint32_t> sent_;   // ai: its bytes as sent: its zstd frame, or its own
+  std::vector<uint8_t> seed_;    // ai: its Wirehair seed attempt (0 where K is 1)
+  std::vector<uint32_t> K_;      // ai: Wirehair source blocks a chunk, of the sent bytes (1: sent unfountained)
+  std::vector<void*> enc_;       // ai: a chunk's encoder, null where K is 1
+  std::map<uint32_t, std::vector<uint8_t>> one_;   // ai: the sent bytes of a chunk of one block
+  uint8_t root_[32]{}, header_[XFER_PAYLOAD]{};
+  std::vector<std::vector<uint8_t>> manifest_;
+  // ai: the schedule (Schedule): symbols a chunk sent, the round's place, each chunk's weight a round and accumulator
+  std::vector<uint32_t> sym_, w_, acc_;
+  uint32_t i_ = 0, max_ = 0, lap_ = 0;
+  // ai: the control cycle: how many data blocks between control slots, since the last, which control is next
+  uint32_t every_ = 1, since_ = UINT32_MAX, ctl_ = 0, frame_ = 0;
+};
+
+}  // namespace lizard
