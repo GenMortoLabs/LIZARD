@@ -152,7 +152,7 @@ private fun ReceivedPanel(h: ReceiveHost, modifier: Modifier, column: Dp?) {
 
 // ai: The rail's squares (the web's #rail): the heat's red triangle above the play while the phone throttles, play or
 // ai: pause, the rate and the percent while a file or the test stream is read; once the file is kept a green check (or
-// ai: the heat's triangle) and the file's actions that have an icon
+// ai: the heat's triangle) alone: its actions are the camera area's tiles (ReceivedPanel), not the rail's (2026-11-07)
 @Composable
 private fun RailSquares(h: ReceiveHost) {
     val kept = h.kept
@@ -169,7 +169,6 @@ private fun RailSquares(h: ReceiveHost) {
     } else {
         if (hot != null && err == null) AlertSquare(hot.text)
         else Square { Icon(Icons.check, contentDescription = "Received ${h.keptName}", Modifier.size(24.dp), tint = Good) }
-        for (a in kept) a.icon?.let { i -> Square { IconBtn(i, "${a.label} ${h.keptName}") { a.run() } } }
     }
 }
 

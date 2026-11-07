@@ -571,7 +571,7 @@ const SIZES = [
   const s = await chrome("file", [`--use-file-for-fake-video-capture=${path}`]);
   await size(s, SIZES[0]);
   await navigate(s, `${BASE}?auto&seen`);
-  const STATE = `(() => { const $ = (id) => document.getElementById(id); return { dt: ${DT}, why: $("why").textContent, lab: $("lab").textContent, deliver: !$("done").hidden, doneName: $("doneName").textContent, doneTitle: $("doneTitle").innerText, clear: !!$("clear"), open: !$("open").hidden && $("open").classList.contains("primary"), go: $("go").textContent, goSolid: $("go").classList.contains("primary"), save: $("save").textContent, href: $("save").href, download: $("save").download,  railRate: $("railRate").textContent, railPct: $("railPct").hidden ? null : $("railPct").textContent, railDone: !$("railDone").hidden && !$("railOpen").hidden && !$("railSave").hidden, railOff: $("railCam").classList.contains("off") }; })()`;
+  const STATE = `(() => { const $ = (id) => document.getElementById(id); return { dt: ${DT}, why: $("why").textContent, lab: $("lab").textContent, deliver: !$("done").hidden, doneName: $("doneName").textContent, doneTitle: $("doneTitle").innerText, clear: !!$("clear"), open: !$("open").hidden && $("open").classList.contains("primary"), go: $("go").textContent, goSolid: $("go").classList.contains("primary"), save: $("save").textContent, href: $("save").href, download: $("save").download,  railRate: $("railRate").textContent, railPct: $("railPct").hidden ? null : $("railPct").textContent, railDone: !$("railDone").hidden, railActs: [...document.querySelectorAll("#rail button[title], #rail a[title]")].map((b) => b.title).filter((t) => t !== "Home" && !/^(Start|Stop|Expand|Collapse|Help)/.test(t)), railOff: $("railCam").classList.contains("off") }; })()`;
   await until(s, `(${DT})?.name === ${JSON.stringify(NAME)} && (${DT}).frac > 0.4`, 60000, "Receiving, two fifths of the way");
   const a = await evaluate(s, STATE);
   await screenshot(s, `${OUT}/recv-phone-portrait-receiving.png`);
@@ -589,7 +589,7 @@ const SIZES = [
   check(a.railPct === a.dt?.end, `receiving: the rail's percent "${a.railPct}" as the block's "${a.dt?.end}"`);
   await until(s, `!document.getElementById("done").hidden`, 60000, "Received");
   const b = await evaluate(s, STATE);
-  check(b.railOff && b.railDone && b.railRate === "" && b.railPct === null, `received: the rail's play square, the green check, Open and Save, no rate or percent`);
+  check(b.railOff && b.railDone && !b.railActs.length && b.railRate === "" && b.railPct === null, `received: the rail's play square and the green check alone, no Open or Save there (${b.railActs.join(", ") || "none"}), no rate or percent`);
   await screenshot(s, `${OUT}/recv-phone-portrait-received.png`);
   const got = await evaluate(s, `fetch(document.getElementById("save").href).then((r) => r.arrayBuffer()).then((x) => { const u = new Uint8Array(x); let v = 7, same = u.length === ${LEN}; for (let i = 0; same && i < u.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; same = u[i] === ((v >>> 16) & 255); } return { n: u.length, same }; })`);
   console.log(`     received: ${JSON.stringify(b.dt)}, "${b.save}" ${b.href.slice(0, 5)}... as ${b.download}`);

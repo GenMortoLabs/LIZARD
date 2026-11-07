@@ -235,8 +235,8 @@ function showState() {
   // ai: the collapsed rail (recv.html #rail): the camera's pause or play, the last second's rate while a file or the
   // ai: test stream is read (its figure over its unit), under it the share of a file in while one comes (its percent over
   // ai: "%", 2026-10-09), and once the file is in a green check in the rate's square (a
-  // ai: mark, no action), then Open (Feather's external-link) and Save (its download), the deliver row's own actions, in
-  // ai: black (2026-10-05; the green tick opened the file until then)
+  // ai: mark, no action) alone: Open and Save are the card's tiles in the camera's place, not the rail's (2026-11-07;
+  // ai: the rail had them too from 2026-10-05, the green tick opening the file before)
   // ai: the red triangle first while something went wrong, its words its name (the apps' AlertSquare)
   $("railAlert").hidden = !ui.err; $("railAlert").title = ui.err; $("railAlert").setAttribute("aria-label", ui.err || "Error");
   const cam = $("railCam");
@@ -247,7 +247,7 @@ function showState() {
   const coming = on && h && !offered && !testing && frac != null;   // ai: the receiving line's own fraction, none under an error
   $("railPct").innerHTML = coming ? `${Math.floor(100 * frac)}<small>%</small>` : "";
   $("railPct").hidden = !coming;
-  $("railDone").hidden = $("railOpen").hidden = $("railSave").hidden = !ui.received || testing;
+  $("railDone").hidden = !ui.received || testing;
 }
 const nb = (s) => s.replace(/ /g, "\u00a0");   // ai: a figure and its unit kept on one line
 // Block ids already forwarded. Ids only ever increase (wirehair is rateless, so the sender keeps minting them),
@@ -1246,8 +1246,6 @@ $("firstStart").onclick = () => {
 $("firstCancel").onclick = () => $("first").close();
 $("go").onclick = () => (track ? stopCamera() : limitSeen() ? start() : $("first").showModal());
 $("railCam").onclick = () => $("go").onclick();
-$("railOpen").onclick = () => $("open").onclick();
-$("railSave").onclick = () => $("save").click();
 // A new resolution, rate or camera needs a new stream.
 // ai: Not in the middle of a start, which would be stopped under itself: the choice then takes effect at the next start.
 // ai: Decoder: CPU lets the GPU worker go and the pool decodes; GPU (or auto) starts it again, a failure before forgotten
