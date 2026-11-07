@@ -1,20 +1,25 @@
 <!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LIZARD</title><meta name="description" content="Move files from a screen to a camera, with no network."><link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="preload" href="../liblizard/vendor/fonts/inter/InterVariable.woff2" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="ui.css">
 <style>
-  /* ai: Home (2026-10-01): Send and Receive, the received
-     files (lizard-web/library.mjs) and Settings. One column, the same at every size. */
+  /* ai: Home (2026-10-01): Send and Receive, the received files (lizard-web/library.mjs, Delete all on their heading),
+     About and Source code (a Settings section until 2026-11-07, the apps' the same). A column on a phone. */
   main,.top{max-width:34rem;margin:0 auto;padding:0 16px 2rem}
   .top{padding-bottom:0}
   /* ai: the PC's parts, hidden on a phone: the bar's About and Source code, the files' columns and their cells */
-  .top .pc,.cols,.files .c-size,.files .c-when,.files .c-open,#clearAllTop,.emptybox{display:none}
+  .top .pc,.cols,.files .c-size,.files .c-when,.files .c-open,.emptybox{display:none}
   .files .c-act{display:flex;flex:none;align-items:center}
-  .shead{display:flex;align-items:center}.shead h2{flex:1 1 auto;font-size:14px;font-weight:600;color:var(--muted);margin:24px 0 4px}
+  .shead{display:flex;align-items:flex-start}.shead h2{flex:1 1 auto;font-size:14px;font-weight:600;color:var(--muted);margin:24px 0 4px}
+  /* ai: Delete all on the files' heading (2026-11-07 on a phone, the apps' FilesHeading; the PC's since 2026-11-06): the
+     button 10 px down so its middle is the label's, the heading 10 px taller for it */
+  #clearAllTop{margin:10px -12px 0 0}
   .go{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0 8px}
   .go .btn{flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:104px;padding:16px;
     border-radius:16px;text-align:center;font-size:18px}
   .go .btn svg{margin-bottom:10px}
-  /* ai: About a fold among the Settings rows (2026-11-06, the apps' AboutFold): the rows' hairline under it, none over it */
-  .settings details.dev{border-top:0;margin-top:0;border-bottom:1px solid var(--line)}
+  /* ai: About a fold over Source code (2026-11-06, the apps' AboutFold): a hairline over it and under it, 24 px of light
+     above (a Settings heading over it until 2026-11-07) */
+  .settings{margin-top:24px}
+  .settings details.dev{margin-top:0;border-bottom:1px solid var(--line)}
   /* ai: Home on a PC (2026-11-06; a window 900 px wide or more, under a mouse or no pointer): spacious, the bar across
      the window (the mark and LIZARD; About, opening the credits in a dialog, and Source code on its right), the
      content at most 1120 px wide with 48 px margins; Send and Receive two cards stretched across it, 200 px tall (the
@@ -30,9 +35,9 @@
     .go .btn{height:200px;min-height:200px;gap:16px;border-radius:16px;font-size:22px;font-weight:600}
     .go .btn svg.i{width:48px;height:48px;stroke-width:1.75;margin:0}
     main>section{margin:0 0 48px}
-    .shead{min-height:40px;margin:0 0 8px}
+    .shead{min-height:40px;margin:0 0 8px;align-items:center}
     .shead h2,section>h2{margin:0;font-size:20px;font-weight:600;color:var(--fg)}
-    #clearAllTop:not([hidden]){display:inline-flex;margin-right:-12px}
+    #clearAllTop{margin:0 -12px 0 0}
     .settings{display:none}
     .cols,.files .item{display:grid;grid-template-columns:40px minmax(0,1fr) 200px 220px 160px;align-items:center;column-gap:16px}
     .cols{font-size:13px;font-weight:600;color:var(--muted);padding:0 0 8px;border-bottom:1px solid var(--line)}
@@ -69,9 +74,7 @@
     <div id="emptyPc" class="emptybox" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span>No received files</span></div>
     <ul id="list" class="list files"></ul>
   </section>
-  <section class="settings" aria-labelledby="settings-h">
-    <h2 id="settings-h" tabindex="-1">Settings</h2>
-    <div class="item"><span class="body"><span class="t">Received files</span><span id="usage" class="s"></span></span><button id="clearAll" class="text danger" type="button" hidden>Delete all</button></div>
+  <section class="settings">
     <details class="dev" id="aboutFold"><summary>About</summary><div id="about" class="about-text"></div></details>
     <a id="source" class="item" href="https://github.com/FNWTalon/LIZARD" target="_blank" rel="noopener"><span class="body"><span class="t">Source code</span></span></a>
   </section>

@@ -22,6 +22,14 @@ PC.addEventListener("change", () => show());
 // ai: every drawing let them all go, a video in such a tab losing its link when the page came back into view).
 let links = new Map();   // ai: `${id}@${at}`, an entry as filed: { file, url }
 const when = (t) => (t ? new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "");
+// ai: a date as a phone's list says it (2026-11-07, the apps' shortWhen; `when` before, "Nov 7, 2026, 1:10 PM"): today its
+// ai: time, this year its month and day, another year the date; the PC's columns keep `when`
+function short(t) {
+  if (!t) return "";
+  const d = new Date(t), n = new Date();
+  if (d.toDateString() === n.toDateString()) return d.toLocaleTimeString(undefined, { timeStyle: "short" });
+  return d.toLocaleDateString(undefined, d.getFullYear() === n.getFullYear() ? { month: "short", day: "numeric" } : { dateStyle: "medium" });
+}
 function button(text, onclick) {
   const b = document.createElement("button");
   b.type = "button"; b.textContent = text;
@@ -43,7 +51,7 @@ async function row(e, next) {
   lead.className = "lead"; lead.append(icon("file"));
   name.className = "name"; name.textContent = e.name; name.title = e.name;
   if (f) { name.href = link.url; name.target = "_blank"; name.rel = "noopener"; }
-  meta.className = "meta"; meta.textContent = [bytes(e.size ?? f?.size ?? 0), when(e.at)].filter(Boolean).join(" · ");
+  meta.className = "meta"; meta.textContent = [bytes(e.size ?? f?.size ?? 0), short(e.at)].filter(Boolean).join(" · ");
   name.append(meta);
   const menu = document.createElement("details"), more = document.createElement("summary"), acts = document.createElement("div");
   menu.className = "menu";
@@ -82,7 +90,7 @@ function partialRow(e) {
   li.className = "item"; li.dataset.id = e.id;
   lead.className = "lead"; lead.append(icon("file"));
   name.className = "name"; name.textContent = e.name || "a file"; name.title = e.name || "";
-  meta.className = "meta"; meta.textContent = [`${Math.floor(100 * (e.fraction ?? 0))}% of ${bytes(e.length ?? 0)}`, when(e.at)].filter(Boolean).join(" · ");
+  meta.className = "meta"; meta.textContent = [`${Math.floor(100 * (e.fraction ?? 0))}% of ${bytes(e.length ?? 0)}`, short(e.at)].filter(Boolean).join(" · ");
   name.append(meta);
   const menu = document.createElement("details"), more = document.createElement("summary"), acts = document.createElement("div");
   menu.className = "menu";
@@ -127,14 +135,12 @@ async function show() {
     $("files").classList.toggle("none", !entries.length);
     $("emptyPc").hidden = entries.length > 0 || !kept;
     $("empty").hidden = entries.length > 0 || kept;
-    const total = entries.reduce((s, e) => s + (e.size || 0), 0);
-    $("usage").textContent = entries.length ? `${entries.length} file${entries.length > 1 ? "s" : ""} kept, ${bytes(total)}` : "No files kept.";
-    $("clearAll").hidden = $("clearAllTop").hidden = !entries.length;
+    $("clearAllTop").hidden = !entries.length;
   })();
   try { await drawing; } finally { drawing = null; }
   if (again) { again = false; await show(); }
 }
-// ai: Delete all, the phone's in Settings and the PC's on the files' heading, each asking on itself first
-for (const id of ["clearAll", "clearAllTop"]) confirmTap($(id), () => { const n = $("list").children.length; return `Delete ${n} file${n > 1 ? "s" : ""}?`; }, () => removeAll().then(show));
+// ai: Delete all on the files' heading (a phone's in Settings until 2026-11-07), asking on itself first
+confirmTap($("clearAllTop"), () => { const n = $("list").children.length; return `Delete ${n} file${n > 1 ? "s" : ""}?`; }, () => removeAll().then(show));
 watch(show);
 show();

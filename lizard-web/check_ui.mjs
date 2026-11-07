@@ -700,19 +700,23 @@ const SIZES = [
   for (const ev of ["Target.targetCreated", "Target.targetInfoChanged"]) s.on(ev, ({ targetInfo: i }) => { if (i.type === "page") opened.push(i.url); });
   const HOMEM = `(() => { const $ = (id) => document.getElementById(id), rows = [...document.querySelectorAll("#list li")];
     return { iw: innerWidth, sw: document.documentElement.scrollWidth, rows: rows.map((r) => r.querySelector(".name").textContent), acts: rows[0] ? [...rows[0].querySelectorAll(".acts > *")].map((a) => a.textContent).join(",") : "",
-      href: rows[0]?.querySelector("a[download]")?.href ?? "", download: rows[0]?.querySelector("a[download]")?.download ?? "", tips: !!$("tips") || !!$("tipsAgain"), empty: !$("empty").hidden, usage: $("usage").textContent, solid: [...document.querySelectorAll(".primary")].map((b) => b.id).join(), bar: [...document.querySelectorAll(".bar .brand, .bar > button, .bar > a.btn")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(",") }; })()`;
+      href: rows[0]?.querySelector("a[download]")?.href ?? "", download: rows[0]?.querySelector("a[download]")?.download ?? "", tips: !!$("tips") || !!$("tipsAgain"), empty: !$("empty").hidden, clear: $("clearAllTop").checkVisibility(), heads: [...document.querySelectorAll("main h2")].filter((x) => x.checkVisibility()).map((x) => x.textContent).join(","), meta: rows[0]?.querySelector(".meta")?.textContent ?? "", solid: [...document.querySelectorAll(".primary")].map((b) => b.id).join(), bar: [...document.querySelectorAll(".bar .brand, .bar > button, .bar > a.btn")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(",") }; })()`;
   for (const [k, z] of SIZES.entries()) {
     await size(s, z);
     await navigate(s, HOME);
     await until(s, `document.querySelectorAll("#list li").length > 0`, 10000, "the received file listed on Home");
     const h = await evaluate(s, HOMEM);
     await screenshot(s, `${OUT}/home-${z.name}.png`);
-    console.log(`     home ${z.name}: ${h.rows.join(" | ")}; ${h.acts}; "${h.usage}"; solid ${h.solid}`);
+    console.log(`     home ${z.name}: ${h.rows.join(" | ")}; ${h.acts}; headings ${h.heads}; solid ${h.solid}`);
     check(h.sw <= h.iw, `home ${z.name}: no horizontal scroll (${h.sw} of ${h.iw})`);
     check(h.rows.length === 1 && h.rows[0].startsWith(NAME) && /300\sKB/.test(h.rows[0]) && /^Open,Save,(Share,)?Delete$/.test(h.acts) && h.download === NAME && !h.empty, `home ${z.name}: "${h.rows[0]}" listed with ${h.acts}`);
     // ai: a PC's Home (2026-11-06, a window 900 px wide or more without a touch screen): About and Source code in the bar
     const pc = !z.mobile && z.w >= 900;
     check(h.bar === (pc ? "LIZARD,About,Source code" : "LIZARD") && h.solid === (z.mobile ? "recv" : "send"), `home ${z.name}: the bar "${h.bar}", the solid one ${h.solid}`);
+    // ai: a phone's (2026-11-07, the apps' the same): Delete all on the files' heading, no Settings section's heading (its
+    // ai: Received files row gone), the row's date short (the file came in today: its time, no year)
+    if (!pc) check(h.clear && h.heads === "Received files" && /\d:\d\d/.test(h.meta) && !/20\d\d/.test(h.meta),
+      `home ${z.name}: Delete all on the heading (${h.clear}), headings "${h.heads}", the row's line "${h.meta}"`);
     if (pc) {
       // ai: Send and Receive two cards across the content, 200 px tall; the file's row in columns with Open beside its
       // ai: menu; Delete all on the heading; no Settings section

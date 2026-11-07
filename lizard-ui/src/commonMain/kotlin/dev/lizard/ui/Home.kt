@@ -59,6 +59,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import dev.lizard.readout.Readout
 import java.text.DateFormat
+import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import kotlin.math.floor
 
@@ -88,6 +90,21 @@ fun Page(title: String?, onBack: (() -> Unit)?, content: @Composable ColumnScope
 }
 
 fun whenOf(at: Long): String = if (at > 0) DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(at)) else ""
+
+// ai: a date as the phone's lists say it (2026-11-07; whenOf's "Nov 7, 2026, 1:10 PM" before, a bundle's line taking two):
+// ai: today its time ("1:10 PM"), this year its month and day ("Nov 5"), another year the date ("Nov 5, 2025"); the PC's
+// ai: columns keep whenOf
+fun shortWhen(at: Long, now: Long = System.currentTimeMillis()): String {
+    if (at <= 0) return ""
+    val d = Calendar.getInstance().apply { timeInMillis = at }
+    val n = Calendar.getInstance().apply { timeInMillis = now }
+    val year = d.get(Calendar.YEAR) == n.get(Calendar.YEAR)
+    return when {
+        year && d.get(Calendar.DAY_OF_YEAR) == n.get(Calendar.DAY_OF_YEAR) -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(at))
+        year -> SimpleDateFormat("MMM d").format(Date(at))
+        else -> DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(at))
+    }
+}
 fun countOf(n: Int) = "$n ${if (n == 1) "file" else "files"}"
 
 // ai: A received file as Home lists it, or a bundle (several files or a folder sent as one, unpacked: a folder, its files'
@@ -113,8 +130,9 @@ interface HomeHost {
 
 // ai: Home (the web's index.html; both apps' since 2026-10-31): Send and Receive side by side, the unfinished transfers
 // ai: (shown where there are any: a press or Continue opens Receive, which resumes one once its file is in the light),
-// ai: the received files (shown where there are any), and Settings (the received files with Delete all, About). No
-// ai: tips (2026-11-03).
+// ai: the received files (shown where there are any, Delete all on their heading), then About and Source code. No tips
+// ai: (2026-11-03); no Settings section (2026-11-07: it held the received files' count with Delete all, and nothing on
+// ai: Home is a setting).
 @Composable
 fun HomeScreen(h: HomeHost) = BoxWithConstraints {
     LaunchedEffect(Unit) { h.refresh() }
@@ -135,12 +153,27 @@ private fun HomeColumn(h: HomeHost) {
             partials.forEachIndexed { i, p -> key(p.id) { PartialRow(h, p, last = i == partials.lastIndex) } }
         }
         val files = h.files
-        if (files.isNotEmpty()) SectionLabel("Received files")
+        if (files.isNotEmpty()) FilesHeading(h)
         // ai: keyed by the file, so a row's menu and its question stay with it when a file is filed above it meanwhile
         files.forEachIndexed { i, e -> key(e.key) { FileRow(h, e, last = i == files.lastIndex) } }
         h.note.let { if (it.isNotEmpty()) NoteDialog(it) { h.clearNote() } }
-        HomeSettings(h)
+        Spacer(Modifier.height(24.dp))
+        AboutFold(h.about)
+        SourceRow()
     }
+}
+
+// ai: the received files' heading, Delete all at its end (2026-11-07; Settings' "Received files" row with the count held
+// ai: it before), asked first; the unfinished transfers stay. The row as tall as the button, 10 dp over it, so the label
+// ai: sits where a SectionLabel's does
+@Composable
+private fun FilesHeading(h: HomeHost) {
+    var asking by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Received files", style = MaterialTheme.typography.titleSmall, color = Muted, modifier = Modifier.weight(1f))
+        Btn("Delete all", Kind.Danger, modifier = Modifier.offset(x = 12.dp)) { asking = true }
+    }
+    if (asking) AskDialog("Delete ${countOf(h.files.size)}?", "Delete all", { asking = false }) { h.deleteAll() }
 }
 
 // ai: A card of Home's (the web's .go .btn): its icon over its title, centred in the card (2026-11-02, the line under the
@@ -164,7 +197,7 @@ private fun PartialRow(h: HomeHost, p: Partial, last: Boolean) {
     var asking by remember { mutableStateOf(false) }
     val frac = h.liveFraction(p) ?: p.fraction
     val name = p.name.ifEmpty { "a file" }
-    ListRow(name, listOf("${floor(100 * frac).toInt()}% of ${Readout.bytes(p.length)}", whenOf(p.at)).filter { it.isNotEmpty() }.joinToString(" · "),
+    ListRow(name, listOf("${floor(100 * frac).toInt()}% of ${Readout.bytes(p.length)}", shortWhen(p.at)).filter { it.isNotEmpty() }.joinToString(" · "),
         lead = Icons.file, divider = !last, onClick = { h.goReceive() }) {
         MoreMenu("More for $name", listOf(Act("Continue") { h.goReceive() }, Act("Delete", danger = true) { asking = true }))
     }
@@ -174,27 +207,11 @@ private fun PartialRow(h: HomeHost, p: Partial, last: Boolean) {
 @Composable
 private fun FileRow(h: HomeHost, e: FileItem, last: Boolean) {
     var asking by remember { mutableStateOf(false) }
-    ListRow(e.name, listOf(if (e.bundle) countOf(e.files) else "", Readout.bytes(e.size), whenOf(e.at)).filter { it.isNotEmpty() }.joinToString(" · "),
+    ListRow(e.name, listOf(if (e.bundle) countOf(e.files) else "", Readout.bytes(e.size), shortWhen(e.at)).filter { it.isNotEmpty() }.joinToString(" · "),
         lead = if (e.bundle) Icons.folder else Icons.file, divider = !last, onClick = e.open) {
         MoreMenu("More for ${e.name}", e.acts + Act("Delete", danger = true) { asking = true })
     }
     if (asking) AskDialog("Delete ${e.name}?", "Delete", { asking = false }) { e.delete() }
-}
-
-// ai: Home's settings (the web Home's .settings): the received files' count and size with Delete all
-// ai: (asked first; the unfinished transfers stay), About (a fold: the build line and the credits, AboutFold)
-@Composable
-private fun HomeSettings(h: HomeHost) {
-    var asking by remember { mutableStateOf(false) }
-    val files = h.files
-    val n = files.size
-    SectionLabel("Settings")
-    ListRow("Received files", if (n == 0) "None" else "${countOf(n)} · ${Readout.bytes(files.sumOf { it.size })}") {
-        if (n > 0) Btn("Delete all", Kind.Danger) { asking = true }
-    }
-    AboutFold(h.about)
-    SourceRow()
-    if (asking) AskDialog("Delete ${countOf(n)}?", "Delete all", { asking = false }) { h.deleteAll() }
 }
 
 // ai: A bundle's files (2026-10-16; where a platform opens a bundle in the app, the phone): its count and size, its
