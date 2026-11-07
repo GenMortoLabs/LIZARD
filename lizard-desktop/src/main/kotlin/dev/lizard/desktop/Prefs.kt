@@ -117,7 +117,7 @@ object Prefs {
     var enc: String get() = str("enc", "auto"); set(v) { p?.put("enc", v) }
     var payload: String get() = str("payload", "file"); set(v) { p?.put("payload", v) }
     // ai: kept as "version" since the versions went to 16 sub-channels (2026-10-29; "blocks" before counted 8)
-    var blocks: Int get() = int("version", 30); set(v) { p?.putInt("version", v) }   // ai: the page's LIZARD-480 default
+    var blocks: Int get() = int("version", Pick.VERSION_DEFAULT); set(v) { p?.putInt("version", v) }   // ai: the page's LIZARD-480 default
     var fps: Int get() = int("fps", 60); set(v) { p?.putInt("fps", v) }
     var size: Int get() = int("size", 100); set(v) { p?.putInt("size", v) }
     var margin: Int get() = int("margin", Room.MARGIN_DEFAULT); set(v) { p?.putInt("margin", v) }

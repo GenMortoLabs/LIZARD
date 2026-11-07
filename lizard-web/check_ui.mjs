@@ -152,7 +152,7 @@ const SIZES = [
       await s.send("Page.setInterceptFileChooserDialog", { enabled: false });
     }
     await screenshot(s, `${OUT}/send-${z.name}-idle.png`);
-    await navigate(s, `${SEND}?subch=auto&fps=24&payload=test&auto`);
+    await navigate(s, `${SEND}?fps=24&payload=test&auto`);
     await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && /^LIZARD-\\d+/.test(document.getElementById("tx").textContent) && document.getElementById("nums").textContent !== ""`, 20000, "the test stream painted");
     const seen = [];
     for (const openPanel of [false, true]) {
@@ -202,7 +202,7 @@ const SIZES = [
       const back = await evaluate(s, `[localStorage.getItem("recv:stats"), document.getElementById("blocksTitle").textContent, document.getElementById("blocksOut").textContent, document.getElementById("ring").value].join(" / ")`);
       check(back === `0 / Density / 27.4 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
       await evaluate(s, `document.getElementById("dev").open = false`);
-      await navigate(s, `${SEND}?subch=auto&fps=24&payload=test&auto`);
+      await navigate(s, `${SEND}?fps=24&payload=test&auto`);
       await until(s, `/^LIZARD-\\d+/.test(document.getElementById("tx").textContent)`, 20000, "the test stream painted");
     }
     // ai: Fullscreen from a click (a user gesture, as the Fullscreen API asks), then its end from outside the page.

@@ -123,7 +123,7 @@ class CodeCanvas(private val s: SendState) : Canvas() {
 // ai: The run (the web's send.mjs, lizard-android/.../Send.kt SendState): the settings, kept (Prefs), the sender and
 // ai: the presenter, and what the column shows. Start makes the sender (txCreate; txPrepare off the UI thread whatever
 // ai: the encoder: the presenter shows the code from the painter's device), then, once the code area has a size and is
-// ai: shown, picks the format from its room, configures, and starts the presenter on the canvas. A change of the area's
+// ai: shown, configures the format, and starts the presenter on the canvas. A change of the area's
 // ai: size, Size, Spacing, Margin, Ring, Codes or Blocks re-picks, and configures where the format changed (a configure
 // ai: drops the frames painted ahead; the transfer goes on, as the web's re-pick); FPS configures (the word states it)
 // ai: and tells the presenter. Every Native call here is on the UI thread but txCreate and txPrepare; the native side
@@ -182,8 +182,9 @@ class SendState {
     var enc by mutableStateOf(Prefs.enc.let { if (it == "gpu" || it == "cpu") it else "auto" })
     // ai: the painter the sender runs on now, "gpu" or "cpu" ("" before a send): the Encoder chip auto marks (2026-10-05)
     val painterNow: String get() = sender?.str("painter") ?: ""
-    // ai: 0 auto, else a version 1 to 64 (16 sub-channels a step, Pick.STEP)
-    var blocks by mutableStateOf(Prefs.blocks.let { if (it in Pick.VERSION_MIN..Pick.VERSION_MAX) it else 0 })
+    // ai: a version 4 to 64 (16 sub-channels a step, Pick.STEP), Pick.VERSION_DEFAULT unless chosen; no auto since
+    // ai: 2026-11-07 (a kept 0, auto's, reads as the default)
+    var blocks by mutableStateOf(Prefs.blocks.let { if (it in Pick.VERSION_MIN..Pick.VERSION_MAX) it else Pick.VERSION_DEFAULT })
     var fps by mutableStateOf(if (Prefs.vsync) Pick.fpsOf(Prefs.fps) else Prefs.fps.coerceIn(1, 60))
     // ai: VSync (2026-10-23, on by default): while the code is shown its monitor holds a refresh the rate divides, the
     // ai: nearest 60 Hz, where its own does not (a 165 Hz laptop at 60: pictures of 3, 3, 2 and 3 refreshes), and is put
@@ -268,14 +269,10 @@ class SendState {
     val canStart get() = loadError.isEmpty() && !sending && (test || (choice != null && !reading))
     val railShown get() = collapsed
     val ringIndex get() = if (ring in Pick.RINGS.indices) ring else Pick.RING_DEFAULT
-    // ai: a symbol's room in the area, device px, the Size slider's share of it (send.mjs room)
-    val room get() = Room.room(areaW, areaH, codes, ringIndex, spacing, margin) * size / 100.0
     // ai: the margin past the quiet zone the presenter keeps at the area's edges, for the ring configured
     private val edge get() = edgeShare
     // ai: the light the presenter keeps past the frame at each edge, a share of its height (presenter.h PresentOptions::edge)
     val edgeShare get() = Room.edgeShare(fmt?.span ?: Pick.span(ringIndex), margin).toFloat()
-    // ai: what auto takes in the area now (0 while it has no size): the configured format's while sending
-    val autoBlocks get() = fmt?.takeIf { blocks == 0 }?.let { it.subch / Pick.STEP } ?: if (areaW > 0 && areaH > 0) Pick.pick(room, ringIndex) / Pick.STEP else 0
     // ai: what the code offers at most, KB/s: codes x blocks a frame x 472 B x the pictures a second it can show, the
     // ai: asked rate or the measured refresh where lower, so a limit outside the sender shows in the figure
     // ai: (2026-10-04); null before a configure
@@ -597,7 +594,7 @@ class SendState {
             }
         }
     }
-    fun chooseBlocks(b: Int) { blocks = if (b in Pick.VERSION_MIN..Pick.VERSION_MAX) b else 0; Prefs.blocks = blocks }
+    fun chooseBlocks(b: Int) { if (b in Pick.VERSION_MIN..Pick.VERSION_MAX) { blocks = b; Prefs.blocks = b } }
     fun chooseFps(v: Int) { fps = v.coerceIn(1, 60); Prefs.fps = fps }
     fun chooseVsync(on: Boolean) {
         vsync = on; Prefs.vsync = on
@@ -638,8 +635,7 @@ class SendState {
         // ai: while a monitor is taken the area is the monitor's (lease): the control window's is no measure of it (read
         // ai: again at leaseEnded)
         if (leased) return
-        // ai: an area not yet laid out keeps the area it had: Blocks' label read "Auto, N" -> "Auto" -> "Auto, N" on each
-        // ai: entry to Send (2026-11-02)
+        // ai: an area not yet laid out keeps the area it had (Auto's label flickered on each entry to Send, 2026-11-02)
         if (seenW <= 0 || seenH <= 0) return
         areaW = seenW; areaH = seenH
         if (p == 0L) repick() else settle.restart()
@@ -673,11 +669,11 @@ class SendState {
         takeOver()
     }
 
-    // ai: The format the area holds now, configured where it changed: blocks set by hand win, else the largest the room
-    // ai: holds (Pick, the web's pickVersion). false where it was refused (the run then ends with why).
+    // ai: The format chosen (Blocks), configured where it changed. false where it was refused (the run then ends with
+    // ai: why).
     private fun configure(): Boolean {
         if (h == 0L) return false
-        val subch = if (blocks > 0) Pick.STEP * blocks else Pick.pick(room, ringIndex)
+        val subch = Pick.STEP * blocks
         val f = Format(subch, Pick.span(ringIndex), fps, codes, if (codes > 1) Room.gapOf(spacing) else 0,
             when (enc) { "cpu" -> 0; "gpu" -> 1; else -> 2 })
         if (f == fmt) return true
@@ -687,7 +683,7 @@ class SendState {
         fmt = f
         val st = parse(Native.txStats(h))
         System.err.println("send: LIZARD-${f.subch}${if (f.codes > 1) " x ${f.codes}, spacing $spacing" else ""}, margin $margin" +
-            (if (blocks > 0) " set by hand" else " in a ${room.roundToInt()} px room") + " at ${f.fps} a second, ring ${f.span / 2}, painting on the " +
+            " at ${f.fps} a second, ring ${f.span / 2}, painting on the " +
             (if (st?.str("painter") == "gpu") "GPU (${st.str("device")})" else "CPU, $threads painters") +
             (st?.str("gpuWhy").orEmpty().let { if (it.isNotEmpty()) ", not the GPU: $it" else "" }))
         return true
@@ -748,8 +744,7 @@ class SendState {
         val pr = present
         val b = sentBlocks
         val l = mutableListOf<String>()
-        l += "LIZARD-${f.subch} ($b blocks${if (tiers.isNotEmpty()) ": $tiers" else ""}), picture ${sd.num("n").toInt()} samples in the ${f.span / 2}-cell ring" +
-            if (blocks > 0) ", manual" else ", auto for ${room.roundToInt()} px"
+        l += "LIZARD-${f.subch} ($b blocks${if (tiers.isNotEmpty()) ": $tiers" else ""}), picture ${sd.num("n").toInt()} samples in the ${f.span / 2}-cell ring"
         if (!runTest) l += "file $fileSize B${sd.num("sentBytes").toLong().let { if (it in 1 until fileSize) ", $it B as sent (zstd)" else "" }}: ${sd.num("chunks").toInt()} chunk${if (sd.num("chunks").toInt() == 1) "" else "s"}, " +
             "${sd.num("lap").toInt()} data blocks a pass, BLAKE3 ${sd.str("root").take(16)}..." +
             (sd.num("pass").let { p -> if (p >= 1) "\npass ${floor(p).toInt()}" + (sd.num("offeredKBs").let { k -> if (k > 0 && sd.num("lap") > 0) ", ${Fmt.f1(sd.num("lap") / (k * 1000 / Pick.PAYLOAD))} s a pass" else "" }) else "" })

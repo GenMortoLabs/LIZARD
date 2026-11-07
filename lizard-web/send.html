@@ -109,11 +109,11 @@
       </div>
       <fieldset id="f-focus"><legend>Code</legend>
         <div class="grid">
-          <!-- ai: the format's size, a slider of versions, its first step (1) auto (the largest that fits the room) and 2 to 64
-               by hand (16 sub-channels a step); #subch the value the page reads ("auto" or the sub-channels), the slider a
+          <!-- ai: the format's size, a slider of versions 4 to 64 (16 sub-channels a step; its first step auto, the largest
+               that fit the room, until 2026-11-07); #subch the value the page reads (the sub-channels), the slider a
                view over it (send.mjs); its label the rate profile's blocks, titled Blocks with Show statistics on and
                Density, the bytes alone, with it off (#blocksTitle) -->
-          <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 27.4 KB</span></span><input id="blocks" type="range" min="1" max="64" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
+          <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 27.4 KB</span></span><input id="blocks" type="range" min="4" max="64" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
           <!-- ai: the display rate, 1 to 60, which the word states -->
           <div class="blocks"><span class="row"><span>FPS</span><span id="fpsOut">60</span></span><input id="fps" type="range" min="1" max="60" step="1" value="60" aria-label="FPS"></div>
           <!-- ai: the code's size, a share of <main>'s room, 25 to 100% (send.mjs sizeOf), so the code can be kept off a monitor's edges -->
@@ -152,7 +152,7 @@
     // ai: (sim/lizard_pick.mjs tiersFor, src/lizard_phy.c lizard_tiers_for): over the frame's 640 s slots, a 7/8 blocks of 4496,
     // ai: t 2/3 of 5760 and c 1/2 of 7680 nearest 39, 15 and 20% of them in least squares (in units of 16 slots),
     // ai: the 3/4 blocks of 5152 filling, a + m + t + c blocks; a value that is no format (LIZARD-64 to -1024 in steps of
-    // ai: 16) is auto, as send.mjs makes it.
+    // ai: 16; a kept "auto" from before 2026-11-07 among them) is the page's default, LIZARD-480, as send.mjs makes it.
     (() => { try {
       const ls = localStorage, $ = (id) => document.getElementById(id);
       for (const id of ["dev", "logs"]) { const v = ls.getItem("send:" + id); if (v !== null) $(id).open = v === "1"; }
@@ -162,9 +162,10 @@
         const v = ls.getItem(el.dataset.shared || "send:" + el.id);
         if (v !== null && (el.tagName !== "SELECT" || [...el.options].some((o) => o.value === v))) el.value = v;
       }
-      const s = +$("subch").value, v = s >= 64 && s <= 1024 && s % 16 === 0 ? s / 16 : 0;
+      if (!(+$("subch").value >= 64 && +$("subch").value <= 1024 && +$("subch").value % 16 === 0)) $("subch").value = "480";   // ai: #subch's own (a hidden input's defaultValue follows each set)
+      const s = +$("subch").value, v = s / 16;
       let k = 0;
-      if (v) {
+      {
         const all = 40 * s;
         let best = -1;
         for (let a = 0; 281 * a <= all - 322; a++) for (let t = 0; 281 * a + 360 * t <= all - 322; t++) for (let c = 0; 281 * a + 360 * t + 480 * c <= all - 322; c++) {
@@ -172,13 +173,13 @@
           if (best < 0 || cost < best) { best = cost; k = a + t + c + Math.floor((all - 281 * a - 360 * t - 480 * c) / 322); }
         }
       }
-      $("blocks").value = String(v || 1);
+      $("blocks").value = String(v);
       // ai: Show statistics on: Blocks with the count and the ring by its cells; off: Density, the bytes alone, the ring by
       // ai: its border's look (send.mjs showStatsLabels)
       const stats = $("stats").value === "1", kb = `${(k * 472 / 1000).toFixed(1)} KB`;
       $("blocksTitle").textContent = stats ? "Blocks" : "Density";
       if (stats) { const r = $("ring"), rv = r.value; r.innerHTML = [64, 128, 256].map((x) => `<option value="${x}">${x}</option>`).join(""); r.value = rv; }
-      $("blocksOut").textContent = v ? (stats ? `${k}, ${kb}` : kb) : "Auto";   // ai: 472 B a block (sim/xfer.mjs PAYLOAD), before the modules load
+      $("blocksOut").textContent = stats ? `${k}, ${kb}` : kb;   // ai: 472 B a block (sim/xfer.mjs PAYLOAD), before the modules load
       $("fpsOut").textContent = `${+$("fps").value}`;
       $("sizeOut").textContent = `${+$("size").value}%`;
       $("spacingOut").textContent = `${+$("spacing").value} modules`;

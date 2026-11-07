@@ -7,7 +7,7 @@
 // ai: Tools, their ids the URL presets.
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
-import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, pickVersion, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
+import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
 import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
 import { bundle } from "./tar.mjs";
 import { remember, persist, say, bytes, rate, about, registerApp, collapser, sideResizer, icon, sayName, nameParts, slider } from "./ui.mjs";
@@ -206,14 +206,14 @@ function gpuGiveUp(e) {
 
 // ai: The format's size, a slider (2026-10-01): every version from 2 to 64, 16 sub-channels a step (src/lizard_phy.h
 // ai: LIZARD_STEP, sim/lizard_pick.mjs STEP), which is what the format word names, so every step is a symbol every
-// ai: receiver reads (steps of 8 sub-channels from 2026-10-01 to 2026-10-29). #subch holds what the page reads, "auto"
-// ai: or the sub-channels; the slider (#blocks) is a view over it, kept out of the saved settings, its first step (1)
-// ai: auto (2026-10-05; an Auto box beside it before; 0 while the ladder started at version 1). The slider commits on release (a re-pick for every step dragged
-// ai: would rebuild the encoder each time); under auto its label says what auto took, once known ("Auto, 54, 25.3 KB").
+// ai: receiver reads (steps of 8 sub-channels from 2026-10-01 to 2026-10-29). #subch holds what the page reads, the
+// ai: sub-channels; the slider (#blocks) is a view over it, kept out of the saved settings. No auto since 2026-11-07 (its
+// ai: first step from 2026-10-05: the largest the room held, sim/lizard_pick.mjs pickVersion). The slider commits on
+// ai: release (a re-pick for every step dragged would rebuild the encoder each time).
 function showBlocks() {
-  const auto = $("subch").value === "auto", b = auto ? (shown ? shown.subch / STEP : 0) : +$("subch").value / STEP;
-  $("blocks").value = auto ? "1" : String(b);
-  $("blocksOut").textContent = auto ? (b ? `Auto, ${blocksText(b)}` : "Auto") : blocksText(b);
+  const b = +$("subch").value / STEP;
+  $("blocks").value = String(b);
+  $("blocksOut").textContent = blocksText(b);
 }
 // ai: the title says "Blocks a frame", so the value is the count and its bytes alone, which fit beside it in the 20rem column
 // ai: "54, 25.3 KB": the blocks a frame of the slider's size carries (the format's rate profile, 2026-10-07: 54 at
@@ -234,8 +234,8 @@ function showStatsLabels() {
   showBlocks();
 }
 $("stats").addEventListener("change", showStatsLabels);
-$("blocks").addEventListener("input", () => { const v = +$("blocks").value; $("blocksOut").textContent = v > 1 ? blocksText(v) : "Auto"; });
-$("blocks").addEventListener("change", () => { const v = +$("blocks").value; $("subch").value = v > 1 ? String(STEP * v) : "auto"; $("subch").dispatchEvent(new Event("change")); });
+$("blocks").addEventListener("input", () => { $("blocksOut").textContent = blocksText(+$("blocks").value); });
+$("blocks").addEventListener("change", () => { $("subch").value = String(STEP * +$("blocks").value); $("subch").dispatchEvent(new Event("change")); });
 $("subch").addEventListener("change", showBlocks);
 // ai: The page's defaults are LIZARD-480 at 60 painted a second (2026-10-01, the night the Android app, its camera's
 // ai: phase held, read 93 to 95% of it; auto and 24 a second before), in send.html
@@ -272,28 +272,23 @@ function spec() {
   // ai: The format's rate profile (the codec's, from the sub-channel count: src/lizard_phy.c lizard_tiers_for, four rates
   // ai: since 2026-10-08), equal power, soft LDPC: the power tilt and RS(80,64) lost (research/10).
   // n is derived from the version (N_FOR in sim/lizard_pick.mjs) and is never chosen here.
-  const subch = $("subch").value === "auto" ? pick(room()).subch : +$("subch").value, n = N_FOR(subch);
+  const subch = +$("subch").value, n = N_FOR(subch);
   // ai: The span of the ring Settings names, or of the default ring, the same for every picture (sim/lizard_pick.mjs
   // ai: RING_DEFAULT).
   return { phy: "lizard", n, subch, mode: 1, span: SPAN(n, ringChosen() ?? RING_DEFAULT), bitmap: LIZARD_BITMAP,
     variants: [{ name: "rx" }], stream: STREAM };
 }
 
-// How large a LIZARD symbol to paint, and how many sub-channels to fill, from the window alone. Nothing comes back
-// from the receiver: a back channel would make the optical link pointless, so both numbers are the sender's guess.
+// How large a LIZARD symbol to paint. Nothing comes back from the receiver: a back channel would make the optical
+// link pointless. The format is the user's (Density, #subch; the page picked the largest the window held until
+// 2026-11-07); the size on screen is the room's.
 //
 // The symbol is the picture resampled into its ring's span (SPAN) plus a 15-module border a side
 // (sim/lizard_pick.mjs OB_MARGIN), so SAMPLES(n) samples, and the margin the codec paints outside that (src/lizard_phy.h
-// LIZARD_QUIET), which ROOM_FOR counts. NEVER let the browser
-// squeeze a format below the room it needs: downscaling past it throws the outer rings away, which is the whole payload
-// above the first few. So take the largest format that fits, and stretch up to
-// fill the rest of the room (an upscale only interpolates; research/09 measures smoothed fractional scaling at 2% of
-// the mean and 11% at worst).
-//
-// Which format, from the WINDOW alone. There is no camera assumption: the sender cannot see the capture, and a
-// guess at it was a control on this page that nobody could answer. Each format states the room it needs
-// (ROOM_FOR, from its top ring), so the largest that fits is the pick. sim/lizard_pick.mjs has the arithmetic so
-// scripts/exp/pick_check.mjs can exercise it.
+// LIZARD_QUIET), which ROOM_FOR counts. Downscaling a format below the room it needs throws the outer rings away,
+// which is the whole payload above the first few, so the canvas stretches up to fill the room (an upscale only
+// interpolates; research/09 measures smoothed fractional scaling at 2% of the mean and 11% at worst), and a format
+// chosen larger than the room is shown squeezed, which #tx says.
 // ai: Spacing and Margin, Settings' sliders (2026-10-23; one Margin, two of them between codes, that morning; a gap
 // ai: between two codes before it, from 2026-10-03): the light between two codes' rings, two quiet zones (OB_QUIET) at
 // ai: least and 68 modules at most (a painter's widest gap, 64, and its quiet zones), shown with two codes; and between a
@@ -325,10 +320,6 @@ const sizeOf = () => Math.max(0.25, Math.min(1, (+$("size").value || 100) / 100)
 // ai: browser decodes two (the receiver's 2:1 path was archived 2026-09-28 and deleted 2026-09-29, the receiver's side
 // ai: planned as two 960 x 960 frames divided by a line); the option says so.
 const codesOf = () => (+$("codes").value === 2 ? 2 : 1);
-// The controls read here, the arithmetic in liblizard/sim/lizard_pick.mjs so that scripts/exp/pick_check.mjs can exercise it.
-// ai: The library's pick over the whole ladder, at the first pick and every re-pick (capped at LIZARD-560, APP_TOP, until
-// ai: 2026-09-29).
-function pick(roomPx) { return pickVersion(roomPx, undefined, ringChosen()); }
 // ai: Settings' ring (an index into RINGS), or null for the default ring (RING_DEFAULT): the menu has no auto
 // ai: since 2026-10-05 (the 128 selected), so null only where it holds no ring at all. Its options are the rings'
 // ai: cells since 2026-10-10 (indices before, when the 96 was the third), so a saved index no longer matches one.
@@ -353,7 +344,7 @@ function layout(n, codes = 1, gpu = false, gap = 0) {
     // Three ways to put a symbol of n samples on screen. "stretch" is the default and what a small screen wants:
     // paint whole device pixels a sample, then let the browser stretch that up to fill the room. Stretching UP only
     // interpolates, so no ring is lost; squeezing DOWN below the format's room (ROOM_FOR) would throw the outer rings
-    // away, which is most of the payload, and that is the one thing never to do (auto's pick sees to it).
+    // away, which is most of the payload (a Density chosen larger than the room does it; #tx says so).
     const mode = FIT, whole = Math.max(1, Math.floor(room / n));
     const scale = mode === "fit" ? 1 : whole, css = mode === "whole" ? n * scale : room;
     cv.width = fw * scale; cv.height = n * scale;
@@ -526,8 +517,7 @@ async function start() {
   // What the window chose, so the guess is visible rather than implied. The capture is an assumption, not a measurement.
   const auto = () => {
     const r = room(), squeezed = SAMPLES(shown.n, ringOf(shown)) > r;
-    const how = $("subch").value !== "auto" ? ", set by hand" : `, chosen from a ${r.toFixed(0)} px window and nothing else`;
-    return `\n${NAME(shown.subch)} (${blocksFor(shown.subch)} blocks), picture ${shown.n} samples in the ${RINGS[ringOf(shown)]}-cell ring${how}` +
+    return `\n${NAME(shown.subch)} (${blocksFor(shown.subch)} blocks), picture ${shown.n} samples in the ${RINGS[ringOf(shown)]}-cell ring` +
       (squeezed ? `\nshown at ${(r / SAMPLES(shown.n, ringOf(shown))).toFixed(2)} device px a sample, so the page is downscaling. That is fine while it AVERAGES; painting nearest drops samples.` : "");
   };
   // ai: The test stream starts at a random id each start (under 2^30, clear of the control ids), so a receiver that saw an
@@ -986,11 +976,12 @@ new ResizeObserver(paintSurround).observe(bgc.parentElement);
 for (const el of document.querySelectorAll("#dev select, #dev input, #logs select")) if (el.type !== "file" && !("view" in el.dataset)) persist(el, el.dataset.shared || `send:${el.id}`);
 // ai: a menu takes a preset only where it is one of its options (?ring=auto, from before the menu lost its auto, keeps the default)
 for (const [k, v] of URLP) { const el = $(k); if (el && "value" in el && el.type !== "file" && (el.tagName !== "SELECT" || [...el.options].some((o) => o.value === v))) el.value = v; }
-// ai: A preset that is no format, every multiple of 16 from 32 to 1024 (?subch=16, ?subch=24), is no symbol: back to
-// ai: auto, and say so, rather than paint it.
-if ($("subch").value !== "auto" && !VERSIONS.includes(+$("subch").value)) {
-  $("tx").textContent = `${$("subch").value} sub-channels is no format (a multiple of 16 from 32 to 1024): showing auto`;
-  $("subch").value = "auto";
+// ai: A preset that is no format (?subch=16, ?subch=24, ?subch=auto) is no symbol: back to the page's default,
+// ai: LIZARD-480 (#subch's own), and say so, rather than paint it; a kept "auto" (the slider's first step until
+// ai: 2026-11-07) goes back to it quietly.
+if (!VERSIONS.includes(+$("subch").value)) {
+  if (URLP.has("subch")) $("tx").textContent = `${$("subch").value} sub-channels is no format (a multiple of 16 from 64 to 1024): showing LIZARD-480`;
+  $("subch").value = "480";
 }
 showStatsLabels();
 showEnc();

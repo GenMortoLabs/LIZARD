@@ -2,11 +2,12 @@
 // ai: A plain static file server (no /api: every such request is answered 404 and logged) serves lizard/ to headless
 // ai: Chrome, driven over the DevTools protocol (phone.mjs on a local port), its window 1920 x 1080. Six cases: the
 // ai: test stream at LIZARD-96 and at LIZARD-64, LIZARD-96 carrying a 50,000-byte file chosen through the file input
-// ai: (DOM.setFileInputFiles), and the test stream at the page's own pick (?payload=test&auto), which must be the
-// ai: library's pick for the room the page measured (sim/lizard_pick.mjs pickVersion over the whole ladder since 2026-09-29,
-// ai: capped at LIZARD-560 before; a 1080 px room picks LIZARD-608 in the default 128 ring), then that pick with two codes (&codes=2): the canvas 2:1, each half read on its own,
+// ai: (DOM.setFileInputFiles), and the test stream at the page's default with no preset (?payload=test&auto), which must
+// ai: be LIZARD-480 (send.html #subch; until 2026-11-07 the page's auto, the library's pick for the room it measured),
+// ai: then LIZARD-272 with two codes (&codes=2): the canvas 2:1, each half read on its own,
 // ai: the right half's word the same and none of its ids the left's (no browser decodes two codes; the C here reads
-// ai: each half as a native receiver would), and the pick again, changed while it runs (below). Each time the page's canvas is
+// ai: each half as a native receiver would), and LIZARD-480 again, its density changed while it runs (below). The
+// ai: canvas is read at its own pixels, so a format larger than the window reads the same. Each time the page's canvas is
 // ai: read back as luma, padded with white as the page's surround is, and decoded by the C told nothing (sim/phy.mjs
 // ai: makeBlind): the word must name the version painted and the page's 24 fps, the blocks must verify, the state line
 // ai: must say what is sent (for a file "<compressed> (<raw> raw)", 2026-10-19), and for the file one of the frames read must carry its header block, whose name, length and
@@ -21,15 +22,14 @@
 // ai: it is presented (drawn later it reads transparent), so it is drawn into a 2D canvas inside an animation frame,
 // ai: after the page's own tick in the same frame, on a frame in which the page presented (else the next one).
 // ai: The sixth case (2026-09-29), in both arms, takes the two changes a running stream meets that the five above never
-// ai: make: a re-pick and a new display rate. The pick at 1920 x 1080 is read once as the auto case reads it, then the
-// ai: viewport goes to 1280 x 720 (Emulation.setDeviceMetricsOverride): <main>'s ResizeObserver, send.mjs roomChanged's
-// ai: 300 ms debounce, repick, which is the worker's respec and, under the GPU encoder, a new configuration made and
+// ai: make: a re-pick and a new display rate. LIZARD-480 is read once, then Density goes to LIZARD-272 as a release of
+// ai: the slider gives it (its change event; until 2026-11-07 a smaller viewport re-picked it under the page's auto):
+// ai: send.mjs repick, which is the worker's respec and, under the GPU encoder, a new configuration made and
 // ai: checked against the C while the frames already asked for present from the old one's slots, the old one released
-// ai: after its last. The canvas is grabbed from the resize on: every grab until the new version shows must read the old
+// ai: after its last. The canvas is grabbed from the change on: every grab until the new version shows must read the old
 // ai: version or the new at 24 fps with 0 bad (the frames in flight: AHEAD, 3, on wasm, up to two batches of 16 under
 // ai: the GPU encoder; a GPU canvas with nothing presented for 120 animation frames, while the new configuration is made,
-// ai: is counted, not judged), and the first frame at the new version, the library's pick for the room the page then
-// ai: measures (a 720 px room: LIZARD-272, n = 768, in the 128 ring), must read it at 24 fps, its blocks verified, 0 bad, off the arm's
+// ai: is counted, not judged), and the first frame at the new version (LIZARD-272, n = 768, in the 128 ring) must read it at 24 fps, its blocks verified, 0 bad, off the arm's
 // ai: canvas with the state line still sending, and its ids all above every id read before (send.mjs nextId: a re-pick
 // ai: changes the blocks a frame, and ids counted from seq would come back as repeats). The page's report after it (#tx
 // ai: and #nums, written together once a second, so a grab can hold the one from before the change) must name it in #nums
@@ -50,8 +50,8 @@
 // ai: Bundles (2026-10-16, tar.mjs): two files through the file input (one transfer, "check-send.bin and 1 more.tar")
 // ai: and a folder of two, one in a subfolder, through the folder input (check-folder.tar), each case's header the
 // ai: name, application/x-tar, length and root of the tar tar.mjs makes in node of the same files and times.
-// ai: Spacing and Margin (2026-10-23, send.html's sliders; a gap slider from 2026-10-03): auto with one code at a margin
-// ai: of 20 (the pick the page's room less the margins); two codes again at spacings 4 and 44 (&spacing=), each canvas's
+// ai: Spacing and Margin (2026-10-23, send.html's sliders; a gap slider from 2026-10-03): LIZARD-480 with one code at a
+// ai: margin of 20; two codes again at spacings 4 and 44 (&spacing=), each canvas's
 // ai: gap between the painted squares spacing - 4 modules within half a module and both halves read blind; then the
 // ai: spacing moved to 8 while it runs (the slider's change event), grabbed until the canvas's gap is 4 (5 s at most),
 // ai: both halves every block, 0 bad.
@@ -68,7 +68,7 @@ import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initWh, Decoder, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { XferSender, XferReceiver, MemoryStore, ID_HEADER, blake3, hex, isControlId } from "../liblizard/sim/xfer.mjs";
-import { N_FOR, NAME, SPAN, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, pickVersion, blocksFor, subchOf, versionOf } from "../liblizard/sim/lizard_pick.mjs";
+import { N_FOR, NAME, SPAN, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, subchOf, versionOf } from "../liblizard/sim/lizard_pick.mjs";
 import { tabs, open, evaluate, navigate } from "./phone.mjs";
 import { bundle } from "./tar.mjs";
 
@@ -168,9 +168,6 @@ async function readTold(x, subs) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const waitPainted = async () => { for (let t = 0; t < 100; t++) { if (/painted [\d.]+\/s/.test(await evaluate(s, `document.getElementById("tx").textContent`))) return true; await sleep(200); } return false; };
-// ai: The window and the room the page measures, as send.mjs room() measures it (codes symbols across <main>, each
-// ai: with the spacing between them and the margins: the page's #tx dataset.wf across and .hf down, in symbol sides).
-const measure = () => evaluate(s, `(() => { const b = document.querySelector("main"), d = document.getElementById("tx").dataset, wf = +d.wf || 1, hf = +d.hf || 1; return { w: innerWidth, h: innerHeight, room: Math.max(64, Math.min(b.clientWidth / wf, b.clientHeight / hf) * devicePixelRatio) }; })()`);
 // ai: #tx's encoder line, and whether it and the canvas read are the arm's: WebGPU off #cg, or wasm off #c saying why
 // ai: WebGPU is off.
 function encoderOf(g) {
@@ -183,13 +180,11 @@ const pageLine = (g) => `  page: ${g.state} | ${g.nums} | ${g.tx.split("\n").sli
 const faults = [];
 // ai: 496 (version 31, an odd version, 60 blocks under the rate profile): set as the slider sets it (488, version 61 of
 // ai: the 8-sub-channel ladder, from 2026-10-01 to 2026-10-29)
-for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file: true }, { subch: 96, file: true, big: true }, { subch: 96, file: true, bundle: "files" }, { subch: 96, file: true, bundle: "folder" }, { subch: "auto" }, { subch: "auto", margin: 20 }, { subch: "auto", codes: 2 }, { subch: "auto", codes: 2, spacing: 4 }, { subch: "auto", codes: 2, spacing: 44, respacing: 8 }, { subch: "auto", midStream: true }]) {
+for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file: true }, { subch: 96, file: true, big: true }, { subch: 96, file: true, bundle: "files" }, { subch: 96, file: true, bundle: "folder" }, { subch: "default" }, { subch: 480, margin: 20 }, { subch: 272, codes: 2 }, { subch: 272, codes: 2, spacing: 4 }, { subch: 272, codes: 2, spacing: 44, respacing: 8 }, { subch: 480, midStream: true }]) {
   const codes = c.codes ?? 1;
   const bun = c.bundle ? BUNDLES[c.bundle] : null;
   let name = `LIZARD-${c.subch}${bun ? `, ${bun.made.name} (${bun.made.files} files, ${bun.bytes.length} B)` : c.big ? `, a ${bigBytes.length} B file of 4 chunks` : c.file ? `, a ${FILE_BYTES} B file` : ", test stream"}${c.margin !== undefined ? `, margin ${c.margin}` : ""}${c.spacing !== undefined ? `, spacing ${c.spacing}` : ""}`;
-  // ai: The window's frame takes rows even headless (1920 x 937 of 1920 x 1080), so the auto case sets the page's viewport.
-  if (c.subch === "auto") await s.send("Emulation.setDeviceMetricsOverride", { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false });
-  await navigate(s, `http://127.0.0.1:${HTTP}/lizard-web/${process.env.APP ? "app/" : ""}send.html?${c.subch === "auto" ? `subch=auto&fps=${FPS}&payload=test&auto` : `subch=${c.subch}&fps=${FPS}${c.file ? "&payload=file" : "&payload=test&auto"}`}${codes > 1 ? `&codes=${codes}` : ""}${c.margin !== undefined ? `&margin=${c.margin}` : ""}${c.spacing !== undefined ? `&spacing=${c.spacing}` : ""}${GPU ? "&enc=gpu" : ""}`);
+  await navigate(s, `http://127.0.0.1:${HTTP}/lizard-web/${process.env.APP ? "app/" : ""}send.html?${c.subch === "default" ? `fps=${FPS}&payload=test&auto` : `subch=${c.subch}&fps=${FPS}${c.file ? "&payload=file" : "&payload=test&auto"}`}${codes > 1 ? `&codes=${codes}` : ""}${c.margin !== undefined ? `&margin=${c.margin}` : ""}${c.spacing !== undefined ? `&spacing=${c.spacing}` : ""}${GPU ? "&enc=gpu" : ""}`);
   if (c.file) {
     // ai: The file picked as a user picks one: into the file input, then the start button.
     const doc = await s.send("DOM.getDocument"), { nodeId } = await s.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: bun?.input ?? "#file" });
@@ -205,14 +200,10 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
     if (await evaluate(s, `!!document.getElementById("first")`)) faults.push(`${name}: a first-send question is back`);
   }
   if (!(await waitPainted())) { faults.push(`${name}: the page never said it painted: ${await evaluate(s, `document.getElementById("tx").textContent`)}`); continue; }
-  // ai: The auto case's version: the library's pick for the room the page measured, as send.mjs room() measures it.
+  // ai: The default case's version: the page's own, LIZARD-480 (send.html #subch), with no preset.
   let subch = c.subch;
-  if (subch === "auto") {
-    const m = await measure(codes);
-    subch = pickVersion(m.room).subch;
-    name = `auto in a ${m.w} x ${m.h} window (a ${m.room} px room${codes > 1 ? ` a code, ${codes} codes side by side` : ""}): LIZARD-${subch}, test stream${c.midStream ? ", before a re-pick and a new rate" : ""}`;
-    if (m.w !== 1920 || m.h !== 1080) faults.push(`${name}: the window is not 1920 x 1080`);
-  }
+  if (subch === "default") { subch = 480; name = "the page's default, LIZARD-480, test stream"; }
+  if (c.midStream) name += ", before a new density and a new rate";
   // ai: For the file, frames until one carries the header (a control block every few frames at this size); else one.
   // ai: A grab a half of which the C's blind decoder reads no word on (its miss on a few clean frames, above) is decoded
   // ai: told at the version painted: read so with 0 bad it is counted as missed and another grab taken, at most four
@@ -335,14 +326,12 @@ async function grabUntil(want, ok, subs, ms) {
 async function midStream(subch0, r0) {
   const v0 = versionOf(subch0);
   let maxId = Math.max(-1, ...r0.got.map((b) => b.id));
-  await s.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+  // ai: Density moved while it runs, as a release of the slider gives it (its change event): LIZARD-272 (a window's
+  // ai: shrink re-picked it under the page's auto until 2026-11-07)
+  const subch = 272, v = versionOf(subch);
   const t0 = Date.now();
-  let m = await measure();
-  for (let t = 0; t < 50 && (m.w !== 1280 || m.h !== 720); t++) { await sleep(100); m = await measure(); }
-  const subch = pickVersion(m.room).subch, v = versionOf(subch);
-  let name = `re-pick in a ${m.w} x ${m.h} window (a ${m.room} px room): LIZARD-${subch0} to LIZARD-${subch}, test stream`;
-  if (m.w !== 1280 || m.h !== 720) { faults.push(`${name}: the window is not 1280 x 720`); return; }
-  if (subch === subch0) { faults.push(`${name}: the smaller room picks the same version, so nothing re-picks`); return; }
+  await evaluate(s, `(() => { const e = document.getElementById("blocks"); e.value = "${v}"; e.dispatchEvent(new Event("change")); })()`);
+  let name = `a new density while it runs: LIZARD-${subch0} to LIZARD-${subch}, test stream`;
   // ai: The change's first frame on the canvas: its word, blocks, picture and ids, the canvas it was read off and the state
   // ai: line at that moment.
   const judge = (o, what, fps) => {

@@ -96,12 +96,12 @@ class SendState(private val a: MainActivity) {
     private var makingNow = false
     private var startWhenMade = false     // ai: Start pressed while the transfer was being made
     var test by mutableStateOf(false)
-    // ai: The format's size (2026-10-02), the web sender's
-    // ai: slider (send.html #blocks and #subchAuto): 0 for auto, the largest the code's square holds (Pick.pick), else a
-    // ai: version 1 to 64 set by hand (16 sub-channels a step, Pick.STEP), painted as set whatever the square (the web's
-    // ai: too); kept, as the web's #subch is ("sendVersion" since the versions went to 16 sub-channels, 2026-10-29: the
-    // ai: "sendBlocks" before counted 8). picked: the sub-channels the last configure took, which auto's label names.
-    var blocks by mutableStateOf(prefs.getInt("sendVersion", 0).let { if (it in Pick.VERSION_MIN..Pick.VERSION_MAX) it else 0 })
+    // ai: The format's size (2026-10-02), the web sender's slider (send.html #blocks): a version 4 to 64 (16
+    // ai: sub-channels a step, Pick.STEP), painted as set whatever the square (the web's too), Pick.VERSION_DEFAULT
+    // ai: (LIZARD-480) unless chosen; no auto since 2026-11-07 (0 was the largest the square held: a kept 0 reads as the
+    // ai: default); kept, as the web's #subch is ("sendVersion" since the versions went to 16 sub-channels, 2026-10-29:
+    // ai: the "sendBlocks" before counted 8). picked: the sub-channels the last configure took.
+    var blocks by mutableStateOf(prefs.getInt("sendVersion", Pick.VERSION_DEFAULT).let { if (it in Pick.VERSION_MIN..Pick.VERSION_MAX) it else Pick.VERSION_DEFAULT })
     var picked by mutableStateOf(0)
     // ai: VSync (2026-10-23, on by default, the desktop sender's): the rate voted on both surfaces (the window's and the
     // ai: ring's, jni.cpp), so the panel moves to a mode the rate divides; off, no vote, the system's choice. Kept.
@@ -122,7 +122,7 @@ class SendState(private val a: MainActivity) {
     // ai: painters; kept.
     var painter by mutableStateOf(prefs.getString("sendPainter", "auto") ?: "auto")
     // ai: Codes (2026-10-05, the web's #codes and #gap): one, or two side by side for a receiver's 2:1 crop, `gap` modules
-    // ai: apart (0 to 64, 12 unless set); kept. The format is picked for one code's share of the box (roomOf).
+    // ai: apart (0 to 64, 12 unless set); kept. Each code is painted in its share of the box (roomOf).
     var codes by mutableStateOf(prefs.getInt("sendCodes", 1).coerceIn(1, 2))
     var gap by mutableStateOf(prefs.getInt("sendGap", 12).coerceIn(0, 64))
     // ai: the ring (2026-10-31, as the desktop's): an index into Pick.RINGS, -1 the default (the 128); kept
@@ -265,7 +265,7 @@ class SendState(private val a: MainActivity) {
     // ai: configure is a new format, its first frames tens of ms away, and one a drag step kept the code flashing
     private var unsettled = false
     fun settle() { if (unsettled) { unsettled = false; if (phase == Phase.On) reconfigure() } }
-    fun chooseBlocks(b: Int) { val n = if (b in Pick.VERSION_MIN..Pick.VERSION_MAX) b else 0; if (n == blocks) return; blocks = n; prefs.edit().putInt("sendVersion", blocks).apply(); unsettled = true }
+    fun chooseBlocks(b: Int) { if (b !in Pick.VERSION_MIN..Pick.VERSION_MAX || b == blocks) return; blocks = b; prefs.edit().putInt("sendVersion", blocks).apply(); unsettled = true }
     fun chooseRate(r: Int, now: Boolean = true) { rate = r.coerceIn(1, 60); prefs.edit().putInt("sendFps", rate).apply(); unsettled = true; if (now) settle() }
     fun chooseVsync(on: Boolean) {
         vsyncOn = on
@@ -289,7 +289,7 @@ class SendState(private val a: MainActivity) {
     fun chooseMargin(m: Int) { margin = m.coerceIn(Pick.QUIET, MARGIN_MAX); prefs.edit().putInt("sendMargin", margin).apply() }
     // ai: one code's room in the view, px: the box's height, or its width's share where that is less
     private fun roomOf() = min((vw / frameAspect).toInt(), vh)   // ai: the surface holds the frame alone
-    // ai: the column's edge let go (2026-10-05): the format re-picked for the box it left
+    // ai: the column's edge let go (2026-10-05): configured again for the box it left
     fun resized() { if (phase == Phase.On && roomOf() != configured) reconfigure() }
 
     // ai: The choice's transfer made off the main thread: the file into the cache (a document is a stream; the sender maps
@@ -388,7 +388,7 @@ class SendState(private val a: MainActivity) {
     private fun reconfigure() {
         room = roomOf()
         if (h == 0L || room <= 0) return
-        val subch = if (blocks > 0) Pick.STEP * blocks else Pick.pick(room.toDouble(), ringIndex)
+        val subch = Pick.STEP * blocks
         val threads = min(4, maxOf(1, Runtime.getRuntime().availableProcessors() - 2))
         val err = Native.txConfigure(h, subch, Pick.span(ringIndex), fps, threads, when (painter) { "cpu" -> 0; "gpu" -> 1; else -> 2 }, assets, codes, gap, vsynced, vsyncOn)
         if (err.isNotEmpty()) { phase = Phase.Error(err); stop(); return }
@@ -403,7 +403,7 @@ class SendState(private val a: MainActivity) {
             else if (Build.VERSION.SDK_INT >= 30) surface?.setFrameRate(vote, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
         }
         val st = runCatching { JSONObject(Native.txStats(h)) }.getOrNull()
-        Log.i(TAG, "send: LIZARD-$subch${if (codes > 1) " x $codes, $gap modules apart" else ""}${if (blocks > 0) " set by hand" else ""} in a $room px square at $fps a second, painting on the " +
+        Log.i(TAG, "send: LIZARD-$subch${if (codes > 1) " x $codes, $gap modules apart" else ""} in a $room px square at $fps a second, painting on the " +
             (if (st?.optString("painter") == "gpu") "GPU (${st.optString("device")})" else "CPU, $threads painters") +
             (st?.optString("gpuWhy").orEmpty().let { if (it.isNotEmpty()) ", not the GPU: $it" else "" }))
     }
@@ -588,7 +588,8 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
         // ai: Display from 2026-10-23)
         // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size carries,
         // ai: Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
-        autoSlide(SendRows.blocksTitle(stats), s.blocks, s.picked / Pick.STEP, Pick.VERSION_MIN..Pick.VERSION_MAX, { n -> SendRows.blocksText(Native.blocksFor(Pick.STEP * n), stats) }, { s.settle() }) { s.chooseBlocks(it) },
+        Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
+            Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) },
         if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
         else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) },
         ChipChoice("Ring", s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) },

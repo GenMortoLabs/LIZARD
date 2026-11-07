@@ -6,18 +6,18 @@ import kotlin.system.exitProcess
 import dev.lizard.ui.*
 
 // ai: The integration check's hook (2026-10-04, the desktop sender's build): env LIZ_SENDER_TEST, space separated
-// ai: key=value, e.g. "secs=8 codes=2 enc=cpu blocks=0". The payload is the test stream; every setting starts at its
+// ai: key=value, e.g. "secs=8 codes=2 enc=cpu blocks=30". The payload is the test stream; every setting starts at its
 // ai: default (the kept ones neither read nor written: Prefs.forget), the ones named applied; sending starts once the
 // ai: code area has a size, and after secs (8 unless named) of presenting the last presenter and sender stats are
 // ai: printed to stdout as one JSON line {"present": {...}, "sender": {...}} and the app exits 0. Any failure prints
-// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 0 (auto) or 1 to 64; fps 1 to
+// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 4 to 64 (Pick.VERSION_MIN to VERSION_MAX); fps 1 to
 // ai: 60; size 25 to 100 (%); spacing 4 to 68 and margin 2 to 34 (modules); ring auto, 64, 128 or 256; full 0 or 1 (the
 // ai: window manager's full screen); exclusive 0 or 1 (Exclusive fullscreen: 0 unless named); vsync 0 or 1 (1 unless named); file=<path>[:<path>...] (files or folders in place
 // ai: of the test stream, as a pick or a drop gives them: one file as itself, else one tar, 2026-10-16; the paths split
 // ai: on the platform's separator, ';' on Windows); steps (2026-10-04, the app's own controls, which only a hand had
 // ai: moved): comma separated <seconds>:<action>, from when the presenter first presents, each as the control does it:
 // ai: full (Fullscreen, F11), max (the window maximized), pause, resume, stop, start, size=N, spacing=N, margin=N,
-// ai: codes=N, blocks=N (0 auto, else 1 to 64) (each a slider's release), fps=N (any 1 to 60, a chip's or the
+// ai: codes=N, blocks=N (4 to 64) (each a slider's release), fps=N (any 1 to 60, a chip's or the
 // ai: slider's), vsync=0|1, enc=auto|gpu|cpu, rail, and the selection's (2026-10-23):
 // ai: add=<path>[:<path>...] (as a pick adds; ';' on Windows), remove=<an item's name> (its Remove), clear (Clear),
 // ai: list (the items and the state line on stderr as "list: <name> | ... | <state line>"); a change stops the run, as
@@ -71,7 +71,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         int("codes", 1..2)?.let { s.codes = it }
         s.exclusiveFull = int("exclusive", 0..1) == 1   // ai: settings from the defaults: off unless named
         kv["enc"]?.let { if (it in setOf("auto", "gpu", "cpu")) s.enc = it else fail("LIZ_SENDER_TEST: enc=$it") }
-        int("blocks", 0..64)?.let { s.blocks = it }
+        int("blocks", Pick.VERSION_MIN..Pick.VERSION_MAX)?.let { s.blocks = it }
         int("fps", 1..60)?.let { s.fps = it }
         int("vsync", 0..1)?.let { s.vsync = it == 1 }
         int("size", 25..100)?.let { s.size = it }
@@ -154,7 +154,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             "spacing" -> { s.chooseSpacing(n(Room.SPACING_MIN..Room.SPACING_MAX)); s.repick() }
             "margin" -> { s.chooseMargin(n(Pick.QUIET..Room.MARGIN_MAX)); s.repick() }
             "codes" -> s.chooseCodes(n(1..2))
-            "blocks" -> { val b = n(0..64); s.chooseBlocks(b); s.repick() }
+            "blocks" -> { val b = n(Pick.VERSION_MIN..Pick.VERSION_MAX); s.chooseBlocks(b); s.repick() }
             "fps" -> { s.chooseFps(n(1..60)); s.commitFps() }
             "vsync" -> s.chooseVsync(n(0..1) == 1)
             "enc" -> if (v in setOf("auto", "gpu", "cpu")) s.chooseEnc(v) else fail("LIZ_SENDER_TEST: step $act")

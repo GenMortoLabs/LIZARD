@@ -22,7 +22,7 @@ app.
 Beside them, `kotlin/` holds plain-JVM code the apps use, compiled into both the Android app and the desktop app with
 their shared UI (`../lizard-ui`): `Tar.kt`, how several files or a folder become one transfer (a tar,
 `research/SPEC.md` 9.6) and how a receiver unpacks one; `Readout.kt`, the receive screen's words and figures; and
-`Pick.kt` (`dev.lizard.pick`), the sender's ladder, rings, rates and the room a format needs. `PhaseLock.kt`, the camera's phase lock against the display, is the
+`Pick.kt` (`dev.lizard.pick`), the sender's ladder, rings and rates. `PhaseLock.kt`, the camera's phase lock against the display, is the
 reference the engine's C++ lock (`core/rx/phase_lock`) is held to; neither app compiles it.
 
 ## Layers

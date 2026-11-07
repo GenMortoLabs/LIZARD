@@ -92,10 +92,11 @@ class DesktopSend(private val app: App) : SendHost {
     override val settings: List<Setting> get() = listOfNotNull(
         // ai: what the symbol carries, then how this machine paints and shows it (one list since 2026-11-01; headed Code
         // ai: and Display from 2026-10-23)
-        // ai: Blocks a frame (send.html #blocks): the slider's first step auto, its value "Auto, 60, 28.1 KB" once auto's
-        // ai: pick in the area is known, every step right of it a version by hand, committed on release
+        // ai: Blocks a frame (send.html #blocks): a version 4 to 64, committed on release (its first step auto until
+        // ai: 2026-11-07)
         // ai: Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
-        autoSlide(SendRows.blocksTitle(stats), s.blocks, s.autoBlocks, Pick.VERSION_MIN..Pick.VERSION_MAX, { n -> SendRows.blocksText(Native.blocksFor(Pick.STEP * n), stats) }, { s.repick() }) { s.chooseBlocks(it) },
+        Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
+            Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, done = { s.repick() }) { s.chooseBlocks(it.roundToInt()) },
         if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
         else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) },
         // ai: the rings alone (2026-10-05): none chosen shows the default

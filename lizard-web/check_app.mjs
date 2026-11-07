@@ -134,7 +134,7 @@ check(await evaluate(s, `!!document.getElementById("go")`).catch(() => false), `
 await navigate(s, `${BASE}recv.html?auto&seen`);
 const read = await until(s, `document.getElementById("state").textContent === "Reading the test stream" && /LIZARD-96/.test(document.getElementById("lab").textContent)`, 40000, "offline: the test stream read").catch((e) => (console.log(`     ${e.message}`), false));
 check(read, `offline: the receiver reads the test stream off the camera (the codec, the workers, every file from the cache)`);
-await navigate(s, `${BASE}send?subch=auto&fps=24&payload=test&auto`);
+await navigate(s, `${BASE}send?fps=24&payload=test&auto`);
 const painted = await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && document.getElementById("state").textContent === "Sending"`, 30000, "offline: the test stream painted").catch((e) => (console.log(`     ${e.message}`), false));
 check(painted, `offline: the sender paints the test stream, asked for at its clean URL (send?...)`);
 
