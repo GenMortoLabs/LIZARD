@@ -1,0 +1,6 @@
+- Sending and receiving show their status as rows: Size, Speed, Time left; warnings as short labels.
+- Errors pop up and close with OK.
+- Density picks the format (LIZARD-480 unless chosen); the border is Thin, Medium or Thick.
+- What you chose to send is always shown; on a phone it scrolls sideways.
+- Home on a phone: Unfinished and Received files fold, with their counts and Delete all.
+- Reads and sends 0.9.0's codes: the format is unchanged.
