@@ -754,13 +754,15 @@ function madeFor(m) {
   if (!running) showReady();
 }
 // ai: The file upload over <main> (#pick, 2026-10-26, LocalSend's geometry) while no send paints and the payload is a
-// ai: file: the File and Folder tiles, and under them, while the selection holds something, its card (#sel): the count
-// ai: with Clear (its size after the count), then a square an item (its icon, its name with the stem cut and the ending kept, "N files" for
+// ai: file: the File and Folder tiles, and under them the selection's card (#sel), always (2026-11-07; while it held
+// ai: something before; "0 items" over a row's empty room, Clear dimmed, while it holds nothing): the count with Clear
+// ai: (its size after the count), then a square an item (its icon, its name with the stem cut and the ending kept, "N files" for
 // ai: a folder or its size, an x that removes it).
 function renderPick() {
   // ai: the count, and the size of what goes after it, muted (2026-11-07: "2 items · 4.4 GB"; a line under the card before)
   $("selSum").textContent = `${items.length} ${items.length === 1 ? "item" : "items"}`;
   if (chosen && items.length) { const t = document.createElement("span"); t.className = "tot"; t.textContent = ` · ${bytes(chosen.size)}`; $("selSum").append(t); }
+  $("clearPick").disabled = !items.length;
   $("pickList").replaceChildren(...items.map((it) => {
     const li = document.createElement("li"), t = document.createElement("span"), stem = document.createElement("span");
     const end = document.createElement("span"), sub = document.createElement("span"), rm = document.createElement("button");
@@ -776,7 +778,6 @@ function renderPick() {
 }
 function showChoice(painting) {
   $("pick").hidden = painting || isTest();
-  $("sel").hidden = items.length === 0;
   renderPick();
 }
 // ai: An input's files are taken as they are picked and the input emptied, so the same pick again is a new pick. Each

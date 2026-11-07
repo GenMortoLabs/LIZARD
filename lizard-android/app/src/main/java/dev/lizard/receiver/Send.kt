@@ -604,13 +604,14 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val edgeTap = true
     override fun leaveCodeAlone() { s.pause(true); if (a.isOpen("sendCollapsed")) a.toggle("sendCollapsed") }
     override val codePadding = 16.dp
-    // ai: the code's box, its shape the code's; while it holds the file upload and something is chosen, at least
-    // ai: UPLOAD_ONE_ROW tall, so a 2:1 box no longer hides the selection under its tiles. In landscape, idle with the
+    // ai: the code's box, its shape the code's; while it holds the file upload, at least UPLOAD_ONE_ROW tall, so a 2:1
+    // ai: box never hides the selection's card under its tiles (the card always there since 2026-11-07, "0 items" empty;
+    // ai: only while something was chosen before). In landscape, idle with the
     // ai: upload, the whole room (2026-10-31: the tiles stretched across it, at its top); from Start the code's shape,
     // ai: which the surface is made at
     override fun codeSize(maxWidth: Dp, maxHeight: Dp, portrait: Boolean): DpSize? {
         val ar = s.aspect.toFloat()
-        val tall = uploading() && s.items.isNotEmpty()
+        val tall = uploading()
         if (portrait) { val h = maxWidth / ar; return DpSize(maxWidth, if (tall) maxOf(h, UPLOAD_ONE_ROW) else h) }
         if (uploading() && !sending()) return null
         val w = minOf(maxWidth, maxHeight * ar)

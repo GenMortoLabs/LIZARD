@@ -127,7 +127,7 @@ const SIZES = [
   const MEASURE_SEND = `(() => {
     const $ = (id) => document.getElementById(id), box = (el) => { const b = el.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, w: b.width, h: b.height }; };
     return { iw: innerWidth, ih: innerHeight, sw: document.documentElement.scrollWidth, main: box(document.querySelector("main")), c: box($("c")),
-      state: $("state").textContent, dt: ${DT}, lab: $("tx").textContent.split("\\n")[0], go: $("go").disabled, full: document.body.classList.contains("full"), dev: $("dev").open, hint: !$("pick").hidden && $("sel").hidden,
+      state: $("state").textContent, dt: ${DT}, lab: $("tx").textContent.split("\\n")[0], go: $("go").disabled, full: document.body.classList.contains("full"), dev: $("dev").open, hint: !$("pick").hidden && $("sel").checkVisibility() && $("selSum").textContent === "0 items" && !$("pickList").children.length && $("clearPick").disabled,
       buttons: [...document.querySelectorAll("#side button:not([hidden]), #side .btn")].map((b) => b.textContent), bar: [...document.querySelectorAll(".bar .brand, .bar h1, .bar > .btn, .bar > button")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(","), railHome: document.getElementById("railHome")?.getAttribute("href") ?? "" };
   })()`;
   const same = (a, b) => ["top", "left", "w", "h"].every((k) => Math.abs(a[k] - b[k]) < 0.5);
@@ -137,7 +137,7 @@ const SIZES = [
     await sleep(300);
     const idle = await evaluate(s, MEASURE_SEND);
     if (k === 0) check(!idle.dev, `send ${z.name}: the Developer panel is closed on a fresh profile`);
-    check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
+    check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles and the empty card ("0 items", Clear dimmed) shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);
     // ai: since 2026-11-01 a phone's landscape bar the collapser alone, a mouse's the switch alone (its edge a sash)
     check(idle.bar === (z.w > z.h ? (z.mobile ? "Send,Sidebar" : "Send,Receiver") : "Home,Send,Receiver") && idle.railHome === "index.html", `send ${z.name}: the bar "${idle.bar}", the rail's Home "${idle.railHome}"`);
@@ -271,9 +271,9 @@ const SIZES = [
       await s.send("DOM.setFileInputFiles", { objectId: result.objectId, files });
     };
     const LIST = `(() => ({ rows: [...document.querySelectorAll("#pickList .t")].map((t) => t.textContent), subs: [...document.querySelectorAll("#pickList .s")].map((t) => t.textContent),
-      state: document.getElementById("sel").hidden ? "" : document.getElementById("selSum").textContent, hint: !document.getElementById("pick").hidden && document.getElementById("sel").hidden, pick: !document.getElementById("sel").hidden, go: document.getElementById("go").disabled }))()`;
+      state: document.getElementById("selSum").textContent, hint: !document.getElementById("pick").hidden && !document.getElementById("pickList").children.length, pick: document.getElementById("pickList").children.length > 0, go: document.getElementById("go").disabled }))()`;
     const step = async (what, rows, state) => {
-      await until(s, `(${LIST}).rows.join("|") === ${JSON.stringify(rows.join("|"))} && /^${state.replace(/[.()]/g, "\\$&")}/.test(document.getElementById("sel").hidden ? "" : document.getElementById("selSum").textContent)`, 8000, what).catch(() => {});
+      await until(s, `(${LIST}).rows.join("|") === ${JSON.stringify(rows.join("|"))} && /^${state.replace(/[.()]/g, "\\$&")}/.test(document.getElementById("selSum").textContent)`, 8000, what).catch(() => {});
       const m = await evaluate(s, LIST);
       check(m.rows.join("|") === rows.join("|") && m.state.startsWith(state) && (rows.length ? m.pick && !m.hint && !m.go : m.hint && !m.pick && m.go),
         `send: ${what}: rows ${m.rows.join(", ") || "none"} (${m.subs.join("; ")}), "${m.state}"`);
@@ -304,7 +304,7 @@ const SIZES = [
     await drop(folder ? [join(src, "c.txt")] : [join(src, "c.txt"), join(src, "album")]);
     await step("dropped", folder ? ["a.txt", "album", "c.txt"] : ["a.txt", "c.txt", "album"], "3 items · ");
     await evaluate(s, `document.getElementById("clearPick").click()`);
-    await step("cleared", [], "");
+    await step("cleared", [], "0 items");
     await setFiles("file", [join(src, "c.txt")]);
     await step("one file alone, sent as itself", ["c.txt"], "1 item · ");
     // ai: the size of what goes in the card's head after the count (2026-11-07; a line under the card before)

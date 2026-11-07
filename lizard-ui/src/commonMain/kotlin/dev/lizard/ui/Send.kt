@@ -209,8 +209,9 @@ private fun Side(h: SendHost) {
 }
 
 // ai: The senders' file upload (2026-10-26, LocalSend's geometry; the web's ui.css .tile and .itile): the tiles (File,
-// ai: Folder and where the platform has one Media) in one row stretched across the box in equal cells, and under them,
-// ai: while the selection holds something, its card as wide: the count with Clear, then a tile an item (its icon, its
+// ai: Folder and where the platform has one Media) in one row stretched across the box in equal cells, and under them
+// ai: the selection's card as wide, always (2026-11-07; while it held something before), "0 items" and a row's empty room
+// ai: while it holds nothing, Clear dimmed: the count with Clear, then a tile an item (its icon, its
 // ai: name with the stem cut and the ending kept, the line under it, an x that removes it), in rows stretched across the
 // ai: card (TileRows, TILE dp the least), or with `row` (the phone's, held either way since 2026-11-07; in landscape
 // ai: alone before, its portrait card scrolling down) one row scrolling sideways across the screen as it is held;
@@ -232,7 +233,7 @@ fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, row: Boo
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 tiles.forEach { t -> Tile(t.icon ?: Icons.file, t.label, (w - 12.dp * (tiles.size - 1)) / tiles.size, enabled = enabled, onClick = t.run) }
             }
-            if (items.isNotEmpty()) Column(Modifier.width(w).weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(12.dp),
+            Column(Modifier.width(w).weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Column(Modifier.fillMaxWidth().weight(1f, fill = false).then(if (column != null) Modifier.heightIn(min = (4 + 48 + 4 + TILE + 12).dp) else Modifier)
                     .clip(RoundedCornerShape(12.dp)).background(Card).padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
@@ -241,13 +242,14 @@ fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, row: Boo
                             Text("${items.size} ${if (items.size == 1) "item" else "items"}", style = MaterialTheme.typography.labelMedium)
                             if (total.isNotEmpty()) Text(" · $total", style = MaterialTheme.typography.bodyMedium, color = Muted, maxLines = 1)
                         }
-                        Btn("Clear", Kind.Text, enabled = enabled) { onClear() }
+                        Btn("Clear", Kind.Text, enabled = enabled && items.isNotEmpty()) { onClear() }
                     }
                     val item: @Composable (Int, Dp) -> Unit = { i, iw ->
                         val it = items[i]
                         ItemTile(it.name, it.sub, if (it.dir) Icons.folder else Icons.file, iw, enabled = enabled) { onRemove(it.key) }
                     }
-                    if (row) {
+                    if (row && items.isEmpty()) Spacer(Modifier.padding(top = 4.dp).height(TILE.dp))   // ai: a row's room, empty
+                    else if (row) {
                         // ai: one row at the columns' width (TileRows' rule), scrolling sideways past what fits
                         val gap = 8.dp; val inner = w - 24.dp
                         val cols = maxOf(1, ((inner + gap) / (TILE.dp + gap)).toInt())
