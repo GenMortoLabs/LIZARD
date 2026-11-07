@@ -10,23 +10,33 @@ import { DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
 import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
 import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
 import { bundle } from "./tar.mjs";
-import { remember, persist, say, bytes, rate, about, registerApp, collapser, sideResizer, icon, sayName, nameParts, slider } from "./ui.mjs";
+import { remember, persist, say, bytes, rate, about, registerApp, collapser, sideResizer, icon, nameParts, slider, details } from "./ui.mjs";
 // ai: the sliders filled to their values as the apps draw them (ui.mjs slider), before the codec's load
 for (const el of document.querySelectorAll('input[type="range"]')) slider(el);
 
 // The room a format needs holds the codec's margin (src/lizard_phy.h LIZARD_QUIET), and only the codec knows it.
 await initOb();
 let offeredKBs = 0;
-let fileBytes = 0, sentBytes = 0;   // ai: the file's bytes and its bytes as sent (every chunk's zstd frame or its own; 2026-10-05), for the sending line
-// ai: ", 420 KB": the bytes that go, what compression left of the file (2026-10-05; the file's own size, and "compressed
-// ai: to" beside it, are #tx's since), at module scope: start() names its file's bytes `bytes`, which there shadows
-// ai: ui.mjs's formatter (a TypeError on the first frame left the line at "Preparing")
-const sizeLine = () => (fileBytes ? `, ${sizeText(sentBytes, fileBytes)}` : "");
-// ai: what goes, "<compressed> (<raw> raw)" once a Start has made the transfer, the size alone before (2026-11-01; the
-// ai: native senders' the same)
-// ai: each figure kept whole on its line, "raw" with its own (no-break spaces, 2026-10-23: "(47 KB / raw)" broke there)
-const nbsp = (t) => t.replace(/ /g, "\u00a0");
-const sizeText = (sent, raw) => (sent ? `${nbsp(bytes(sent))} ${nbsp(`(${bytes(raw)} raw)`)}` : nbsp(bytes(raw)));
+let fileBytes = 0, sentBytes = 0;   // ai: the file's bytes and its bytes as sent (every chunk's zstd frame or its own; 2026-10-05), the block's Size and Compressed
+// ai: the run's test stream or not, its bundle's files, and the last second's pass time (sendDetails)
+let runTest = false, runFiles = 1, passTime = 0;
+// ai: What goes, as elements from Start until Stop (ui.mjs details, 2026-11-07; the apps' lizard-ui SendRows.details;
+// ai: "Sending <name>, <compressed> (<raw> raw)" over the rate before): the name, a spinner until the first picture
+// ai: paints, Size, Files (a bundle's), Speed (the rate the pictures painted carry, none while paused), and with Show
+// ai: statistics on Compressed (the bytes that go), Pass and Pass time; the test stream its name and Speed. Every row
+// ai: from Start, a value "" until known, so nothing under the block moves. Module scope: start() names its file's bytes
+// ai: `bytes`, which there shadows ui.mjs's formatter.
+function showDetails() {
+  if (!running) { details($("dt"), null); return; }
+  const speed = live && !paused && offeredKBs > 0 ? rate(offeredKBs) : "";
+  if (runTest) { details($("dt"), { name: "Test stream", test: true, spin: !live, rows: [["Speed", speed]] }); return; }
+  const stats = statsOn(), pass = lap ? Math.floor(dataSent / lap) + 1 : 0, rows = [["Size", bytes(fileBytes)]];
+  if (stats) rows.push(["Compressed", sentBytes ? bytes(sentBytes) : ""]);
+  if (runFiles > 1) rows.push(["Files", String(runFiles)]);
+  rows.push(["Speed", speed]);
+  if (stats) rows.push(["Pass", pass && live ? String(pass) : ""], ["Pass time", passTime ? `${passTime.toFixed(1)}\u00a0s` : ""]);
+  details($("dt"), { name: runName, spin: !live, rows });
+}
 const $ = (id) => document.getElementById(id), canvas = $("c"), ctx = canvas.getContext("2d"), tmp = document.createElement("canvas"), tctx = tmp.getContext("2d"), gcanvas = $("cg");
 // nextId is the block id space and seq only counts painted frames. They are separate because
 // blocksPerFrame changes when repick() swaps the layout mid-stream: seq * blocksPerFrame would
@@ -233,7 +243,7 @@ function showStatsLabels() {
   r.value = v;
   showBlocks();
 }
-$("stats").addEventListener("change", showStatsLabels);
+$("stats").addEventListener("change", () => { showStatsLabels(); showDetails(); });
 $("blocks").addEventListener("input", () => { $("blocksOut").textContent = blocksText(+$("blocks").value); });
 $("blocks").addEventListener("change", () => { $("subch").value = String(STEP * +$("blocks").value); $("subch").dispatchEvent(new Event("change")); });
 $("subch").addEventListener("change", showBlocks);
@@ -391,11 +401,10 @@ function showReady() {
   const f = chosen;
   $("go").hidden = false; $("go").disabled = !isTest() && !f; $("stop").hidden = $("pause").hidden = true;
   document.body.classList.remove("busy");
-  showChoice(false); $("nums").textContent = "";
-  // ai: what goes is said under the upload's card (#choice, 2026-11-06, the PC sender's ChoiceLine), not the column
+  showChoice(false); showDetails();
+  // ai: the choice's size is the upload card's head's ("2 items · 4.4 GB", 2026-11-07; a line under the card named it
+  // ai: and its size before)
   say($("state"), "");
-  $("choice").hidden = !f || isTest();
-  if (f && !isTest()) { sayName($("choiceName"), "", f.name); $("choiceMore").textContent = `, ${f.bundled ? `${f.files} ${f.files === 1 ? "file" : "files"}, ` : ""}${sizeText(f.sent, f.size)}`; }
   showRail();
 }
 // ai: Pause and resume (the rail's button, and Pause or Resume beside Stop, the PC's: Resume the solid one). The
@@ -405,7 +414,7 @@ function setPaused(p) {
   if (!running) return;
   paused = p;
   $("pause").textContent = p ? "Resume" : "Pause"; $("pause").classList.toggle("primary", p);
-  if (p) $("nums").textContent = "";
+  showDetails();
   showRail();
 }
 // ai: The collapsed rail (send.html #rail): pause while sending, play to resume or to start, and the code's capacity,
@@ -427,12 +436,12 @@ function showRail() {
   $("railRate").innerHTML = v ? `${v}<small>${u}</small>` : "";
 }
 // ai: from Start until Stop: Stop, then Pause (live once the first picture paints) or Resume, then Fullscreen, in
-// ai: places that do not move; the state line and the figures keep a line each (body.busy)
-function showRunning(before, name) {
+// ai: places that do not move; what goes as elements under them (showDetails)
+function showRunning() {
   $("go").hidden = true; $("go").disabled = true; $("stop").hidden = false;
   $("pause").hidden = false; $("pause").disabled = !live; $("pause").textContent = "Pause"; $("pause").classList.remove("primary");
   document.body.classList.add("busy");
-  if (name) sayName($("state"), before, name); else say($("state"), before);
+  say($("state"), ""); showDetails();
 }
 // ai: Every error ends here: the stream stops, the state line says what went wrong in red, the console has the rest.
 function fail(what, e) {
@@ -473,7 +482,8 @@ async function start() {
   if (!test && !file) { showReady(); return; }
   const what = test ? "" : file.name, my = gen;
   running = true; runPick = file && !file.failed ? file.pick : null; runName = what;
-  showRunning(test ? "Preparing" : "Preparing ", test ? null : what);
+  runTest = test; runFiles = file?.bundled ? file.files : 1; fileBytes = file?.size ?? 0; sentBytes = file?.sent ?? 0; passTime = 0;
+  showRunning();
   holdWake();
   // ai: A browser reads a chosen file only as it was when chosen: once it has been saved again, moved or replaced
   // ai: on disk the read is refused (NotReadableError, in the browser's own words "permission problems that have
@@ -570,7 +580,7 @@ async function start() {
     if (!pump()) return;
     samples = fr.w;
     // ai: the file's size and, where compression shrank it, the bytes that actually go (2026-10-05)
-    if (!live) { live = true; $("pause").disabled = false; showChoice(true); const sz = sizeLine(); file ? sayName($("state"), "Sending ", what, sz) : say($("state"), "Sending"); }
+    if (!live) { live = true; $("pause").disabled = false; showChoice(true); showDetails(); }
     if (now - lastReport > 1000 && painted) {
       const g = gcfg ? genc.takeGpuMs() : null;
       gpuMs = gcfg ? g ?? gpuMs : null;
@@ -590,7 +600,7 @@ async function start() {
       // ai: #tx's first line names the format (auto(): "LIZARD-480 (54 blocks), picture ..."; the lab line #lab did until
       // ai: 2026-10-02, repeating #nums' rate and pass: deleted). The user's figure (#nums): the offered rate alone (the
       // ai: pass went to #tx on 2026-10-05).
-      $("nums").textContent = rate(offeredKBs);
+      passTime = passSecs; showDetails();
       dataWin = 0;
       painted = 0; paintMs = encMs = 0; behind = 0; held.fill(0); rafGaps.length = 0; lastReport = now;
     }
@@ -729,7 +739,7 @@ function madeAll(m) {
   if (!running || runPick !== m.pick) { if (!running) showReady(); return; }
   if (m.error) { fail("The file could not be prepared", new Error(m.error)); return; }
   sentBytes = m.sent; lap = m.lap;
-  if (live && runName) sayName($("state"), "Sending ", runName, sizeLine());
+  showDetails();
 }
 function madeFor(m) {
   const p = chosen;
@@ -740,10 +750,12 @@ function madeFor(m) {
 }
 // ai: The file upload over <main> (#pick, 2026-10-26, LocalSend's geometry) while no send paints and the payload is a
 // ai: file: the File and Folder tiles, and under them, while the selection holds something, its card (#sel): the count
-// ai: with Clear (the state line says the size), then a square an item (its icon, its name with the stem cut and the ending kept, "N files" for
+// ai: with Clear (its size after the count), then a square an item (its icon, its name with the stem cut and the ending kept, "N files" for
 // ai: a folder or its size, an x that removes it).
 function renderPick() {
+  // ai: the count, and the size of what goes after it, muted (2026-11-07: "2 items · 4.4 GB"; a line under the card before)
   $("selSum").textContent = `${items.length} ${items.length === 1 ? "item" : "items"}`;
+  if (chosen && items.length) { const t = document.createElement("span"); t.className = "tot"; t.textContent = ` · ${bytes(chosen.size)}`; $("selSum").append(t); }
   $("pickList").replaceChildren(...items.map((it) => {
     const li = document.createElement("li"), t = document.createElement("span"), stem = document.createElement("span");
     const end = document.createElement("span"), sub = document.createElement("span"), rm = document.createElement("button");
@@ -817,7 +829,7 @@ document.addEventListener("drop", (e) => {
   if (!flat.length && !roots.length) return;
   const walked = roots.length && roots.every(Boolean) ? walkDrop(roots)
     : Promise.resolve(flat.map((f) => itemOf(f.name, [{ path: f.name, blob: f, mtime: f.lastModified / 1000 }])));
-  if (!running) say($("state"), "Reading the files");
+  if (!running) { const sp = document.createElement("span"); sp.className = "spin"; $("state").replaceChildren(sp); }   // ai: a spinner, no words (2026-11-07)
   // ai: a drop that cannot be read leaves the list and a run as they were, and says so where nothing is sending
   walked.then(add, (err) => {
     console.error("sender: the dropped files could not be read:", err);

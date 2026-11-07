@@ -131,6 +131,9 @@ const phy = await makePhy(blindSpec());
 
 // ai: The page's canvas as luma (the rig's formula, src/acquire.c), with the #tx line that says what was painted. The
 // ai: canvas shown: #c (2D) or the GPU encoder's #cg, read through a 2D canvas it is drawn into.
+// ai: the column's block as the page draws it (ui.mjs details and detailsOf, 2026-11-07: the state line and figures
+// ai: before): { name, end, spin, frac, ghost, rows: { label: value } }, null while hidden
+const DT = `(() => { const el = document.getElementById("dt"); if (!el || el.hidden) return null; const rows = {}; for (const r of el.querySelectorAll(".dt-row")) rows[r.dataset.k] = r.lastElementChild.textContent; const m = el.querySelector(".meter>span"); return { name: el.querySelector(".nm")?.textContent ?? "", end: el.querySelector(".pc")?.textContent ?? "", spin: !!el.querySelector(".spin"), frac: m ? parseFloat(m.style.width) / 100 : null, ghost: el.classList.contains("ghost"), rows }; })()`;
 const GRAB = `(async () => { const s = [document.getElementById("cg"), document.getElementById("c")].find((e) => !e.hidden);
   let c = s;
   if (s.id === "cg") for (let k = 0; ; k++) {
@@ -141,7 +144,7 @@ const GRAB = `(async () => { const s = [document.getElementById("cg"), document.
   const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data, n = c.width * c.height, y = new Uint8Array(n);
   for (let i = 0, j = 0; i < n; i++, j += 4) y[i] = (77 * d[j] + 150 * d[j + 1] + 29 * d[j + 2] + 128) >> 8;
   let b = ""; for (let i = 0; i < n; i += 8192) b += String.fromCharCode.apply(null, y.subarray(i, i + 8192));
-  return { w: c.width, h: c.height, which: s.id, b64: btoa(b), gap: +document.getElementById("tx").dataset.gap || 0, tx: document.getElementById("tx").textContent, state: document.getElementById("state").textContent, nums: document.getElementById("nums").textContent }; })()`;
+  return { w: c.width, h: c.height, which: s.id, b64: btoa(b), gap: +document.getElementById("tx").dataset.gap || 0, tx: document.getElementById("tx").textContent, state: document.getElementById("state").textContent, dt: ${DT} }; })()`;
 // ai: One grab decoded blind, the canvas set in PAD px of white as the page's white surround sets it. With two codes
 // ai: the canvas is two squares side by side: each half is set in white and decoded on its own (halves), as a receiver
 // ai: reading both would, and r is the left's.
@@ -175,7 +178,7 @@ function encoderOf(g) {
   return { line, ok: GPU ? g.which === "cg" && line.startsWith("encoder: WebGPU") : g.which === "c" && /^encoder: wasm in the worker \(WebGPU off: .+\)$/.test(line) };
 }
 const decoded = (g, r) => `canvas ${g.w} x ${g.h}, picture n = ${r.n}, word ${r.fmt ? `version ${r.fmt.version} at ${r.fmt.fps} fps` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad`;
-const pageLine = (g) => `  page: ${g.state} | ${g.nums} | ${g.tx.split("\n").slice(0, 3).join(" | ")} | ${g.tx.split("\n").find((l) => l.startsWith("painted ")) ?? "no painted line"} | ${encoderOf(g).line} (#${g.which})`;
+const pageLine = (g) => `  page: ${g.state} | ${JSON.stringify(g.dt)} | ${g.tx.split("\n").slice(0, 3).join(" | ")} | ${g.tx.split("\n").find((l) => l.startsWith("painted ")) ?? "no painted line"} | ${encoderOf(g).line} (#${g.which})`;
 
 const faults = [];
 // ai: 496 (version 31, an odd version, 60 blocks under the rate profile): set as the slider sets it (488, version 61 of
@@ -191,10 +194,11 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
     await s.send("DOM.setFileInputFiles", { nodeId, files: bun?.paths ?? [c.big ? bigPath : filePath] });
     // ai: the pick's ready line under the upload's card (#choice, 2026-11-06; the column's #state before), a bundle's
     // ai: naming its files (a folder's change event comes once Chrome has listed it)
-    const wantReady = bun ? `${bun.made.name}, ${bun.made.files} files, ` : c.big ? "check-big.bin, " : "check-send.bin, ";
+    // ai: the card's head, the count and the size of what goes (2026-11-07; a line under the card named it before)
+    const nItems = bun ? (bun.input === "#folder" ? 1 : bun.paths.length) : 1, wantReady = `${nItems} ${nItems === 1 ? "item" : "items"} · `;
     let ready = "";
-    for (let t = 0; t < 50 && !ready.startsWith(wantReady); t++) { ready = await evaluate(s, `document.getElementById("choice").textContent`); if (!ready.startsWith(wantReady)) await new Promise((ok) => setTimeout(ok, 100)); }
-    if (!ready.startsWith(wantReady)) faults.push(`${name}: the ready line says "${ready}"`);
+    for (let t = 0; t < 50 && !ready.startsWith(wantReady); t++) { ready = await evaluate(s, `document.getElementById("selSum").textContent`); if (!ready.startsWith(wantReady)) await new Promise((ok) => setTimeout(ok, 100)); }
+    if (!ready.startsWith(wantReady)) faults.push(`${name}: the card's head says "${ready}"`);
     await evaluate(s, `document.getElementById("go").click()`);
     // ai: Start sends at once (no first-send question since 2026-11-03)
     if (await evaluate(s, `!!document.getElementById("first")`)) faults.push(`${name}: a first-send question is back`);
@@ -225,7 +229,10 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   const { g, r } = out, v = versionOf(subch), wordOk = r.fmt?.version === v && r.fmt?.fps === FPS, blocksOk = r.seen > 0 && r.bad === 0;
   // ai: a file's line carries its size, and what it was compressed to where zstd shrank it (2026-10-05): random bytes do not shrink
   // ai: its figures kept whole by no-break spaces (send.mjs sizeText, 2026-10-23), read as spaces here
-  const state = g.state.replace(/\u00a0/g, " "), stateOk = bun ? state.startsWith(`Sending ${bun.made.name}, `) : c.big ? state.startsWith("Sending check-big.bin, ") : state === (c.file ? "Sending check-send.bin, 50 KB (50 KB raw)" : "Sending");
+  // ai: the block (2026-11-07; "Sending <name>, <sizes>" before): the file's name, its Size, a bundle's Files; the test
+  // ai: stream its name and Speed; no spinner once it paints, no error line
+  const rows = g.dt?.rows ?? {}, wantName = bun ? bun.made.name : c.big ? "check-big.bin" : c.file ? "check-send.bin" : "Test stream";
+  const stateOk = g.state === "" && g.dt?.name === wantName && !g.dt.spin && (c.file ? !!rows.Size && (!bun || rows.Files === String(bun.made.files)) && (bun || c.big || /^50\sKB$/.test(rows.Size)) : Object.keys(rows).join() === "Speed");
   const want = bun ? { name: bun.made.name, type: "application/x-tar", bytes: bun.bytes } : c.big ? { name: "check-big.bin", bytes: bigBytes } : { name: "check-send.bin", bytes: fileBytes };
   const root = hex(blake3(M, want.bytes)), headerOk = !c.file || (header && header.name === want.name && header.length === want.bytes.length && header.root === root && (!want.type || header.type === want.type));
   console.log(`${name}: canvas ${g.w} x ${g.h}, picture n = ${r.n} (want ${N_FOR(subch)}), word ${r.fmt ? `version ${r.fmt.version} at ${r.fmt.fps} fps` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad${c.file ? `; ${frames} frames read, ${blocks} blocks, header ${header ? `${header.name}, ${header.length} B, root ${header.root.slice(0, 16)}...` : "not read"}` : ""}`);
@@ -235,7 +242,7 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   if (!wordOk) faults.push(`${name}: the word is not version ${v} at ${FPS} fps`);
   if (!blocksOk) faults.push(`${name}: ${r.seen} blocks, ${r.bad} bad`);
   if (r.n !== N_FOR(subch)) faults.push(`${name}: registered at n = ${r.n}`);
-  if (!stateOk) faults.push(`${name}: the state line says "${g.state}"`);
+  if (!stateOk) faults.push(`${name}: the block says ${JSON.stringify(g.dt)}${g.state ? `, the state line "${g.state}"` : ""}`);
   if (c.big) {
     const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder, Z }), x = new Uint8Array(472), data = read.filter((b) => !isControlId(b.id));
     const chunks = new Set(data.map((b) => b.id >>> 18)), differ = data.filter((b) => { ref.block(b.id, x); return b.bytes.some((v, i) => v !== x[i]); }).length;
@@ -343,7 +350,7 @@ async function midStream(subch0, r0) {
     if (o.bad) faults.push(`${what}: ${o.bad} bad blocks over the grabs until it`);
     if (o.strays) faults.push(`${what}: ${o.strays} grabs on the way that neither the blind decoder nor a told one reads as the old frames or the new (${o.before})`);
     if (r.n !== N_FOR(subch)) faults.push(`${what}: registered at n = ${r.n} (want ${N_FOR(subch)})`);
-    if (g.state !== "Sending") faults.push(`${what}: the state line says "${g.state}"`);
+    if (g.state !== "" || g.dt?.name !== "Test stream") faults.push(`${what}: the block says ${JSON.stringify(g.dt)}${g.state ? `, the state line "${g.state}"` : ""}`);
     if (g.which !== (GPU ? "cg" : "c")) faults.push(`${what}: read off #${g.which}`);
     if (!(lo > prior)) faults.push(`${what}: its ids start at ${lo}, not above the ${prior} read before it`);
     maxId = Math.max(prior, ...ids);
@@ -352,22 +359,22 @@ async function midStream(subch0, r0) {
   // ai: The page's own lines once its report after the change is written (#tx and #nums together, once a second, so a
   // ai: frame's grab can hold the report from before the change): said(p) must hold within 3 s, and then the encoder line
   // ai: must still be the arm's (under the GPU encoder no stop or fallback since) and the state line sending.
-  const PAGE = `(() => ({ nums: document.getElementById("nums").textContent, lab: document.getElementById("tx").textContent.split("\\n")[0], tx: document.getElementById("tx").textContent, state: document.getElementById("state").textContent, which: ["cg", "c"].find((id) => !document.getElementById(id).hidden) }))()`;
+  const PAGE = `(() => ({ dt: ${DT}, lab: document.getElementById("tx").textContent.split("\\n")[0], tx: document.getElementById("tx").textContent, state: document.getElementById("state").textContent, which: ["cg", "c"].find((id) => !document.getElementById(id).hidden) }))()`;
   const reported = async (what, said, want) => {
     let p = await evaluate(s, PAGE);
     for (let t = 0; t < 30 && !said(p); t++) { await sleep(100); p = await evaluate(s, PAGE); }
     const enc = encoderOf(p);
     console.log(pageLine(p));
-    if (!said(p)) faults.push(`${what}: 3 s after the canvas showed it the page does not say ${want}: #tx "${p.lab}", #nums "${p.nums}", #tx "${p.tx.split("\n").find((l) => l.startsWith("painted ")) ?? ""}"`);
+    if (!said(p)) faults.push(`${what}: 3 s after the canvas showed it the page does not say ${want}: #tx "${p.lab}", the block ${JSON.stringify(p.dt)}, #tx "${p.tx.split("\n").find((l) => l.startsWith("painted ")) ?? ""}"`);
     if (!enc.ok) faults.push(`${what}: the encoder is not the one asked for: ${enc.line}, on #${p.which}`);
-    if (p.state !== "Sending") faults.push(`${what}: the state line says "${p.state}"`);
+    if (p.state !== "" || p.dt?.name !== "Test stream") faults.push(`${what}: the block says ${JSON.stringify(p.dt)}${p.state ? `, the state line "${p.state}"` : ""}`);
   };
   // ai: The re-pick: grabbed from the resize on (the old version until the worker, and under the GPU encoder the new
   // ai: configuration, has the new code, and the frames asked for before it have painted); the first frame at the new
-  // ai: version is judged, then #nums must name it.
+  // ai: version is judged, then #tx must name it.
   let o = await grabUntil((r) => r.fmt?.version === v, (r) => (r.fmt?.version === v0 || r.fmt?.version === v) && r.fmt?.fps === FPS, [subch0, subch], 60000);
   if (!judge(o, name, FPS)) return;
-  // ai: the version is #tx's first line's since 2026-10-02 (the lab line #lab's from 2026-10-01); #nums is the rate
+  // ai: the version is #tx's first line's since 2026-10-02 (the lab line #lab's from 2026-10-01); the block's Speed the rate
   await reported(name, (p) => p.lab.split(/[ ,]/)[0] === NAME(subch), `${NAME(subch)} in #tx`);
   // ai: The display rate, set as a script sets it (no change event, so the page keeps nothing); the page's tick states it
   // ai: from the box. Grabbed from the change on; the first frame whose word says 30 is judged, then #tx must say 30 asked.

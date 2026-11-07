@@ -32,7 +32,7 @@ object Readout {
     }
     private fun at(v: Double) = if (v < 9.95) String.format(Locale.ROOT, "%.1f", v) else v.roundToInt().toString()
 
-    // ai: "6.3 of 12.9 MB": the part in the unit bytes() gives the whole (recv.mjs partOf)
+    // ai: "6.3 of 12.9 MB": the part in the unit bytes() gives the whole (recv.mjs partOf; the apps' lab readouts)
     fun partOf(n: Double, whole: Long): String {
         val all = bytes(whole)
         val unit = all.substringAfter(NB)
@@ -43,21 +43,22 @@ object Readout {
     // ai: "640 KB/s", "1.57 MB/s" (ui.mjs rate)
     fun rate(kbs: Double): String = if (kbs < 999.5) "${kbs.roundToInt()}${NB}KB/s" else "${String.format(Locale.ROOT, "%.2f", kbs / 1000)}${NB}MB/s"
 
-    // ai: "4 s left", "2 min left" from 100 s (ui.mjs left)
+    // ai: a time left, "4 s", "2 min" from 100 s (ui.mjs left), the value of a Time left row
     fun left(secs: Double): String {
         val s = maxOf(1, ceil(secs).toInt())
-        return if (s < 100) "$s${NB}s left" else "${(s / 60.0).roundToInt()}${NB}min left"
+        return if (s < 100) "$s${NB}s" else "${(s / 60.0).roundToInt()}${NB}min"
     }
 
     enum class Tone { Plain, Good, Bad }
 
-    // ai: line: the state; nums: the figures under it ("" for none); frac: the meter (null hides it)
-    // ai: text: the line whole; a line that names a file also says so in three parts, the name between (before, name,
-    // ai: after), for Parts.kt NameLine to hold its head on one line (2026-10-23); size: a received file's own (its size,
-    // ai: or a bundle's count of files), for Receive.kt's card (2026-11-06)
-    data class Line(val text: String, val tone: Tone = Tone.Plain, val nums: String = "", val frac: Double? = null,
-                    val before: String = "", val name: String? = null, val after: String = "", val size: String = "",
-                    val files: Int = 0)   // ai: files: how many a received file holds (a bundle's, else 1); 0 none in
+    // ai: What the column shows of a transfer, as elements (2026-11-07; a sentence of state and figures before, "Receiving
+    // ai: x" over "49%, 147 of 300 KB, 2 s left"): text the name shown, or an error (Tone.Bad), "" for nothing; name the
+    // ai: file's (null for the test stream, test); frac the meter (null hides it) and pct its percentage at the head's end;
+    // ai: rows its facts, a label and a value each ("" a value not yet known, its row kept); size a received file's own (its
+    // ai: size, or a bundle's count of files) and files how many it holds (a bundle's, else 1; 0 none in), for Receive.kt's card
+    data class Line(val text: String, val tone: Tone = Tone.Plain, val frac: Double? = null, val pct: String = "",
+                    val name: String? = null, val test: Boolean = false, val rows: List<Pair<String, String>> = emptyList(),
+                    val size: String = "", val files: Int = 0)
 
     // ai: What the native receiver says (its stats JSON: liblizard/core/rx/receiver.h stats) that the screen reads.
     data class Rx(
@@ -95,21 +96,27 @@ object Readout {
         rx.state == "error" -> Line("Reading stopped.", Tone.Bad)
         // ai: the test stream first while the camera reads it (2026-10-05): it takes over from a file received or in
         // ai: progress, which shows again once the camera is back on its frames (receiver.cpp's state the same)
-        on && rx.state == "test" -> Line("Reading the test stream")
+        on && rx.state == "test" -> Line("Test stream", test = true, rows = listOf("Speed" to rate(rx.goodputKBs)))
         rx.hasFile && !rx.verified && on -> {
-            // ai: the bytes as sent where the manifest has said them, the file's own until then (recv.mjs the same)
+            // ai: the bytes as sent where the manifest has said them, the file's own until then (recv.mjs the same): the
+            // ai: share in and the time left are of them; Received is that share of the file's own size
             val total = if (rx.sent > 0) rx.sent else rx.size
             val got = if (rx.sent > 0) rx.sentIn else rx.received
             val frac = fraction(rx)
             val now = rx.goodputKBs
-            // ai: the rate itself is its own line under the buttons since 2026-10-05 (Receive.kt RateLine), so not here
-            val leftNow = if (now > 0) ", ${left((total - got) / (now * 1000))}" else ""
-            Line("Receiving ${rx.name}", nums = "${floor(100 * frac).toInt()}%, ${partOf(got.toDouble(), total)}$leftNow", frac = frac, before = "Receiving ", name = rx.name)
+            Line(rx.name, frac = frac, pct = "${floor(100 * frac).toInt()}%", name = rx.name, rows = listOf(
+                "Received" to bytes((frac * rx.size).toLong()), "Size" to bytes(rx.size),
+                "Time left" to (if (now > 0) left((total - got) / (now * 1000)) else ""), "Speed" to (if (now > 0) rate(now) else "")))
         }
         rx.hasFile && rx.verified -> {
-            val after = ", ${if (files > 0) "$files ${if (files == 1) "file" else "files"}, " else ""}${bytes(rx.size)} in ${String.format(Locale.ROOT, "%.1f", rx.secs)}${NB}s${received(rx)}" +
-                (if (rx.sent in 1 until rx.size) ", ${bytes(rx.sent)} sent" else "")
-            Line("Received ${rx.name}$after", Tone.Good, frac = 1.0, before = "Received ", name = rx.name, after = after,
+            // ai: the file's facts once in: its size, a bundle's files, the transfer's own time and speed (the column's
+            // ai: block with Show statistics on, Receive.kt; the card says it arrived)
+            Line(rx.name, Tone.Good, frac = 1.0, pct = "100%", name = rx.name, rows = buildList {
+                    add("Size" to bytes(rx.size))
+                    if (files > 1) add("Files" to "$files")
+                    if (rx.secs >= 0.05) add("Time" to "${String.format(Locale.ROOT, "%.1f", rx.secs)}${NB}s")
+                    received(rx).let { if (it.isNotEmpty()) add("Speed" to it) }
+                },
                 size = if (files > 0) "$files ${if (files == 1) "file" else "files"}" else bytes(rx.size), files = maxOf(files, 1))
         }
         // ai: nothing while the camera is off (2026-10-02); the screen draws no empty line
@@ -118,13 +125,13 @@ object Readout {
         else -> Line("")
     }
 
-    // ai: The received line's speed (2026-10-10): the bytes the light carried (as sent where the manifest said them, the
-    // ai: file's own until then) over the transfer's own time, ", 3.17 MB/s". A file in under a second ends before the
+    // ai: A received file's speed (2026-10-10): the bytes the light carried (as sent where the manifest said them, the
+    // ai: file's own until then) over the transfer's own time, "3.17 MB/s". A file in under a second ends before the
     // ai: receiver's one-second window closes, so the live rate never showed it. None where the time reads 0.0 s (a file
     // ai: inside a frame or two).
     private fun received(rx: Rx): String {
         val bytes = if (rx.sent > 0) rx.sent else rx.size
-        return if (rx.secs >= 0.05 && bytes > 0) ", ${rate(bytes / rx.secs / 1000)}" else ""
+        return if (rx.secs >= 0.05 && bytes > 0) rate(bytes / rx.secs / 1000) else ""
     }
 
     // ai: The lab line (Developer Tools): the last second's rate, the registered share and, while a word is read, the format,

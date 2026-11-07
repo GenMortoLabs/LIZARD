@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -54,10 +55,6 @@ import androidx.compose.ui.unit.dp
 import dev.lizard.readout.Readout
 import kotlinx.coroutines.delay
 
-// ai: The state line a send shows: its head, the file's name (its stem cut, its ending kept: NameLine) and the rest;
-// ai: in red for an error
-class SendLine(val before: String, val name: String?, val after: String, val bad: Boolean)
-
 // ai: What Send shows and does, the app's: the run (the sender's state), its settings, the platform's code area and
 // ai: the windows and full screen around it
 interface SendHost {
@@ -77,10 +74,13 @@ interface SendHost {
     val pauseShown: Boolean            // ai: Pause or Resume beside Stop (the desktop's while sending; the phone's paused)
     val fullscreen: Boolean            // ai: a Fullscreen button (the desktop's; the phone's send is the whole screen)
     fun toggleFull()
-    val line: SendLine
-    val figures: String
-    // ai: the state line drawn (the desktop's control window, while a monitor of its own shows the code, has none: its
-    // ai: area says it)
+    // ai: what goes, from Start until Stop (null otherwise): the file's or the test stream's block (Details: the name, a
+    // ai: spinner while it is prepared, a row a fact), its rows the same from Start, so nothing moves as figures arrive
+    val details: Details?
+    val error: String                  // ai: what went wrong, in red ("" none)
+    val reading: Boolean get() = false // ai: the pick being read (a dropped folder walked): a spinner, no words
+    // ai: the block drawn (the desktop's control window, while a monitor of its own shows the code, has none: its area
+    // ai: says it)
     val lineShown: Boolean get() = true
     val heat: String?
     val railCapacity: Double?
@@ -188,17 +188,13 @@ private fun Side(h: SendHost) {
         }
         if (h.fullscreen) Btn("Fullscreen", pad = 16.dp) { h.toggleFull() }
     }
-    val ln = h.line
-    val color = if (ln.bad) Bad else Fg
-    val named = ln.name
-    // ai: from Start until Stop the state line and the figures keep a line each, empty or not (2026-11-02: Preparing,
-    // ai: Sending, the first second's figures and Pause moved everything under them); idle, only what has words
-    val held = h.busy
+    // ai: what goes as elements (2026-11-07, Details; "Sending x, 2.4 GB (4.4 GB raw)" over "1.69 MB/s, pass 2" before),
+    // ai: an error in red, or a spinner while the pick is read
+    val d = h.details
     if (!h.lineShown) Spacer(Modifier.height(10.dp))
-    else if (named != null) NameLine(ln.before, named, ln.after, MaterialTheme.typography.titleMedium, color, Modifier.padding(top = 12.dp))
-    else if (ln.before.isNotEmpty() || held) Text(ln.before, style = MaterialTheme.typography.titleMedium, color = color,
-        maxLines = if (ln.bad) Int.MAX_VALUE else 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 12.dp))
-    if (h.figures.isNotEmpty() || held) Text(h.figures, style = MaterialTheme.typography.bodyMedium, color = Muted, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
+    else if (h.error.isNotEmpty()) Text(h.error, style = MaterialTheme.typography.titleMedium, color = Bad, modifier = Modifier.padding(top = 12.dp))
+    else if (d != null) DetailsBlock(d, Modifier.padding(top = 12.dp))
+    else if (h.reading) CircularProgressIndicator(Modifier.padding(top = 12.dp).size(16.dp), color = Fg, strokeWidth = 2.dp, trackColor = Line)
     h.heat?.let { Warning(it, Modifier.padding(top = 8.dp)) }
     Spacer(Modifier.height(16.dp))
     Fold("Settings", h.folds.open(FoldKey.SendSettings), { h.folds.toggle(FoldKey.SendSettings) }) { Settings(h.settings) }
@@ -219,13 +215,14 @@ private fun Side(h: SendHost) {
 // ai: card (TileRows, TILE dp the least), one row scrolling sideways in landscape; nothing changes while sending. The
 // ai: phone's at the top of its box, 16 dp from its edges, stretched across; `column` (the desktop's, 576 dp) a column
 // ai: at most that wide, centred, and the whole centred in its height where it fits, the card at least a row of items
-// ai: tall; only the card scrolls. `under`: a line 12 dp under the card while it shows (the desktop's choice, what goes).
+// ai: tall; only the card scrolls. `total`: the selection's size, after the count in the card's head ("2 items · 4.4 GB",
+// ai: 2026-11-07; a line under the card named what goes and its size before).
 // ai: Both apps draw it in Compose (the desktop's with AWT on its code canvas until 2026-11-02).
 class UploadItem(val key: String, val name: String, val sub: String, val dir: Boolean)
 
 @Composable
 fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, landscape: Boolean, onRemove: (String) -> Unit, onClear: () -> Unit,
-           column: Dp? = null, under: (@Composable () -> Unit)? = null) {
+           column: Dp? = null, total: String = "") {
     BoxWithConstraints(Modifier.fillMaxSize().background(Bg)) {
         val w = if (column != null) minOf(maxWidth - 32.dp, column) else maxWidth - 32.dp
         Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally,
@@ -233,13 +230,15 @@ fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, landscap
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 tiles.forEach { t -> Tile(t.icon ?: Icons.file, t.label, (w - 12.dp * (tiles.size - 1)) / tiles.size, enabled = enabled, onClick = t.run) }
             }
-            // ai: the card, and under it `under`, as one: the card gives up height before the line does
             if (items.isNotEmpty()) Column(Modifier.width(w).weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Column(Modifier.fillMaxWidth().weight(1f, fill = false).then(if (column != null) Modifier.heightIn(min = (4 + 48 + 4 + TILE + 12).dp) else Modifier)
                     .clip(RoundedCornerShape(12.dp)).background(Card).padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
                     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("${items.size} ${if (items.size == 1) "item" else "items"}", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                        Row(Modifier.weight(1f)) {
+                            Text("${items.size} ${if (items.size == 1) "item" else "items"}", style = MaterialTheme.typography.labelMedium)
+                            if (total.isNotEmpty()) Text(" · $total", style = MaterialTheme.typography.bodyMedium, color = Muted, maxLines = 1)
+                        }
                         Btn("Clear", Kind.Text, enabled = enabled) { onClear() }
                     }
                     val item: @Composable (Int, Dp) -> Unit = { i, iw ->
@@ -255,7 +254,6 @@ fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, landscap
                         }
                     } else Box(Modifier.padding(top = 4.dp).weight(1f, fill = false).verticalScroll(rememberScrollState())) { TileRows(items.size, w - 24.dp, 8.dp, item) }
                 }
-                under?.invoke()
             }
         }
     }

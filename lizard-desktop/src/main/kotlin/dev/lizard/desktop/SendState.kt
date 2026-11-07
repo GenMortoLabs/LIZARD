@@ -702,38 +702,22 @@ class SendState {
         if (e.isNotEmpty()) fail(e)
     }
 
-    // ai: what goes, "<compressed> (<raw> raw)" once a run has made the transfer, the size alone before (the web's and the
-    // ai: app's the same)
-    // ai: "raw" kept with its figure (a no-break space, 2026-10-23: "(47 KB / raw)" broke there)
-    private fun sizeText() = if (compressed > 0) "${Readout.bytes(compressed)} (${Readout.bytes(fileSize)}\u00a0raw)" else Readout.bytes(fileSize)
-
-    // ai: The state line (the web's #state): what is sent (paused too: Resume beside Stop tells a pause, no "Paused" line,
-    // ai: 2026-11-06), or the error (red; Main.kt colours it). A line naming
-    // ai: the file says so in three parts, the name between (2026-10-23), for the shared NameLine to hold its head on one
-    // ai: line; any other is all `before`.
-    data class StateLine(val before: String, val name: String? = null, val after: String = "")
-    val stateParts: StateLine get() = when (val ph = phase) {
-        is Phase.Error -> StateLine(ph.why)
-        Phase.Preparing -> if (runTest) StateLine("Preparing") else StateLine("Preparing ", runName)
-        Phase.On -> if (runTest) StateLine("Sending") else StateLine("Sending ", runName, ", ${sizeText()}")
-        // ai: idle, nothing but "Reading the files" or an error: the choice is named on its card (choiceLine, 2026-11-01)
-        Phase.Idle -> if (loadError.isNotEmpty()) StateLine(loadError) else if (!test && reading) StateLine("Reading the files") else StateLine("")
+    // ai: What goes, as elements from Start until Stop (lizard-ui SendRows.details, 2026-11-07; the state line "Sending
+    // ai: <name>, <compressed> (<raw> raw)" over the figures before): the name, a spinner while it is made, Size, Files,
+    // ai: Speed, and with Show statistics on Compressed (the bytes that go), Pass and Pass time; null otherwise
+    fun details(stats: Boolean): Details? {
+        if (phase != Phase.Preparing && phase != Phase.On) return null
+        val sd = sender
+        return SendRows.details(runName, runTest, phase == Phase.Preparing, fileSize, compressed,
+            choice?.takeIf { it.single == null }?.files ?: 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("lap") ?: 0.0, stats)
     }
-    // ai: the choice's name and what follows it, ", N files, " for a bundle and the bytes that go (the web's "<name>,
-    // ai: <size>"); null while the pick is walked or the bundle made
-    val choiceLine: Pair<String, String>? get() = choice?.takeIf { !reading }?.let {
-        it.name to ", ${if (it.single == null) "${it.files} ${if (it.files == 1) "file" else "files"}, " else ""}${sizeText()}"
-    }
-    val stateLine: String get() = stateParts.let { "${it.before}${it.name ?: ""}${it.after}" }
-
-    // ai: The figures (the web's #nums): the rate the pictures actually presented carry (the presenter's fresh pictures a
-    // ai: second x codes x blocks a frame x 472 B, so a limit outside the sender shows in the figure; 2026-10-04); the
-    // ai: pass, beside it until 2026-10-05, is the readout's.
-    val figures: String get() {
-        if (phase != Phase.On || paused) return ""
-        val f = fmt ?: return ""
-        val pr = present ?: return ""
-        return Readout.rate(pr.num("shownFps") * f.codes * sentBlocks * Pick.PAYLOAD / 1000.0)
+    // ai: the rate the pictures actually presented carry (the presenter's fresh pictures a second x codes x blocks a frame
+    // ai: x 472 B, so a limit outside the sender shows in it; 2026-10-04), 0 while paused or before the first present
+    private val speedKBs: Double get() {
+        if (phase != Phase.On || paused) return 0.0
+        val f = fmt ?: return 0.0
+        val pr = present ?: return 0.0
+        return pr.num("shownFps") * f.codes * sentBlocks * Pick.PAYLOAD / 1000.0
     }
 
     // ai: The readout (the web's #tx, Developer Tools): the format and why, the file, the frame on the surface, a frame's

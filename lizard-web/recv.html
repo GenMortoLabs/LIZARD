@@ -44,26 +44,17 @@
   #done{display:flex;flex-direction:column;gap:16px;width:100%;margin:0 auto}
   body.got #view{display:none}
   .tile.primary svg.i{color:var(--bg)}
-  /* ai: the card's title alone on its line, how it went under it, drawn only with Show statistics on (the apps'
-     ReceivedPanel, 2026-11-06: beside the title it had taken the row); off, the title counts it, "Received 1 file" (the
-     page keeps a bundle as its one tar; the size is the tile's) */
-  #doneSum{margin-top:-8px;padding:0 4px 12px;font-size:14px;color:var(--muted)}
-  body:not(.stats) #doneSum,body.stats #doneCount{display:none}
-  /* ai: the state line and the figures one line each, cut with an ellipsis (the apps': every line is one line) */
-  #state{margin:12px 0 2px}
-  #state,#nums{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #nums{margin:0}
+  /* ai: the card's title counts what came, "Received 1 file" (the page keeps a bundle as its one tar; the size is the
+     tile's); how it went is the column's block with Show statistics on (2026-11-07, the apps' ReceivedPanel) */
   /* ai: the hint (the verdict, each flag on a line of its own: recv.mjs joins them with newlines), muted as the apps' */
   #why{white-space:pre-line;font-weight:400;font-size:14px;color:var(--muted);margin:4px 0 0}
-  #why:empty,#nums:empty{margin:0}
-  #state:empty{display:none}
-  /* ai: Within a run (Start until it stops) a line once shown keeps its room, drawn clear when it falls silent
-     (recv.mjs held; the apps' Receive.kt, 2026-11-02): nothing under it moves as lines come and go */
-  .ghost{color:transparent !important}.meter.ghost{visibility:hidden}
+  #why:empty{margin:0}
+  /* ai: Within a run (Start until it stops) the block and the hint once shown keep their room, drawn clear when they fall
+     silent (recv.mjs held; the apps' Receive.kt, 2026-11-02): nothing under them moves as they come and go */
+  .ghost{color:transparent !important}
   /* ai: Show statistics (Developer Tools, recv:stats; the apps'): off, the lab line and readouts not drawn (still
-     written: the checks read them). The green received line is never drawn in the column since the card in the
-     camera's area says it (#done, 2026-11-06); it is still written, for the checks and a screen reader. */
-  #state.good,body:not(.stats) #logs .lab,body:not(.stats) #logs pre.readout{display:none}
+     written: the checks read them) */
+  body:not(.stats) #logs .lab,body:not(.stats) #logs pre.readout{display:none}
   .settings{margin-top:16px}
   .rail .alert{color:var(--bad)}
   /* ai: one menu a row: an option's text is its menu's label, and two to a row cut it off */
@@ -95,14 +86,12 @@
 <header class="bar"><a class="btn icon back" href="index.html" title="Home"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span class="sr-only">Home</span></a><h1>Receive</h1><span class="grow"></span><a id="swap" class="btn text" href="send.html" title="Switch to the sender page"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></svg>Sender</a><button id="collapse" class="btn icon collapse" type="button" title="Hide sidebar" aria-expanded="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg><span class="sr-only">Sidebar</span></button></header>
 <div id="view"><video id="v" playsinline muted></video><canvas id="shot" width="0" height="0"></canvas><p id="idle" class="hint"><svg class="i alert" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg><svg class="i off" viewBox="0 0 24 24" aria-hidden="true"><path d="M1 1l22 22M21 21H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h3m3-3h6l2 3h4a2 2 0 0 1 2 2v9.34m-7.72-2.06a4 4 0 1 1-5.56-5.56"/></svg><span id="idleText">Camera off</span></p><div id="loading" class="hint" aria-hidden="true" hidden><span class="spin"></span><span>Getting ready</span></div></div>
 <!-- ai: the received file's actions and its card (recv.mjs showState): the ids the page's handlers take -->
-<div id="done" hidden><div class="tiles"><button id="open" class="tile primary" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>Open</button><a id="save" class="btn tile" download><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Save</a><button id="share" class="tile" type="button" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/></svg>Share</button></div><div class="sel"><div class="head"><span id="doneTitle">Received<span id="doneCount"></span></span></div><div id="doneSum"></div><ul class="items"><li class="itile"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span id="doneName" class="t fname"><span class="stem"></span><span></span></span><span id="doneSize" class="s"></span></li></ul></div></div>
+<div id="done" hidden><div class="tiles"><button id="open" class="tile primary" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg>Open</button><a id="save" class="btn tile" download><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>Save</a><button id="share" class="tile" type="button" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/></svg>Share</button></div><div class="sel"><div class="head"><span id="doneTitle">Received<span id="doneCount"></span></span></div><ul class="items"><li class="itile"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span id="doneName" class="t fname"><span class="stem"></span><span></span></span><span id="doneSize" class="s"></span></li></ul></div></div>
 <div id="rail" class="rail"><span id="railAlert" class="alert" role="img" hidden><svg class="i alert" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01"/></svg></span><button id="railCam" class="btn icon" type="button" title="Start"><svg class="i pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg><svg class="i play" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3l14 9-14 9z"/></svg></button><span id="railRate" class="rate" aria-live="off"></span><span id="railPct" class="rate" aria-live="off" hidden></span><span id="railDone" class="done" role="img" aria-label="Received" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14M22 4 12 14.01l-3-3"/></svg></span><button id="railOpen" class="btn icon" type="button" title="Open" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></svg></button><button id="railSave" class="btn icon" type="button" title="Save" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></button><a id="railHome" class="btn icon home" href="index.html" title="Home"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span class="sr-only">Home</span></a></div>
 <div id="side">
   <!-- ai: Start or Stop, the column's one button (2026-11-06; the received file's Open, Save and Share are #done's) -->
   <div id="top"><button id="go" class="primary">Start</button></div>
-  <p id="state" class="status" role="status" aria-live="polite"></p>
-  <div id="meter" class="meter" role="progressbar" aria-label="File received" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
-  <p id="nums" class="nums"></p>
+  <div id="dt" class="dt" role="status" aria-live="polite" hidden></div>
   <p id="why" class="why"></p>
   <!-- ai: the browser's limit, before the first camera start on this browser (recv.mjs go, 2026-10-09): a browser's
        camera and timing hold it far under the Android app, and with no control of the camera's timing it reads a

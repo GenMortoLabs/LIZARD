@@ -38,6 +38,9 @@ import { N_FOR } from "../liblizard/sim/lizard_pick.mjs";
 const at = (p) => fileURLToPath(new URL(p, import.meta.url));
 const DIR = process.env.APP ? "lizard-web/app" : "lizard-web", OUT = at(process.env.APP ? "../research/build/ui/app" : "../research/build/ui"), PORT = 8700 + (process.pid % 200);
 const BASE = `http://localhost:${PORT}/${DIR}/recv.html`, SEND = `http://localhost:${PORT}/${DIR}/send.html`, HOME = `http://localhost:${PORT}/${DIR}/index.html`;
+// ai: the column's block as the pages draw it (ui.mjs details and detailsOf, 2026-11-07: the state line and figures
+// ai: before): { name, end, spin, frac, ghost, rows: { label: value } }, null while hidden
+const DT = `(() => { const el = document.getElementById("dt"); if (!el || el.hidden) return null; const rows = {}; for (const r of el.querySelectorAll(".dt-row")) rows[r.dataset.k] = r.lastElementChild.textContent; const m = el.querySelector(".meter>span"); return { name: el.querySelector(".nm")?.textContent ?? "", end: el.querySelector(".pc")?.textContent ?? "", spin: !!el.querySelector(".spin"), frac: m ? parseFloat(m.style.width) / 100 : null, ghost: el.classList.contains("ghost"), rows }; })()`;
 const scratch = mkdtempSync(join(tmpdir(), "lizard-ui-"));
 mkdirSync(OUT, { recursive: true });
 const server = spawn("node", [at("./server.mjs")], { env: { ...process.env, RIG_HTTP: PORT, RIG_HTTPS: PORT + 363 }, stdio: "ignore" });
@@ -73,7 +76,7 @@ async function press(s, key, code, vk, modifiers = 0) {
 async function until(s, expr, ms, what) {
   for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(100)) if (await evaluate(s, expr)) return true;
   // ai: what the page showed when it gave up, and its console errors so far, so a stall names itself
-  const seen = await evaluate(s, `(() => { const t = (id) => document.getElementById(id)?.textContent ?? ""; return [t("state"), t("nums"), t("lab"), t("why"), t("file")].filter(Boolean).join(" | "); })()`).catch(() => "");
+  const seen = await evaluate(s, `(() => { const t = (id) => document.getElementById(id)?.textContent ?? ""; return [t("state"), t("dt"), t("lab"), t("why"), t("file")].filter(Boolean).join(" | "); })()`).catch(() => "");
   throw new Error(`waited ${ms / 1000} s for ${what}; the page: ${seen}${s.errors?.length ? `; errors: ${s.errors.slice(-3).join("; ")}` : ""}`);
 }
 async function size(s, { w, h, dpr = 1, mobile = false }) {
@@ -87,7 +90,7 @@ const MEASURE = `(async () => {
   const v = $("v"), cs = getComputedStyle(v);
   const rate = await new Promise((ok) => { let n = 0; const t0 = performance.now(); const f = () => { n++; const t = performance.now() - t0; if (t < 2000) v.requestVideoFrameCallback(f); else ok(n / (t / 1000)); }; v.requestVideoFrameCallback(f); });
   return { rate, iw: innerWidth, ih: innerHeight, sw: document.documentElement.scrollWidth, view: box("view"), v: box("v"), vDisplay: cs.display, vVisibility: cs.visibility,
-    state: $("state").textContent, nums: $("nums").textContent, lab: $("lab").textContent, why: $("why").textContent, go: $("go").textContent, goBox: box("go"), swapBox: box("swap"), swap: $("swap").textContent + " " + $("swap").getAttribute("href"), dev: $("dev").open };
+    dt: ${DT}, lab: $("lab").textContent, why: $("why").textContent, go: $("go").textContent, goBox: box("go"), swapBox: box("swap"), swap: $("swap").textContent + " " + $("swap").getAttribute("href"), dev: $("dev").open };
 })()`;
 // ai: The bar's Settings button (#set) and its check went 2026-10-02.
 
@@ -124,7 +127,7 @@ const SIZES = [
   const MEASURE_SEND = `(() => {
     const $ = (id) => document.getElementById(id), box = (el) => { const b = el.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, w: b.width, h: b.height }; };
     return { iw: innerWidth, ih: innerHeight, sw: document.documentElement.scrollWidth, main: box(document.querySelector("main")), c: box($("c")),
-      state: $("state").textContent, nums: $("nums").textContent, lab: $("tx").textContent.split("\\n")[0], go: $("go").disabled, full: document.body.classList.contains("full"), dev: $("dev").open, hint: !$("pick").hidden && $("sel").hidden,
+      state: $("state").textContent, dt: ${DT}, lab: $("tx").textContent.split("\\n")[0], go: $("go").disabled, full: document.body.classList.contains("full"), dev: $("dev").open, hint: !$("pick").hidden && $("sel").hidden,
       buttons: [...document.querySelectorAll("#side button:not([hidden]), #side .btn")].map((b) => b.textContent), bar: [...document.querySelectorAll(".bar .brand, .bar h1, .bar > .btn, .bar > button")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(","), railHome: document.getElementById("railHome")?.getAttribute("href") ?? "" };
   })()`;
   const same = (a, b) => ["top", "left", "w", "h"].every((k) => Math.abs(a[k] - b[k]) < 0.5);
@@ -134,7 +137,7 @@ const SIZES = [
     await sleep(300);
     const idle = await evaluate(s, MEASURE_SEND);
     if (k === 0) check(!idle.dev, `send ${z.name}: the Developer panel is closed on a fresh profile`);
-    check(idle.state === "" && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line, the File and Folder tiles shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
+    check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);
     // ai: since 2026-11-01 a phone's landscape bar the collapser alone, a mouse's the switch alone (its edge a sash)
     check(idle.bar === (z.w > z.h ? (z.mobile ? "Send,Sidebar" : "Send,Receiver") : "Home,Send,Receiver") && idle.railHome === "index.html", `send ${z.name}: the bar "${idle.bar}", the rail's Home "${idle.railHome}"`);
@@ -153,7 +156,7 @@ const SIZES = [
     }
     await screenshot(s, `${OUT}/send-${z.name}-idle.png`);
     await navigate(s, `${SEND}?fps=24&payload=test&auto`);
-    await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && /^LIZARD-\\d+/.test(document.getElementById("tx").textContent) && document.getElementById("nums").textContent !== ""`, 20000, "the test stream painted");
+    await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && /^LIZARD-\\d+/.test(document.getElementById("tx").textContent) && !!(${DT})?.rows?.Speed`, 20000, "the test stream painted");
     const seen = [];
     for (const openPanel of [false, true]) {
       await evaluate(s, `document.getElementById("dev").open = ${openPanel}`);
@@ -161,11 +164,12 @@ const SIZES = [
       const m = await evaluate(s, MEASURE_SEND), tag = `send ${z.name}, Advanced ${openPanel ? "open" : "closed"}`, v = +m.lab.match(/LIZARD-(\d+)/)[1];
       seen.push({ ...m, v });
       await screenshot(s, `${OUT}/send-${z.name}-sending-${openPanel ? "open" : "closed"}.png`);
-      console.log(`     ${tag}: ${m.iw} x ${m.ih}, main ${m.main.w.toFixed(0)} x ${m.main.h.toFixed(0)} at ${m.main.left.toFixed(0)},${m.main.top.toFixed(0)}; "${m.state}" / "${m.nums}" / "${m.lab}"`);
+      console.log(`     ${tag}: ${m.iw} x ${m.ih}, main ${m.main.w.toFixed(0)} x ${m.main.h.toFixed(0)} at ${m.main.left.toFixed(0)},${m.main.top.toFixed(0)}; ${JSON.stringify(m.dt)} / "${m.lab}"`);
       check(m.sw <= m.iw, `${tag}: no horizontal scroll (${m.sw} of ${m.iw})`);
       check(m.c.left >= m.main.left - 0.5 && m.c.right <= m.main.right + 0.5 && m.c.top >= m.main.top - 0.5 && m.c.bottom <= m.main.bottom + 0.5, `${tag}: #c inside <main>`);
-      // ai: the user's figure is the speed alone for the test stream; the version is #tx's first line's (the lab line's, 2026-10-01 to 2026-10-02)
-      check(/^[\d.]+\s(KB|MB)\/s$/.test(m.nums), `${tag}: the numbers line "${m.nums}"`);
+      // ai: the test stream's block: its name and Speed alone (2026-11-07; "Sending" over the rate before); the version
+      // ai: is #tx's first line's (the lab line's, 2026-10-01 to 2026-10-02)
+      check(m.dt?.name === "Test stream" && !m.dt.spin && Object.keys(m.dt.rows).join() === "Speed" && /^[\d.]+\s(KB|MB)\/s$/.test(m.dt.rows.Speed), `${tag}: the block ${JSON.stringify(m.dt)}`);
     }
     check(same(seen[0].main, seen[1].main) && seen[0].v === seen[1].v, `send ${z.name}: Advanced moves neither <main> nor the version (LIZARD-${seen[0].v})`);
     if (k === 0) {
@@ -223,7 +227,7 @@ const SIZES = [
     // ai: Keys as video players have them (2026-10-23, send.mjs): Space and K pause and resume, Space on a focused button
     // ai: is the hotkey and not that button's press, F full screen and back, Ctrl+O nothing while the test stream is the payload
     if (k === 0) {
-      const now = () => evaluate(s, `({ state: document.getElementById("state").textContent, resume: !document.getElementById("pause").hidden && document.getElementById("pause").textContent === "Resume", full: document.body.classList.contains("full") })`);
+      const now = () => evaluate(s, `({ dt: ${DT}, resume: !document.getElementById("pause").hidden && document.getElementById("pause").textContent === "Resume", full: document.body.classList.contains("full") })`);
       await press(s, " ", "Space", 32); await sleep(200);
       const a = await now();
       await press(s, "k", "KeyK", 75); await sleep(200);
@@ -241,10 +245,11 @@ const SIZES = [
       await press(s, "o", "KeyO", 79, 2);
       const opened = await none;
       await s.send("Page.setInterceptFileChooserDialog", { enabled: false });
-      // ai: a pause is told by the button alone (Pause turned Resume beside Stop); the state line keeps what it said
-      check(a.resume && a.state === b.state && !/paused/i.test(a.state), `send ${z.name}: Space pauses, the state line unchanged ("${a.state}")`);
-      check(!b.resume, `send ${z.name}: K resumes ("${b.state}")`);
-      check(c.resume && !c.full, `send ${z.name}: Space with Fullscreen focused pauses, not Fullscreen ("${c.state}", full ${c.full})`);
+      // ai: a pause is told by the button alone (Pause turned Resume beside Stop); the block keeps its name and rows, its
+      // ai: Speed blank while paused, no word of a pause
+      check(a.resume && a.dt?.name === b.dt?.name && a.dt?.rows.Speed === "" && !/paused/i.test(JSON.stringify(a.dt)), `send ${z.name}: Space pauses, the block unchanged but its speed (${JSON.stringify(a.dt)})`);
+      check(!b.resume, `send ${z.name}: K resumes (${JSON.stringify(b.dt)})`);
+      check(c.resume && !c.full, `send ${z.name}: Space with Fullscreen focused pauses, not Fullscreen (full ${c.full})`);
       check(d.full && !e.full, `send ${z.name}: F enters full screen and leaves it`);
       check(!opened, `send ${z.name}: Ctrl+O opens nothing while the test stream is the payload`);
     }
@@ -266,27 +271,27 @@ const SIZES = [
       await s.send("DOM.setFileInputFiles", { objectId: result.objectId, files });
     };
     const LIST = `(() => ({ rows: [...document.querySelectorAll("#pickList .t")].map((t) => t.textContent), subs: [...document.querySelectorAll("#pickList .s")].map((t) => t.textContent),
-      state: document.getElementById("choice").hidden ? "" : document.getElementById("choice").textContent, hint: !document.getElementById("pick").hidden && document.getElementById("sel").hidden, pick: !document.getElementById("sel").hidden, go: document.getElementById("go").disabled }))()`;
+      state: document.getElementById("sel").hidden ? "" : document.getElementById("selSum").textContent, hint: !document.getElementById("pick").hidden && document.getElementById("sel").hidden, pick: !document.getElementById("sel").hidden, go: document.getElementById("go").disabled }))()`;
     const step = async (what, rows, state) => {
-      await until(s, `(${LIST}).rows.join("|") === ${JSON.stringify(rows.join("|"))} && /^${state.replace(/[.()]/g, "\\$&")}/.test(document.getElementById("choice").textContent)`, 8000, what).catch(() => {});
+      await until(s, `(${LIST}).rows.join("|") === ${JSON.stringify(rows.join("|"))} && /^${state.replace(/[.()]/g, "\\$&")}/.test(document.getElementById("sel").hidden ? "" : document.getElementById("selSum").textContent)`, 8000, what).catch(() => {});
       const m = await evaluate(s, LIST);
       check(m.rows.join("|") === rows.join("|") && m.state.startsWith(state) && (rows.length ? m.pick && !m.hint && !m.go : m.hint && !m.pick && m.go),
         `send: ${what}: rows ${m.rows.join(", ") || "none"} (${m.subs.join("; ")}), "${m.state}"`);
     };
     await setFiles("file", [join(src, "a.txt"), join(src, "b.bin")]);
-    await step("two files added", ["a.txt", "b.bin"], "a.txt and 1 more.tar, 2 files, ");
+    await step("two files added", ["a.txt", "b.bin"], "2 items · ");
     await setFiles("folder", [join(src, "album")]);
     // ai: a folder's files come to the page a moment after the protocol sets them
     const folder = await until(s, `(${LIST}).rows.length === 3`, 5000, "the folder listed").catch(() => false);
-    if (folder) await step("a folder added", ["a.txt", "b.bin", "album"], "a.txt and 2 more.tar, 4 files, ");
+    if (folder) await step("a folder added", ["a.txt", "b.bin", "album"], "3 items · ");
     else {   // ai: a protocol that cannot set a folder input: the folder through a drop below instead
       console.log("     DOM.setFileInputFiles took no folder here: the folder is dropped below");
     }
     await setFiles("file", [join(src, "a.txt")]);
     await sleep(300);
-    await step("a file added again listed once", folder ? ["a.txt", "b.bin", "album"] : ["a.txt", "b.bin"], folder ? "a.txt and 2 more.tar, 4 files, " : "a.txt and 1 more.tar, 2 files, ");
+    await step("a file added again listed once", folder ? ["a.txt", "b.bin", "album"] : ["a.txt", "b.bin"], folder ? "3 items · " : "2 items · ");
     await evaluate(s, `document.querySelector('#pickList button[title="Remove b.bin"]').click()`);
-    await step("one removed", folder ? ["a.txt", "album"] : ["a.txt"], folder ? "a.txt and 1 more.tar, 3 files, " : "a.txt, ");
+    await step("one removed", folder ? ["a.txt", "album"] : ["a.txt"], folder ? "2 items · " : "1 item · ");
     await screenshot(s, `${OUT}/send-pick-list.png`);
     // ai: the tiles' rectangle at the desktop size, for the receiver's card to match (2026-11-06)
     sendTiles = await evaluate(s, `(() => { const r = document.querySelector("#pick .tiles").getBoundingClientRect(), m = document.querySelector("main").getBoundingClientRect(); return { w: r.width, h: r.height, x: r.left - m.left, y: r.top - m.top, mw: m.width, mh: m.height }; })()`);
@@ -297,33 +302,42 @@ const SIZES = [
       for (const type of ["dragEnter", "dragOver", "drop"]) await s.send("Input.dispatchDragEvent", { type, x: at.x, y: at.y, data });
     };
     await drop(folder ? [join(src, "c.txt")] : [join(src, "c.txt"), join(src, "album")]);
-    await step("dropped", folder ? ["a.txt", "album", "c.txt"] : ["a.txt", "c.txt", "album"], folder ? "a.txt and 2 more.tar, 4 files, " : "a.txt and 2 more.tar, 4 files, ");
+    await step("dropped", folder ? ["a.txt", "album", "c.txt"] : ["a.txt", "c.txt", "album"], "3 items · ");
     await evaluate(s, `document.getElementById("clearPick").click()`);
     await step("cleared", [], "");
     await setFiles("file", [join(src, "c.txt")]);
-    await step("one file alone, sent as itself", ["c.txt"], "c.txt, ");
-    // ai: the size alone until a Start makes the transfer (2026-11-01: nothing compressed at the pick)
-    await until(s, `/, 30\\sB$/.test(document.getElementById("choice").textContent)`, 10000, "the file's size");   // ai: no-break spaces in the figures
-    check(/, 30\sB$/.test(await evaluate(s, `document.getElementById("choice").textContent`)), `send: the picked file's line under the card, its size alone "${await evaluate(s, `document.getElementById("choice").textContent`)}"`);
-    // ai: long names (2026-10-23): the choice line (under the card since 2026-11-06), on one line, the name's stem cut with
-    // ai: an ellipsis and its ending whole (".txt" for a file, " and 1 more.tar" for a bundle, its space kept), the rest
-    // ai: after it; the row cut to its width
+    await step("one file alone, sent as itself", ["c.txt"], "1 item · ");
+    // ai: the size of what goes in the card's head after the count (2026-11-07; a line under the card before)
+    await until(s, `/^1 item · 30\\sB$/.test(document.getElementById("selSum").textContent)`, 10000, "the file's size");   // ai: no-break spaces in the figures
+    check(/^1 item · 30\sB$/.test(await evaluate(s, `document.getElementById("selSum").textContent`)), `send: the card's head, the count and the size "${await evaluate(s, `document.getElementById("selSum").textContent`)}"`);
+    // ai: long names (2026-10-23): the sending block's name (2026-11-07; the choice line under the card before), on one
+    // ai: line, its stem cut with an ellipsis and its ending whole (".txt" for a file, " and 1 more.tar" for a bundle, its
+    // ai: space kept); the tile's stem cut and its ending kept too
     const long = join(src, "a very long file name for the ellipsis check, longer than any row is wide.txt");
     const long2 = join(src, "another file with a long name, so the bundle's name is long too.txt");
     put(long, "long"); put(long2, "long too");
-    const HEAD = `(() => { const f = document.querySelector("#choice .fname"); if (!f) return null; const st = f.firstElementChild, c = document.getElementById("choice"), lh = parseFloat(getComputedStyle(c).lineHeight), e = f.lastElementChild;
-      return { end: e.textContent, cut: st.scrollWidth > st.clientWidth, over: getComputedStyle(st).textOverflow, oneLine: c.getBoundingClientRect().height < 1.5 * lh, ws: getComputedStyle(e).whiteSpace, state: c.textContent }; })()`;
+    const HEAD = `(() => { const nm = document.querySelector("#dt:not([hidden]) .nm"), f = nm?.querySelector(".fname"); if (!f) return null; const st = f.querySelector(".stem"), e = f.querySelector(".end"), fs = parseFloat(getComputedStyle(nm).fontSize);
+      return { end: e.textContent, cut: st.scrollWidth > st.clientWidth, over: getComputedStyle(st).textOverflow, oneLine: nm.getBoundingClientRect().height < 2 * fs, ws: getComputedStyle(e).whiteSpace, state: nm.textContent }; })()`;
+    // ai: Start, the block's name read, Stop, the pick back
+    const sendOnce = async (end) => {
+      await evaluate(s, `document.getElementById("go").click()`);
+      await until(s, `(${HEAD})?.end === ${JSON.stringify(end)}`, 15000, "the block's name").catch(() => {});
+      const h = await evaluate(s, HEAD);
+      await evaluate(s, `document.getElementById("stop").click()`);
+      await until(s, `!document.getElementById("pick").hidden && !document.getElementById("sel").hidden`, 8000, "the pick back").catch(() => {});
+      return h;
+    };
     await evaluate(s, `document.getElementById("clearPick").click()`);
     await setFiles("file", [long]);
-    await until(s, `(${HEAD})?.end === ".txt"`, 8000, "the long name's line").catch(() => {});
-    const one = await evaluate(s, HEAD);
+    await until(s, `document.querySelectorAll("#pickList .t").length === 1`, 8000, "the long name's tile").catch(() => {});
     const row = await evaluate(s, `(() => { const t = document.querySelector("#pickList .t"), st = t.querySelector(".stem"); return { cut: st.scrollWidth > st.clientWidth, over: getComputedStyle(st).textOverflow, end: st.nextElementSibling.textContent, title: t.title }; })()`);
+    const one = await sendOnce(".txt");
     check(one?.end === ".txt" && one.cut && one.over === "ellipsis" && one.oneLine && row.cut && row.end === ".txt" && row.title.endsWith("is wide.txt"),
-      `send: a long name's head on one line, its stem cut and ".txt" whole (${JSON.stringify(one)}), its tile's stem cut and ".txt" kept (${row.over})`);
+      `send: a long name's block on one line, its stem cut and ".txt" whole (${JSON.stringify(one)}), its tile's stem cut and ".txt" kept (${row.over})`);
     await setFiles("file", [long2]);
-    await until(s, `(${HEAD})?.end === " and 1 more.tar"`, 8000, "the bundle's line").catch(() => {});
-    const two = await evaluate(s, HEAD);
-    check(two?.end === " and 1 more.tar" && two.cut && two.oneLine && two.ws === "pre" && / and 1 more\.tar, 2/.test(two.state), `send: a long bundle name on one line, " and 1 more.tar" whole with its space (${JSON.stringify(two)})`);
+    await until(s, `document.querySelectorAll("#pickList .t").length === 2`, 8000, "the second tile").catch(() => {});
+    const two = await sendOnce(" and 1 more.tar");
+    check(two?.end === " and 1 more.tar" && two.cut && two.oneLine && two.ws === "pre" && two.state.endsWith(" and 1 more.tar"), `send: a long bundle name on one line, " and 1 more.tar" whole with its space (${JSON.stringify(two)})`);
     await screenshot(s, `${OUT}/send-long-name.png`);
   }
   // ai: Files from outside (2026-10-23): a file the system's Open with hands over (launchQueue, stubbed here) and one
@@ -372,7 +386,7 @@ const SIZES = [
       await sleep(400);
       const m = await evaluate(s, MEASURE), tag = `${z.name}, Advanced ${openPanel ? "open" : "closed"}`;
       await screenshot(s, `${OUT}/recv-${z.name}-${openPanel ? "open" : "closed"}.png`);
-      console.log(`     ${tag}: ${m.iw} x ${m.ih}, view ${m.view.w.toFixed(0)} x ${m.view.h.toFixed(0)} at ${m.view.top.toFixed(0)}, go ${m.goBox.top.toFixed(0)} to ${m.goBox.bottom.toFixed(0)}, ${m.rate.toFixed(1)} callbacks/s; "${m.state}" / "${m.nums}" / "${m.lab}" / "${m.why.replace(/\n/g, " | ")}"`);
+      console.log(`     ${tag}: ${m.iw} x ${m.ih}, view ${m.view.w.toFixed(0)} x ${m.view.h.toFixed(0)} at ${m.view.top.toFixed(0)}, go ${m.goBox.top.toFixed(0)} to ${m.goBox.bottom.toFixed(0)}, ${m.rate.toFixed(1)} callbacks/s; ${JSON.stringify(m.dt)} / "${m.lab}" / "${m.why.replace(/\n/g, " | ")}"`);
       check(m.rate > 10, `${tag}: #v ${m.rate.toFixed(1)} frame callbacks a second`);
       check(m.v.w > 100 && m.v.h > 100 && m.vDisplay !== "none" && m.vVisibility !== "hidden", `${tag}: #v ${m.v.w.toFixed(0)} x ${m.v.h.toFixed(0)}, display ${m.vDisplay}, visibility ${m.vVisibility}`);
       check(m.sw <= m.iw, `${tag}: no horizontal scroll (${m.sw} of ${m.iw})`);
@@ -410,9 +424,9 @@ const SIZES = [
     await navigate(s, `${BASE}?seen`);
     await evaluate(s, `document.getElementById("go").click()`);
     await sleep(600);
-    const r = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id), a = $("idle").querySelector(".alert"); return { text: $("idleText").textContent, shown: !$("idle").hidden && $("idle").classList.contains("err"), color: getComputedStyle(a).color, alert: getComputedStyle(a).display !== "none", state: $("state").textContent, rail: !$("railAlert").hidden && $("railAlert").title === $("idleText").textContent, go: $("go").disabled }; })()`);
+    const r = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id), a = $("idle").querySelector(".alert"); return { text: $("idleText").textContent, shown: !$("idle").hidden && $("idle").classList.contains("err"), color: getComputedStyle(a).color, alert: getComputedStyle(a).display !== "none", dt: ${DT}, rail: !$("railAlert").hidden && $("railAlert").title === $("idleText").textContent, go: $("go").disabled }; })()`);
     await screenshot(s, `${OUT}/recv-error-${name}.png`);
-    check(want.test(r.text) && r.shown && r.alert && r.color === "rgb(176, 0, 32)" && r.state === "" && r.rail && !r.go, `${name}: "${r.text}" over the box, its triangle in ${r.color}, the column's line "${r.state}", the rail's triangle ${r.rail ? "named by it" : "missing"}, #go ${r.go ? "disabled" : "enabled"}`);
+    check(want.test(r.text) && r.shown && r.alert && r.color === "rgb(176, 0, 32)" && r.dt === null && r.rail && !r.go, `${name}: "${r.text}" over the box, its triangle in ${r.color}, the column's block ${JSON.stringify(r.dt)}, the rail's triangle ${r.rail ? "named by it" : "missing"}, #go ${r.go ? "disabled" : "enabled"}`);
     await s.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
   }
   const other = s.errors.filter((e) => !/camera did not start/.test(e));
@@ -495,14 +509,13 @@ const SIZES = [
   const t = await chrome("test", [`--use-file-for-fake-video-capture=${testPath}`]);
   await size(t, SIZES[0]);
   await navigate(t, `${BASE}?auto&seen`);
-  await until(t, `document.getElementById("state").textContent === "Reading the test stream" && document.getElementById("lab").textContent.includes("% registered, LIZARD")`, 30000, "the test stream read");
+  await until(t, `(${DT})?.name === "Test stream" && document.getElementById("lab").textContent.includes("% registered, LIZARD")`, 30000, "the test stream read");
   await sleep(1200);
-  const ts = await evaluate(t, `(() => { const $ = (id) => document.getElementById(id); return { state: $("state").textContent, nums: $("nums").textContent, lab: $("lab").textContent, why: $("why").textContent, meter: !$("meter").hidden }; })()`);
+  const ts = await evaluate(t, `(() => { const $ = (id) => document.getElementById(id); return { dt: ${DT}, lab: $("lab").textContent, why: $("why").textContent }; })()`);
   await screenshot(t, `${OUT}/recv-phone-portrait-test.png`);
-  // ai: no figure for the test stream (its rate the rail's and the lab line's since 2026-10-05); the lab line the rate,
-  // ai: the registered share and the format (Developer Tools)
-  // ai: the rate in Developer Tools' lab line and the collapsed rail, not the figures (2026-10-05)
-  check(ts.state === "Reading the test stream" && ts.nums === "" && /^\d+\sKB\/s, \d+% registered, LIZARD-96 at 24\sfps$/.test(ts.lab) && !ts.meter, `test stream: "${ts.state}" / "${ts.nums}" / "${ts.lab}" / "${ts.why}"`);
+  // ai: the test stream's block: its name and Speed, no meter (2026-11-07; "Reading the test stream" before); the lab
+  // ai: line the rate, the registered share and the format (Developer Tools)
+  check(ts.dt?.name === "Test stream" && ts.dt.frac === null && Object.keys(ts.dt.rows).join() === "Speed" && /^\d+\sKB\/s, \d+% registered, LIZARD-96 at 24\sfps$/.test(ts.lab), `test stream: ${JSON.stringify(ts.dt)} / "${ts.lab}" / "${ts.why}"`);
   // ai: The native app is recommended only to a sender painting faster than 24 (2026-10-01): not here, and
   // ai: on a clip of the same stream whose word says 30 (a picture a camera frame).
   check(!/LIZARD app/.test(ts.why), `at 24 fps no word of the LIZARD app: "${ts.why}"`);
@@ -529,54 +542,64 @@ const SIZES = [
   // ai: nothing (2026-11-06, as the apps'; its words drawn clear while the run holds the line's room), the code's name
   // ai: leaves the lab line (until 2026-09-26 the band, once read, stayed on both for good).
   await evaluate(t, `document.getElementById("v").pause()`);
-  await until(t, `!/LIZARD/.test(document.getElementById("lab").textContent) && document.getElementById("state").classList.contains("ghost")`, 8000, "the line silent once the light is gone");
-  const gone = await evaluate(t, `[document.getElementById("nums").textContent, document.getElementById("lab").textContent].join(" / ")`);
-  check(!/LIZARD/.test(gone), `the light gone: the line silent, its room held / "${gone}"`);
+  await until(t, `!/LIZARD/.test(document.getElementById("lab").textContent) && (${DT})?.ghost === true`, 8000, "the block silent once the light is gone");
+  const gone = await evaluate(t, `[JSON.stringify(${DT}), document.getElementById("lab").textContent].join(" / ")`);
+  check(!/LIZARD/.test(gone) && /"ghost":true/.test(gone), `the light gone: the block drawn clear, its room held / ${gone}`);
   check(!t.errors.length, `no console errors over the test stream${t.errors.length ? `: ${t.errors.join("; ")}` : ""}`);
   t.close();
 
   const s = await chrome("file", [`--use-file-for-fake-video-capture=${path}`]);
   await size(s, SIZES[0]);
   await navigate(s, `${BASE}?auto&seen`);
-  const STATE = `(() => { const $ = (id) => document.getElementById(id), m = $("meter"); return { state: $("state").textContent, good: $("state").classList.contains("good"), nums: $("nums").textContent, why: $("why").textContent, meter: m.hidden ? null : m.firstElementChild?.style.width, deliver: !$("done").hidden, doneName: $("doneName").textContent, doneSum: $("doneSum").textContent, doneTitle: $("doneTitle").innerText, clear: !!$("clear"), open: !$("open").hidden && $("open").classList.contains("primary"), go: $("go").textContent, goSolid: $("go").classList.contains("primary"), save: $("save").textContent, href: $("save").href, download: $("save").download,  railRate: $("railRate").textContent, railPct: $("railPct").hidden ? null : $("railPct").textContent, railDone: !$("railDone").hidden && !$("railOpen").hidden && !$("railSave").hidden, railOff: $("railCam").classList.contains("off") }; })()`;
-  await until(s, `/^Receiving/.test(document.getElementById("state").textContent) && parseFloat(document.getElementById("meter").firstElementChild?.style.width) > 40`, 60000, "Receiving, two fifths of the way");
+  const STATE = `(() => { const $ = (id) => document.getElementById(id); return { dt: ${DT}, why: $("why").textContent, lab: $("lab").textContent, deliver: !$("done").hidden, doneName: $("doneName").textContent, doneTitle: $("doneTitle").innerText, clear: !!$("clear"), open: !$("open").hidden && $("open").classList.contains("primary"), go: $("go").textContent, goSolid: $("go").classList.contains("primary"), save: $("save").textContent, href: $("save").href, download: $("save").download,  railRate: $("railRate").textContent, railPct: $("railPct").hidden ? null : $("railPct").textContent, railDone: !$("railDone").hidden && !$("railOpen").hidden && !$("railSave").hidden, railOff: $("railCam").classList.contains("off") }; })()`;
+  await until(s, `(${DT})?.name === ${JSON.stringify(NAME)} && (${DT}).frac > 0.4`, 60000, "Receiving, two fifths of the way");
   const a = await evaluate(s, STATE);
   await screenshot(s, `${OUT}/recv-phone-portrait-receiving.png`);
-  console.log(`     receiving: "${a.state}" / "${a.nums}", meter ${a.meter}`);
-  // ai: progress, size, speed and time left (2026-10-01); the speed and the time left once a second has closed
-  check(a.state === `Receiving ${NAME}` && /^\d+%, [\d.]+ of 300\sKB(, \d+\s(s|min) left)?$/.test(a.nums) && a.meter && !a.deliver, `receiving: the state, the meter at ${a.meter} and "${a.nums}"`);
+  console.log(`     receiving: ${JSON.stringify(a.dt)}`);
+  // ai: the block (2026-11-07): the name with its percentage, the meter, Received, Size, Time left and Speed (the last
+  // ai: two once a second has closed); progress, size, speed and time left since 2026-10-01
+  const ar = a.dt?.rows ?? {};
+  check(a.dt?.name === NAME && /^\d+%$/.test(a.dt.end) && a.dt.frac > 0 && Object.keys(ar).join() === "Received,Size,Time left,Speed" && /^300\sKB$/.test(ar.Size)
+    && /^[\d.]+\s(B|KB)$/.test(ar.Received) && (ar["Time left"] === "" || /^\d+\s(s|min)$/.test(ar["Time left"])) && (ar.Speed === "" || /^[\d.]+\s(KB|MB)\/s$/.test(ar.Speed)) && !a.deliver,
+    `receiving: the block ${JSON.stringify(a.dt)}`);
   // ai: the collapsed rail's squares follow the page whether or not it is shown (2026-10-02): the pause square, the
   // ai: last second's rate where the line has one, no tick yet
-  check(!a.railOff && !a.railDone && (/ left$/.test(a.nums) ? /^[\d.]+(KB|MB)\/s$/.test(a.railRate) : true), `receiving: the rail's camera on, its rate "${a.railRate}", no check, Open or Save`);
+  check(!a.railOff && !a.railDone && (ar.Speed ? /^[\d.]+(KB|MB)\/s$/.test(a.railRate) : true), `receiving: the rail's camera on, its rate "${a.railRate}", no check, Open or Save`);
   // ai: the share of the file in under the rate (2026-10-09), the figures line's own percent
-  check(a.railPct === `${a.nums.match(/^(\d+)%/)?.[1]}%`, `receiving: the rail's percent "${a.railPct}" as the line's "${a.nums.split(",")[0]}"`);
-  await until(s, `/^Received/.test(document.getElementById("state").textContent)`, 60000, "Received");
+  check(a.railPct === a.dt?.end, `receiving: the rail's percent "${a.railPct}" as the block's "${a.dt?.end}"`);
+  await until(s, `!document.getElementById("done").hidden`, 60000, "Received");
   const b = await evaluate(s, STATE);
   check(b.railOff && b.railDone && b.railRate === "" && b.railPct === null, `received: the rail's play square, the green check, Open and Save, no rate or percent`);
   await screenshot(s, `${OUT}/recv-phone-portrait-received.png`);
   const got = await evaluate(s, `fetch(document.getElementById("save").href).then((r) => r.arrayBuffer()).then((x) => { const u = new Uint8Array(x); let v = 7, same = u.length === ${LEN}; for (let i = 0; same && i < u.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; same = u[i] === ((v >>> 16) & 255); } return { n: u.length, same }; })`);
-  console.log(`     received: "${b.state}" / "${b.nums}", meter ${b.meter}, "${b.save}" ${b.href.slice(0, 5)}... as ${b.download}`);
-  // ai: the received file in the camera's place (#done, 2026-11-06): its name and how it went in the card, the column's
-  // ai: line written (green, not drawn) and no meter there
-  check(new RegExp(`^Received ${NAME.replace(".", "\\.")}, 300\\sKB in [\\d.]+\\ss(, [\\d.]+\\s[KM]B/s)?$`).test(b.state) && b.good && b.meter === null && b.deliver && b.doneName === NAME
-    && /^300\sKB in [\d.]+\ss(, [\d.]+\s[KM]B\/s)?$/.test(b.doneSum) && /^Received 1\sfile$/.test(b.doneTitle) && b.download === NAME && b.href.startsWith("blob:"), `received: the card in the camera's place ("${b.doneName}", "${b.doneTitle}", the figures "${b.doneSum}" drawn only with Show statistics on), Save offered as ${b.download}`);
+  console.log(`     received: ${JSON.stringify(b.dt)}, "${b.save}" ${b.href.slice(0, 5)}... as ${b.download}`);
+  // ai: the received file in the camera's place (#done, 2026-11-06): "Received 1 file" and the file in the card, no block
+  // ai: in the column with Show statistics off (2026-11-07: how it went is the column's block with it on, below)
+  check(b.dt === null && b.deliver && b.doneName === NAME && /^Received 1\sfile$/.test(b.doneTitle) && b.download === NAME && b.href.startsWith("blob:"),
+    `received: the card in the camera's place ("${b.doneName}", "${b.doneTitle}"), no block in the column, Save offered as ${b.download}`);
+  await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "1"; e.dispatchEvent(new Event("change")); })()`);
+  const bs = await evaluate(s, DT);
+  await screenshot(s, `${OUT}/recv-phone-portrait-received-stats.png`);
+  check(bs?.name === NAME && bs.end === "100%" && bs.frac === 1 && /^300\sKB$/.test(bs.rows.Size) && (!("Time" in bs.rows) || (/^[\d.]+\ss$/.test(bs.rows.Time) && /^[\d.]+\s(KB|MB)\/s$/.test(bs.rows.Speed))),
+    `received, Show statistics on: the column's block ${JSON.stringify(bs)}`);
+  await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "0"; e.dispatchEvent(new Event("change")); })()`);
   check(b.open && !b.goSolid && !b.clear, `received: Open the one solid button, "${b.go}" outlined, no Receive again`);
   // ai: the camera off by itself once the file is in (2026-10-01, to save heat)
-  check(b.go === "Start" && b.nums === "" && b.why === "", `received: the camera stopped by itself ("${b.go}")`);
+  check(b.go === "Start" && b.why === "", `received: the camera stopped by itself ("${b.go}")`);
   check(got.n === LEN && got.same, `Save's file is the ${LEN} bytes sent (${got.n}, ${got.same ? "the same" : "NOT the same"})`);
   await sleep(500);
   const c = await evaluate(s, STATE);
   await screenshot(s, `${OUT}/recv-phone-portrait-received-stopped.png`);
-  check(c.state === b.state && c.deliver && c.go === "Start" && c.nums === "" && c.why === "", `stopped: "${c.state}", the card and Save kept, "${c.go}"`);
+  check(c.dt === null && c.deliver && c.go === "Start" && c.why === "", `stopped: the card and Save kept, no block, "${c.go}"`);
   // ai: started again on the same clip: the camera's view back in the card's place, the finished file named again by the
   // ai: light, Save's file the same, and the camera left running (it stops itself once a file, not each time the light
   // ai: names one)
   await evaluate(s, `document.getElementById("go").click()`);
-  await until(s, `document.getElementById("go").textContent === "Stop" && /^Received/.test(document.getElementById("state").textContent)`, 30000, "Received again after a restart");
+  await until(s, `document.getElementById("go").textContent === "Stop" && document.getElementById("done").hidden && /LIZARD-/.test(document.getElementById("lab").textContent)`, 30000, "the code read again after a restart");
   const d = await evaluate(s, STATE);
   await sleep(1500);
   const d2 = await evaluate(s, STATE);
-  check(d.state === b.state && !d.deliver && d.href === b.href && d2.go === "Stop", `started again: "${d.state}", the camera's view in the card's place, the same Save, the camera still on 1.5 s later ("${d2.go}")`);
+  check(d.dt === null && !d.deliver && d.href === b.href && d2.go === "Stop", `started again: no block for the file already in (${JSON.stringify(d.dt)}), the camera's view in the card's place, the same Save, the camera still on 1.5 s later ("${d2.go}")`);
   await evaluate(s, `document.getElementById("go").click()`);
   await size(s, SIZES[2]);
   await sleep(300);

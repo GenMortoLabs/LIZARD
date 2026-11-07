@@ -21,9 +21,10 @@
   @media (pointer:fine),(pointer:none){#side .row>button,#side .row>.btn{flex:0 0 auto}}
   /* ai: One line each, so a long name or a figure never grows the controls and shrinks <main> under a painted symbol. */
   /* ai: An error wraps: nothing is painted then. */
-  #state,#nums{margin:.5rem 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #nums{min-height:1.4em}
+  #state{margin:.5rem 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   #state.bad{white-space:normal}
+  /* ai: a pick being read (a dropped folder walked): a spinner, no words (2026-11-07; "Reading the files" before) */
+  #state .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--fg);border-radius:50%;animation:dt-spin .8s linear infinite;vertical-align:middle}
   #settings{position:absolute;top:100%;left:0;right:0;margin:0;padding:0 16px 1rem}
   #settings label select{width:100%}
   details.dev select,details.dev input{width:100%}
@@ -42,9 +43,7 @@
   #pickList{min-height:0;overflow-y:auto}
   /* ai: what goes, under the card (2026-11-06, the PC sender's ChoiceLine): the name semibold, its stem cut and its
      ending kept, then ", N files, " for a bundle and the size, regular and muted; centred, one line, 12 px under */
-  #choice{display:flex;justify-content:center;margin:-4px 0 0;font-size:15px;font-weight:600;line-height:20px;white-space:nowrap;min-width:0}
-  #choiceName{display:flex;min-width:0}#choiceName>.fname{min-width:0}
-  #choiceMore{flex:none;font-weight:400;color:var(--muted)}
+  #selSum .tot{font-weight:400;color:var(--muted)}
   /* ai: a file dragged over the page: the whole of <main> takes the drop, and the outline says so */
   main.drop{outline:3px dashed var(--fg);outline-offset:-12px}
   /* ai: Landscape and desktop: a 20rem column beside <main>, the bar fixed at its top and the controls over Settings in */
@@ -61,17 +60,14 @@
     #settings{padding:0 12px 1rem}
     #settings{position:static}
     /* ai: the PC's column (lizard-ui Send.kt Side, Column.kt ToolLandscape): the bar's hairline inside the column's
-       padding (the rail's across it), the state line 12 px under the row and the figures 2 px under it, one line each,
-       a long name's stem cut first and the rest last (ui.mjs sayName); from Start until Stop (body.busy) they keep a
-       line each, empty or not, so nothing under them moves; idle only what has words; 16 px before the folds. Each line
-       the font's own height (the apps' Compose text has no leading over its first line or under its last) */
+       padding (the rail's across it), what goes 12 px under the row as elements (#dt, ui.mjs details: its rows the same
+       from Start, so nothing under them moves) or an error; 16 px before the folds. A line the font's own height (the
+       apps' Compose text has no leading over its first line or under its last) */
     .bar{border-bottom:0;position:relative;min-height:57px;padding-bottom:1px}
     .bar::after{content:"";position:absolute;left:12px;right:12px;bottom:0;height:1px;background:var(--line)}
     body.collapsed .bar::after{left:0;right:0}
     #state{margin:12px 0 0;line-height:normal}
-    #nums{margin:2px 0 0;line-height:normal;min-height:0}
-    #state:empty,#nums:empty{display:none}
-    body.busy #state:empty,body.busy #nums:empty{display:block;min-height:1lh}
+    #state:empty{display:none}
     #dev{margin-top:16px}
   }
   /* ai: under a mouse (or no pointer) each 40 px button in a 48 px target, as the PC's (lizard-ui LocalTarget) */
@@ -94,7 +90,7 @@
     <div id="side">
       <div class="row"><button id="go" class="primary" disabled>Start</button><button id="stop" hidden>Stop</button><button id="pause" hidden>Pause</button><button id="fs">Fullscreen</button></div>
       <p id="state" class="status" role="status"></p>
-      <p id="nums" class="nums"></p>
+      <div id="dt" class="dt" role="status" hidden></div>
     </div>
     <section id="settings" class="settings">
       <!-- ai: Settings and Developer Tools, two rows that open (2026-10-02): Settings (#dev, its open state and every control in
@@ -189,6 +185,6 @@
     </script>
     </div>
   </div>
-  <main><canvas id="bgc"></canvas><canvas id="c"></canvas><canvas id="cg" hidden></canvas><div id="pick" class="pick" hidden><div class="tiles"><button id="addFiles" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>File</button><button id="addFolder" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Folder</button></div><div id="sel" class="sel" hidden><div class="head"><span id="selSum"></span><button id="clearPick" class="text" type="button">Clear</button></div><ul id="pickList" class="items"></ul></div><p id="choice" hidden><span id="choiceName"></span><span id="choiceMore"></span></p></div><input id="file" type="file" multiple class="sr-only" aria-label="Choose files"><input id="folder" type="file" webkitdirectory class="sr-only" aria-label="Choose a folder"></main>
+  <main><canvas id="bgc"></canvas><canvas id="c"></canvas><canvas id="cg" hidden></canvas><div id="pick" class="pick" hidden><div class="tiles"><button id="addFiles" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>File</button><button id="addFolder" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Folder</button></div><div id="sel" class="sel" hidden><div class="head"><span id="selSum"></span><button id="clearPick" class="text" type="button">Clear</button></div><ul id="pickList" class="items"></ul></div></div><input id="file" type="file" multiple class="sr-only" aria-label="Choose files"><input id="folder" type="file" webkitdirectory class="sr-only" aria-label="Choose a folder"></main>
 </div>
 <script type="module" src="send.mjs"></script>

@@ -110,14 +110,14 @@ export function bytes(n) {
 
 // ai: The transfer's figures for people (2026-10-01: progress, size, speed, time left), the Android app's
 // ai: Readout.kt the same: rate(kbs) a speed from KB/s (1 KB = 1000 B), "640 KB/s" under 1,000 and "1.57 MB/s" from
-// ai: there; left(secs) the time still to go, "4 s left", "2 min left" from 100 s. A figure keeps its unit on its line
+// ai: there; left(secs) the time still to go, "4 s", "2 min" from 100 s (a Time left row's value). A figure keeps its unit on its line
 // ai: (a no-break space).
 export function rate(kbs) {
   return kbs < 999.5 ? `${Math.round(kbs)} KB/s` : `${(kbs / 1000).toFixed(2)} MB/s`;
 }
 export function left(secs) {
   const s = Math.max(1, Math.ceil(secs));
-  return s < 100 ? `${s} s left` : `${Math.round(s / 60)} min left`;
+  return s < 100 ? `${s} s` : `${Math.round(s / 60)} min`;
 }
 
 // ai: The icons a script puts on a page (2026-10-01; Feather's, MIT): ui.css svg.i draws them on a 24 grid, 2 px strokes
@@ -141,6 +141,44 @@ export function sayName(el, before, name, after = "", tone = null) {
   el.replaceChildren(line);
   el.classList.toggle("bad", tone === "bad");
   el.classList.toggle("good", tone === "good");
+}
+// ai: What a send or a receive moves, as elements (2026-11-07, the apps' lizard-ui Details; a sentence of state and
+// ai: figures before, "Sending x, 2.4 GB (4.4 GB raw)"): a head, the file's icon and name (its stem cut, its ending
+// ai: kept) with at its end a percentage or, while it is prepared, a spinner; the meter where there is one; then a row a
+// ai: fact (data-k its label), the label muted at the left, the value at the right. d: { name, test (the test stream:
+// ai: its name not a file's), end, spin, frac, rows: [[label, value]] }, or null to hide the block (el, a .dt). clear:
+// ai: drawn clear, its room kept (a run's block once shown). Rebuilt only when it changes (a screen reader reads each
+// ai: rewrite of a live region).
+export function details(el, d, clear = false) {
+  el.hidden = !d;
+  el.classList.toggle("ghost", !!d && clear);
+  if (!d) { el.dataset.key = ""; return; }
+  const key = JSON.stringify(d);
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  const span = (cls, text) => { const p = document.createElement("span"); p.className = cls; p.textContent = text; return p; };
+  const head = document.createElement("div"), nm = span("nm", "");
+  head.className = "dt-head";
+  if (d.test) nm.textContent = d.name; else sayName(nm, "", d.name);
+  head.append(icon("file"), nm);
+  if (d.spin) head.append(span("spin", "")); else if (d.end) head.append(span("pc", d.end));
+  const parts = [head];
+  if (d.frac != null) {
+    const m = document.createElement("div");
+    m.className = "meter"; m.setAttribute("role", "progressbar"); m.setAttribute("aria-valuemin", "0"); m.setAttribute("aria-valuemax", "100");
+    meter(m, d.frac); parts.push(m);
+  }
+  for (const [k, v] of d.rows ?? []) { const r = document.createElement("div"); r.className = "dt-row"; r.dataset.k = k; r.append(span("k", k), span("v", v)); parts.push(r); }
+  el.replaceChildren(...parts);
+}
+// ai: a block's facts as the checks read them: { name, end, frac, rows: { label: value } }, null where hidden
+export function detailsOf(el) {
+  if (!el || el.hidden) return null;
+  const rows = {};
+  for (const r of el.querySelectorAll(".dt-row")) rows[r.dataset.k] = r.lastElementChild.textContent;
+  const m = el.querySelector(".meter>span");
+  return { name: el.querySelector(".nm")?.textContent ?? "", end: el.querySelector(".pc")?.textContent ?? "", spin: !!el.querySelector(".spin"),
+    frac: m ? parseFloat(m.style.width) / 100 : null, ghost: el.classList.contains("ghost"), rows };
 }
 // ai: a name's stem and the ending kept whole when it is cut: a bundle's " and N more.tar" (tar.mjs bundle), else an
 // ai: extension of at most 10 characters, else nothing

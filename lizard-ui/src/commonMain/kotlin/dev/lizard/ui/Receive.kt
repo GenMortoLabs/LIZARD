@@ -121,7 +121,8 @@ fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
 
 // ai: The received file (2026-11-06; the web's recv.html #done), in the camera's place once the camera is off, in the
 // ai: sender's upload geometry (Send.kt Upload): its actions as tiles in one row in equal
-// ai: cells, Open the solid one, then a card, "Received" and how it went, the file as an item tile. `column`: in
+// ai: cells, Open the solid one, then a card, "Received" with what came and the file as an item tile (how it went is
+// ai: the column's block with Show statistics on, 2026-11-07: the card holds things to act on). `column`: in
 // ai: landscape a column at most that wide centred in the camera's area (the sender's 576 dp); null, the column's width
 // ai: at the top (portrait, a phone's: the tiles across it).
 @Composable
@@ -137,14 +138,11 @@ private fun ReceivedPanel(h: ReceiveHost, modifier: Modifier, column: Dp?) {
                 acts.forEachIndexed { i, a -> Tile(a.icon ?: Icons.file, a.label, (w - 12.dp * (acts.size - 1)) / acts.size, solid = i == 0, onClick = a.run) }
             }
             Column(Modifier.width(w).clip(RoundedCornerShape(12.dp)).background(Card).padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 12.dp)) {
-                // ai: the title alone on its line, how it went under it (2026-11-06: beside it, it took the row and
-                // ai: squeezed the title to a letter a line); the figures only with Show statistics on, else the title
-                // ai: counts what came, "Received 10 files", "Received 1 file" (the size is the tile's)
+                // ai: the title counts what came, "Received 10 files", "Received 1 file" (the size is the tile's)
                 val good = ln.tone == Readout.Tone.Good
-                Column(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(if (good && !h.showStats && ln.files > 0) "Received ${countOf(ln.files)}" else "Received",
+                Column(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 12.dp)) {
+                    Text(if (good && ln.files > 0) "Received ${countOf(ln.files)}" else "Received",
                         style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = Fg)
-                    if (good && h.showStats) Text(ln.after.removePrefix(", "), style = MaterialTheme.typography.bodyMedium, color = Muted)
                 }
                 ItemTile(h.keptName, if (ln.tone == Readout.Tone.Good) ln.size else "", Icons.file, TILE.dp, onRemove = null)
             }
@@ -190,8 +188,8 @@ private fun Side(h: ReceiveHost) {
 // ai: one row, Open the solid one filling it, the others their own width; Start or Stop alone under them,
 // ai: the full width; on the desktop every button its label's width, LocalButtonsFill; without the camera's permission
 // ai: the one button that gets it, why on the state line), 12 dp under
-// ai: them the state line, the meter, the figures, then 4 dp apart the heat warning and one hint (a filing's failure over the preview),
-// ai: 16 dp before the folds. Show statistics off: no green line once a file is in.
+// ai: them the transfer's block (Details), then 4 dp apart the heat warning and one hint (a filing's failure over the
+// ai: preview), 16 dp before the folds. A file in: its block only with Show statistics on.
 @Composable
 private fun TransferPanel(h: ReceiveHost) {
     Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -206,35 +204,31 @@ private fun TransferPanel(h: ReceiveHost) {
         }
     }
     val ln = h.line
-    // ai: an error is the preview's to say (errorOf), not the column's
-    // ai: the received line is the card's to say (ReceivedPanel, 2026-11-06), never the column's; Show statistics off hid
-    // ai: it before
-    val shown = ln.text.isNotEmpty() && ln.tone != Readout.Tone.Good && ln.tone != Readout.Tone.Bad
-    val named = ln.name
-    // ai: Within a run (Start until it stops) a line once shown keeps its room until the run ends, drawn clear
+    // ai: an error is the preview's to say (errorOf), not the column's. The transfer as elements (2026-11-07, Details:
+    // ai: the name, the meter and its percentage, a row a fact; "Receiving x" over "49%, 147 of 300 KB, 2 s left"
+    // ai: before); a file in is the card's to say, its block here only with Show statistics on and the camera off. A
+    // ai: line naming nothing (the camera's access) is a message, said as one.
+    val good = ln.tone == Readout.Tone.Good
+    val shown = ln.text.isNotEmpty() && ln.tone != Readout.Tone.Bad && (!good || (h.showStats && !h.running))
+    val message = shown && ln.name == null && !ln.test
+    val now = if (shown && !message) Details(ln.name ?: ln.text, test = ln.test, end = ln.pct, frac = ln.frac, rows = ln.rows) else null
+    // ai: Within a run (Start until it stops) the block once shown keeps its room until the run ends, drawn clear
     // ai: when it falls silent (2026-11-02: Receiving, its meter and figures, and the hint each moved the folds under them
     // ai: as they came and went); none is held before it has had words, so a camera starting shows no gap (a run's whole
     // ai: room held from Start stood empty under Stop). The run's file in ends it at once, the kept row and the
-    // ai: lines' going in one frame (the camera stops a poll later); a run started over a file already kept holds on.
-    // ai: Every line is one line.
+    // ai: block's going in one frame (the camera stops a poll later); a run started over a file already kept holds on.
     val keptAtStart = remember(h.running) { h.kept != null }
     val run = h.running && (h.kept == null || keptAtStart)
-    val last = remember(h.running) { arrayOf("", "", "") }   // ai: the line, the figures and the hint as last shown this run
-    val meterSeen = remember(h.running) { BooleanArray(1) }
-    if (run && ln.frac != null) meterSeen[0] = true
-    fun said(i: Int, now: String): String { if (run && now.isNotEmpty()) last[i] = now; return now }
-    val lineNow = said(0, if (shown) ln.text else "")
-    if (shown && named != null) NameLine(ln.before, named, ln.after, MaterialTheme.typography.titleMedium, toneColour(ln.tone), Modifier.padding(top = 12.dp, bottom = 2.dp))
-    else if (lineNow.isNotEmpty() || (run && last[0].isNotEmpty())) Text(lineNow.ifEmpty { last[0] }, style = MaterialTheme.typography.titleMedium,
-        color = if (lineNow.isEmpty()) Color.Transparent else toneColour(ln.tone), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 12.dp, bottom = 2.dp))
-    Meter(ln.frac.takeIf { ln.tone != Readout.Tone.Good }, hold = run && meterSeen[0])
-    val numsNow = said(1, ln.nums)
-    if (numsNow.isNotEmpty() || (run && last[1].isNotEmpty())) Text(numsNow.ifEmpty { last[1] }, style = MaterialTheme.typography.bodyMedium,
-        color = if (numsNow.isEmpty()) Color.Transparent else Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val last = remember(h.running) { arrayOfNulls<Details>(1) }
+    val lastHint = remember(h.running) { arrayOf("") }
+    if (run && now != null) last[0] = now
+    if (message) Text(ln.text, style = MaterialTheme.typography.titleMedium, color = toneColour(ln.tone), modifier = Modifier.padding(top = 12.dp, bottom = 2.dp))
+    else (now ?: last[0].takeIf { run })?.let { DetailsBlock(it, Modifier.padding(top = 12.dp), clear = now == null) }
     h.heat?.let { Warning(it, Modifier.padding(top = 4.dp)) }
-    // ai: the hint is the running camera's: held still while it runs (steady), its room kept as the lines' are, gone with it
-    val hint = said(2, steady(h.hint, on = 0).takeIf { run }.orEmpty())
-    if (hint.isNotEmpty() || (run && last[2].isNotEmpty())) Text(hint.ifEmpty { last[2] }, style = MaterialTheme.typography.bodyMedium,
+    // ai: the hint is the running camera's: held still while it runs (steady), its room kept as the block's is, gone with it
+    val hint = steady(h.hint, on = 0).takeIf { run }.orEmpty()
+    if (run && hint.isNotEmpty()) lastHint[0] = hint
+    if (hint.isNotEmpty() || (run && lastHint[0].isNotEmpty())) Text(hint.ifEmpty { lastHint[0] }, style = MaterialTheme.typography.bodyMedium,
         color = if (hint.isEmpty()) Color.Transparent else Muted, modifier = Modifier.padding(top = 4.dp))
     Spacer(Modifier.height(16.dp))
 }

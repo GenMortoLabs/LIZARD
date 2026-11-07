@@ -84,7 +84,7 @@ async function clip(path) {
 }
 async function until(s, expr, ms, what) {
   for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(200)) if (await evaluate(s, expr).catch(() => false)) return true;
-  const seen = await evaluate(s, `[document.getElementById("state")?.textContent, document.getElementById("nums")?.textContent].filter(Boolean).join(" | ")`).catch(() => "");
+  const seen = await evaluate(s, `[document.getElementById("state")?.textContent, document.getElementById("dt")?.textContent].filter(Boolean).join(" | ")`).catch(() => "");
   throw new Error(`waited ${ms / 1000} s for ${what}; the page: ${seen}`);
 }
 const CACHED = `(async () => { const out = {}; for (const k of await caches.keys()) out[k] = (await (await caches.open(k)).keys()).map((r) => new URL(r.url).pathname); return out; })()`;
@@ -132,10 +132,10 @@ check(await evaluate(s, `!!document.getElementById("send") && !!document.getElem
 await navigate(s, `${BASE}send.html`).catch(() => {});
 check(await evaluate(s, `!!document.getElementById("go")`).catch(() => false), `offline: send.html loads by its own name (stored without the redirect that brought it)`);
 await navigate(s, `${BASE}recv.html?auto&seen`);
-const read = await until(s, `document.getElementById("state").textContent === "Reading the test stream" && /LIZARD-96/.test(document.getElementById("lab").textContent)`, 40000, "offline: the test stream read").catch((e) => (console.log(`     ${e.message}`), false));
+const read = await until(s, `document.querySelector("#dt:not([hidden]) .nm")?.textContent === "Test stream" && /LIZARD-96/.test(document.getElementById("lab").textContent)`, 40000, "offline: the test stream read").catch((e) => (console.log(`     ${e.message}`), false));
 check(read, `offline: the receiver reads the test stream off the camera (the codec, the workers, every file from the cache)`);
 await navigate(s, `${BASE}send?fps=24&payload=test&auto`);
-const painted = await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && document.getElementById("state").textContent === "Sending"`, 30000, "offline: the test stream painted").catch((e) => (console.log(`     ${e.message}`), false));
+const painted = await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && document.querySelector("#dt:not([hidden]) .nm")?.textContent === "Test stream" && !document.querySelector("#dt .spin")`, 30000, "offline: the test stream painted").catch((e) => (console.log(`     ${e.message}`), false));
 check(painted, `offline: the sender paints the test stream, asked for at its clean URL (send?...)`);
 
 // ai: 3. the differential install

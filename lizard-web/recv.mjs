@@ -27,12 +27,12 @@ import { PoolPolicy } from "./pool.mjs";
 import { logPost } from "./devlog.mjs";
 import { R_RING, SPAN, MODULES, N_FOR, NAME, PICTURE_SIZES, subchOf } from "../liblizard/sim/lizard_pick.mjs";
 import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
-import { remember, persist, restoreSaved, say, meter, bytes, rate, left, about, registerApp, collapser, sideResizer, sayName, slider, nameParts } from "./ui.mjs";
+import { remember, persist, restoreSaved, bytes, rate, left, about, registerApp, collapser, sideResizer, slider, nameParts, details } from "./ui.mjs";
 import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
 // ai: Settings and Developer Tools (the Developer panel until 2026-10-01) open as they were left, a phone session
 // ai: being a series of reloads; restored here, at the top of the module, so nothing is seen to move. Errors a user must
-// ai: see go to #state instead.
+// ai: see go over the camera's box (#idle) instead.
 remember($("dev"), "recv:dev");
 remember($("logs"), "recv:logs");
 collapser($("collapse"), "recv:collapsed");   // ai: the sidebar collapser (ui.mjs); the camera box takes the width
@@ -134,7 +134,7 @@ function showCfg() {
 // ai: Developer Tools: the numbers line's until 2026-10-01); why: its hints in plain words.
 // ai: fileAt: when a frame last brought blocks that were not the test stream's (2026-10-05: the test stream owns the
 // ai: display only while it is the newer of the two)
-const held = { running: false, kept: false, state: "", nums: "", why: "", meter: false, whyText: "", whyAt: 0 };   // ai: showState's run: the lines' room
+const held = { running: false, kept: false, dt: null, why: "", whyText: "", whyAt: 0 };   // ai: showState's run: the block's and the hint's room
 const ui = { err: "", starting: false, received: null, testAt: -Infinity, fileAt: -Infinity, bandAt: -Infinity, stoppedAt: 0, lab: "", why: "" };
 const LIVE_MS = 3000;   // ai: the test stream, or a code's word, is still "being read" this long after its last frame
 const recent = (at) => performance.now() - at < LIVE_MS;
@@ -144,10 +144,8 @@ const recent = (at) => performance.now() - at < LIVE_MS;
 // ai: received (the camera off, or the transfer in hand the file offered), idle (camera off), then scanning: the test
 // ai: stream, a code found with no file yet, or looking. Drawn from what the page holds, on every change and once a
 // ai: second from the stats tick. The received file's buttons stay whatever the state, until the next file replaces them.
-// ai: The words and figures are the Android app's too (Readout.kt; 2026-10-01): the user's figures are progress, size,
-// ai: speed and time left; the format's name and the registered
-// ai: share are the lab line's, in Developer Tools (#lab).
-let stateShown = "";
+// ai: The figures are the apps' too (Readout.kt; 2026-10-01): progress, received, size, time left and speed as rows; the
+// ai: format's name and the registered share are the lab line's, in Developer Tools (#lab).
 // ai: New bytes a second over the last closed one-second bucket (KB/s), null before a second has closed (the last two
 // ai: buckets from 2026-09-29 to 2026-09-30).
 function recentKBs() {
@@ -165,67 +163,54 @@ function plainVerdict(text) {
 }
 function showState() {
   const on = !!track, h = xferNow?.header, go = $("go"), offered = !!h && xferNow.done && h.root === ui.received?.root;
-  let line, tone = null, frac = null, nums = "", named = null, doneSum = "";   // ai: named: a line that names a file, for sayName
+  // ai: What the column shows as elements (ui.mjs details, 2026-11-07; the apps' Readout.line and lizard-ui Details;
+  // ai: "Receiving x" over "49%, 147 of 300 KB, 2 s left" before): the file's name with its percentage, the meter,
+  // ai: Received, Size, Time left and Speed; the test stream its name and Speed; a file in only with Show statistics on
+  // ai: and the camera off (Size, Time, Speed: the card in the camera's place says it arrived).
+  let d = null, frac = null;
   const loading = on && !ui.err && !ui.starting && !answered;
   // ai: the test stream first while the camera reads it, the newer of it and a file's frames (2026-10-05): it takes over
-  // ai: from a file received or in progress, whose line, buttons and rail squares come back once the camera is on its frames
+  // ai: from a file received or in progress, whose block, buttons and rail squares come back once the camera is on its frames
   const testing = on && recent(ui.testAt) && ui.testAt >= ui.fileAt;
-  // ai: no line while the camera starts or no decoder has answered (the preview's cover says "Getting ready"), and an error
+  const speedNow = () => { const k = recentKBs(); return k > 0 ? nb(rate(k)) : ""; };
+  // ai: nothing while the camera starts or no decoder has answered (the preview's cover says "Getting ready"), and an error
   // ai: is the preview's to say (2026-11-06, the apps' Receive.kt: errorOf, Readout.line)
-  if (ui.err || ui.starting || loading) line = "";
-  else if (testing) line = "Reading the test stream";   // ai: its rate the rail's and Developer Tools' (#lab) since 2026-10-05
+  if (ui.err || ui.starting || loading) d = null;
+  else if (testing) d = { name: "Test stream", test: true, rows: [["Speed", speedNow()]] };
   else if (on && h && !offered) {
     frac = fractionDone(xferNow);
-    line = `Receiving ${h.name || "a file"}`; named = ["Receiving ", h.name || "a file", ""];
-    // ai: the last second's new bytes a second (recentKBs) and nothing else: the average since the first decode (avgAt)
-    // ai: stood beside it as "(M KB/s average)" from 2026-09-29 to 2026-09-30 and is the stats row's alone since (avgKBs:
-    // ai: after a wait it often read wrong); the time left is what is missing at that rate
-    const now = recentKBs();
     // ai: the bytes as sent where the manifest has said them (2026-10-05): what the light carries, which the rate and
-    // ai: the time left are of; the file's own bytes until then, and in the received line
-    const total = h.sent ?? h.length, got = h.sent ? xferNow.sentIn : frac * h.length;
-    // ai: progress, size and time left; the rate itself is the collapsed rail's and Developer Tools' (#lab) since 2026-10-05
-    nums = `${Math.floor(100 * frac)}%, ${partOf(got, total)}${now > 0 ? `, ${left((total - got) / (now * 1000))}` : ""}`;
-  } else if (ui.received && (!on || offered)) {
-    const r = ui.received;
-    // ai: the speed the transfer ran at (2026-10-10, the Android app's Readout.received): the bytes the light carried over
-    // ai: its time, none where the time reads 0.0 s
-    const speed = r.secs >= 0.05 ? `, ${nb(rate((r.sent || r.n) / r.secs / 1000))}` : "";
-    const after = `, ${nb(bytes(r.n))} in ${nb(`${r.secs.toFixed(1)} s`)}${speed}${r.sent && r.sent < r.n ? `, ${nb(bytes(r.sent))} sent` : ""}`;
-    // ai: said in the camera's area's card (#done, 2026-11-06), not the column: the line stays for the checks and a
-    // ai: screen reader, drawn only with Show statistics on, as before
-    line = `Received ${r.name}${after}`; named = ["Received ", r.name, after]; tone = "good";
-    doneSum = `${nb(bytes(r.n))} in ${nb(`${r.secs.toFixed(1)} s`)}${speed}${r.sent && r.sent < r.n ? `, ${nb(bytes(r.sent))} sent` : ""}`;
-  } else if (!on) line = "";   // ai: idle says nothing (2026-10-02: an instruction that obvious only takes space)
-  else line = "";   // ai: nothing while looking (2026-11-06, the apps' Readout.line since 2026-10-05; "Looking for a code" here until then)
-  // ai: Within a run (Start until it stops) a line once shown keeps its room until the run ends, drawn clear when it
+    // ai: the time left are of; Received is that share of the file's own size; the speed the last second's new bytes
+    // ai: (recentKBs)
+    const now = recentKBs(), total = h.sent ?? h.length, got = h.sent ? xferNow.sentIn : frac * h.length;
+    d = { name: h.name || "a file", end: `${Math.floor(100 * frac)}%`, frac, rows: [["Received", nb(bytes(frac * h.length))], ["Size", nb(bytes(h.length))],
+      ["Time left", now > 0 ? nb(left((total - got) / (now * 1000))) : ""], ["Speed", now > 0 ? nb(rate(now)) : ""]] };
+  } else if (ui.received && !on && $("stats").value === "1") {
+    // ai: the speed the transfer ran at (2026-10-10, the apps' Readout.received): the bytes the light carried over its
+    // ai: time, none where the time reads 0.0 s
+    const r = ui.received, rows = [["Size", nb(bytes(r.n))]];
+    if (r.secs >= 0.05) rows.push(["Time", nb(`${r.secs.toFixed(1)} s`)], ["Speed", nb(rate((r.sent || r.n) / r.secs / 1000))]);
+    d = { name: r.name, end: "100%", frac: 1, rows };
+  }
+  // ai: Within a run (Start until it stops) the block once shown keeps its room until the run ends, drawn clear when it
   // ai: falls silent (the apps' Receive.kt, 2026-11-02: lines coming and going moved the folds under them); none is held
   // ai: before it has had words, so a camera starting shows no gap. The run's file in ends it at once; a run started
   // ai: over a file already received holds on.
   const running = on || ui.starting;
-  if (running !== held.running) Object.assign(held, { running, kept: !!ui.received, state: "", nums: "", why: "", meter: false });
+  if (running !== held.running) Object.assign(held, { running, kept: !!ui.received, dt: null, why: "" });
   // ai: the hint held still as the apps' (Parts.kt steady, on 0): shown at once, kept until it has been gone 2 s
   const whyNow = on && !ui.err && !loading ? ui.why : "", t = performance.now();
   if (whyNow) { held.whyText = whyNow; held.whyAt = t; }
   const why = whyNow || (on && held.whyText && t - held.whyAt < 2000 ? held.whyText : "");
   const run = running && (!ui.received || held.kept);
-  if (run && line) held.state = line;
-  if (run && nums) held.nums = nums;
+  if (run && d) held.dt = d;
   if (run && why) held.why = why;
-  if (run && frac != null) held.meter = true;
-  const ghost = !line && run && !!held.state;
-  // ai: rewritten only when it changes: #state is a live region, and a screen reader reads out every rewrite (a line
-  // ai: falling silent in a run keeps its last words, drawn clear)
-  if (!ghost && `${tone} ${line}` !== stateShown) { stateShown = `${tone} ${line}`; if (named) sayName($("state"), ...named, tone); else say($("state"), line, tone); }
-  $("state").classList.toggle("ghost", ghost);
-  meter($("meter"), frac ?? (run && held.meter ? 0 : null));
-  $("meter").classList.toggle("ghost", frac == null && run && held.meter);
-  $("nums").textContent = nums || (run ? held.nums : "");
-  $("nums").classList.toggle("ghost", !nums && run && !!held.nums);
+  details($("dt"), d ?? (run ? held.dt : null), !d && run && !!held.dt);
   $("lab").textContent = on ? ui.lab : "";
   $("why").textContent = why || (run ? held.why : "");
   $("why").classList.toggle("ghost", !why && run && !!held.why);
-  // ai: the received file in the camera's place once it is in and the camera is off (#done); Start brings the camera back
+  // ai: the received file in the camera's place once it is in and the camera is off (#done): "Received 1 file" and the
+  // ai: file (how it went is the column's block, with Show statistics on, 2026-11-07); Start brings the camera back
   const got = !!ui.received && !on && !ui.starting && !ui.err;
   document.body.classList.toggle("got", got);
   $("done").hidden = !got;
@@ -235,7 +220,6 @@ function showState() {
     $("doneSize").textContent = bytes(ui.received.n);
     $("doneCount").textContent = " 1\u00a0file";
   }
-  if (got) $("doneSum").textContent = doneSum;
   // ai: The preview's cover (the apps' PreviewBox): what went wrong (the red triangle over its words), else "Camera off"
   // ai: while no camera runs, else "Getting ready" with the spinner while the camera starts and until a decoder answers
   const idle = !!ui.err || (!on && !ui.starting);
@@ -265,11 +249,6 @@ function showState() {
   $("railDone").hidden = $("railOpen").hidden = $("railSave").hidden = !ui.received || testing;
 }
 const nb = (s) => s.replace(/ /g, "\u00a0");   // ai: a figure and its unit kept on one line
-// ai: "3.1 of 7.4 MB": the part in the unit ui.mjs bytes() gives the whole, at its precision.
-function partOf(n, whole) {
-  const all = bytes(whole), unit = all.split(" ")[1], v = n / { B: 1, KB: 1e3, MB: 1e6, GB: 1e9 }[unit];
-  return `${unit === "B" ? Math.round(v) : v < 9.95 ? v.toFixed(1) : Math.round(v)} of ${nb(all)}`;
-}
 // Block ids already forwarded. Ids only ever increase (wirehair is rateless, so the sender keeps minting them),
 // which used to make this grow for as long as the session lasted: about 500 a second here, and the same again
 // inside every worker. Two generations instead of one set, rolled on INSERTION, so what ages out is only ids from
@@ -1299,7 +1278,7 @@ document.addEventListener("visibilitychange", async () => { if (track && documen
 // ai: the URL's presets after, so a scripted run still gets what it names. The camera's menu fills later (listCameras).
 for (const el of document.querySelectorAll("#dev select, #logs select")) persist(el, `recv:${el.id}`);
 // ai: Show statistics (Developer Tools, the apps'): on, the green line once a file is in and the lab line and readouts
-$("stats").addEventListener("change", () => document.body.classList.toggle("stats", $("stats").value === "1"));
+$("stats").addEventListener("change", () => { document.body.classList.toggle("stats", $("stats").value === "1"); showState(); });
 document.body.classList.toggle("stats", $("stats").value === "1");
 listCameras();
 for (const [k, v] of new URLSearchParams(location.search)) if ($(k) && "value" in $(k) && [...($(k).options ?? [])].some((o) => o.value === v)) $(k).value = v;

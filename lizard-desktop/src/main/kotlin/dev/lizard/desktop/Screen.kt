@@ -80,11 +80,11 @@ class DesktopSend(private val app: App) : SendHost {
     override val pauseShown = true
     override val fullscreen = true
     override fun toggleFull() = s.toggleFull()
-    // ai: a line naming the file holds its head on one line (the shared NameLine, 2026-10-23: a long name wrapped over two)
-    override val line get() = s.stateParts.let { st ->
-        SendLine(st.before, st.name, st.after, s.phase is SendState.Phase.Error || (s.phase == SendState.Phase.Idle && s.loadError.isNotEmpty()))
-    }
-    override val figures get() = s.figures
+    // ai: what goes as elements (SendState.details: Show statistics, Receive's own setting, names the rows it adds), the
+    // ai: error in red, and the spinner while a pick is walked or a bundle made (2026-11-07; the state line before)
+    override val details get() = s.details(app.recv.showStats)
+    override val error get() = when (val ph = s.phase) { is SendState.Phase.Error -> ph.why; SendState.Phase.Idle -> s.loadError; else -> "" }
+    override val reading get() = s.phase == SendState.Phase.Idle && !s.test && s.reading
     // ai: the control window says what plays where in its area (LeasedNote): no state line in its column
     override val lineShown get() = !s.leased
     override val heat: String? = null
@@ -171,7 +171,7 @@ class DesktopSend(private val app: App) : SendHost {
                 else Upload(listOf(Act("File", icon = Icons.file) { s.chooseFile() }, Act("Folder", icon = Icons.folder) { s.chooseFolder() }),
                     s.items.map { UploadItem(it.key, it.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
                     enabled = !s.sending, landscape = false, onRemove = { s.remove(it) }, onClear = { s.clearPicks() },
-                    column = 576.dp, under = { ChoiceLine(s.choiceLine) })
+                    column = 576.dp, total = s.choice?.takeIf { !s.reading }?.let { Readout.bytes(it.size) } ?: "")
                 if (s.dragOver) DropOutline()
             }
         }
@@ -186,23 +186,6 @@ class DesktopSend(private val app: App) : SendHost {
 
 // ai: how near the code area's left edge the pointer shows full screen's rail
 private val EDGE_NEAR = 24.dp
-
-// ai: what goes, 12 dp under the upload's card (SendState.choiceLine; 2026-11-01, AWT's until 2026-11-02): the name
-// ai: semibold, its stem cut first and its ending kept, then its files and the bytes that go, regular and muted, centred;
-// ai: its line kept while the pick is walked or the bundle made
-@Composable
-private fun ChoiceLine(line: Pair<String, String>?) {
-    val name = MaterialTheme.typography.labelLarge
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-        if (line == null) Text("", style = name)
-        else {
-            val (stem, end) = Readout.nameParts(line.first)
-            Text(stem, style = name, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            Text(end, style = name, color = Fg, maxLines = 1)
-            Text(line.second, style = name.copy(fontWeight = FontWeight.Normal), color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
-}
 
 // ai: the control window's area while the code plays on a monitor of its own (2026-11-02; painted on the code canvas by
 // ai: AWT until then): the line centred on the soft fill

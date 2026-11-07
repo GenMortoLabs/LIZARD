@@ -20,7 +20,7 @@ import dev.lizard.ui.*
 // ai: codes=N, blocks=N (4 to 64) (each a slider's release), fps=N (any 1 to 60, a chip's or the
 // ai: slider's), vsync=0|1, enc=auto|gpu|cpu, rail, and the selection's (2026-10-23):
 // ai: add=<path>[:<path>...] (as a pick adds; ';' on Windows), remove=<an item's name> (its Remove), clear (Clear),
-// ai: list (the items and the state line on stderr as "list: <name> | ... | <state line>"); a change stops the run, as
+// ai: list (the items and what goes on stderr as "list: <name> | ... | <choice>, <n> files, <bytes> B", "reading" while the pick is walked); a change stops the run, as
 // ai: the app's does, until a start; each logged on stderr as "step <s>: <action>" when it is taken. Each second's
 // ai: presenter stats go to stderr as "present: {...}".
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
@@ -161,7 +161,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             "add" -> { s.pick(v.split(java.io.File.pathSeparatorChar).filter { it.isNotEmpty() }.map { java.io.File(it) }); return true }
             "remove" -> { s.items.firstOrNull { it.name == v }?.let { s.remove(it.key) } ?: fail("LIZ_SENDER_TEST: no item $v"); return true }
             "clear" -> { s.clearPicks(); return true }
-            "list" -> System.err.println("list: ${(s.items.map { "${it.name} (${if (it.dir) "${it.files} files, " else ""}${it.size} B${if (it.links > 0) ", ${it.links} links skipped" else ""})" } + (s.choiceLine?.let { (n, a) -> "$n$a" } ?: s.stateLine)).joinToString(" | ")}")
+            "list" -> System.err.println("list: ${(s.items.map { "${it.name} (${if (it.dir) "${it.files} files, " else ""}${it.size} B${if (it.links > 0) ", ${it.links} links skipped" else ""})" } + (s.choice?.takeIf { !s.reading }?.let { "${it.name}, ${it.files} files, ${it.size} B" } ?: if (s.reading) "reading" else "")).joinToString(" | ")}")
             else -> fail("LIZ_SENDER_TEST: unknown step $act")
         }
         return stopped

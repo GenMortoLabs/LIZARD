@@ -72,8 +72,8 @@ class SendState(private val a: MainActivity) {
                      // ai: the GPU ring's tally over the last second (2026-10-07, jni.cpp txPostStats): posted, held by
                      // ai: vsyncs, late, behind, buffers filled of the ring's
                      val gpuRing: Boolean = false, val posted: Long = 0, val held: String = "", val late: Long = 0, val behind: Long = 0, val filled: Int = 0, val slots: Int = 0,
-                     // ai: the blocks a code carries (2026-10-07)
-                     val blocks: Int = 0)
+                     // ai: the blocks a code carries (2026-10-07); lap: a pass's data blocks (Pass time, 2026-11-07)
+                     val blocks: Int = 0, val lap: Double = 0.0)
 
     private val prefs = a.getSharedPreferences("lizard", Context.MODE_PRIVATE)
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
@@ -479,7 +479,7 @@ class SendState(private val a: MainActivity) {
             stats = Stats(j.optString("label"), j.optDouble("shownFps"), j.optDouble("offeredKBs"), j.optDouble("paintMs"), j.optDouble("pass", 0.0),
                 j.optString("painter"), j.optString("gpuWhy"), j.optLong("sentBytes", 0),
                 p?.optBoolean("gpu") ?: false, p?.optLong("posted") ?: 0, held, p?.optLong("late") ?: 0, p?.optLong("behind") ?: 0, p?.optInt("filled") ?: 0, p?.optInt("slots") ?: 0,
-                j.optInt("blocks", 0))
+                j.optInt("blocks", 0), j.optDouble("lap", 0.0))
             if (p?.optBoolean("gpu") == true) Log.i(TAG, "send: posted ${stats.posted}, held {${held}}, late ${stats.late}, behind ${stats.behind}, ${stats.filled} of ${stats.slots} buffers filled, ${j.optInt("ahead")} of ${j.optInt("depth")} frames painted ahead")
             if (j.optString("error").isNotEmpty()) phase = Phase.Error(j.optString("error"))
             // ai: the bytes as they go, known once every chunk is made (the core streams: its first frames go while the
@@ -555,32 +555,18 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val pauseShown get() = s.paused
     override val fullscreen = false
     override fun toggleFull() {}
-    // ai: the state line: the file and its sizes ("<compressed> (<raw> raw)" once a run has made the transfer, the size
-    // ai: alone before), "Preparing", "Sending" with the bytes that go (paused too: Resume tells a pause, no "Paused" line,
-    // ai: 2026-11-06), or what went wrong
-    override val line: SendLine get() {
-        val what = s.name
-        val count = s.choice?.takeIf { it.single == null }?.files?.let { "$it ${if (it == 1) "file" else "files"}, " } ?: ""
-        val sizeText = if (s.compressed > 0) "${Readout.bytes(s.compressed)} (${Readout.bytes(s.size)}\u00a0raw)" else Readout.bytes(s.size)
-        val err = (s.phase as? SendState.Phase.Error)?.why
+    // ai: what goes as elements from Start until Stop (lizard-ui SendRows.details, 2026-11-07; the state line "Sending
+    // ai: <name>, <compressed> (<raw> raw)" over the rate before): the name, a spinner while it is made, Size, Files,
+    // ai: Speed (the rate the code carries, none while paused), and with Show statistics on (Receive's setting)
+    // ai: Compressed, Pass and Pass time; what went wrong in red; a spinner while a pick is walked
+    override val details: Details? get() {
         val preparing = s.phase == SendState.Phase.Preparing
-        val named = !s.test && err == null && (preparing || on || (!on && !s.reading && s.choice != null))
-        if (named) return SendLine(when { preparing -> "Preparing "; on -> "Sending "; else -> "" }, what,
-            if (preparing || s.size <= 0) "" else ", ${if (on) "" else count}$sizeText", false)
-        val sized = if (s.size <= 0) what else "$what, ${if (on) "" else count}$sizeText"
-        val text = when {
-            err != null -> err
-            s.test -> if (preparing) "Preparing" else if (on) "Sending" else ""
-            preparing -> "Preparing $what"
-            on -> "Sending $sized"
-            s.reading -> "Reading the files"
-            s.choice != null -> sized
-            else -> ""
-        }
-        return SendLine(text, null, "", err != null)
+        if (!preparing && !on) return null
+        return SendRows.details(s.name, s.test, preparing, s.size, s.compressed, s.choice?.takeIf { it.single == null }?.files ?: 1,
+            if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.lap, a.settings.stats == "on")
     }
-    // ai: the rate the code carries, once sending
-    override val figures get() = if (on && s.stats.offeredKBs > 0) Readout.rate(s.stats.offeredKBs) else ""
+    override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: ""
+    override val reading get() = s.reading && !on && s.phase != SendState.Phase.Preparing
     override val heat get() = heatText(a.heat, a.clocks)
     override val railCapacity get() = if (on) s.capacityKBs else null
     override val settings: List<Setting> get() = listOfNotNull(
@@ -653,7 +639,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
                     Act("Media", icon = Icons.image) { a.pickMedia() }),
                 s.items.map { UploadItem(it.key, it.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
                 enabled = !sending, landscape = maxWidth > maxHeight || LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE,
-                onRemove = { s.remove(it) }, onClear = { s.clear() })
+                onRemove = { s.remove(it) }, onClear = { s.clear() }, total = if (!s.reading && s.choice != null && s.size > 0) Readout.bytes(s.size) else "")
             else if (!shown) TestStreamNote()
         }
     }
