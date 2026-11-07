@@ -429,23 +429,25 @@ const SIZES = [
   s.close();
 }
 
-// ai: 2. Start errors, over the camera's box (2026-11-06, the apps' PreviewBox): the red triangle over the sentence, the
-// ai: column's line empty, the collapsed rail's red triangle named by it.
+// ai: 2. Start errors as popups (2026-11-07, the apps' ReceiveScreen; over the camera's box with the rail's red triangle
+// ai: from 2026-11-06): the title and the body, the box "Camera off", the column's block empty; OK closes it.
 {
   const s = await chrome("errors");
   await size(s, SIZES[0]);
   const cases = [
-    ["notallowed", `navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("Permission denied", "NotAllowedError"));`, /^Camera blocked: allow it in site settings$/],
-    ["nomediadevices", `Object.defineProperty(Navigator.prototype, "mediaDevices", { get: () => undefined, configurable: true });`, /^Insecure page: camera needs https or localhost$/],
+    ["notallowed", `navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("Permission denied", "NotAllowedError"));`, /^Camera blocked \| Allow it in site settings$/],
+    ["nomediadevices", `Object.defineProperty(Navigator.prototype, "mediaDevices", { get: () => undefined, configurable: true });`, /^Insecure page \| Camera needs https or localhost$/],
   ];
   for (const [name, source, want] of cases) {
     const { identifier } = await s.send("Page.addScriptToEvaluateOnNewDocument", { source });
     await navigate(s, `${BASE}?seen`);
     await evaluate(s, `document.getElementById("go").click()`);
     await sleep(600);
-    const r = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id), a = $("idle").querySelector(".alert"); return { text: $("idleText").textContent, shown: !$("idle").hidden && $("idle").classList.contains("err"), color: getComputedStyle(a).color, alert: getComputedStyle(a).display !== "none", dt: ${DT}, rail: !$("railAlert").hidden && $("railAlert").title === $("idleText").textContent, go: $("go").disabled }; })()`);
+    const r = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id); return { text: $("errTitle").textContent + " | " + $("errBody").textContent, open: $("errDlg").open, idle: !$("idle").hidden && $("idleText").textContent, dt: ${DT}, rail: !!$("railAlert"), go: $("go").disabled }; })()`);
     await screenshot(s, `${OUT}/recv-error-${name}.png`);
-    check(want.test(r.text) && r.shown && r.alert && r.color === "rgb(176, 0, 32)" && r.dt === null && r.rail && !r.go, `${name}: "${r.text}" over the box, its triangle in ${r.color}, the column's block ${JSON.stringify(r.dt)}, the rail's triangle ${r.rail ? "named by it" : "missing"}, #go ${r.go ? "disabled" : "enabled"}`);
+    check(want.test(r.text) && r.open && r.idle === "Camera off" && r.dt === null && !r.rail && !r.go, `${name}: "${r.text}" in a popup, the box "${r.idle}", the column's block ${JSON.stringify(r.dt)}, ${r.rail ? "a rail triangle LEFT" : "no rail triangle"}, #go ${r.go ? "disabled" : "enabled"}`);
+    await evaluate(s, `document.getElementById("errOk").click()`);
+    check(await evaluate(s, `!document.getElementById("errDlg").open`), `${name}: OK closes the popup`);
     await s.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
   }
   const other = s.errors.filter((e) => !/camera did not start/.test(e));

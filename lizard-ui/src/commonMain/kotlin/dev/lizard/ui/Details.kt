@@ -1,12 +1,10 @@
 package dev.lizard.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -19,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,16 +72,6 @@ fun WarnRow(w: Warn, modifier: Modifier = Modifier, clear: Boolean = false) {
         Text(w.label, style = MaterialTheme.typography.bodyMedium, color = if (clear) Color.Transparent else Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (w.value.isNotEmpty()) Text(w.value, style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = if (clear) Color.Transparent else Muted, maxLines = 1)
     }
-}
-
-// ai: What went wrong, said over an area (the receiver's preview since 2026-11-02; Send's code area for a lasting fault,
-// ai: its errors popups since 2026-11-07): the soft fill, the red triangle and the words under it, in the form what
-// ai: happened, then what it touched ("Camera stopped: ..."), never in the column
-@Composable
-fun ErrorCover(text: String, modifier: Modifier = Modifier) = Column(modifier.background(Soft).padding(horizontal = 24.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
-    Icon(Icons.alert, contentDescription = null, Modifier.size(24.dp), tint = Bad)
-    Text(text, style = MaterialTheme.typography.bodyMedium, color = Muted, textAlign = TextAlign.Center)
 }
 
 // ai: A note as a popup (2026-11-07; a red line on Home before; Send's errors too, a cover before): the part before its

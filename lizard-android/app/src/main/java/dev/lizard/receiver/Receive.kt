@@ -83,6 +83,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override val heat get() = heatText(a.heat, a.clocks, r.cameraSlow)
     override val hint get() = a.hint
     override val note get() = a.note
+    override fun clearNote() { a.note = "" }
     override val running get() = on || a.phase == RxPhase.Starting || a.phase == RxPhase.Loading
     override val starting get() = a.phase == RxPhase.Starting
     override fun toggleCamera() = a.toggleCamera()

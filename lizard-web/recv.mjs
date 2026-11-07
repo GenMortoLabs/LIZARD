@@ -127,6 +127,16 @@ function showCfg() {
   const light = !band ? "no format word read yet" : `${NAME(subchOf(band.version))}, ${band.fps ? `${band.fps} fps` : "no rate"} from the band`;
   $("cfg").textContent = `light: ${light}`;
 }
+// ai: An error's popup (#errDlg, send.mjs showErr's twin): what happened the title, what it touched the body, a body
+// ai: opening on a plain word capitalised; OK closes it
+function sayErr(text) {
+  const d = $("errDlg"), at = text.indexOf(": "), body = at > 0 ? text.slice(at + 2) : "";
+  $("errTitle").textContent = at > 0 ? text.slice(0, at) : text;
+  $("errBody").textContent = /^[a-z]+(\s|$)/.test(body) ? body[0].toUpperCase() + body.slice(1) : body;
+  $("errBody").hidden = !body;
+  if (!d.open) d.showModal();
+}
+$("errOk").onclick = () => $("errDlg").close();
 // ai: What the side column says (showState). err: why a start, or the transfer, failed, a plain sentence kept until the
 // ai: next start; starting: a start under way; received: the last file finished ({ name, n, secs, root }); testAt: when a
 // ai: frame last showed the test stream; bandAt: when a frame last read a format word; stoppedAt: when the camera last
@@ -135,7 +145,7 @@ function showCfg() {
 // ai: fileAt: when a frame last brought blocks that were not the test stream's (2026-10-05: the test stream owns the
 // ai: display only while it is the newer of the two)
 const held = { running: false, kept: false, dt: null, why: [], whyList: [], whyAt: 0 };   // ai: showState's run: the block's and the warnings' room
-const ui = { err: "", starting: false, received: null, testAt: -Infinity, fileAt: -Infinity, bandAt: -Infinity, stoppedAt: 0, lab: "", why: [] };
+const ui = { err: "", said: "", starting: false, received: null, testAt: -Infinity, fileAt: -Infinity, bandAt: -Infinity, stoppedAt: 0, lab: "", why: [] };
 const LIVE_MS = 3000;   // ai: the test stream, or a code's word, is still "being read" this long after its last frame
 const recent = (at) => performance.now() - at < LIVE_MS;
 // ai: One state at a time, the first that holds: error, starting, loading (the camera on and no decoder answer yet since
@@ -212,7 +222,7 @@ function showState() {
   warnings($("why"), why.length ? why : run ? held.why : [], !why.length && run && held.why.length > 0);
   // ai: the received file in the camera's place once it is in and the camera is off (#done): "Received 1 file" and the
   // ai: file (how it went is the column's block, with Show statistics on, 2026-11-07); Start brings the camera back
-  const got = !!ui.received && !on && !ui.starting && !ui.err;
+  const got = !!ui.received && !on && !ui.starting;
   document.body.classList.toggle("got", got);
   $("done").hidden = !got;
   if (got && $("doneName").dataset.name !== ui.received.name) {
@@ -221,13 +231,14 @@ function showState() {
     $("doneSize").textContent = bytes(ui.received.n);
     $("doneCount").textContent = " 1\u00a0file";
   }
-  // ai: The preview's cover (the apps' PreviewBox): what went wrong (the red triangle over its words), else "Camera off"
-  // ai: while no camera runs, else "Getting ready" with the spinner while the camera starts and until a decoder answers
-  const idle = !!ui.err || (!on && !ui.starting);
+  // ai: The preview's cover (the apps' PreviewBox): "Camera off" while no camera runs, else "Getting ready" with the
+  // ai: spinner while the camera starts and until a decoder answers. What went wrong a popup (2026-11-07, the apps'
+  // ai: ReceiveScreen; over the box with the rail's red triangle before): said once, OK closing it until another comes
+  const idle = !on && !ui.starting;
   $("idle").hidden = !idle;
-  $("idle").classList.toggle("err", !!ui.err);
-  $("idleText").textContent = ui.err || "Camera off";
   $("loading").hidden = idle || !(ui.starting || loading);
+  if (!ui.err) ui.said = "";
+  else if (ui.err !== ui.said) { ui.said = ui.err; sayErr(ui.err); }
   // ai: one solid button on the page at a time: Start while nothing waits, else Open
   go.textContent = on ? "Stop" : "Start";
   go.classList.toggle("primary", !on && !ui.received);
@@ -237,8 +248,6 @@ function showState() {
   // ai: "%", 2026-10-09), and once the file is in a green check in the rate's square (a
   // ai: mark, no action) alone: Open and Save are the card's tiles in the camera's place, not the rail's (2026-11-07;
   // ai: the rail had them too from 2026-10-05, the green tick opening the file before)
-  // ai: the red triangle first while something went wrong, its words its name (the apps' AlertSquare)
-  $("railAlert").hidden = !ui.err; $("railAlert").title = ui.err; $("railAlert").setAttribute("aria-label", ui.err || "Error");
   const cam = $("railCam");
   cam.classList.toggle("off", !on); cam.title = on ? "Stop" : "Start"; cam.disabled = ui.starting;
   const now = (on && h && !offered) || testing ? recentKBs() : null, [v, u] = now != null ? rate(now).split(/\s/) : ["", ""];   // ai: \s takes rate()'s no-break space

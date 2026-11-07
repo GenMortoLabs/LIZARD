@@ -79,10 +79,10 @@ interface SendHost {
     val details: Details?
     // ai: what went wrong ("" none), said in a popup (NoteDialog, 2026-11-07: a cover over the code area that morning hid
     // ai: File, Folder and Media after a failed pick, and a cover cannot be closed; every error stops the stream, so the
-    // ai: upload is what is under it); OK forgets it (clearError)
+    // ai: upload is what is under it); OK closes it (clearError, and the screen keeps that it said it: an error that
+    // ai: stays, the desktop's missing native library, is said again each time Send opens)
     val error: String
     fun clearError() {}
-    val broken: String get() = ""     // ai: a lasting fault said over the code area (ErrorCover; the desktop's missing native library)
     val reading: Boolean get() = false // ai: the pick being read (a dropped folder walked): a spinner, no words
     // ai: the block drawn (the desktop's control window, while a monitor of its own shows the code, has none: its area
     // ai: says it)
@@ -118,8 +118,7 @@ interface SendHost {
 @Composable
 fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
     // ai: one code area for every layout: a turn of the phone moves its surface rather than making another
-    // ai: a lasting fault said over it (ErrorCover); an error in a popup (below)
-    val code = remember(h) { movableContentOf<Modifier> { m -> Box { h.CodeArea(m); if (h.broken.isNotEmpty()) ErrorCover(h.broken, Modifier.matchParentSize()) } } }
+    val code = remember(h) { movableContentOf<Modifier> { m -> h.CodeArea(m) } }
     BoxWithConstraints {
         val portrait = h.canPortrait && maxHeight > maxWidth
         if (h.codeAlone && !(h.codeAloneInPlace && !portrait)) CodeAlone(h, code)
@@ -139,7 +138,10 @@ fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
         }
     }
     h.Windows()
-    if (h.error.isNotEmpty()) NoteDialog(h.error) { h.clearError() }
+    val err = h.error
+    var said by remember(h) { mutableStateOf("") }
+    LaunchedEffect(err) { if (err.isEmpty()) said = "" }
+    if (err.isNotEmpty() && err != said) NoteDialog(err) { said = err; h.clearError() }
 }
 
 // ai: The code alone (2026-10-26 on the phone, as the desktop's full screen): on the page's white, as large as the screen

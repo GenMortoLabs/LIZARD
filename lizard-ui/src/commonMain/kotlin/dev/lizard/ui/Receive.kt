@@ -21,8 +21,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -63,6 +67,7 @@ interface ReceiveHost {
     val heat: Warn?                    // ai: the heat warning (Throttling, the camera's rate where it fell), null while nothing throttles
     val hint: Warn?                    // ai: the camera's hint (Sender too fast, its most), null for none
     val note: String                   // ai: a filing's or a Save's failure; "" none
+    fun clearNote() {}                 // ai: its popup's OK
     val running: Boolean
     val starting: Boolean              // ai: Start inert while the camera opens
     fun toggleCamera()
@@ -98,7 +103,13 @@ fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
     val preview = remember(h) { movableContentOf<Modifier, Boolean> { m, p -> PreviewBox(h, m, p) } }
     val swap: @Composable () -> Unit = { SwapBtn("Sender") { h.goSend() } }
     // ai: the received file in the camera's place once it is in and the camera is off (2026-11-06, the web's #done)
-    val got = h.kept != null && !h.running && !h.starting && errorOf(h) == null
+    val got = h.kept != null && !h.running && !h.starting
+    // ai: an error said once, in a popup (errorOf): OK closes it until another comes; the phase keeps its error until
+    // ai: the next Start, so the screen keeps which it has said
+    val err = errorOf(h)
+    var said by remember(h) { mutableStateOf<String?>(null) }
+    LaunchedEffect(err) { if (err == null) said = null }
+    if (err != null && err != said) NoteDialog(err) { said = err; if (err == h.note) h.clearNote() }
     if (portrait) {
         // ai: the camera the column's width, up to 55% of the screen's height
         val tall = maxHeight * 0.55f
@@ -158,8 +169,7 @@ private fun ReceivedPanel(h: ReceiveHost, modifier: Modifier, column: Dp?) {
 private fun RailSquares(h: ReceiveHost) {
     val kept = h.kept
     val hot = h.heat
-    val err = errorOf(h)
-    if (err != null) AlertSquare(err) else if (hot != null && kept == null) AlertSquare(hot.text)
+    if (hot != null && kept == null) AlertSquare(hot.text)
     Square {
         IconBtn(if (h.running) Icons.pause else Icons.play, if (h.running) "Stop" else "Start",
             enabled = h.access == null && !h.starting) { h.toggleCamera() }
@@ -168,7 +178,7 @@ private fun RailSquares(h: ReceiveHost) {
         RateSquare(h.railRate)
         h.railPct?.let { PctSquare(it) }
     } else {
-        if (hot != null && err == null) AlertSquare(hot.text)
+        if (hot != null) AlertSquare(hot.text)
         else Square { Icon(Icons.check, contentDescription = "Received ${h.keptName}", Modifier.size(24.dp), tint = Good) }
     }
 }
@@ -247,7 +257,8 @@ private fun PreviewBox(h: ReceiveHost, modifier: Modifier, portrait: Boolean) {
                 val b = if (wide) Offset(size.width / 2, size.height) else Offset(size.width, size.height / 2)
                 drawLine(Color(0xFFE53935), a, b, strokeWidth = 1.dp.toPx())
             }
-            val err = errorOf(h)
+            // ai: the camera's access a state the preview says (its button the column's), no popup
+            val err = h.line.takeIf { h.access != null && it.tone == Readout.Tone.Bad }?.text?.takeIf { it.isNotEmpty() }
             if (err != null || h.off.isNotEmpty() || h.waiting) Column(Modifier.matchParentSize().background(Soft).padding(horizontal = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
                 when {
@@ -261,10 +272,12 @@ private fun PreviewBox(h: ReceiveHost, modifier: Modifier, portrait: Boolean) {
     }
 }
 
-// ai: What went wrong (2026-11-02), said over the preview, its cover the red triangle with the words under it, never in
-// ai: the column (the collapsed rail's AlertSquare at most): the line's error (the phase's why, "Reading stopped. ...")
-// ai: or a filing's refusal (the note)
-private fun errorOf(h: ReceiveHost): String? = h.line.takeIf { it.tone == Readout.Tone.Bad }?.text?.takeIf { it.isNotEmpty() }
+// ai: What went wrong, said in a popup (NoteDialog, ReceiveScreen; 2026-11-07, the owner: "fatal errors benefit from
+// ai: popups, while non-fatal like htermal throttling benefit from no popup"; a cover over the preview with the rail's red
+// ai: triangle from 2026-11-02, never the column): the line's error (the phase's why, "Camera stopped: ...", "Reading
+// ai: stopped") or a filing's refusal or a Save's failure (the note). The camera's access is no error: the preview says
+// ai: it, its button in the column. The warnings (Throttling, Sender too fast) stay rows.
+private fun errorOf(h: ReceiveHost): String? = h.line.takeIf { h.access == null && it.tone == Readout.Tone.Bad }?.text?.takeIf { it.isNotEmpty() }
     ?: h.note.takeIf { it.isNotEmpty() }
 
 // ai: the red triangle in a rail's square, its words the description: the phone's heat, a receiver's error

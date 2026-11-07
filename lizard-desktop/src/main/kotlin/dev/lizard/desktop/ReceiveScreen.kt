@@ -86,6 +86,7 @@ class DesktopReceive(private val app: App) : ReceiveHost {
     override val heat: Warn? = null
     override val hint get() = r.hint
     override val note get() = r.driverNote.ifEmpty { r.fileNote }
+    override fun clearNote() { if (r.driverNote.isNotEmpty()) r.driverNote = "" else r.fileNote = "" }
     override val running get() = r.running
     override val starting get() = r.phase == RxPhase.Starting
     override fun toggleCamera() = r.toggle()
