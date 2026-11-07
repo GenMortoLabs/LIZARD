@@ -9,7 +9,8 @@
 // ai:   tx_check decode <luma> <w> <h> [held]   one frame read blind (a screenshot of the phone's Send screen, grey)
 // ai: The GPU's painter (2026-10-02, tx/gpu_painter.h), its kernels and manifest from LIZ_ASSETS (out, liblizard/out run from liblizard/, by default):
 // ai:   tx_check gputables <dir>   tx/send_tables.cpp's tables against gen/send_tables_ref.mjs's, every format in its
-// ai:       index, section by section (exact; the twiddles to a float's last bit)
+// ai:       index, section by section (exact; the twiddles to a float's last bit, the border's picture, which the GPU
+// ai:       paints again, within a grey level)
 // ai:   tx_check gpucheck <subch> [ring] [frames]   the GPU's frames of the test stream's blocks against
 // ai:       the C's paint at the same counts (the border to the byte, the square within a grey level: the web's auto
 // ai:       rule), then its GPU ms a frame over encodes of its most; ring an index into src/lizard_phy.h LIZARD_RING, the
@@ -248,8 +249,29 @@ int main(int argc, char** argv) {
         else if (diff) off.push_back(std::string("(") + sec + " " + std::to_string(diff) + " floats a last bit apart)");
       };
       same("rows", t.rows.data(), 4 * t.rows.size()); same("uv", t.uv.data(), 4 * t.uv.size()); same("tw", t.tw.data(), 4 * t.tw.size(), true);
-      same("su", t.su.data(), 48); same("g", t.g.data(), 48); same("taps", t.taps.data(), 4 * t.taps.size()); same("border", t.border.data(), t.border.size());
+      same("su", t.su.data(), 48); same("g", t.g.data(), 48); same("taps", t.taps.data(), 4 * t.taps.size());
       same("pu", t.pu.data(), 4 * t.pu.size());
+      // ai: the border as the painter reads it: every pixel outside the square and in the anchors' squares to the byte;
+      // ai: the picture between them (painted again on the GPU, never read from here) within a grey level, as gpucheck
+      // ai: holds the GPU's square: x86-64's vector kernels round it apart from the scalar C and the wasm (2026-11-05)
+      {
+        const auto ref = slurp(dir + "/" + name + ".border.bin");
+        if (ref.size() != t.border.size()) off.push_back("border " + std::to_string(t.border.size()) + " B against " + std::to_string(ref.size()));
+        else {
+          auto inAnchor = [&](int v) { for (int i = 0; i < 7; i++) if (v >= static_cast<int>(t.anch[i]) && v < static_cast<int>(t.anch[i] + t.anch[7])) return true; return false; };
+          size_t exact = 0, far = 0, near = 0;
+          for (int y = 0; y < t.W; y++) for (int x = 0; x < t.W; x++) {
+            const size_t i = static_cast<size_t>(y) * t.W + x;
+            const int d = std::abs(static_cast<int>(t.border[i]) - ref[i]);
+            if (!d) continue;
+            const bool square = x >= t.sq && x < t.sq + t.q && y >= t.sq && y < t.sq + t.q;
+            if (!square || (inAnchor(x) && inAnchor(y))) exact++; else if (d > 1) far++; else near++;
+          }
+          if (exact) off.push_back("border " + std::to_string(exact) + " bytes outside the picture");
+          if (far) off.push_back("border " + std::to_string(far) + " picture bytes past a grey level");
+          if (near) off.push_back("(border " + std::to_string(near) + " picture bytes a grey level apart)");
+        }
+      }
       const bool fail = std::any_of(off.begin(), off.end(), [](const std::string& x) { return x[0] != '('; });
       if (fail || (done < 3 && !off.empty())) { printf("%s %s:", fail ? "FAIL" : "note", name.c_str()); for (auto& x : off) printf(" %s;", x.c_str()); printf("\n"); }
       bad += fail;

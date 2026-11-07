@@ -5,7 +5,8 @@
 // ai: format's block count, each tier's first block, first sub-channel and blocks (2026-10-07, the format's rate
 // ai: profile), the stride, and the CRC powers gen/sender.mjs baked), and the border, the C's
 // ai: paint of the symbol (its pixels outside the square: ring, marks, band, word, margin) as grey bytes. Held to the
-// ai: web's byte for byte by `tx_check gputables` against gen/send_tables_ref.mjs (the twiddles to a float's last bit).
+// ai: web's byte for byte by `tx_check gputables` against gen/send_tables_ref.mjs (the twiddles to a float's last bit; the
+// ai: border's picture, between the anchors' squares, within a grey level: x86-64's vector kernels round it apart).
 // ai: The border holds the anchors' squares too (SPEC 6.13: the C paints them over the picture), and anch says where
 // ai: they are.
 #pragma once
