@@ -269,9 +269,9 @@ private fun PreviewBox(h: ReceiveHost, modifier: Modifier, portrait: Boolean) {
     }
 }
 
-// ai: What went wrong, said in a popup (NoteDialog, ReceiveScreen; 2026-11-07, the owner: "fatal errors benefit from
-// ai: popups, while non-fatal like htermal throttling benefit from no popup"; a cover over the preview with the rail's red
-// ai: triangle from 2026-11-02, never the column): the line's error (the phase's why, "Camera stopped: ...", "Reading
+// ai: What went wrong, said in a popup (NoteDialog, ReceiveScreen; since 2026-11-07: a fatal error pops up, a warning
+// ai: that lets the run go on stays a row; a cover over the preview with the rail's red triangle from 2026-11-02, never
+// ai: the column): the line's error (the phase's why, "Camera stopped: ...", "Reading
 // ai: stopped") or a filing's refusal or a Save's failure (the note). The camera's access is no error: the preview says
 // ai: it, its button in the column. The warnings (Throttling, Sender too fast) stay rows.
 private fun errorOf(h: ReceiveHost): String? = h.line.takeIf { h.access == null && it.tone == Readout.Tone.Bad }?.text?.takeIf { it.isNotEmpty() }
