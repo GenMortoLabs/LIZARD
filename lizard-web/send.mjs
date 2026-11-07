@@ -444,11 +444,22 @@ function showRunning() {
   document.body.classList.add("busy");
   say($("state"), ""); showErr(""); showDetails();
 }
-// ai: Every error ends here: the stream stops, what went wrong is said over the code area (#err, 2026-11-07; a red line
-// ai: in the column before), what happened, then what it touched ("Start failed: ..."; an error made with alone() is said
-// ai: as it is), the console has the rest; until the next start or pick.
+// ai: Every error ends here: the stream stops, what went wrong is said in a popup (#errDlg, 2026-11-07, the apps'
+// ai: NoteDialog: a cover over the code area that morning hid File and Folder and could not be closed; a red line in
+// ai: the column before), what happened the title and what it touched the body ("Start failed" over the reason; an
+// ai: error made with alone() split the same way), a body opening on a plain word taking a capital; the console has the
+// ai: rest; OK, the next start or pick closes it.
 const alone = (text) => Object.assign(new Error(text), { alone: true });
-function showErr(text) { $("errText").textContent = text; $("err").hidden = !text; }
+function showErr(text) {
+  const d = $("errDlg");
+  if (!text) { if (d.open) d.close(); return; }
+  const at = text.indexOf(": "), body = at > 0 ? text.slice(at + 2) : "";
+  $("errTitle").textContent = at > 0 ? text.slice(0, at) : text;
+  $("errBody").textContent = /^[a-z]+(\s|$)/.test(body) ? body[0].toUpperCase() + body.slice(1) : body;
+  $("errBody").hidden = !body;
+  if (!d.open) d.showModal();
+}
+$("errOk").onclick = () => showErr("");
 function fail(what, e) {
   console.error(`sender: ${what}:`, e);
   stop(); showReady();

@@ -22,10 +22,9 @@
   /* ai: One line each, so a long name or a figure never grows the controls and shrinks <main> under a painted symbol. */
   /* ai: An error wraps: nothing is painted then. */
   #state{margin:.5rem 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  /* ai: what went wrong, said over the code area (2026-11-07, the receiver's #idle.err; a red line in the column
-     before): the soft fill, the red triangle, the words under it */
-  #err{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;margin:0;padding:0 24px;text-align:center;background:var(--soft);color:var(--muted);font-size:14px}
-  #err[hidden]{display:none}#err>svg.i{width:24px;height:24px;color:var(--bad)}
+  /* ai: what went wrong, a popup (2026-11-07, the apps' NoteDialog; a cover over the code area that morning, which hid
+     File and Folder and could not be closed; a red line in the column before): the title, the body muted, OK */
+  #errTitle{margin:0 0 8px;font-size:17px;font-weight:500}#errBody{color:var(--muted);overflow-wrap:anywhere}
   /* ai: a pick being read (a dropped folder walked): a spinner, no words (2026-11-07; "Reading the files" before) */
   #state .spin{display:inline-block;width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--fg);border-radius:50%;animation:dt-spin .8s linear infinite;vertical-align:middle}
   #settings{position:absolute;top:100%;left:0;right:0;margin:0;padding:0 16px 1rem}
@@ -190,6 +189,6 @@
     </script>
     </div>
   </div>
-  <main><canvas id="bgc"></canvas><canvas id="c"></canvas><canvas id="cg" hidden></canvas><div id="pick" class="pick" hidden><div class="tiles"><button id="addFiles" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>File</button><button id="addFolder" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Folder</button></div><div id="sel" class="sel"><div class="head"><span id="selSum"></span><button id="clearPick" class="text" type="button">Clear</button></div><ul id="pickList" class="items"></ul></div></div><p id="err" role="alert" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></svg><span id="errText"></span></p><input id="file" type="file" multiple class="sr-only" aria-label="Choose files"><input id="folder" type="file" webkitdirectory class="sr-only" aria-label="Choose a folder"></main>
+  <main><canvas id="bgc"></canvas><canvas id="c"></canvas><canvas id="cg" hidden></canvas><div id="pick" class="pick" hidden><div class="tiles"><button id="addFiles" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>File</button><button id="addFolder" class="tile" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Folder</button></div><div id="sel" class="sel"><div class="head"><span id="selSum"></span><button id="clearPick" class="text" type="button">Clear</button></div><ul id="pickList" class="items"></ul></div></div><dialog id="errDlg" class="dialog" aria-labelledby="errTitle"><p id="errTitle"></p><p id="errBody"></p><div class="row end"><button id="errOk" type="button">OK</button></div></dialog><input id="file" type="file" multiple class="sr-only" aria-label="Choose files"><input id="folder" type="file" webkitdirectory class="sr-only" aria-label="Choose a folder"></main>
 </div>
 <script type="module" src="send.mjs"></script>

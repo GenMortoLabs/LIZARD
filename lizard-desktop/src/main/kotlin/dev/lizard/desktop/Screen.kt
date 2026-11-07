@@ -81,9 +81,11 @@ class DesktopSend(private val app: App) : SendHost {
     override val fullscreen = true
     override fun toggleFull() = s.toggleFull()
     // ai: what goes as elements (SendState.details: Show statistics, Receive's own setting, names the rows it adds), the
-    // ai: error in red, and the spinner while a pick is walked or a bundle made (2026-11-07; the state line before)
+    // ai: error a popup, and the spinner while a pick is walked or a bundle made (2026-11-07; the state line before)
     override val details get() = s.details(app.recv.showStats)
-    override val error get() = when (val ph = s.phase) { is SendState.Phase.Error -> ph.why; SendState.Phase.Idle -> s.loadError; else -> "" }
+    override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: ""
+    override fun clearError() { if (s.phase is SendState.Phase.Error) s.phase = SendState.Phase.Idle }
+    override val broken get() = s.loadError   // ai: no native library: nothing sends, said over the code area for good
     override val reading get() = s.phase == SendState.Phase.Idle && !s.test && s.reading
     // ai: the control window says what plays where in its area (LeasedNote): no state line in its column
     override val lineShown get() = !s.leased

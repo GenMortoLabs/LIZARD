@@ -339,8 +339,9 @@ const SIZES = [
     const two = await sendOnce(" and 1 more.tar");
     check(two?.end === " and 1 more.tar" && two.cut && two.oneLine && two.ws === "pre" && two.state.endsWith(" and 1 more.tar"), `send: a long bundle name on one line, " and 1 more.tar" whole with its space (${JSON.stringify(two)})`);
     await screenshot(s, `${OUT}/send-long-name.png`);
-    // ai: an error over the code area (2026-11-07; a red line in the column before): a file picked, then gone from disk
-    // ai: before Start, so the browser refuses the read; the cover says what happened and what to do, the column nothing
+    // ai: an error as a popup (2026-11-07; a cover over the code area that morning, a red line in the column before): a
+    // ai: file picked, then gone from disk before Start, so the browser refuses the read; the popup says what happened
+    // ai: and what to do, the column nothing, the upload under it; OK closes it
     const gone = join(src, "gone.txt");
     put(gone, "gone");
     await evaluate(s, `document.getElementById("clearPick").click()`);
@@ -348,14 +349,13 @@ const SIZES = [
     await until(s, `document.querySelectorAll("#pickList .t").length === 1`, 8000, "the file to lose").catch(() => {});
     rmSync(gone);
     await evaluate(s, `document.getElementById("go").click()`);
-    await until(s, `!document.getElementById("err").hidden`, 8000, "the error's cover").catch(() => {});
-    const er = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id), r = $("err").getBoundingClientRect(), m = document.querySelector("main").getBoundingClientRect();
-      return { text: $("errText").textContent, shown: !$("err").hidden, covers: Math.abs(r.width - m.width) < 1 && Math.abs(r.height - m.height) < 1, state: $("state").textContent, go: $("go").hidden }; })()`);
+    await until(s, `document.getElementById("errDlg").open`, 8000, "the error's popup").catch(() => {});
+    const er = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id);
+      return { title: $("errTitle").textContent, body: $("errBody").textContent, open: $("errDlg").open, pick: !$("pick").hidden && $("addFiles").checkVisibility(), state: $("state").textContent, go: $("go").hidden }; })()`);
     await screenshot(s, `${OUT}/send-error.png`);
-    check(er.shown && er.text === "File changed: choose it again" && er.covers && er.state === "" && !er.go, `send: an error over the code area, the column silent (${JSON.stringify(er)})`);
-    await evaluate(s, `document.getElementById("clearPick").click()`);
-    await until(s, `document.getElementById("err").hidden`, 5000, "the cover gone with a new pick").catch(() => {});
-    check(await evaluate(s, `document.getElementById("err").hidden`), `send: the error's cover gone at the next pick`);
+    check(er.open && er.title === "File changed" && er.body === "Choose it again" && er.pick && er.state === "" && !er.go, `send: an error as a popup over the upload, the column silent (${JSON.stringify(er)})`);
+    await evaluate(s, `document.getElementById("errOk").click()`);
+    check(await evaluate(s, `!document.getElementById("errDlg").open`), `send: the error's popup closed by OK`);
   }
   // ai: Files from outside (2026-10-23): a file the system's Open with hands over (launchQueue, stubbed here) and one
   // ai: another app shared (left in the "lizard-share" cache as the worker leaves it, then send.html?shared), each added

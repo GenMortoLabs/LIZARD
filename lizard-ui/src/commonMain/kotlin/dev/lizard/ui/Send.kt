@@ -77,7 +77,12 @@ interface SendHost {
     // ai: what goes, from Start until Stop (null otherwise): the file's or the test stream's block (Details: the name, a
     // ai: spinner while it is prepared, a row a fact), its rows the same from Start, so nothing moves as figures arrive
     val details: Details?
-    val error: String                  // ai: what went wrong, in red ("" none)
+    // ai: what went wrong ("" none), said in a popup (NoteDialog, 2026-11-07: a cover over the code area that morning hid
+    // ai: File, Folder and Media after a failed pick, and a cover cannot be closed; every error stops the stream, so the
+    // ai: upload is what is under it); OK forgets it (clearError)
+    val error: String
+    fun clearError() {}
+    val broken: String get() = ""     // ai: a lasting fault said over the code area (ErrorCover; the desktop's missing native library)
     val reading: Boolean get() = false // ai: the pick being read (a dropped folder walked): a spinner, no words
     // ai: the block drawn (the desktop's control window, while a monitor of its own shows the code, has none: its area
     // ai: says it)
@@ -113,8 +118,8 @@ interface SendHost {
 @Composable
 fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
     // ai: one code area for every layout: a turn of the phone moves its surface rather than making another
-    // ai: an error said over it (ErrorCover, 2026-11-07; the column's red line before), as the receiver's over its preview
-    val code = remember(h) { movableContentOf<Modifier> { m -> Box { h.CodeArea(m); if (h.error.isNotEmpty()) ErrorCover(h.error, Modifier.matchParentSize()) } } }
+    // ai: a lasting fault said over it (ErrorCover); an error in a popup (below)
+    val code = remember(h) { movableContentOf<Modifier> { m -> Box { h.CodeArea(m); if (h.broken.isNotEmpty()) ErrorCover(h.broken, Modifier.matchParentSize()) } } }
     BoxWithConstraints {
         val portrait = h.canPortrait && maxHeight > maxWidth
         if (h.codeAlone && !(h.codeAloneInPlace && !portrait)) CodeAlone(h, code)
@@ -134,6 +139,7 @@ fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
         }
     }
     h.Windows()
+    if (h.error.isNotEmpty()) NoteDialog(h.error) { h.clearError() }
 }
 
 // ai: The code alone (2026-10-26 on the phone, as the desktop's full screen): on the page's white, as large as the screen
@@ -190,7 +196,7 @@ private fun Side(h: SendHost) {
         if (h.fullscreen) Btn("Fullscreen", pad = 16.dp) { h.toggleFull() }
     }
     // ai: what goes as elements (2026-11-07, Details; "Sending x, 2.4 GB (4.4 GB raw)" over "1.69 MB/s, pass 2" before),
-    // ai: or a spinner while the pick is read; an error is the code area's to say (ErrorCover, SendScreen), never the column's
+    // ai: or a spinner while the pick is read; an error a popup (SendScreen), never the column's
     val d = h.details
     if (!h.lineShown) Spacer(Modifier.height(10.dp))
     else if (d != null) DetailsBlock(d, Modifier.padding(top = 12.dp))

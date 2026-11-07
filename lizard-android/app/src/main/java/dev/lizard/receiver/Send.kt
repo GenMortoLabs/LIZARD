@@ -564,6 +564,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.lap, a.settings.stats == "on")
     }
     override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: ""
+    override fun clearError() { if (s.phase is SendState.Phase.Error) s.phase = SendState.Phase.Idle }
     override val reading get() = s.reading && !on && s.phase != SendState.Phase.Preparing
     override val heat get() = heatText(a.heat, a.clocks)
     override val railCapacity get() = if (on) s.capacityKBs else null

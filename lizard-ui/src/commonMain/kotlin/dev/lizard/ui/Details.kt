@@ -77,9 +77,9 @@ fun WarnRow(w: Warn, modifier: Modifier = Modifier, clear: Boolean = false) {
     }
 }
 
-// ai: What went wrong, said over an area (2026-11-07 for Send's code area; the receiver's preview since 2026-11-02): the
-// ai: soft fill, the red triangle and the words under it, in the form what happened, then what it touched ("Device lost:
-// ai: GPU encoder stopped"), never in the column
+// ai: What went wrong, said over an area (the receiver's preview since 2026-11-02; Send's code area for a lasting fault,
+// ai: its errors popups since 2026-11-07): the soft fill, the red triangle and the words under it, in the form what
+// ai: happened, then what it touched ("Camera stopped: ..."), never in the column
 @Composable
 fun ErrorCover(text: String, modifier: Modifier = Modifier) = Column(modifier.background(Soft).padding(horizontal = 24.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -87,13 +87,14 @@ fun ErrorCover(text: String, modifier: Modifier = Modifier) = Column(modifier.ba
     Text(text, style = MaterialTheme.typography.bodyMedium, color = Muted, textAlign = TextAlign.Center)
 }
 
-// ai: A note as a popup (2026-11-07; a red line on Home before): the part before its first ": " the title, the rest the
-// ai: body ("Not saved to Downloads" over the reason), OK closing it
+// ai: A note as a popup (2026-11-07; a red line on Home before; Send's errors too, a cover before): the part before its
+// ai: first ": " the title, the rest the body ("Not saved to Downloads" over the reason, "File changed" over "Choose it
+// ai: again"), a body opening on a plain word taking a capital (a name such as dev.fosslabs.lizard kept), OK closing it
 @Composable
 fun NoteDialog(note: String, onDismiss: () -> Unit) {
     val at = note.indexOf(": ")
     val title = if (at > 0) note.substring(0, at) else note
-    val body = if (at > 0) note.substring(at + 2) else ""
+    val body = (if (at > 0) note.substring(at + 2) else "").let { if (Regex("^[a-z]+(\\s|$)").containsMatchIn(it)) it.replaceFirstChar { c -> c.uppercaseChar() } else it }
     AlertDialog(onDismissRequest = onDismiss,
         confirmButton = { Btn("OK", Kind.Text, onClick = onDismiss) },
         title = { Text(title, style = MaterialTheme.typography.titleMedium, color = Fg) },
