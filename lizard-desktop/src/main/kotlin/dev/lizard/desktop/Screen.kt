@@ -24,6 +24,9 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeWindow
@@ -129,7 +132,10 @@ class DesktopSend(private val app: App) : SendHost {
     override val codeAlone get() = s.full && !s.leased
     override val codeAloneInPlace = true
     override val edgeTap = false
-    override fun leaveCodeAlone() { s.toggleFull(); if (s.collapsed) s.toggleRail() }
+    // ai: the column over the code in full screen (2026-11-07; the rail's collapser left full screen before, the column
+    // ai: open): open until its collapser, a change of full screen closing it (Windows)
+    var sideOver by mutableStateOf(false)
+    override fun leaveCodeAlone() { sideOver = true }
     override val codePadding = 0.dp
     // ai: the column's margin the edge's whole strip: the canvas begins past it, so a drag of the edge is Compose's from
     // ai: its start (a run paused at it takes the canvas out of the window, which ended a drag it had)
@@ -180,6 +186,7 @@ class DesktopSend(private val app: App) : SendHost {
 
     @Composable
     override fun Windows() {
+        LaunchedEffect(s.full) { sideOver = false }
         val w = window ?: return
         if (s.full && !s.leased) EdgeRail(this, s, w)
     }
@@ -223,28 +230,37 @@ private fun DropOutline() = Canvas(Modifier.fillMaxSize()) {
 // ai: popup (override-redirect on X11): the window manager neither places it (a dialog it centres on its owner at
 // ai: first) nor shades it, nor gives it the focus full screen holds. Mapped for as long as full screen lasts, parked
 // ai: off every screen while hidden, so a show is a move (a window mapped and drawn at each show took 0.5 to 1.1 s).
-// ai: Its collapser leaves full screen with the column open. Hidden once the pointer is off it (read a few times a
-// ai: second: the canvas below hears nothing while the pointer is over the rail, nor once it goes past the screen's edge).
+// ai: Its collapser opens the column over the code (SendSideOver, 2026-11-07; it left full screen with the column open
+// ai: before): the window as wide as the column, the code under it keeping its size and format, open until the column's
+// ai: own collapser or full screen left. The rail alone is hidden once the pointer is off it (read a few times a second:
+// ai: the canvas below hears nothing while the pointer is over the rail, nor once it goes past the screen's edge).
 @Composable
 private fun EdgeRail(h: DesktopSend, s: SendState, owner: ComposeWindow) {
-    val shown = s.edgeRail
+    val shown = s.edgeRail || h.sideOver
+    val over = h.sideOver
+    // ai: the column's width as the landscape layout takes it on this screen (sendSideWidth)
+    val sideDp = sendSideWidth(h, (owner.contentPane.width / owner.graphicsConfiguration.defaultTransform.scaleX).toFloat().dp).value
     DialogWindow(visible = true,
         create = { ComposeDialog(owner, Dialog.ModalityType.MODELESS).apply { type = Window.Type.POPUP; isUndecorated = true; isResizable = false; focusableWindowState = false } },
         dispose = ComposeDialog::dispose,
         update = { d ->
-            // ai: full screen's code area is the window's whole content
+            // ai: full screen's code area is the window's whole content; the window's width the rail's or the column's,
+            // ai: and its divider, in the screen's pixels
             val c = owner.contentPane
             val h = maxOf(1, c.height)
-            if (shown && c.isShowing) c.locationOnScreen.let { d.setBounds(it.x, it.y, 57, h) } else d.setBounds(-10000, -10000, 57, h)
+            val scale = owner.graphicsConfiguration.defaultTransform.scaleX
+            val w = if (over) ((sideDp + 1) * scale).roundToInt() else 57
+            if (shown && c.isShowing) c.locationOnScreen.let { d.setBounds(it.x, it.y, w, h) } else d.setBounds(-10000, -10000, w, h)
         }) {
-        LaunchedEffect(shown) {
-            while (shown) {
+        LaunchedEffect(shown, over) {
+            while (shown && !over) {
                 delay(150)
                 val p = MouseInfo.getPointerInfo()?.location
                 if (p == null || !window.bounds.contains(p)) { s.edgeRail = false; break }
             }
         }
-        Row(Modifier.fillMaxSize().background(Bg)) {
+        if (over) SendSideOver(h, sideDp.dp) { h.sideOver = false }
+        else Row(Modifier.fillMaxSize().background(Bg)) {
             Rail(onClick = { h.leaveCodeAlone() }) { SendRail(h) }
             VerticalDivider(color = Line)
         }

@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
@@ -99,7 +100,7 @@ interface SendHost {
     // ai: and begun anew (2026-11-02, every full-screen switch); the phone's CodeAlone otherwise
     val codeAloneInPlace: Boolean get() = false
     val edgeTap: Boolean               // ai: a tap near the left edge shows the rail over the code alone (the phone's)
-    fun leaveCodeAlone()               // ai: the rail's collapser over the code alone
+    fun leaveCodeAlone()               // ai: the rail's collapser over the code alone (the desktop's: the column over it, SendSideOver)
     val codePadding: Dp                // ai: the light round the code area in the page (the phone's 16 dp; the desktop's canvas fills)
     val codeFill: Color get() = Bg     // ai: the code area's fill at its left edge, which the column's margin beside it takes
     val edgeRoom: Dp get() = EdgeRoom  // ai: the column's margin past its edge (ToolLandscape's `room`; the desktop's the edge's whole strip)
@@ -129,7 +130,7 @@ fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
             Side(h)
         } else ToolLandscape("Send", h.folds.open(FoldKey.SendCollapsed), { h.folds.toggle(FoldKey.SendCollapsed) }, { h.goHome() },
             if (h.swapInColumn) ({ SwapBtn("Receiver") { h.goReceive() } }) else null, h.width,
-            RowFloor(listOfNotNull(listOf("Stop") to 16.dp, listOf("Pause", "Resume") to 16.dp, if (h.fullscreen) listOf("Fullscreen") to 16.dp else null)),
+            sendRowFloor(h),
             mainPadding = h.codePadding, room = h.edgeRoom, roomFill = h.codeFill, bare = h.codeAlone,
             rail = { SendRail(h) }, side = { Side(h) }) {
             val size = h.codeSize(maxWidth, maxHeight, false)
@@ -162,6 +163,36 @@ private fun CodeAlone(h: SendHost, code: @Composable (Modifier) -> Unit) {
             VerticalDivider(color = Line)
         }
     }
+}
+
+// ai: The Send column's floor: its widest row of buttons (Stop, Pause or Resume, Fullscreen where the platform has one)
+@Composable
+fun sendRowFloor(h: SendHost): Dp = RowFloor(listOfNotNull(listOf("Stop") to 16.dp, listOf("Pause", "Resume") to 16.dp, if (h.fullscreen) listOf("Fullscreen") to 16.dp else null))
+
+// ai: The Send column's width on a screen `screen` wide, as the landscape layout takes it (SideWidth: its default or
+// ai: the width its edge was dragged to, within its floor and three fifths of the screen)
+@Composable
+fun sendSideWidth(h: SendHost, screen: Dp): Dp = SideWidth(screen, h.width.dp, h.width.default(screen), sendRowFloor(h))
+
+// ai: The column over the code alone (the desktop's full screen, 2026-11-07): the rail's collapser opens it over the
+// ai: code's left part, full screen kept (it was left before), the code keeping its size and format under it; the
+// ai: column as the landscape layout draws it (the bar with the swap, Side scrolling), its own collapser closing it.
+// ai: Fullscreen, its keys or Escape still leave full screen.
+@Composable
+fun SendSideOver(h: SendHost, width: Dp, onClose: () -> Unit) = Row(Modifier.fillMaxHeight().background(Bg)) {
+    Column(Modifier.width(width).fillMaxHeight()) {
+        Box(Modifier.padding(horizontal = SidePad)) {
+            TopBar("Send") { if (h.swapInColumn) SwapBtn("Receiver") { h.goReceive() }; CollapseBtn(false, onClose) }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            val scroll = rememberScrollState()
+            Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = SidePad)) {
+                CompositionLocalProvider(LocalButtonsFill provides h.width.stretch) { Side(h) }
+            }
+            LocalScrollbar.current(scroll, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+        }
+    }
+    VerticalDivider(color = Line)
 }
 
 // ai: how near the left edge a tap shows the rail over the code alone, and how long it stays untouched
