@@ -1522,7 +1522,7 @@ regenerates them exactly: 7/8 (5 block rows, 31 data columns, 5 of degree 5, see
 data columns of degree 3. The columns are placed in order, each edge in the lightest block row, and every shift of 0 to
 z - 1 is scored by the exact count of 4- and 6-cycles through the whole base matrix, the staircase included. The heavy
 columns are the profiles of the codes before them (2026-10-08) scaled to these widths. Their 10% codeword-loss
-thresholds on BI-AWGN (QPSK Es/N0, the exact int8 decoder of 8.5 with no stop, 30 iterations): 6.023, 4.038, 3.005 and
+thresholds on BI-AWGN (QPSK Es/N0, the exact int8 decoder of 8.5 with no stop, 30 iterations): 5.693, 4.038, 3.005 and
 1.087 dB. The printed tables are the format, and `liblizard/test/ldpc_table.c` holds each to its hash (8.1, 8.6) and
 `ldpc_init`'s block-row view to the table entry by entry.
 
