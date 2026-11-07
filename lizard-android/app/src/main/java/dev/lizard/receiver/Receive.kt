@@ -256,7 +256,6 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         }
         return out
     }
-    override val about get() = a.aboutLine()
 }
 
 // ai: a rate as the Frame rate menu shows it: whole where it is, else two places (the desktop's ReceiveState.fpsText)

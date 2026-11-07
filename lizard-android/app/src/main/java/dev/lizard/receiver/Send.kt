@@ -598,7 +598,6 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
         Choice("Show statistics", a.settings.stats, listOf("off" to "Off", "on" to "On")) { a.change(a.settings.copy(stats = it)) },
         ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = s.phase != SendState.Phase.On && s.phase != SendState.Phase.Preparing) { s.test = it })
     override val readout get() = sendLab(s).takeIf { it.isNotEmpty() }?.let { Code(it) }
-    override val about get() = a.aboutLine()
     // ai: While a send runs the code is the whole screen (2026-10-26): the code alone, the bars hidden (SendState.screenFor);
     // ai: the page only while paused; the collapser over it pauses and opens the page with the column
     override val codeAlone get() = on && !s.paused

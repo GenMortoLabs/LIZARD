@@ -10,7 +10,7 @@ import { DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
 import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
 import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
 import { bundle } from "./tar.mjs";
-import { remember, persist, say, bytes, rate, about, registerApp, collapser, sideResizer, icon, nameParts, slider, details } from "./ui.mjs";
+import { remember, persist, say, bytes, rate, registerApp, collapser, sideResizer, icon, nameParts, slider, details } from "./ui.mjs";
 // ai: the sliders filled to their values as the apps draw them (ui.mjs slider), before the codec's load
 for (const el of document.querySelectorAll('input[type="range"]')) slider(el);
 
@@ -947,8 +947,7 @@ for (const id of ["spacing", "margin"]) {
   $(id).addEventListener("change", () => { showMargin(); image = null; roomChanged(); });
 }
 // ai: The app's shell (2026-10-01): the bar's Settings, About and the installed app's worker.
-about($("about"));
-registerApp(() => about($("about"), true));
+registerApp();
 
 // The surround: clutter painted on the canvas behind the symbol, filling <main> up to the symbol's own painted
 // margin. A busy page is the channel the decoder is judged on (the training scenes carry the same kinds,

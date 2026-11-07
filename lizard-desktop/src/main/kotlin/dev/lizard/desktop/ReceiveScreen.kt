@@ -214,7 +214,6 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         }
         return out
     }
-    override val about get() = app.about
 
     companion object {
         private const val EXPOSURE_STEPS = 100

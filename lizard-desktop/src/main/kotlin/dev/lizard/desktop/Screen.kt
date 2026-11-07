@@ -124,7 +124,6 @@ class DesktopSend(private val app: App) : SendHost {
         Choice("Show statistics", app.recv.showStats, listOf(false to "Off", true to "On")) { app.recv.chooseStats(it) },
         ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = !s.sending) { s.chooseTest(it) })
     override val readout get() = s.readout.takeIf { it.isNotEmpty() }?.let { Code(it, 12) }
-    override val about get() = s.about
     // ai: full screen: the code alone (2026-10-23, as the web's and the app's); while a monitor is taken for the code the
     // ai: window is the control: the column as when not full
     override val codeAlone get() = s.full && !s.leased

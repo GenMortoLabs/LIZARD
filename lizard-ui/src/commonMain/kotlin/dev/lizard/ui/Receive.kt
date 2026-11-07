@@ -85,7 +85,6 @@ interface ReceiveHost {
     val settings: List<Setting>
     val experimental: List<Setting>    // ai: the Experimental fold's lab arms; no fold where there are none
     val tools: List<Setting>
-    val about: String
 }
 
 // ai: Receive (the web's recv.html; both apps' since 2026-10-31): the camera's crop, the transfer (the actions: Open and
@@ -189,8 +188,6 @@ private fun Side(h: ReceiveHost) {
     Fold("Settings", h.folds.open(FoldKey.RecvSettings), { h.folds.toggle(FoldKey.RecvSettings) }) { Settings(h.settings) }
     if (h.experimental.isNotEmpty()) Fold("Experimental", h.folds.open(FoldKey.RecvExperimental), { h.folds.toggle(FoldKey.RecvExperimental) }) { Settings(h.experimental) }
     Fold("Developer Tools", h.folds.open(FoldKey.RecvTools), { h.folds.toggle(FoldKey.RecvTools) }) { Settings(h.tools) }
-    AboutFold(h.about)
-    SourceRow()
     Spacer(Modifier.height(24.dp))
 }
 

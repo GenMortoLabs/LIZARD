@@ -93,7 +93,6 @@ interface SendHost {
     val experimental: List<Setting>    // ai: the Experimental fold's lab arms; no fold where there are none
     val tools: List<Setting>
     val readout: Code?                 // ai: the lab's text under Developer Tools' fields (CodeBlock's own 6 dp under them)
-    val about: String
     val codeAlone: Boolean             // ai: the code alone on the screen (the phone's send running; the desktop's full screen)
     // ai: the code alone drawn as the landscape layout bare (ToolLandscape's `bare`), the code area never moved in the tree:
     // ai: the desktop's, whose code area is a heavyweight canvas a move destroys and makes again, its presenter stopped
@@ -211,8 +210,6 @@ private fun Side(h: SendHost) {
         Settings(h.tools)
         h.readout?.let { CodeBlock(it.text, it.size) }
     }
-    AboutFold(h.about)
-    SourceRow()
     Spacer(Modifier.height(24.dp))
 }
 

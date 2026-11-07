@@ -27,7 +27,7 @@ import { PoolPolicy } from "./pool.mjs";
 import { logPost } from "./devlog.mjs";
 import { R_RING, SPAN, MODULES, N_FOR, NAME, PICTURE_SIZES, subchOf } from "../liblizard/sim/lizard_pick.mjs";
 import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
-import { remember, persist, restoreSaved, bytes, rate, left, about, registerApp, collapser, sideResizer, slider, nameParts, details, warnings } from "./ui.mjs";
+import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings } from "./ui.mjs";
 import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
 // ai: Settings and Developer Tools (the Developer panel until 2026-10-01) open as they were left, a phone session
@@ -48,8 +48,7 @@ function actionsFloor() {
 }
 sideResizer("recv:side", actionsFloor, "recv:collapsed");   // ai: the column's edge dragged to resize it (2026-10-05), no narrower than the actions need
 // ai: The app's shell (2026-10-01): the bar's Settings, the first-run tip, About and the installed app's worker.
-about($("about"));
-registerApp(() => about($("about"), true));
+registerApp();
 const PARAMS = new URLSearchParams(location.search), VERIFY = PARAMS.has("verify"), PROF = PARAMS.has("prof");
 // ai: The lab's switches that were test-only menus until 2026-10-01, URL parameters alone since, each read where its
 // ai: menu was: srccrop=full, workers=<n>. The page records no replays since 2026-10-09: the Android app's Save replays
