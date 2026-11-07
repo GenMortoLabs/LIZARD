@@ -106,7 +106,8 @@ interface HomeHost {
     fun deletePartial(p: Partial)
     val files: List<FileItem>
     fun deleteAll()
-    val note: String                 // ai: a Save's or a filing's failure, in red; "" none (a Save that works says nothing, 2026-11-06)
+    val note: String                 // ai: a Save's or a filing's failure, a dialog (NoteDialog, 2026-11-07; a red line before); "" none (a Save that works says nothing, 2026-11-06)
+    fun clearNote() {}               // ai: its OK
     val about: String
 }
 
@@ -137,7 +138,7 @@ private fun HomeColumn(h: HomeHost) {
         if (files.isNotEmpty()) SectionLabel("Received files")
         // ai: keyed by the file, so a row's menu and its question stay with it when a file is filed above it meanwhile
         files.forEachIndexed { i, e -> key(e.key) { FileRow(h, e, last = i == files.lastIndex) } }
-        h.note.let { if (it.isNotEmpty()) Text(it, style = MaterialTheme.typography.bodyMedium, color = Bad, modifier = Modifier.padding(top = 8.dp)) }
+        h.note.let { if (it.isNotEmpty()) NoteDialog(it) { h.clearNote() } }
         HomeSettings(h)
     }
 }
@@ -202,13 +203,13 @@ private fun HomeSettings(h: HomeHost) {
 class BundleFile(val path: String, val size: Long, val open: () -> Unit, val acts: List<Act>)
 
 @Composable
-fun BundleScreen(name: String, files: Int, size: Long, acts: List<Act>, items: List<BundleFile>, note: String, onBack: () -> Unit) {
+fun BundleScreen(name: String, files: Int, size: Long, acts: List<Act>, items: List<BundleFile>, note: String, onNote: () -> Unit, onBack: () -> Unit) {
     Page(name, onBack) {
         Text("${countOf(files)} · ${Readout.bytes(size)}", style = MaterialTheme.typography.bodyMedium, color = Muted, modifier = Modifier.padding(top = 8.dp))
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for (a in acts) Btn(a.label, modifier = Modifier.weight(1f)) { a.run() }
         }
-        if (note.isNotEmpty()) Text(note, style = MaterialTheme.typography.bodyMedium, color = Bad, modifier = Modifier.padding(bottom = 8.dp))
+        if (note.isNotEmpty()) NoteDialog(note, onNote)
         items.forEachIndexed { i, it -> key(it.path) {
             ListRow(it.path, Readout.bytes(it.size), lead = Icons.file, divider = i != items.lastIndex, onClick = it.open) { MoreMenu("More for ${it.path}", it.acts) }
         } }
@@ -269,7 +270,7 @@ private fun HomeWide(h: HomeHost) {
                         Heading("Received files")
                         EmptyBox("No received files")
                     }
-                    h.note.let { if (it.isNotEmpty()) Text(it, style = MaterialTheme.typography.bodyMedium, color = Bad, modifier = Modifier.padding(top = 12.dp)) }
+                    h.note.let { if (it.isNotEmpty()) NoteDialog(it) { h.clearNote() } }
                     Spacer(Modifier.height(48.dp))
                 }
             }

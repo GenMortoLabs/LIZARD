@@ -75,12 +75,12 @@ function swInit() {
       pump();
       return;
     }
-    if (m.type === "error") { if (pending) { pending.rej(new Error(m.message)); pending = null; } else fail("The encoder stopped", new Error(m.message)); return; }
+    if (m.type === "error") { if (pending) { pending.rej(new Error(m.message)); pending = null; } else fail("Encoder failed", new Error(m.message)); return; }
     if (pending && m.type === pending.type) { const p = pending; pending = null; p.res(m); }
   };
   sw.onerror = (e) => {
     const err = new Error(e.message || "the sender worker did not load");
-    if (pending) { pending.rej(err); pending = null; } else fail("The encoder stopped", err);
+    if (pending) { pending.rej(err); pending = null; } else fail("Encoder failed", err);
   };
 }
 // A request that waits for its reply: start answers "ready", respec answers "respec".
@@ -208,7 +208,8 @@ function gpuGiveUp(e) {
   console.warn("sender: the GPU encoder:", e);
   try { genc?.destroy(); } catch {}
   genc = gctx = gcfg = null; batchOf.clear(); encodeQueue.length = 0;
-  if ($("enc").value === "gpu") { fail("The GPU encoder stopped", e); return; }
+  // ai: what happened first, then what it touched (2026-11-07: "Device lost: GPU encoder stopped")
+  if ($("enc").value === "gpu") { if (/lost/i.test(String(e?.message ?? e))) fail("", alone("Device lost: GPU encoder stopped")); else fail("GPU encoder failed", e); return; }
   gpuOff = String(e?.message ?? e);
   showEnc();
   if (running) go();
@@ -401,7 +402,7 @@ function showReady() {
   const f = chosen;
   $("go").hidden = false; $("go").disabled = !isTest() && !f; $("stop").hidden = $("pause").hidden = true;
   document.body.classList.remove("busy");
-  showChoice(false); showDetails();
+  showChoice(false); showDetails(); showErr("");
   // ai: the choice's size is the upload card's head's ("2 items · 4.4 GB", 2026-11-07; a line under the card named it
   // ai: and its size before)
   say($("state"), "");
@@ -441,13 +442,17 @@ function showRunning() {
   $("go").hidden = true; $("go").disabled = true; $("stop").hidden = false;
   $("pause").hidden = false; $("pause").disabled = !live; $("pause").textContent = "Pause"; $("pause").classList.remove("primary");
   document.body.classList.add("busy");
-  say($("state"), ""); showDetails();
+  say($("state"), ""); showErr(""); showDetails();
 }
-// ai: Every error ends here: the stream stops, the state line says what went wrong in red, the console has the rest.
+// ai: Every error ends here: the stream stops, what went wrong is said over the code area (#err, 2026-11-07; a red line
+// ai: in the column before), what happened, then what it touched ("Start failed: ..."; an error made with alone() is said
+// ai: as it is), the console has the rest; until the next start or pick.
+const alone = (text) => Object.assign(new Error(text), { alone: true });
+function showErr(text) { $("errText").textContent = text; $("err").hidden = !text; }
 function fail(what, e) {
   console.error(`sender: ${what}:`, e);
   stop(); showReady();
-  say($("state"), `${what}: ${e?.message ?? e}`, "bad");
+  showErr(e?.alone ? e.message : `${what}: ${e?.message ?? e}`);
 }
 
 // ai: The screen stays on while a symbol is painted. The browser lets the lock go when the page is hidden, so it is
@@ -678,12 +683,12 @@ async function repickOnce() {
 //     for a non-video element.
 //   window resize: browser zoom changes devicePixelRatio, and so room(), without changing clientWidth.
 let repickSoon = 0;
-const roomChanged = () => { clearTimeout(repickSoon); repickSoon = setTimeout(() => repick().catch((e) => { if (e !== STOPPED) fail("The version could not change", e); }), 300); };
+const roomChanged = () => { clearTimeout(repickSoon); repickSoon = setTimeout(() => repick().catch((e) => { if (e !== STOPPED) fail("Density not changed", e); }), 300); };
 addEventListener("resize", roomChanged);
 new ResizeObserver(roomChanged).observe(canvas.parentElement);
 
 // ai: Start as the person presses it (Start, the rail's play): Resume where paused, else a send
-const begin = () => start().catch((e) => { if (e !== STOPPED) fail("Could not start", e); });
+const begin = () => start().catch((e) => { if (e !== STOPPED) fail("Start failed", e); });
 const go = () => (paused ? setPaused(false) : begin());
 $("go").onclick = go;
 $("stop").onclick = () => { stop(); showReady(); };
@@ -722,7 +727,7 @@ function changed() {
 }
 // ai: the chosen file's bytes, with the page's words for one the browser no longer reads
 const readOf = (file) => file.blob.arrayBuffer().then((b) => new Uint8Array(b), (e) => {
-  throw e?.name === "NotReadableError" || e?.name === "NotFoundError" ? new Error(`${file.bundled ? `A file in ${file.name}` : file.name} has changed, moved or gone since it was chosen: choose it again`) : e;
+  throw e?.name === "NotReadableError" || e?.name === "NotFoundError" ? alone(`File changed: choose ${file.bundled ? "the files" : "it"} again`) : e;
 });
 async function prepare(p) {
   let b;
@@ -737,7 +742,7 @@ let runPick = null, runName = "";
 function madeAll(m) {
   if (chosen?.pick === m.pick) { if (m.error) chosen.failed = new Error(m.error); else chosen.sent = m.sent; }
   if (!running || runPick !== m.pick) { if (!running) showReady(); return; }
-  if (m.error) { fail("The file could not be prepared", new Error(m.error)); return; }
+  if (m.error) { fail("File not prepared", new Error(m.error)); return; }
   sentBytes = m.sent; lap = m.lap;
   showDetails();
 }
@@ -833,7 +838,7 @@ document.addEventListener("drop", (e) => {
   // ai: a drop that cannot be read leaves the list and a run as they were, and says so where nothing is sending
   walked.then(add, (err) => {
     console.error("sender: the dropped files could not be read:", err);
-    if (!running) { showReady(); say($("state"), `The dropped files could not be read: choose them instead: ${err?.message ?? err}`, "bad"); }
+    if (!running) { showReady(); showErr("Drop unreadable: choose the files instead"); }
   });
 });
 // ai: A drop's items, each dropped root with every folder walked, folders included (an empty one survives), under its

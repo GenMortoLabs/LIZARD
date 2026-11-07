@@ -26,6 +26,7 @@ internal class AndroidHome(private val a: MainActivity) : HomeHost {
     }
     override fun deleteAll() = a.deleteAll()
     override val note get() = a.note
+    override fun clearNote() { a.note = "" }
     override val about get() = a.aboutLine()
 
     // ai: the bundle a press opened (MainActivity.shownBundle): its files sorted by their path in the folder

@@ -1,11 +1,15 @@
 package dev.lizard.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -14,6 +18,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,4 +57,46 @@ fun DetailsBlock(d: Details, modifier: Modifier = Modifier, clear: Boolean = fal
             }
         }
     }
+}
+
+// ai: A warning as a status label (2026-11-07; a sentence before, "Set the sender to at most 30 fps for this camera.";
+// ai: sentences are for popups and covers): its label ("Sender too fast", "Throttling") and where a figure helps a value
+// ai: ("max 30 fps", "camera 42 of 60 fps"). Drawn as a row under the block, the red triangle before its label (WarnRow;
+// ai: rows, not chips); in a rail the triangle alone, its words the description (text).
+class Warn(val label: String, val value: String = "") {
+    val text get() = if (value.isEmpty()) label else "$label, $value"
+}
+
+@Composable
+fun WarnRow(w: Warn, modifier: Modifier = Modifier, clear: Boolean = false) {
+    Row(modifier.fillMaxWidth().heightIn(min = 26.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(Icons.alert, contentDescription = "Warning", Modifier.size(16.dp), tint = if (clear) Color.Transparent else Bad)
+        Text(w.label, style = MaterialTheme.typography.bodyMedium, color = if (clear) Color.Transparent else Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (w.value.isNotEmpty()) Text(w.value, style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = if (clear) Color.Transparent else Muted, maxLines = 1)
+    }
+}
+
+// ai: What went wrong, said over an area (2026-11-07 for Send's code area; the receiver's preview since 2026-11-02): the
+// ai: soft fill, the red triangle and the words under it, in the form what happened, then what it touched ("Device lost:
+// ai: GPU encoder stopped"), never in the column
+@Composable
+fun ErrorCover(text: String, modifier: Modifier = Modifier) = Column(modifier.background(Soft).padding(horizontal = 24.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
+    Icon(Icons.alert, contentDescription = null, Modifier.size(24.dp), tint = Bad)
+    Text(text, style = MaterialTheme.typography.bodyMedium, color = Muted, textAlign = TextAlign.Center)
+}
+
+// ai: A note as a popup (2026-11-07; a red line on Home before): the part before its first ": " the title, the rest the
+// ai: body ("Not saved to Downloads" over the reason), OK closing it
+@Composable
+fun NoteDialog(note: String, onDismiss: () -> Unit) {
+    val at = note.indexOf(": ")
+    val title = if (at > 0) note.substring(0, at) else note
+    val body = if (at > 0) note.substring(at + 2) else ""
+    AlertDialog(onDismissRequest = onDismiss,
+        confirmButton = { Btn("OK", Kind.Text, onClick = onDismiss) },
+        title = { Text(title, style = MaterialTheme.typography.titleMedium, color = Fg) },
+        text = if (body.isNotEmpty()) ({ Text(body, style = MaterialTheme.typography.bodyMedium, color = Muted) }) else null,
+        shape = RoundedCornerShape(12.dp), containerColor = Bg)
 }

@@ -339,6 +339,23 @@ const SIZES = [
     const two = await sendOnce(" and 1 more.tar");
     check(two?.end === " and 1 more.tar" && two.cut && two.oneLine && two.ws === "pre" && two.state.endsWith(" and 1 more.tar"), `send: a long bundle name on one line, " and 1 more.tar" whole with its space (${JSON.stringify(two)})`);
     await screenshot(s, `${OUT}/send-long-name.png`);
+    // ai: an error over the code area (2026-11-07; a red line in the column before): a file picked, then gone from disk
+    // ai: before Start, so the browser refuses the read; the cover says what happened and what to do, the column nothing
+    const gone = join(src, "gone.txt");
+    put(gone, "gone");
+    await evaluate(s, `document.getElementById("clearPick").click()`);
+    await setFiles("file", [gone]);
+    await until(s, `document.querySelectorAll("#pickList .t").length === 1`, 8000, "the file to lose").catch(() => {});
+    rmSync(gone);
+    await evaluate(s, `document.getElementById("go").click()`);
+    await until(s, `!document.getElementById("err").hidden`, 8000, "the error's cover").catch(() => {});
+    const er = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id), r = $("err").getBoundingClientRect(), m = document.querySelector("main").getBoundingClientRect();
+      return { text: $("errText").textContent, shown: !$("err").hidden, covers: Math.abs(r.width - m.width) < 1 && Math.abs(r.height - m.height) < 1, state: $("state").textContent, go: $("go").hidden }; })()`);
+    await screenshot(s, `${OUT}/send-error.png`);
+    check(er.shown && er.text === "File changed: choose it again" && er.covers && er.state === "" && !er.go, `send: an error over the code area, the column silent (${JSON.stringify(er)})`);
+    await evaluate(s, `document.getElementById("clearPick").click()`);
+    await until(s, `document.getElementById("err").hidden`, 5000, "the cover gone with a new pick").catch(() => {});
+    check(await evaluate(s, `document.getElementById("err").hidden`), `send: the error's cover gone at the next pick`);
   }
   // ai: Files from outside (2026-10-23): a file the system's Open with hands over (launchQueue, stubbed here) and one
   // ai: another app shared (left in the "lizard-share" cache as the worker leaves it, then send.html?shared), each added
@@ -361,7 +378,9 @@ const SIZES = [
     const extra = await evaluate(s, `!!document.getElementById("first") || !!document.getElementById("power")`);
     check(/Turn off power saving/.test(tip) && !extra, `send: power saving in the "?" alone ("${tip}"), no first-send question, no live line`);
   }
-  check(!s.errors.length, `send: no console errors${s.errors.length ? `: ${s.errors.join("; ")}` : ""}`);
+  // ai: the deliberate error's own line (the file gone before Start, above) is no fault
+  const sendErrs = s.errors.filter((e) => !/File changed: choose it again/.test(e));
+  check(!sendErrs.length, `send: no console errors${sendErrs.length ? `: ${sendErrs.join("; ")}` : ""}`);
   s.close();
 }
 
@@ -416,8 +435,8 @@ const SIZES = [
   const s = await chrome("errors");
   await size(s, SIZES[0]);
   const cases = [
-    ["notallowed", `navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("Permission denied", "NotAllowedError"));`, /Allow it for this site in the browser's site settings/],
-    ["nomediadevices", `Object.defineProperty(Navigator.prototype, "mediaDevices", { get: () => undefined, configurable: true });`, /secure page: open this one over https, or on localhost/],
+    ["notallowed", `navigator.mediaDevices.getUserMedia = () => Promise.reject(new DOMException("Permission denied", "NotAllowedError"));`, /^Camera blocked: allow it in site settings$/],
+    ["nomediadevices", `Object.defineProperty(Navigator.prototype, "mediaDevices", { get: () => undefined, configurable: true });`, /^Insecure page: camera needs https or localhost$/],
   ];
   for (const [name, source, want] of cases) {
     const { identifier } = await s.send("Page.addScriptToEvaluateOnNewDocument", { source });
@@ -518,7 +537,7 @@ const SIZES = [
   check(ts.dt?.name === "Test stream" && ts.dt.frac === null && Object.keys(ts.dt.rows).join() === "Speed" && /^\d+\sKB\/s, \d+% registered, LIZARD-96 at 24\sfps$/.test(ts.lab), `test stream: ${JSON.stringify(ts.dt)} / "${ts.lab}" / "${ts.why}"`);
   // ai: The native app is recommended only to a sender painting faster than 24 (2026-10-01): not here, and
   // ai: on a clip of the same stream whose word says 30 (a picture a camera frame).
-  check(!/LIZARD app/.test(ts.why), `at 24 fps no word of the LIZARD app: "${ts.why}"`);
+  check(!/Too fast for a browser/.test(ts.why), `at 24 fps no word of a browser's limit: "${ts.why}"`);
   {
     const fastPhy = await makePhy({ phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FC, variants: [{ name: "rx" }] }), fastPath = join(scratch, "fast.y4m");
     const fd = openSync(fastPath, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
@@ -535,8 +554,9 @@ const SIZES = [
     await navigate(f, `${BASE}?auto&seen`);
     await until(f, `/at 30\\sfps/.test(document.getElementById("lab").textContent)`, 30000, "the 30 fps test stream read");
     await sleep(1200);
-    const fw = await evaluate(f, `document.getElementById("why").textContent`);
-    check(/(^|\n)30 pictures a second is too fast for a browser/.test(fw) && /LIZARD app/.test(fw) && /send at 24/.test(fw), `a sender at 30 fps is sent to the LIZARD app: "${fw}"`);
+    // ai: the warning as a row (2026-11-07; a sentence naming the LIZARD app before): its label and the most a browser reads
+    const fw = await evaluate(f, `[...document.querySelectorAll("#why .wr")].map((r) => r.dataset.k + "|" + r.querySelector(".v").textContent).join(" / ")`);
+    check(/(^| \/ )Too fast for a browser\|max 24\sfps( \/ |$)/.test(fw), `a sender at 30 fps: the warning row "${fw}"`);
   }
   // ai: The light gone (the video paused, as a camera turned to a wall): the state falls back to looking, which says
   // ai: nothing (2026-11-06, as the apps'; its words drawn clear while the run holds the line's room), the code's name

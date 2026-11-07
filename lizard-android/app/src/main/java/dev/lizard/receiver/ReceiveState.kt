@@ -136,7 +136,7 @@ class ReceiveState(private val a: MainActivity) {
             made++
         }.onFailure { e ->
             Log.e(TAG, "session: ${e.message}")
-            main.post { phaseTo(RxPhase.Error("The camera did not start: ${e.message}")) }
+            main.post { phaseTo(RxPhase.Error("Camera not started: ${e.message}")) }
         }.getOrNull()
     }
     // ai: the start's thread: the session let go (the calls under way waited for, then its close: the camera stopped and
@@ -453,7 +453,7 @@ class ReceiveState(private val a: MainActivity) {
 
     // ai: One hint, the first that holds, while the camera reads a word (dev.lizard.ui hintOf; the desktop's rules): a
     // ai: camera the phase lock holds takes no rate hint
-    fun hint(j: JsonObject?): String = hintOf(j, phase == RxPhase.On, locked = lock?.let { "off" !in it } == true)
+    fun hint(j: JsonObject?): Warn? = hintOf(j, phase == RxPhase.On, locked = lock?.let { "off" !in it } == true)
 
 
     // ai: A second's line for the log while a symbol is in view (Engine.rx before; tools/phone read it): what the receiver

@@ -28,6 +28,7 @@ import dev.lizard.ui.RxPhase
 import dev.lizard.ui.Setting
 import dev.lizard.ui.Slide
 import dev.lizard.ui.Typed
+import dev.lizard.ui.Warn
 import dev.lizard.ui.runLine
 import java.util.Locale
 import kotlin.math.exp
@@ -76,7 +77,7 @@ class DesktopReceive(private val app: App) : ReceiveHost {
     override fun goSend() = app.go(Screen.Send)
     override val line get() = r.line
     override val showStats get() = r.showStats
-    override val heat: String? = null
+    override val heat: Warn? = null
     override val hint get() = r.hint
     override val note get() = r.driverNote.ifEmpty { r.fileNote }
     override val running get() = r.running

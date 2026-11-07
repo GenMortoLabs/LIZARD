@@ -127,6 +127,7 @@ const ICONS = {
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
 };
 // ai: A line that names a file (2026-10-23; the PC's rule since 2026-11-06, lizard-ui Parts.kt NameLine): on one line
@@ -170,6 +171,22 @@ export function details(el, d, clear = false) {
   }
   for (const [k, v] of d.rows ?? []) { const r = document.createElement("div"); r.className = "dt-row"; r.dataset.k = k; r.append(span("k", k), span("v", v)); parts.push(r); }
   el.replaceChildren(...parts);
+}
+// ai: Warnings as status labels under the block (2026-11-07, the apps' lizard-ui Warn and WarnRow; sentences before,
+// ai: "30 pictures a second is too fast for a browser: use the LIZARD app, or send at 24."): a row each, the red
+// ai: triangle, the label, and at the right a value where a figure helps. list: [[label, value]]; clear: drawn clear,
+// ai: its room kept. Rebuilt only when it changes.
+export function warnings(el, list, clear = false) {
+  el.classList.toggle("ghost", clear);
+  const key = JSON.stringify(list);
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.replaceChildren(...list.map(([l, v]) => {
+    const r = document.createElement("div"), a = document.createElement("span"), b = document.createElement("span");
+    r.className = "wr"; r.dataset.k = l; a.className = "l"; a.textContent = l; b.className = "v"; b.textContent = v ?? "";
+    r.append(icon("alert"), a, b);
+    return r;
+  }));
 }
 // ai: a block's facts as the checks read them: { name, end, frac, rows: { label: value } }, null where hidden
 export function detailsOf(el) {

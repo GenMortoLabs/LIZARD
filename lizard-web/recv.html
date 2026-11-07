@@ -47,7 +47,8 @@
   /* ai: the card's title counts what came, "Received 1 file" (the page keeps a bundle as its one tar; the size is the
      tile's); how it went is the column's block with Show statistics on (2026-11-07, the apps' ReceivedPanel) */
   /* ai: the hint (the verdict, each flag on a line of its own: recv.mjs joins them with newlines), muted as the apps' */
-  #why{white-space:pre-line;font-weight:400;font-size:14px;color:var(--muted);margin:4px 0 0}
+  /* ai: the warnings as rows under the block (ui.mjs warnings, 2026-11-07; muted sentences before) */
+  #why{margin:4px 0 0}
   #why:empty{margin:0}
   /* ai: Within a run (Start until it stops) the block and the hint once shown keep their room, drawn clear when they fall
      silent (recv.mjs held; the apps' Receive.kt, 2026-11-02): nothing under them moves as they come and go */
@@ -92,7 +93,7 @@
   <!-- ai: Start or Stop, the column's one button (2026-11-06; the received file's Open, Save and Share are #done's) -->
   <div id="top"><button id="go" class="primary">Start</button></div>
   <div id="dt" class="dt" role="status" aria-live="polite" hidden></div>
-  <p id="why" class="why"></p>
+  <div id="why" class="why"></div>
   <!-- ai: the browser's limit, before the first camera start on this browser (recv.mjs go, 2026-10-09): a browser's
        camera and timing hold it far under the Android app, and with no control of the camera's timing it reads a
        sender painting at most half the camera's rate, where no capture straddles two pictures -->

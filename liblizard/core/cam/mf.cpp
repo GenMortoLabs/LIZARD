@@ -71,7 +71,7 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 
-const char* const kBlocked = "The camera is blocked: allow desktop apps to use the camera in Windows' privacy settings.";
+const char* const kBlocked = "Camera blocked: allow desktop apps in Windows privacy settings";
 
 // ai: KSPROPERTY_CAMERACONTROL_AUTO_EXPOSURE_PRIORITY: the Windows SDK's next value after FOCAL_LENGTH, UVC's
 // ai: auto-exposure priority (0: the frame rate held; 1: the camera may lower it to expose longer)
@@ -86,7 +86,7 @@ std::string hex(HRESULT hr) {
   return b;
 }
 
-// ai: an HRESULT as the state line words it (after "The camera did not start: " or "The camera stopped: ")
+// ai: an HRESULT as the state line words it (after "Camera not started: " or "Camera stopped: ")
 std::string hrWhy(HRESULT hr) {
   switch (hr) {
     case E_ACCESSDENIED: return kBlocked;

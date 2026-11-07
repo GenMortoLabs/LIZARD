@@ -121,7 +121,7 @@ bool allowed(std::string& why) {
   if (s == AVAuthorizationStatusNotDetermined) {
     NSBundle* b = [NSBundle mainBundle];
     if ([b.bundlePath hasSuffix:@".app"] && ![b objectForInfoDictionaryKey:@"NSCameraUsageDescription"]) {
-      why = "This build cannot ask for the camera: its Info.plist has no NSCameraUsageDescription.";
+      why = "No camera permission entry: Info.plist lacks NSCameraUsageDescription";
       return false;
     }
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -132,12 +132,12 @@ bool allowed(std::string& why) {
                                dispatch_semaphore_signal(done);
                              }];
     if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 60 * static_cast<int64_t>(NSEC_PER_SEC))) != 0) {
-      why = "The camera's permission was not answered.";
+      why = "Camera permission unanswered";
       return false;
     }
     if (granted) return true;
   }
-  why = "The camera is blocked: allow LIZARD in System Settings, Privacy & Security, Camera.";
+  why = "Camera blocked: allow LIZARD in System Settings, Privacy & Security, Camera";
   return false;
 }
 

@@ -1,5 +1,6 @@
 package dev.lizard.receiver
 
+import dev.lizard.ui.Warn
 import java.io.File
 
 // ai: The GPU's clock ceiling against its top, which the red warning states (2026-10-03): Adreno's kgsl,
@@ -26,15 +27,16 @@ object Clocks {
     }
 }
 
-// ai: The heat warning (2026-10-01): a red triangle and the line "Thermal throttling." Since
+// ai: The heat warning (2026-10-01): a red triangle and "Throttling" (2026-11-07, a row under the block, lizard-ui Warn;
+// ai: the line "Thermal throttling." before). Since
 // ai: 2026-10-03 it shows when the phone has lowered the GPU's clock ceiling (Clocks.kt, under its top; the CPU's not),
 // ai: the clock itself only in the statistics' heat line (2026-11-03: the GPU named nowhere else); where the GPU's
 // ai: clock cannot be read, from Android's moderate thermal status (2) up. Since 2026-10-07, first of all, when the
-// ai: camera's rate has fallen from its peak (ReceiveState.cameraSlow): "Thermal throttling. Camera at 53 of 60 frames a
-// ai: second.", the loss that costs the rate most. heatText is its line, null while nothing throttles.
-fun heatText(status: Int, clocks: Clocks.Read?, camera: ReceiveState.CameraSlow? = null): String? = when {
-    camera != null -> "Thermal throttling. Camera at ${camera.now} of ${camera.max} frames a second."
-    clocks != null -> if (clocks.throttled) "Thermal throttling." else null
-    status >= android.os.PowerManager.THERMAL_STATUS_MODERATE -> "Thermal throttling."
+// ai: camera's rate has fallen from its peak (ReceiveState.cameraSlow): its value "camera 53 of 60 fps", the loss that
+// ai: costs the rate most. heatText is the warning, null while nothing throttles.
+fun heatText(status: Int, clocks: Clocks.Read?, camera: ReceiveState.CameraSlow? = null): Warn? = when {
+    camera != null -> Warn("Throttling", "camera ${camera.now} of ${camera.max} fps")
+    clocks != null -> if (clocks.throttled) Warn("Throttling") else null
+    status >= android.os.PowerManager.THERMAL_STATUS_MODERATE -> Warn("Throttling")
     else -> null
 }

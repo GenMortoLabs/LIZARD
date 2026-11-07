@@ -153,7 +153,7 @@ class ReceiveState(private val app: App) {
                 timer.start()
             }
         } catch (e: Exception) {
-            phase = RxPhase.Error("The camera did not start: ${e.message ?: e.javaClass.simpleName}")
+            phase = RxPhase.Error("Camera not started: ${e.message ?: e.javaClass.simpleName}")
             null
         }
     }
@@ -420,7 +420,7 @@ class ReceiveState(private val app: App) {
             post {
                 driverBusy = false
                 if (why.isEmpty()) { driverFor = null; pickUsbPhone = true; pickCamera = p.camera; refreshCameras() }
-                else driverNote = "The USB driver was not installed: $why"
+                else driverNote = "USB driver not installed: $why"
             }
         }
     }
@@ -432,7 +432,7 @@ class ReceiveState(private val app: App) {
             val why = UsbDriver.remove()
             post {
                 driverBusy = false
-                if (why.isNotEmpty()) driverNote = "The USB driver was not removed: $why"
+                if (why.isNotEmpty()) driverNote = "USB driver not removed: $why"
                 refreshCameras()
             }
         }
@@ -653,7 +653,7 @@ class ReceiveState(private val app: App) {
     // ai: PC's is held by the phase lock; the mode's rate where the camera agreed to none
     // ai: locked: the phase lock on the camera (a GenICam camera's software trigger, cam/aravis.cpp, since 2026-11-01;
     // ai: UVC's lock is {"off": why}, a stream whose trigger did not arm {})
-    val hint: String get() = hintOf(stats, on, phone, upload,
+    val hint: Warn? get() = hintOf(stats, on, phone, upload,
         locked = (stats?.get("lock") as? JsonObject)?.let { it.isNotEmpty() && "off" !in it } == true, modeFps = mode?.fps ?: 0.0)
 
     // ai: The readout (Developer Tools; the app's devReadout): a labelled line or two a part, from the stats (receiver.cpp

@@ -82,7 +82,7 @@ interface SendHost {
     // ai: the block drawn (the desktop's control window, while a monitor of its own shows the code, has none: its area
     // ai: says it)
     val lineShown: Boolean get() = true
-    val heat: String?
+    val heat: Warn?                    // ai: the heat warning (the phone's Throttling), null while nothing throttles
     val railCapacity: Double?
     val settings: List<Setting>
     val experimental: List<Setting>    // ai: the Experimental fold's lab arms; no fold where there are none
@@ -113,7 +113,8 @@ interface SendHost {
 @Composable
 fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
     // ai: one code area for every layout: a turn of the phone moves its surface rather than making another
-    val code = remember(h) { movableContentOf<Modifier> { m -> h.CodeArea(m) } }
+    // ai: an error said over it (ErrorCover, 2026-11-07; the column's red line before), as the receiver's over its preview
+    val code = remember(h) { movableContentOf<Modifier> { m -> Box { h.CodeArea(m); if (h.error.isNotEmpty()) ErrorCover(h.error, Modifier.matchParentSize()) } } }
     BoxWithConstraints {
         val portrait = h.canPortrait && maxHeight > maxWidth
         if (h.codeAlone && !(h.codeAloneInPlace && !portrait)) CodeAlone(h, code)
@@ -164,7 +165,7 @@ private const val RAIL_MS = 4000L
 // ai: sending, and the code's capacity
 @Composable
 fun SendRail(h: SendHost) {
-    h.heat?.let { AlertSquare(it) }
+    h.heat?.let { AlertSquare(it.text) }
     Square {
         IconBtn(if (h.on && !h.paused) Icons.pause else Icons.play, if (!h.on) "Start" else if (h.paused) "Resume" else "Pause",
             enabled = h.on || h.canStart) { if (h.on) h.pause(!h.paused) else h.start() }
@@ -189,13 +190,12 @@ private fun Side(h: SendHost) {
         if (h.fullscreen) Btn("Fullscreen", pad = 16.dp) { h.toggleFull() }
     }
     // ai: what goes as elements (2026-11-07, Details; "Sending x, 2.4 GB (4.4 GB raw)" over "1.69 MB/s, pass 2" before),
-    // ai: an error in red, or a spinner while the pick is read
+    // ai: or a spinner while the pick is read; an error is the code area's to say (ErrorCover, SendScreen), never the column's
     val d = h.details
     if (!h.lineShown) Spacer(Modifier.height(10.dp))
-    else if (h.error.isNotEmpty()) Text(h.error, style = MaterialTheme.typography.titleMedium, color = Bad, modifier = Modifier.padding(top = 12.dp))
     else if (d != null) DetailsBlock(d, Modifier.padding(top = 12.dp))
     else if (h.reading) CircularProgressIndicator(Modifier.padding(top = 12.dp).size(16.dp), color = Fg, strokeWidth = 2.dp, trackColor = Line)
-    h.heat?.let { Warning(it, Modifier.padding(top = 8.dp)) }
+    h.heat?.let { WarnRow(it, Modifier.padding(top = 8.dp)) }
     Spacer(Modifier.height(16.dp))
     Fold("Settings", h.folds.open(FoldKey.SendSettings), { h.folds.toggle(FoldKey.SendSettings) }) { Settings(h.settings) }
     if (h.experimental.isNotEmpty()) Fold("Experimental", h.folds.open(FoldKey.SendExperimental), { h.folds.toggle(FoldKey.SendExperimental) }) { Settings(h.experimental) }

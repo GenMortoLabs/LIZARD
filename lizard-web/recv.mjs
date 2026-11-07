@@ -27,7 +27,7 @@ import { PoolPolicy } from "./pool.mjs";
 import { logPost } from "./devlog.mjs";
 import { R_RING, SPAN, MODULES, N_FOR, NAME, PICTURE_SIZES, subchOf } from "../liblizard/sim/lizard_pick.mjs";
 import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
-import { remember, persist, restoreSaved, bytes, rate, left, about, registerApp, collapser, sideResizer, slider, nameParts, details } from "./ui.mjs";
+import { remember, persist, restoreSaved, bytes, rate, left, about, registerApp, collapser, sideResizer, slider, nameParts, details, warnings } from "./ui.mjs";
 import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
 // ai: Settings and Developer Tools (the Developer panel until 2026-10-01) open as they were left, a phone session
@@ -134,8 +134,8 @@ function showCfg() {
 // ai: Developer Tools: the numbers line's until 2026-10-01); why: its hints in plain words.
 // ai: fileAt: when a frame last brought blocks that were not the test stream's (2026-10-05: the test stream owns the
 // ai: display only while it is the newer of the two)
-const held = { running: false, kept: false, dt: null, why: "", whyText: "", whyAt: 0 };   // ai: showState's run: the block's and the hint's room
-const ui = { err: "", starting: false, received: null, testAt: -Infinity, fileAt: -Infinity, bandAt: -Infinity, stoppedAt: 0, lab: "", why: "" };
+const held = { running: false, kept: false, dt: null, why: [], whyList: [], whyAt: 0 };   // ai: showState's run: the block's and the warnings' room
+const ui = { err: "", starting: false, received: null, testAt: -Infinity, fileAt: -Infinity, bandAt: -Infinity, stoppedAt: 0, lab: "", why: [] };
 const LIVE_MS = 3000;   // ai: the test stream, or a code's word, is still "being read" this long after its last frame
 const recent = (at) => performance.now() - at < LIVE_MS;
 // ai: One state at a time, the first that holds: error, starting, loading (the camera on and no decoder answer yet since
@@ -154,11 +154,13 @@ function recentKBs() {
 }
 const WEB_FPS = 24;   // ai: the display rate a browser's receiver is for (24 was chosen to avoid phasing against a 60 fps camera)
 // ai: verdict.mjs's wording, the lab's (#out, the stats row), put plainly for the page's hints (#why).
+// ai: the verdict as a status label (2026-11-07; a sentence of advice before, "Hold the phone so the code fills the
+// ai: square, steady and in focus.")
 function plainVerdict(text) {
-  if (/reaching the decoders/.test(text)) return "The camera's pictures are not reaching the reader.";
-  if (/not being registered/.test(text)) return "Hold the phone so the code fills the square, steady and in focus.";
-  if (/not changing/.test(text)) return "The code on the other screen is not changing: is the sender running?";
-  if (/survives FEC/.test(text)) return "The code is seen but cannot be read: move closer, or cut the glare.";
+  if (/reaching the decoders/.test(text)) return "No frames";
+  if (/not being registered/.test(text)) return "Code not found";
+  if (/not changing/.test(text)) return "Code not changing";
+  if (/survives FEC/.test(text)) return "Code unreadable";
   return text;
 }
 function showState() {
@@ -197,18 +199,17 @@ function showState() {
   // ai: before it has had words, so a camera starting shows no gap. The run's file in ends it at once; a run started
   // ai: over a file already received holds on.
   const running = on || ui.starting;
-  if (running !== held.running) Object.assign(held, { running, kept: !!ui.received, dt: null, why: "" });
-  // ai: the hint held still as the apps' (Parts.kt steady, on 0): shown at once, kept until it has been gone 2 s
-  const whyNow = on && !ui.err && !loading ? ui.why : "", t = performance.now();
-  if (whyNow) { held.whyText = whyNow; held.whyAt = t; }
-  const why = whyNow || (on && held.whyText && t - held.whyAt < 2000 ? held.whyText : "");
+  if (running !== held.running) Object.assign(held, { running, kept: !!ui.received, dt: null, why: [] });
+  // ai: the warnings held still as the apps' (Parts.kt steady, on 0): shown at once, kept until gone 2 s
+  const whyNow = on && !ui.err && !loading ? ui.why : [], t = performance.now();
+  if (whyNow.length) { held.whyList = whyNow; held.whyAt = t; }
+  const why = whyNow.length ? whyNow : on && held.whyList?.length && t - held.whyAt < 2000 ? held.whyList : [];
   const run = running && (!ui.received || held.kept);
   if (run && d) held.dt = d;
-  if (run && why) held.why = why;
+  if (run && why.length) held.why = why;
   details($("dt"), d ?? (run ? held.dt : null), !d && run && !!held.dt);
   $("lab").textContent = on ? ui.lab : "";
-  $("why").textContent = why || (run ? held.why : "");
-  $("why").classList.toggle("ghost", !why && run && !!held.why);
+  warnings($("why"), why.length ? why : run ? held.why : [], !why.length && run && held.why.length > 0);
   // ai: the received file in the camera's place once it is in and the camera is off (#done): "Received 1 file" and the
   // ai: file (how it went is the column's block, with Show statistics on, 2026-11-07); Start brings the camera back
   const got = !!ui.received && !on && !ui.starting && !ui.err;
@@ -545,8 +546,8 @@ fountain.onmessage = ({ data: m }) => {
     xferRoot = m.header.root;
   }
   if (m.type === "xfer") showXfer(m);
-  else if (m.type === "file") offerXfer(m).catch((e) => { file = `${m.name}: FAILED to offer: ${e?.stack ?? e}`; console.error(file); ui.err = "The file arrived but could not be opened for saving."; showState(); });
-  else if (m.type === "error") { console.error(`fountain: ${m.message}`); ui.err = "Putting the file together failed. Reload the page to receive it again."; showState(); }
+  else if (m.type === "file") offerXfer(m).catch((e) => { file = `${m.name}: FAILED to offer: ${e?.stack ?? e}`; console.error(file); ui.err = "File not saved: storage refused it"; showState(); });
+  else if (m.type === "error") { console.error(`fountain: ${m.message}`); ui.err = "File not assembled: reload to receive again"; showState(); }
 };
 
 function onResult(slot, m) {
@@ -793,8 +794,8 @@ function second() {
   // ai: the Android app holds the camera's phase by the pilots (lizard-android/, PhaseLock.kt) and reads 60 painted. Said
   // ai: while the word is live; the sender's own control for it is Settings' FPS slider ("Receiving with" went
   // ai: 2026-10-02).
-  const fast = live && band.fps > WEB_FPS ? `${band.fps} pictures a second is too fast for a browser: use the LIZARD app, or send at ${WEB_FPS}.` : "";
-  ui.why = [lead, clipping && "The picture is washed out: avoid glare, or turn the other screen's brightness down.", fast].filter(Boolean).join("\n");
+  // ai: as status labels (2026-11-07): "Too fast for a browser", its most a value; "Washed out" (sentences before)
+  ui.why = [lead && [lead, ""], clipping && ["Washed out", ""], live && band.fps > WEB_FPS && ["Too fast for a browser", `max ${WEB_FPS}\u00a0fps`]].filter(Boolean);
   showState();
   // ai: The frame path's diagnostics go to the console (read over adb DevTools) and the stats row, not the page, which
   // ai: keeps what a user aims and judges by (2026-09-25).
@@ -1035,7 +1036,7 @@ function stopCamera() {
   cur = fresh(); buckets = []; policy.reset();
   shot.width = shot.height = 0; cropCheck.key = ""; trackBox = null; trackTags.clear();   // nothing of the last session left on screen, and the next one tests its source rect again
   $("out").textContent = "camera off";
-  ui.lab = ui.why = ""; ui.stoppedAt = performance.now();
+  ui.lab = ""; ui.why = []; ui.stoppedAt = performance.now();
   showState();
 }
 // ai: start(): the camera started once at a time (ui.starting refuses a second while one is under way, and #go is off
@@ -1054,12 +1055,13 @@ async function start() {
   finally { ui.starting = false; showState(); }
 }
 function startError(e) {
-  if (!navigator.mediaDevices) return "The camera needs a secure page: open this one over https, or on localhost.";
+  // ai: what happened, then what it touched or what to do (2026-11-07; sentences before)
+  if (!navigator.mediaDevices) return "Insecure page: camera needs https or localhost";
   switch (e?.name) {
-    case "NotAllowedError": return "The camera is blocked. Allow it for this site in the browser's site settings, then start again.";
-    case "NotFoundError": case "OverconstrainedError": return "No camera was found on this device.";
-    case "NotReadableError": return "The camera is in use by another app. Close that app, then start again.";
-    default: return `The camera did not start (${e?.name ?? "unknown error"}).`;
+    case "NotAllowedError": return "Camera blocked: allow it in site settings";
+    case "NotFoundError": case "OverconstrainedError": return "No camera found";
+    case "NotReadableError": return "Camera in use by another app";
+    default: return `Camera not started: ${e?.name ?? "unknown error"}`;
   }
 }
 async function startCamera() {

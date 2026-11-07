@@ -30,7 +30,7 @@ fun main(args: Array<String>) {
     if (!testing && given.isNotEmpty() && Instance.handOff(given)) return
     val app = App()
     val s = app.send
-    try { Native.load() } catch (e: Throwable) { app.loadError = "The native library could not be loaded: ${e.message}" }
+    try { Native.load() } catch (e: Throwable) { app.loadError = "Native library missing: ${e.message}" }
     // ai: the launch's priority raised (native/priority.cpp) before the window's threads start, which inherit it;
     // ai: LIZ_PRIORITY=normal leaves it
     if (app.loadError.isEmpty() && System.getenv("LIZ_PRIORITY") != "normal")

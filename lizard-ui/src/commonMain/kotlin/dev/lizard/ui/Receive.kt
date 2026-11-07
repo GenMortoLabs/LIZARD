@@ -59,8 +59,8 @@ interface ReceiveHost {
     fun goSend()
     val line: Readout.Line
     val showStats: Boolean
-    val heat: String?                  // ai: the heat warning's line, null while nothing throttles
-    val hint: String
+    val heat: Warn?                    // ai: the heat warning (Throttling, the camera's rate where it fell), null while nothing throttles
+    val hint: Warn?                    // ai: the camera's hint (Sender too fast, its most), null for none
     val note: String                   // ai: a filing's or a Save's failure; "" none
     val running: Boolean
     val starting: Boolean              // ai: Start inert while the camera opens
@@ -158,7 +158,7 @@ private fun RailSquares(h: ReceiveHost) {
     val kept = h.kept
     val hot = h.heat
     val err = errorOf(h)
-    if (err != null) AlertSquare(err) else if (hot != null && kept == null) AlertSquare(hot)
+    if (err != null) AlertSquare(err) else if (hot != null && kept == null) AlertSquare(hot.text)
     Square {
         IconBtn(if (h.running) Icons.pause else Icons.play, if (h.running) "Stop" else "Start",
             enabled = h.access == null && !h.starting) { h.toggleCamera() }
@@ -167,7 +167,7 @@ private fun RailSquares(h: ReceiveHost) {
         RateSquare(h.railRate)
         h.railPct?.let { PctSquare(it) }
     } else {
-        if (hot != null && err == null) AlertSquare(hot)
+        if (hot != null && err == null) AlertSquare(hot.text)
         else Square { Icon(Icons.check, contentDescription = "Received ${h.keptName}", Modifier.size(24.dp), tint = Good) }
         for (a in kept) a.icon?.let { i -> Square { IconBtn(i, "${a.label} ${h.keptName}") { a.run() } } }
     }
@@ -206,12 +206,10 @@ private fun TransferPanel(h: ReceiveHost) {
     val ln = h.line
     // ai: an error is the preview's to say (errorOf), not the column's. The transfer as elements (2026-11-07, Details:
     // ai: the name, the meter and its percentage, a row a fact; "Receiving x" over "49%, 147 of 300 KB, 2 s left"
-    // ai: before); a file in is the card's to say, its block here only with Show statistics on and the camera off. A
-    // ai: line naming nothing (the camera's access) is a message, said as one.
+    // ai: before); a file in is the card's to say, its block here only with Show statistics on and the camera off
     val good = ln.tone == Readout.Tone.Good
     val shown = ln.text.isNotEmpty() && ln.tone != Readout.Tone.Bad && (!good || (h.showStats && !h.running))
-    val message = shown && ln.name == null && !ln.test
-    val now = if (shown && !message) Details(ln.name ?: ln.text, test = ln.test, end = ln.pct, frac = ln.frac, rows = ln.rows) else null
+    val now = if (shown) Details(ln.name ?: ln.text, test = ln.test, end = ln.pct, frac = ln.frac, rows = ln.rows) else null
     // ai: Within a run (Start until it stops) the block once shown keeps its room until the run ends, drawn clear
     // ai: when it falls silent (2026-11-02: Receiving, its meter and figures, and the hint each moved the folds under them
     // ai: as they came and went); none is held before it has had words, so a camera starting shows no gap (a run's whole
@@ -220,16 +218,16 @@ private fun TransferPanel(h: ReceiveHost) {
     val keptAtStart = remember(h.running) { h.kept != null }
     val run = h.running && (h.kept == null || keptAtStart)
     val last = remember(h.running) { arrayOfNulls<Details>(1) }
-    val lastHint = remember(h.running) { arrayOf("") }
+    val lastHint = remember(h.running) { arrayOfNulls<Warn>(1) }
     if (run && now != null) last[0] = now
-    if (message) Text(ln.text, style = MaterialTheme.typography.titleMedium, color = toneColour(ln.tone), modifier = Modifier.padding(top = 12.dp, bottom = 2.dp))
-    else (now ?: last[0].takeIf { run })?.let { DetailsBlock(it, Modifier.padding(top = 12.dp), clear = now == null) }
-    h.heat?.let { Warning(it, Modifier.padding(top = 4.dp)) }
-    // ai: the hint is the running camera's: held still while it runs (steady), its room kept as the block's is, gone with it
-    val hint = steady(h.hint, on = 0).takeIf { run }.orEmpty()
-    if (run && hint.isNotEmpty()) lastHint[0] = hint
-    if (hint.isNotEmpty() || (run && lastHint[0].isNotEmpty())) Text(hint.ifEmpty { lastHint[0] }, style = MaterialTheme.typography.bodyMedium,
-        color = if (hint.isEmpty()) Color.Transparent else Muted, modifier = Modifier.padding(top = 4.dp))
+    (now ?: last[0].takeIf { run })?.let { DetailsBlock(it, Modifier.padding(top = 12.dp), clear = now == null) }
+    // ai: the warnings as rows under the block (2026-11-07; red lines and a sentence before): the heat, then the camera's
+    // ai: hint, held still while the camera runs (steady), its room kept as the block's is, gone with it
+    h.heat?.let { WarnRow(it, Modifier.padding(top = 4.dp)) }
+    val hintKey = steady(h.hint?.let { "${it.label}\t${it.value}" }.orEmpty(), on = 0).takeIf { run }.orEmpty()
+    val hint = hintKey.takeIf { it.isNotEmpty() }?.split('\t')?.let { Warn(it[0], it.getOrElse(1) { "" }) }
+    if (run && hint != null) lastHint[0] = hint
+    (hint ?: lastHint[0].takeIf { run })?.let { WarnRow(it, Modifier.padding(top = if (h.heat == null) 4.dp else 0.dp), clear = hint == null) }
     Spacer(Modifier.height(16.dp))
 }
 
@@ -268,16 +266,6 @@ private fun PreviewBox(h: ReceiveHost, modifier: Modifier, portrait: Boolean) {
 // ai: or a filing's refusal (the note)
 private fun errorOf(h: ReceiveHost): String? = h.line.takeIf { it.tone == Readout.Tone.Bad }?.text?.takeIf { it.isNotEmpty() }
     ?: h.note.takeIf { it.isNotEmpty() }
-
-// ai: The heat warning (the phone's): the red triangle and its line; in a rail the triangle alone, its line the
-// ai: description
-@Composable
-fun Warning(text: String, modifier: Modifier = Modifier) {
-    Row(modifier.semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.alert, contentDescription = "Warning", Modifier.size(20.dp), tint = Bad)
-        Text(text, style = MaterialTheme.typography.bodyMedium, color = Bad)
-    }
-}
 
 // ai: the red triangle in a rail's square, its words the description: the phone's heat, a receiver's error
 @Composable

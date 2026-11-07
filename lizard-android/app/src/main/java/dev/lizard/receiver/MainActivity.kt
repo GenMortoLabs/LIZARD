@@ -121,7 +121,7 @@ class MainActivity : ComponentActivity() {
     // ai: the rows that open, open or not, kept by key (the web's send:dev, send:logs, recv:dev, recv:logs)
     internal val folds = mutableStateMapOf<String, Boolean>()
     internal var autoRan by mutableStateOf("")             // ai: what auto last decoded on, GPU or CPU (the Decoder menu's value under auto)
-    internal var hint by mutableStateOf("")                // ai: the one hint while the camera reads (ReceiveState.hint)
+    internal var hint by mutableStateOf<Warn?>(null)       // ai: the one hint while the camera reads (ReceiveState.hint)
     // ai: The phone's USB and the PC link (2026-10-27): while a cable is in (USB_STATE's connected, while this activity
     // ai: runs) the core's PC link is up (the session's link: the listener, the beacon, the accessory's sessions),
     // ai: answering a PC whatever the decoder; a cable out for UNPLUG_MS lets it go (the drop as the PC switches the
@@ -402,7 +402,7 @@ class MainActivity : ComponentActivity() {
     internal fun open(e: Received.Entry) { if (e.bundle) openBundle(e) else openUri(received.uriOf(e.uri.ifEmpty { e.local }), e.mime) }
     internal fun openUri(u: Uri, mime: String) {
         val i = Intent(Intent.ACTION_VIEW).setDataAndType(u, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        try { startActivity(i) } catch (_: ActivityNotFoundException) { note = "No app opens $mime files." }
+        try { startActivity(i) } catch (_: ActivityNotFoundException) { note = "No app for $mime files" }
     }
     internal fun openBundle(e: Received.Entry) { shownBundle = e; go(Screen.Files) }
     internal fun share(e: Received.Entry) { if (e.bundle) shareAll(e) else shareUri(received.uriOf(e.uri.ifEmpty { e.local }), e.name, e.mime) }
@@ -414,7 +414,7 @@ class MainActivity : ComponentActivity() {
     // ai: every file of a bundle in one share, the type they have in common ("image/*", else any); a share too large
     // ai: for Android's binder (thousands of files) is said, and Save does it
     private fun shareAll(e: Received.Entry) {
-        if (e.items.isEmpty()) { note = "${e.name} is empty."; return }
+        if (e.items.isEmpty()) { note = "Empty folder: ${e.name}"; return }
         val uris = ArrayList(e.items.map { received.uriOf(it.uri) })
         val types = e.items.map { Received.mimeOf(it.path) }.distinct()
         val kinds = types.map { it.substringBefore('/') }.distinct()
@@ -453,7 +453,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 ""
-            } catch (x: Exception) { "The folder could not be saved: ${x.message}" }
+            } catch (x: Exception) { "Folder not saved: ${x.message}" }
             runOnUiThread { note = n }
         }.start()
     }
@@ -464,7 +464,7 @@ class MainActivity : ComponentActivity() {
                     (contentResolver.openInputStream(received.uriOf(e.uri.ifEmpty { e.local })) ?: throw IOException("the file could not be read")).use { it.copyTo(o, 1 shl 16) }
                 }
                 ""
-            } catch (x: Exception) { "The copy could not be saved: ${x.message}" }
+            } catch (x: Exception) { "Copy not saved: ${x.message}" }
             runOnUiThread { note = n }
         }.start()
     }
@@ -642,7 +642,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         Screens(screen, home, sendUi, receiveUi) {
-            shownBundle?.let { e -> BundleScreen(e.name, e.files, e.size, home.bundleActs, home.bundleFiles, note) { go(Screen.Home) } }
+            shownBundle?.let { e -> BundleScreen(e.name, e.files, e.size, home.bundleActs, home.bundleFiles, note, { note = "" }) { go(Screen.Home) } }
         }
     }
 }

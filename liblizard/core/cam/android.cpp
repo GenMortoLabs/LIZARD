@@ -553,11 +553,11 @@ class AndroidCamera : public Camera {
   bool prioritySet_ = false;     // ai: the reader's thread's
 };
 
-void onDeviceDisconnected(void* ctx, ACameraDevice*) { static_cast<AndroidCamera*>(ctx)->deviceGone("The camera was taken by another app."); }
+void onDeviceDisconnected(void* ctx, ACameraDevice*) { static_cast<AndroidCamera*>(ctx)->deviceGone("Camera taken by another app"); }
 void onDeviceError(void* ctx, ACameraDevice*, int error) {
   static_cast<AndroidCamera*>(ctx)->deviceGone(error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE
-                                                   ? "The camera is in use by another app."
-                                                   : ("The camera stopped (error " + std::to_string(error) + ").").c_str());
+                                                   ? "Camera in use by another app"
+                                                   : ("Camera error " + std::to_string(error)).c_str());
 }
 void onSessionClosed(void*, ACameraCaptureSession*) {}
 void onSessionReady(void*, ACameraCaptureSession*) {}
@@ -954,7 +954,7 @@ void AndroidCamera::previewTo(void* w) {
         e = live_ ? ended_ : nullptr;
         live_ = false;
       }
-      if (e) e("The camera stopped: " + why);
+      if (e) e("Camera stopped: " + why);
     }
   }
 }

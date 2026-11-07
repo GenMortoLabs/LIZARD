@@ -87,7 +87,7 @@ class DesktopSend(private val app: App) : SendHost {
     override val reading get() = s.phase == SendState.Phase.Idle && !s.test && s.reading
     // ai: the control window says what plays where in its area (LeasedNote): no state line in its column
     override val lineShown get() = !s.leased
-    override val heat: String? = null
+    override val heat: Warn? = null
     override val railCapacity get() = s.capacityKBs
     override val settings: List<Setting> get() = listOfNotNull(
         // ai: what the symbol carries, then how this machine paints and shows it (one list since 2026-11-01; headed Code

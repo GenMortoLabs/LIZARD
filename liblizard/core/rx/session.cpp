@@ -533,7 +533,7 @@ struct Session::Impl {
       describeNow();
     } catch (const std::exception&) {
     }
-    if (was) told(genNow(), Phase::Error, "The receiver stopped: " + what);
+    if (was) told(genNow(), Phase::Error, "Receiver stopped: " + what);
   }
 
   // ai: the worker's: a receiver where none is (or the one in hand broke), with what was asked last; its own crop for a
@@ -1098,7 +1098,7 @@ struct Session::Impl {
       return w;
     };
     std::string w;
-    if (!haveLock(0, w)) return refuse("The camera did not start: " + w, w);
+    if (!haveLock(0, w)) return refuse("Camera not started: " + w, w);
     closeLocked();
     // ai: the cameras listed only where needed (a listing probes devices, and listens for phones a second): for "", and
     // ai: for an id that would not open, which a camera listed in its place stands for where it is not listed itself
@@ -1132,7 +1132,7 @@ struct Session::Impl {
           std::string n;
           for (const auto& x : notes) n += (n.empty() ? "" : "; ") + x;
           if (!n.empty()) say("camera: none listed: " + n);
-          return refuse("No camera was found.", "no camera was found");
+          return refuse("No camera found", "no camera was found");
         }
         if (!id.empty()) say("camera: " + id + " is not listed: " + listed[0].id + " in its place");
         id = listed[0].id;
@@ -1143,7 +1143,7 @@ struct Session::Impl {
       std::unique_ptr<cam::Camera> c = first ? std::move(first) : (w.empty() ? cam::open(id, w) : nullptr);
       if (!c) {
         w = w.empty() ? "the camera " + id + " could not be opened" : w;
-        return refuse("The camera did not start: " + w, w);
+        return refuse("Camera not started: " + w, w);
       }
       std::shared_ptr<cam::Camera> sp(std::move(c));
       std::vector<cam::Mode> ms = sp->modes();
@@ -1189,7 +1189,7 @@ struct Session::Impl {
       return "";
     } catch (const std::exception& e) {
       w = std::string("the camera could not be opened: ") + e.what();
-      return refuse("The camera did not start: " + w, w);
+      return refuse("Camera not started: " + w, w);
     }
   }
 
@@ -1228,14 +1228,14 @@ struct Session::Impl {
     std::string w;
     const auto refuse = [&](const std::string& r) {
       closeLocked();
-      told(g, Phase::Error, "The camera did not start: " + r);
+      told(g, Phase::Error, "Camera not started: " + r);
       return r;
     };
     if (!haveLock(0, w)) return refuse(w);
     retryTakes();
     if (!camera) {
       // ai: the open asked before this start refused: its sentence is the start's
-      told(g, Phase::Error, openFailed.empty() ? "The camera did not start: no camera is open" : openFailed);
+      told(g, Phase::Error, openFailed.empty() ? "Camera not started: no camera open" : openFailed);
       return openFailed.empty() ? "no camera is open" : openFailed;
     }
     // ai: a camera that names its own crop (a phone's, an upload's): the receiver's crop its own
@@ -1325,7 +1325,7 @@ struct Session::Impl {
     if (!swap(decoder, own.empty() ? layout : own, w)) {
       if (g == genNow() && running()) {
         closeLocked();
-        told(g, Phase::Error, "The camera did not start: " + w);
+        told(g, Phase::Error, "Camera not started: " + w);
       }
       return w;
     }
@@ -1344,7 +1344,7 @@ struct Session::Impl {
         if (!startLocked(i, w)) {
           const uint64_t g = genNow();
           closeLocked();
-          told(g, Phase::Error, "The camera did not start: " + w);
+          told(g, Phase::Error, "Camera not started: " + w);
           return w;
         }
         told(genNow(), Phase::Loading);
@@ -1534,7 +1534,7 @@ struct Session::Impl {
       const uint64_t g = genNow();
       const bool was = running();
       closeLocked();
-      if (was) told(g, upload ? Phase::Idle : Phase::Error, upload ? "" : "The camera stopped: " + end);
+      if (was) told(g, upload ? Phase::Idle : Phase::Error, upload ? "" : "Camera stopped: " + end);
     }
     {
       std::string pf;
@@ -1563,7 +1563,7 @@ struct Session::Impl {
       const uint64_t g = genNow();
       stopLocked();
       describeNow();
-      told(g, Phase::Error, "Reading stopped. Start the camera again to go on.");
+      told(g, Phase::Error, "Reading stopped");
     }
     lastState = st;
     // ai: the autofocus region on the code once a second (the GPU's codeBox: camera pixels from the frame's centre), for

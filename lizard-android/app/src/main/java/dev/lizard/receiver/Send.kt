@@ -183,7 +183,7 @@ class SendState(private val a: MainActivity) {
         test = false; reading = true
         if (phase is Phase.Error) phase = Phase.Idle
         thread(name = "lizard-send-pick") {
-            val got = try { walk() } catch (e: Exception) { a.runOnUiThread { reading = bundling != bundled; phase = Phase.Error("The files could not be read: ${e.message}") }; return@thread }
+            val got = try { walk() } catch (e: Exception) { a.runOnUiThread { reading = bundling != bundled; phase = Phase.Error("Files unreadable: ${e.message}") }; return@thread }
             a.runOnUiThread {
                 reading = bundling != bundled
                 val have = items.mapTo(HashSet()) { it.key }
@@ -313,7 +313,7 @@ class SendState(private val a: MainActivity) {
                 null
             } catch (e: Exception) { e }
             val hnd = if (wrote != null) 0L else Native.txCreate(f.path, nm, ty)
-            val err = if (wrote != null) "The file could not be read: ${wrote.message}" else if (hnd == 0L) "This file cannot be sent: ${Native.txError()}" else ""
+            val err = if (wrote != null) "File unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
             val sent = if (hnd != 0L) runCatching { JSONObject(Native.txStats(hnd)).optLong("sentBytes", 0) }.getOrDefault(0L) else 0L
             a.runOnUiThread {
                 if (my != making) { if (hnd != 0L) Native.txDestroy(hnd); f.delete(); return@runOnUiThread }   // ai: let go meanwhile
@@ -357,7 +357,7 @@ class SendState(private val a: MainActivity) {
                 if (why.isNotEmpty()) Log.i(TAG, "send: no GPU painter: $why")
             }
             a.runOnUiThread {
-                if (hnd == 0L) { phase = Phase.Error("This file cannot be sent: $err"); return@runOnUiThread }
+                if (hnd == 0L) { phase = Phase.Error("Not sendable: $err"); return@runOnUiThread }
                 if (phase != Phase.Preparing || my != making) { Native.txDestroy(hnd); return@runOnUiThread }   // ai: stopped meanwhile
                 h = hnd; configured = 0; phase = Phase.On
                 vsynced = Build.VERSION.SDK_INT >= 33

@@ -305,7 +305,7 @@ class SendState {
                     val have = items.mapTo(HashSet()) { it.key }
                     val fresh = list.filter { have.add(it.key) }
                     if (fresh.isNotEmpty()) { items.addAll(fresh); changed() }
-                }.onFailure { phase = Phase.Error("The files could not be read: ${it.message}") }
+                }.onFailure { phase = Phase.Error("Files unreadable: ${it.message}") }
             }
         }
     }
@@ -367,7 +367,7 @@ class SendState {
                 tar.outputStream().buffered(1 shl 20).use { b.write(it) }
             }.exceptionOrNull()
             val hnd = if (wrote != null) 0L else Native.txCreate(path, b.name, type)
-            val err = if (wrote != null) "The files could not be read: ${wrote.message}" else if (hnd == 0L) "This file cannot be sent: ${Native.txError()}" else ""
+            val err = if (wrote != null) "Files unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
             val sent = if (hnd != 0L) parse(Native.txStats(hnd))?.num("sentBytes")?.toLong() ?: 0L else 0L
             EventQueue.invokeLater {
                 if (my != making || closing) { if (hnd != 0L) Native.txDestroy(hnd); tar?.delete(); return@invokeLater }   // ai: let go meanwhile
@@ -410,7 +410,7 @@ class SendState {
             val why = if (hnd != 0L) Native.txPrepare(hnd, Native.assets) else ""
             EventQueue.invokeLater {
                 if (my != gen) { if (hnd != 0L) Native.txDestroy(hnd); return@invokeLater }   // ai: stopped meanwhile
-                if (hnd == 0L) { phase = Phase.Error("This file cannot be sent: $err"); return@invokeLater }
+                if (hnd == 0L) { phase = Phase.Error("Not sendable: $err"); return@invokeLater }
                 h = hnd; gpuWhy = why; prepared = true; fmt = null; phase = Phase.On
                 if (why.isNotEmpty()) System.err.println("send: no GPU painter: $why")
                 areaNow()
@@ -661,7 +661,7 @@ class SendState {
         if (!canvas.isDisplayable) { canvas.want(true); return }
         if (!configure()) return
         val pr = Native.presentStart(canvas, h, fps, size / 100f, edge, vsync, false, canvas.place())
-        if (pr == 0L) { fail("The code cannot be shown: ${Native.txError()}"); return }
+        if (pr == 0L) { fail("Display failed: ${Native.txError()}"); return }
         p = pr
         stamp = null
         if (paused) Native.presentPause(p, true)
