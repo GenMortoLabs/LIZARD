@@ -700,11 +700,22 @@ const SIZES = [
   for (const ev of ["Target.targetCreated", "Target.targetInfoChanged"]) s.on(ev, ({ targetInfo: i }) => { if (i.type === "page") opened.push(i.url); });
   const HOMEM = `(() => { const $ = (id) => document.getElementById(id), rows = [...document.querySelectorAll("#list li")];
     return { iw: innerWidth, sw: document.documentElement.scrollWidth, rows: rows.map((r) => r.querySelector(".name").textContent), acts: rows[0] ? [...rows[0].querySelectorAll(".acts > *")].map((a) => a.textContent).join(",") : "",
-      href: rows[0]?.querySelector("a[download]")?.href ?? "", download: rows[0]?.querySelector("a[download]")?.download ?? "", tips: !!$("tips") || !!$("tipsAgain"), empty: !$("empty").hidden, clear: $("clearAllTop").checkVisibility(), heads: [...document.querySelectorAll("main h2")].filter((x) => x.checkVisibility()).map((x) => x.textContent).join(","), meta: rows[0]?.querySelector(".meta")?.textContent ?? "", solid: [...document.querySelectorAll(".primary")].map((b) => b.id).join(), bar: [...document.querySelectorAll(".bar .brand, .bar > button, .bar > a.btn")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(",") }; })()`;
+      href: rows[0]?.querySelector("a[download]")?.href ?? "", download: rows[0]?.querySelector("a[download]")?.download ?? "", tips: !!$("tips") || !!$("tipsAgain"), empty: !$("empty").hidden, clear: $("clearAllTop").checkVisibility(), heads: [...document.querySelectorAll("main h2")].filter((x) => x.checkVisibility()).map((x) => x.querySelector(".ft")?.textContent ?? x.textContent).join(","), meta: rows[0]?.querySelector(".meta")?.textContent ?? "", solid: [...document.querySelectorAll(".primary")].map((b) => b.id).join(), bar: [...document.querySelectorAll(".bar .brand, .bar > button, .bar > a.btn")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(",") }; })()`;
   for (const [k, z] of SIZES.entries()) {
     await size(s, z);
     await navigate(s, HOME);
     await until(s, `document.querySelectorAll("#list li").length > 0`, 10000, "the received file listed on Home");
+    // ai: a phone's lists folds (2026-11-07): closed at first (the phone's portrait, the first size), opened by a tap on
+    // ai: the heading's row, kept open over the next load (the phone's landscape); the count beside the title; Delete
+    // ai: all only while open. A PC's never fold.
+    if (z.mobile || z.w < 900) {
+      const F = `(() => { const $ = (id) => document.getElementById(id); return { shut: $("files").classList.contains("shut"), list: $("list").checkVisibility(), clear: $("clearAllTop").checkVisibility(), n: $("filesN").textContent, exp: $("filesFold").getAttribute("aria-expanded") }; })()`;
+      const before = await evaluate(s, F);
+      if (before.shut) { await screenshot(s, `${OUT}/home-${z.name}-closed.png`); await evaluate(s, `document.getElementById("filesFold").click()`); }
+      const after = await evaluate(s, F);
+      check((k === 0 ? before.shut && !before.list && !before.clear : !before.shut) && before.n === "1" && !after.shut && after.list && after.clear && after.exp === "true",
+        `home ${z.name}: the received files a fold, ${k === 0 ? "closed at first" : "kept open"} ("${before.n}" beside the title), open with the list and Delete all`);
+    }
     const h = await evaluate(s, HOMEM);
     await screenshot(s, `${OUT}/home-${z.name}.png`);
     console.log(`     home ${z.name}: ${h.rows.join(" | ")}; ${h.acts}; headings ${h.heads}; solid ${h.solid}`);
@@ -764,11 +775,27 @@ const SIZES = [
   // ai: An unfinished transfer (2026-10-22, library.mjs unfinished): a folder under lizard-xfer as the fountain worker
   // ai: leaves one (its header and meta.json), listed under Unfinished with its share and size, Continue and Delete;
   // ai: Delete asks on itself, then removes the folder.
-  await evaluate(s, `(async () => { const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("lizard-xfer", { create: true })).getDirectoryHandle("00112233aabbccdd", { create: true });
+  const MAKE_PART = `(async () => { const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("lizard-xfer", { create: true })).getDirectoryHandle("00112233aabbccdd", { create: true });
     for (const [n, b] of [["header", new Uint8Array(${PAYLOAD})], ["meta.json", new TextEncoder().encode(JSON.stringify({ name: "half.bin", type: "", length: 3133383, chunks: 3, verified: 1, root: "00112233aabbccdd", fraction: 0.37, sent: 3133383, sentIn: 1159352 }))]]) {
-      const w = await (await d.getFileHandle(n, { create: true })).createWritable(); await w.write(b); await w.close(); } return true; })()`);
+      const w = await (await d.getFileHandle(n, { create: true })).createWritable(); await w.write(b); await w.close(); } return true; })()`;
+  await evaluate(s, MAKE_PART);
   await navigate(s, HOME);
   await until(s, `!document.getElementById("partial").hidden && document.querySelectorAll("#partialList li").length === 1`, 5000, "the unfinished transfer listed on Home");
+  // ai: on a phone (2026-11-07): Unfinished a fold, closed at first, "1" beside it; open, its Delete all asks on itself and
+  // ai: then forgets every unfinished transfer; the folder made again for the PC's row checks below
+  await size(s, SIZES[0]); await sleep(300);
+  const pf0 = await evaluate(s, `(() => { const $ = (id) => document.getElementById(id); return { shut: $("partial").classList.contains("shut"), n: $("partialN").textContent, clear: $("clearPartial").checkVisibility() }; })()`);
+  await evaluate(s, `document.getElementById("partialFold").click()`);
+  const pf1 = await evaluate(s, `(() => { const b = document.getElementById("clearPartial"), vis = b.checkVisibility(); b.click(); return { vis, ask: b.textContent }; })()`);
+  await evaluate(s, `document.getElementById("clearPartial").click()`);
+  await until(s, `document.getElementById("partial").hidden`, 5000, "Unfinished gone after its Delete all");
+  const pfLeft = await evaluate(s, opfsFiles("lizard-xfer"));
+  check(pf0.shut && pf0.n === "1" && !pf0.clear && pf1.vis && pf1.ask === "Delete 1 unfinished transfer?" && pfLeft === 0,
+    `home phone-portrait: Unfinished a fold, closed with "${pf0.n}", open its Delete all asking "${pf1.ask}" then forgetting it (${pfLeft} left)`);
+  await evaluate(s, MAKE_PART);
+  await size(s, SIZES[3]);
+  await navigate(s, HOME);
+  await until(s, `!document.getElementById("partial").hidden && document.querySelectorAll("#partialList li").length === 1`, 5000, "the unfinished transfer listed again on Home");
   const part = await evaluate(s, `(() => { const r = document.querySelector("#partialList li"); return { text: r.querySelector(".name").textContent, acts: [...r.querySelectorAll(".acts > *")].map((a) => a.textContent).join(","), href: r.querySelector(".acts a")?.getAttribute("href") }; })()`);
   await screenshot(s, `${OUT}/home-unfinished.png`);
   check(/^half\.bin37% of 3\.1\sMB/.test(part.text) && part.acts === "Continue,Delete" && part.href === "recv.html?auto", `home: an unfinished transfer listed, "${part.text}", ${part.acts} (Continue to ${part.href})`);

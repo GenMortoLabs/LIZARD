@@ -25,6 +25,7 @@ internal class AndroidHome(private val a: MainActivity) : HomeHost {
             delete = { a.delete(e) })
     }
     override fun deleteAll() = a.deleteAll()
+    override val folds = AndroidFolds(a)
     override val note get() = a.note
     override fun clearNote() { a.note = "" }
     override val about get() = a.aboutLine()

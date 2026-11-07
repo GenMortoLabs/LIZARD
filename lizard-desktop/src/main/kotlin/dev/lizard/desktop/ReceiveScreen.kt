@@ -36,17 +36,23 @@ import kotlin.math.ln
 import kotlin.math.roundToInt
 import dev.lizard.ui.Screen
 
-// ai: The tool screens' folds and rail on the desktop, under the keys Prefs kept them by
+// ai: The tool screens' folds and rail on the desktop, under the keys Prefs kept them by; Home's lists' folds (its
+// ai: narrow window's column, 2026-11-07) here, kept in Prefs as the others
 class DesktopFolds(private val app: App) : Folds {
     private val r get() = app.recv
     private val s get() = app.send
+    private var unfinishedOpen by mutableStateOf(Prefs.homeUnfinishedOpen)
+    private var filesOpen by mutableStateOf(Prefs.homeFilesOpen)
     override fun open(k: FoldKey) = when (k) {
         FoldKey.RecvSettings -> r.settingsOpen; FoldKey.RecvExperimental -> r.experimentalOpen; FoldKey.RecvTools -> r.toolsOpen; FoldKey.RecvCollapsed -> r.collapsed
         FoldKey.SendSettings -> s.settingsOpen; FoldKey.SendExperimental -> s.experimentalOpen; FoldKey.SendTools -> s.toolsOpen; FoldKey.SendCollapsed -> s.collapsed
+        FoldKey.HomeUnfinished -> unfinishedOpen; FoldKey.HomeFiles -> filesOpen
     }
     override fun toggle(k: FoldKey) = when (k) {
         FoldKey.RecvSettings -> r.toggleSettings(); FoldKey.RecvExperimental -> r.toggleExperimental(); FoldKey.RecvTools -> r.toggleTools(); FoldKey.RecvCollapsed -> r.toggleRail()
         FoldKey.SendSettings -> s.toggleSettings(); FoldKey.SendExperimental -> s.toggleExperimental(); FoldKey.SendTools -> s.toggleTools(); FoldKey.SendCollapsed -> s.toggleRail()
+        FoldKey.HomeUnfinished -> { unfinishedOpen = !unfinishedOpen; Prefs.homeUnfinishedOpen = unfinishedOpen; Unit }
+        FoldKey.HomeFiles -> { filesOpen = !filesOpen; Prefs.homeFilesOpen = filesOpen; Unit }
     }
 }
 

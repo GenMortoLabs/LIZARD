@@ -135,6 +135,9 @@ object Prefs {
     var settingsOpen: Boolean get() = bool("dev", false); set(v) { p?.putBoolean("dev", v) }
     var toolsOpen: Boolean get() = bool("logs", false); set(v) { p?.putBoolean("logs", v) }
     var collapsed: Boolean get() = bool("collapsed", false); set(v) { p?.putBoolean("collapsed", v) }
+    // ai: Home's lists' folds (its narrow window's column, 2026-11-07), closed until opened
+    var homeUnfinishedOpen: Boolean get() = bool("homeUnfinished", false); set(v) { p?.putBoolean("homeUnfinished", v) }
+    var homeFilesOpen: Boolean get() = bool("homeFiles", false); set(v) { p?.putBoolean("homeFiles", v) }
     // ai: the tool screens' column as its edge was dragged, dp (2026-10-31; 0: the web's 20rem), Receive's and Send's
     var sideDp: Float get() = p?.getFloat("sideDp", 0f) ?: 0f; set(v) { p?.putFloat("sideDp", v) }
 }

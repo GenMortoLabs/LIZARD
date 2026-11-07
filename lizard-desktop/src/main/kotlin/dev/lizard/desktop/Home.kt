@@ -23,6 +23,7 @@ class DesktopHome(private val app: App) : HomeHost {
             acts = listOf(Act("Open") { Received.open(e.file) }, Act("Show in folder") { Received.show(e.file) }), delete = { r.deleteReceived(e) })
     }
     override fun deleteAll() = r.deleteAll()
+    override val folds get() = app.folds
     override val note = ""
     override val about: String get() = app.about
 }

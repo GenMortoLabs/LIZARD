@@ -8,18 +8,28 @@
   /* ai: the PC's parts, hidden on a phone: the bar's About and Source code, the files' columns and their cells */
   .top .pc,.cols,.files .c-size,.files .c-when,.files .c-open,.emptybox{display:none}
   .files .c-act{display:flex;flex:none;align-items:center}
-  .shead{display:flex;align-items:flex-start}.shead h2{flex:1 1 auto;font-size:14px;font-weight:600;color:var(--muted);margin:24px 0 4px}
-  /* ai: Delete all on the files' heading (2026-11-07 on a phone, the apps' FilesHeading; the PC's since 2026-11-06): the
-     button 10 px down so its middle is the label's, the heading 10 px taller for it */
-  #clearAllTop{margin:10px -12px 0 0}
+  /* ai: A phone's lists as folds (2026-11-07, the apps' ListFold; a muted label over the rows before): the hairline over
+     each, its row 56 px, the title in medium and the count muted after it (.n), a tap on the row opening it (home.mjs
+     folds; .shut while closed, closed until opened and kept as left), the chevron turned over while open; open, Delete
+     all before the chevron and 16 px of light under the rows, the last row's hairline gone */
+  .fold{border-top:1px solid var(--line)}
+  .shead{display:flex;align-items:center;gap:8px;min-height:56px;cursor:pointer}.shead h2{flex:1 1 auto;margin:0;font-size:16px;font-weight:500;color:var(--fg)}
+  .fold-t{display:flex;width:100%;min-height:0;padding:0;justify-content:flex-start;gap:8px;background:transparent;border-radius:0;font:inherit;color:inherit;text-align:left}
+  .fold-t .n{font-weight:400;color:var(--muted)}.fold-t:hover{background:transparent}
+  .shead .chev{flex:none;width:24px;height:24px;transition:transform .15s;
+    background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") center/24px no-repeat}
+  .fold:not(.shut) .chev{transform:rotate(180deg)}
+  .fold.shut .list,.fold.shut .shead .danger{display:none}
+  .fold:not(.shut){padding-bottom:16px}
+  .fold .list .item:last-child{border-bottom:0}
+  .go{margin-bottom:24px}
   .go{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0 8px}
   .go .btn{flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:104px;padding:16px;
     border-radius:16px;text-align:center;font-size:18px}
   .go .btn svg{margin-bottom:10px}
   /* ai: About a fold over Source code (2026-11-06, the apps' AboutFold): a hairline over it and under it, 24 px of light
      above (a Settings heading over it until 2026-11-07) */
-  .settings{margin-top:24px}
-  .settings details.dev{margin-top:0;border-bottom:1px solid var(--line)}
+  .settings details.dev{margin-top:0}
   /* ai: Home on a PC (2026-11-06; a window 900 px wide or more, under a mouse or no pointer): spacious, the bar across
      the window (the mark and LIZARD; About, opening the credits in a dialog, and Source code on its right), the
      content at most 1120 px wide with 48 px margins; Send and Receive two cards stretched across it, 200 px tall (the
@@ -35,9 +45,10 @@
     .go .btn{height:200px;min-height:200px;gap:16px;border-radius:16px;font-size:22px;font-weight:600}
     .go .btn svg.i{width:48px;height:48px;stroke-width:1.75;margin:0}
     main>section{margin:0 0 48px}
-    .shead{min-height:40px;margin:0 0 8px;align-items:center}
+    .fold{border-top:0;padding:0}.fold .list .item:last-child{border-bottom:1px solid var(--line)}
+    .shead{min-height:40px;margin:0 0 8px;cursor:default}.shead .chev,.fold-t .n,#clearPartial{display:none}
     .shead h2,section>h2{margin:0;font-size:20px;font-weight:600;color:var(--fg)}
-    #clearAllTop{margin:0 -12px 0 0}
+    #clearAllTop{margin-right:-12px}
     .settings{display:none}
     .cols,.files .item{display:grid;grid-template-columns:40px minmax(0,1fr) 200px 220px 160px;align-items:center;column-gap:16px}
     .cols{font-size:13px;font-weight:600;color:var(--muted);padding:0 0 8px;border-bottom:1px solid var(--line)}
@@ -64,11 +75,11 @@
 <dialog id="aboutDlg" class="dialog"><div id="aboutPc" class="about-text"></div><div class="row end"><button id="aboutClose" type="button">Close</button></div></dialog>
 <main>
   <div class="go"><a id="send" class="btn" href="send.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Send</a><a id="recv" class="btn" href="recv.html?auto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>Receive</a></div>
-  <section id="partial" aria-labelledby="partial-h" hidden><div class="shead"><h2 id="partial-h">Unfinished</h2></div>
+  <section id="partial" class="fold" aria-labelledby="partial-h" hidden><div class="shead"><h2 id="partial-h"><button id="partialFold" class="fold-t" type="button" aria-expanded="false"><span class="ft">Unfinished</span><span id="partialN" class="n"></span></button></h2><button id="clearPartial" class="text danger" type="button">Delete all</button><span class="chev" aria-hidden="true"></span></div>
     <div class="cols" aria-hidden="true"><span>Name</span><span>Progress</span><span>Started</span><span></span></div>
     <ul id="partialList" class="list files"></ul>
   </section>
-  <section id="files" aria-labelledby="files-h"><div class="shead"><h2 id="files-h">Received files</h2><button id="clearAllTop" class="text danger" type="button" hidden>Delete all</button></div>
+  <section id="files" class="fold" aria-labelledby="files-h"><div class="shead"><h2 id="files-h"><button id="filesFold" class="fold-t" type="button" aria-expanded="false"><span class="ft">Received files</span><span id="filesN" class="n"></span></button></h2><button id="clearAllTop" class="text danger" type="button" hidden>Delete all</button><span class="chev" aria-hidden="true"></span></div>
     <div id="empty" class="empty"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg><span>This browser keeps no files: a received file stays until its page closes.</span></div>
     <div class="cols" aria-hidden="true"><span>Name</span><span>Size</span><span>Received</span><span></span></div>
     <div id="emptyPc" class="emptybox" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span>No received files</span></div>

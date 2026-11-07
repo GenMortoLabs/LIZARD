@@ -37,8 +37,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.style.TextOverflow
 import dev.lizard.readout.Readout
 
-// ai: The folds of the tool screens, kept by each app under its own keys
-enum class FoldKey { RecvSettings, RecvExperimental, RecvTools, RecvCollapsed, SendSettings, SendExperimental, SendTools, SendCollapsed }
+// ai: The folds of the tool screens and Home's lists (HomeUnfinished, HomeFiles: the phone's Home, 2026-11-07), kept by
+// ai: each app under its own keys, closed until opened
+enum class FoldKey { RecvSettings, RecvExperimental, RecvTools, RecvCollapsed, SendSettings, SendExperimental, SendTools, SendCollapsed, HomeUnfinished, HomeFiles }
 
 interface Folds {
     fun open(k: FoldKey): Boolean

@@ -251,13 +251,17 @@ fun ListRow(title: String, sub: String? = null, lead: ImageVector? = null, divid
 
 // ai: A row that opens (the web's details.dev, 2026-10-02: Settings, Experimental and Developer Tools on Send and
 // ai: Receive): a hairline over it, its title in medium, a chevron that turns, and what it holds straight under it; its state the
-// ai: caller's, kept by the app.
+// ai: caller's, kept by the app. count: muted after the title (Home's lists, 2026-11-07: "Received files 4"); action:
+// ai: in the row before the chevron while open (their Delete all)
 @Composable
-fun Fold(title: String, open: Boolean, onToggle: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+fun Fold(title: String, open: Boolean, onToggle: () -> Unit, count: String = "", action: (@Composable () -> Unit)? = null,
+         content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         HorizontalDivider(color = Line)
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = onToggle), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = Fg, modifier = Modifier.weight(1f))
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = Fg, modifier = if (count.isEmpty()) Modifier.weight(1f) else Modifier)
+            if (count.isNotEmpty()) Text(count, style = MaterialTheme.typography.bodyLarge, color = Muted, modifier = Modifier.padding(start = 8.dp).weight(1f))
+            if (open) action?.invoke()
             Icon(Icons.chevron, contentDescription = null, Modifier.size(24.dp).rotate(if (open) 180f else 0f), tint = Muted)
         }
         if (open) {

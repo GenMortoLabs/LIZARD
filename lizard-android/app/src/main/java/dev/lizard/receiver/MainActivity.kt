@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
         const val UNPLUG_MS = 2000L   // ai: a cable out this long is out (usb)
         const val PC_GONE_MS = 2000L  // ai: a PC decoder with no PC heard this long, past the link's QUIET_MS, lets go
         // ai: the folds' keys, and the two collapsers' (Receive's column, the sending screen's panel; landscape)
-        val FOLDS = listOf("recvSettings", "recvAdvanced", "recvExperimental", "sendSettings", "sendAdvanced", "sendExperimental", "recvCollapsed", "sendCollapsed")
+        val FOLDS = listOf("recvSettings", "recvAdvanced", "recvExperimental", "sendSettings", "sendAdvanced", "sendExperimental", "recvCollapsed", "sendCollapsed", "homeUnfinished", "homeFiles")
         // ai: the received files' own work, one at a time in the order asked (placing into Downloads, deletes)
         private val filer = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "lizard-files") }
         // ai: Save replays' Download: the run a copy is under way for, and how the last went

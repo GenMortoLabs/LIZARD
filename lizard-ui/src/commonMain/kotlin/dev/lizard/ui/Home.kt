@@ -123,6 +123,8 @@ interface HomeHost {
     fun deletePartial(p: Partial)
     val files: List<FileItem>
     fun deleteAll()
+    fun deleteAllPartials() { partials.toList().forEach { deletePartial(it) } }   // ai: Unfinished's Delete all (2026-11-07)
+    val folds: Folds                 // ai: Home's lists' folds (FoldKey.HomeUnfinished, HomeFiles), closed until opened
     val note: String                 // ai: a Save's or a filing's failure, a dialog (NoteDialog, 2026-11-07; a red line before); "" none (a Save that works says nothing, 2026-11-06)
     fun clearNote() {}               // ai: its OK
     val about: String
@@ -130,9 +132,9 @@ interface HomeHost {
 
 // ai: Home (the web's index.html; both apps' since 2026-10-31): Send and Receive side by side, the unfinished transfers
 // ai: (shown where there are any: a press or Continue opens Receive, which resumes one once its file is in the light),
-// ai: the received files (shown where there are any, Delete all on their heading), then About and Source code. No tips
-// ai: (2026-11-03); no Settings section (2026-11-07: it held the received files' count with Delete all, and nothing on
-// ai: Home is a setting).
+// ai: the received files (shown where there are any), then About and Source code. The two lists folds (2026-11-07,
+// ai: ListFold), their counts beside their titles, Delete all in each open one's row. No tips (2026-11-03); no Settings
+// ai: section (2026-11-07: it held the received files' count with Delete all, and nothing on Home is a setting).
 @Composable
 fun HomeScreen(h: HomeHost) = BoxWithConstraints {
     LaunchedEffect(Unit) { h.refresh() }
@@ -147,33 +149,32 @@ private fun HomeColumn(h: HomeHost) {
             HomeTile(Icons.monitor, "Send", solid = h.sendSolid, modifier = Modifier.weight(1f)) { h.goSend() }
             HomeTile(Icons.camera, "Receive", solid = !h.sendSolid, modifier = Modifier.weight(1f)) { h.goReceive() }
         }
+        Spacer(Modifier.height(16.dp))
         val partials = h.partials
-        if (partials.isNotEmpty()) {
-            SectionLabel("Unfinished")
+        if (partials.isNotEmpty()) ListFold(h, "Unfinished", partials.size, FoldKey.HomeUnfinished,
+            "Delete ${partials.size} unfinished ${if (partials.size == 1) "transfer" else "transfers"}?", { h.deleteAllPartials() }) {
             partials.forEachIndexed { i, p -> key(p.id) { PartialRow(h, p, last = i == partials.lastIndex) } }
         }
         val files = h.files
-        if (files.isNotEmpty()) FilesHeading(h)
         // ai: keyed by the file, so a row's menu and its question stay with it when a file is filed above it meanwhile
-        files.forEachIndexed { i, e -> key(e.key) { FileRow(h, e, last = i == files.lastIndex) } }
+        if (files.isNotEmpty()) ListFold(h, "Received files", files.size, FoldKey.HomeFiles, "Delete ${countOf(files.size)}?", { h.deleteAll() }) {
+            files.forEachIndexed { i, e -> key(e.key) { FileRow(h, e, last = i == files.lastIndex) } }
+        }
         h.note.let { if (it.isNotEmpty()) NoteDialog(it) { h.clearNote() } }
-        Spacer(Modifier.height(24.dp))
         AboutFold(h.about)
         SourceRow()
     }
 }
 
-// ai: the received files' heading, Delete all at its end (2026-11-07; Settings' "Received files" row with the count held
-// ai: it before), asked first; the unfinished transfers stay. The row as tall as the button, 10 dp over it, so the label
-// ai: sits where a SectionLabel's does
+// ai: One of Home's lists as a fold (2026-11-07; a label over the rows before, the files' Delete all on it since that
+// ai: morning, Settings' "Received files" row before that): its title and count, closed until opened and kept as left
+// ai: (h.folds); open, Delete all in its row before the chevron (in the row, where a long list cannot push it away),
+// ai: asked first: the files' every received file, Unfinished's every unfinished transfer, neither touching the other
 @Composable
-private fun FilesHeading(h: HomeHost) {
+private fun ListFold(h: HomeHost, title: String, n: Int, fold: FoldKey, ask: String, deleteAll: () -> Unit, rows: @Composable () -> Unit) {
     var asking by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("Received files", style = MaterialTheme.typography.titleSmall, color = Muted, modifier = Modifier.weight(1f))
-        Btn("Delete all", Kind.Danger, modifier = Modifier.offset(x = 12.dp)) { asking = true }
-    }
-    if (asking) AskDialog("Delete ${countOf(h.files.size)}?", "Delete all", { asking = false }) { h.deleteAll() }
+    Fold(title, h.folds.open(fold), { h.folds.toggle(fold) }, count = "$n", action = { Btn("Delete all", Kind.Danger) { asking = true } }) { rows() }
+    if (asking) AskDialog(ask, "Delete all", { asking = false }) { deleteAll() }
 }
 
 // ai: A card of Home's (the web's .go .btn): its icon over its title, centred in the card (2026-11-02, the line under the

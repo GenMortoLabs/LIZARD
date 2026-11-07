@@ -46,6 +46,7 @@ internal class AndroidFolds(private val a: MainActivity) : Folds {
         FoldKey.RecvSettings -> "recvSettings"; FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
         FoldKey.RecvCollapsed -> "recvCollapsed"; FoldKey.SendSettings -> "sendSettings"; FoldKey.SendExperimental -> "sendExperimental"
         FoldKey.SendTools -> "sendAdvanced"; FoldKey.SendCollapsed -> "sendCollapsed"
+        FoldKey.HomeUnfinished -> "homeUnfinished"; FoldKey.HomeFiles -> "homeFiles"
     }
     override fun open(k: FoldKey) = a.isOpen(key(k))
     override fun toggle(k: FoldKey) = a.toggle(key(k))

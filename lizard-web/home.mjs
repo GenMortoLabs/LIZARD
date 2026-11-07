@@ -119,6 +119,19 @@ function partialRow(e) {
 }
 document.addEventListener("click", (ev) => { for (const m of document.querySelectorAll("details.menu[open]")) if (!m.contains(ev.target)) m.open = false; });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") for (const m of document.querySelectorAll("details.menu[open]")) { m.open = false; m.querySelector("summary").focus(); } });
+// ai: A phone's lists as folds (2026-11-07, the apps' ListFold): closed until opened, kept as left (home:<id>Open); a tap
+// ai: on the heading's row opens or closes it, Delete all (shown while open) not; a PC's always open, never folds
+const isOpen = (id) => { try { return localStorage.getItem(`home:${id}Open`) === "1"; } catch { return false; } };
+function drawFold(id) {
+  const open = PC.matches || isOpen(id);
+  $(id).classList.toggle("shut", !open);
+  $(`${id}Fold`).setAttribute("aria-expanded", String(open));
+}
+for (const id of ["partial", "files"]) $(id).querySelector(".shead").addEventListener("click", (ev) => {
+  if (PC.matches || ev.target.closest(".danger")) return;
+  try { localStorage.setItem(`home:${id}Open`, isOpen(id) ? "0" : "1"); } catch {}
+  drawFold(id);
+});
 // ai: One drawing at a time: a change heard while one runs draws once more after it.
 let drawing = null, again = false;
 async function show() {
@@ -127,6 +140,7 @@ async function show() {
     const entries = await list(), kept = await keeps(), next = new Map(), parts = await unfinished();
     $("partialList").replaceChildren(...parts.map(partialRow));
     $("partial").hidden = !parts.length;
+    $("partialN").textContent = parts.length ? String(parts.length) : "";
     $("list").replaceChildren(...(await Promise.all(entries.map((e) => row(e, next)))));
     for (const [key, { url }] of links) if (!next.has(key)) URL.revokeObjectURL(url);
     links = next;
@@ -136,11 +150,16 @@ async function show() {
     $("emptyPc").hidden = entries.length > 0 || !kept;
     $("empty").hidden = entries.length > 0 || kept;
     $("clearAllTop").hidden = !entries.length;
+    $("filesN").textContent = entries.length ? String(entries.length) : "";
+    drawFold("partial"); drawFold("files");
   })();
   try { await drawing; } finally { drawing = null; }
   if (again) { again = false; await show(); }
 }
-// ai: Delete all on the files' heading (a phone's in Settings until 2026-11-07), asking on itself first
+// ai: Delete all on the files' heading (a phone's in Settings until 2026-11-07), and on a phone Unfinished's (2026-11-07:
+// ai: every unfinished transfer, the files kept), each asking on itself first
 confirmTap($("clearAllTop"), () => { const n = $("list").children.length; return `Delete ${n} file${n > 1 ? "s" : ""}?`; }, () => removeAll().then(show));
+confirmTap($("clearPartial"), () => { const n = $("partialList").children.length; return `Delete ${n} unfinished transfer${n > 1 ? "s" : ""}?`; },
+  () => Promise.all([...$("partialList").children].map((li) => forgetUnfinished(li.dataset.id))).then(show));
 watch(show);
 show();
