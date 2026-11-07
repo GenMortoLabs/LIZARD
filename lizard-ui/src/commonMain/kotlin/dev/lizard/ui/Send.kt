@@ -212,8 +212,10 @@ private fun Side(h: SendHost) {
 // ai: Folder and where the platform has one Media) in one row stretched across the box in equal cells, and under them,
 // ai: while the selection holds something, its card as wide: the count with Clear, then a tile an item (its icon, its
 // ai: name with the stem cut and the ending kept, the line under it, an x that removes it), in rows stretched across the
-// ai: card (TileRows, TILE dp the least), one row scrolling sideways in landscape; nothing changes while sending. The
-// ai: phone's at the top of its box, 16 dp from its edges, stretched across; `column` (the desktop's, 576 dp) a column
+// ai: card (TileRows, TILE dp the least), or with `row` (the phone's, held either way since 2026-11-07; in landscape
+// ai: alone before, its portrait card scrolling down) one row scrolling sideways across the screen as it is held;
+// ai: nothing changes while sending. The phone's at the top of its box, 16 dp from its edges, stretched across;
+// ai: `column` (the desktop's, 576 dp) a column
 // ai: at most that wide, centred, and the whole centred in its height where it fits, the card at least a row of items
 // ai: tall; only the card scrolls. `total`: the selection's size, after the count in the card's head ("2 items · 4.4 GB",
 // ai: 2026-11-07; a line under the card named what goes and its size before).
@@ -221,7 +223,7 @@ private fun Side(h: SendHost) {
 class UploadItem(val key: String, val name: String, val sub: String, val dir: Boolean)
 
 @Composable
-fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, landscape: Boolean, onRemove: (String) -> Unit, onClear: () -> Unit,
+fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, row: Boolean, onRemove: (String) -> Unit, onClear: () -> Unit,
            column: Dp? = null, total: String = "") {
     BoxWithConstraints(Modifier.fillMaxSize().background(Bg)) {
         val w = if (column != null) minOf(maxWidth - 32.dp, column) else maxWidth - 32.dp
@@ -245,7 +247,7 @@ fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, landscap
                         val it = items[i]
                         ItemTile(it.name, it.sub, if (it.dir) Icons.folder else Icons.file, iw, enabled = enabled) { onRemove(it.key) }
                     }
-                    if (landscape) {
+                    if (row) {
                         // ai: one row at the columns' width (TileRows' rule), scrolling sideways past what fits
                         val gap = 8.dp; val inner = w - 24.dp
                         val cols = maxOf(1, ((inner + gap) / (TILE.dp + gap)).toInt())

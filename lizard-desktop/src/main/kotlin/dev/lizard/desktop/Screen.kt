@@ -170,7 +170,7 @@ class DesktopSend(private val app: App) : SendHost {
                 if (s.test) TestStreamNote()
                 else Upload(listOf(Act("File", icon = Icons.file) { s.chooseFile() }, Act("Folder", icon = Icons.folder) { s.chooseFolder() }),
                     s.items.map { UploadItem(it.key, it.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
-                    enabled = !s.sending, landscape = false, onRemove = { s.remove(it) }, onClear = { s.clearPicks() },
+                    enabled = !s.sending, row = false, onRemove = { s.remove(it) }, onClear = { s.clearPicks() },
                     column = 576.dp, total = s.choice?.takeIf { !s.reading }?.let { Readout.bytes(it.size) } ?: "")
                 if (s.dragOver) DropOutline()
             }

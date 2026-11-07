@@ -3,11 +3,9 @@ package dev.lizard.receiver
 import dev.lizard.pick.Pick
 import dev.lizard.readout.Readout
 import android.content.Context
-import android.content.res.Configuration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import android.net.Uri
 import android.os.Build
@@ -638,7 +636,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             if (uploading()) Upload(listOf(Act("File", icon = Icons.file) { a.pickFile() }, Act("Folder", icon = Icons.folder) { a.pickFolder() },
                     Act("Media", icon = Icons.image) { a.pickMedia() }),
                 s.items.map { UploadItem(it.key, it.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
-                enabled = !sending, landscape = maxWidth > maxHeight || LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE,
+                enabled = !sending, row = true,
                 onRemove = { s.remove(it) }, onClear = { s.clear() }, total = if (!s.reading && s.choice != null && s.size > 0) Readout.bytes(s.size) else "")
             else if (!shown) TestStreamNote()
         }
