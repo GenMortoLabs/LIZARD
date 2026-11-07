@@ -142,6 +142,5 @@ object Prefs {
 // ai: The sender's own figures beside Readout's (liblizard/kotlin/Readout.kt bytes and rate): digits as the web prints
 // ai: them whatever the locale, a figure kept on its line (a no-break space).
 object Fmt {
-    fun blocks(b: Int) = "$b, ${String.format(Locale.ROOT, "%.1f", b * Pick.PAYLOAD / 1000.0)}\u00a0KB"   // ai: under the title "Blocks" (2026-10-05)
     fun f1(v: Double) = String.format(Locale.ROOT, "%.1f", v)
 }

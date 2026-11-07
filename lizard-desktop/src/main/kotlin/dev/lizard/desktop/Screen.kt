@@ -94,13 +94,14 @@ class DesktopSend(private val app: App) : SendHost {
         // ai: and Display from 2026-10-23)
         // ai: Blocks a frame (send.html #blocks): the slider's first step auto, its value "Auto, 60, 28.1 KB" once auto's
         // ai: pick in the area is known, every step right of it a version by hand, committed on release
-        autoSlide("Blocks", s.blocks, s.autoBlocks, Pick.VERSION_MIN..Pick.VERSION_MAX, { n -> Fmt.blocks(Native.blocksFor(Pick.STEP * n)) }, { s.repick() }) { s.chooseBlocks(it) },
+        // ai: Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
+        autoSlide(SendRows.blocksTitle(stats), s.blocks, s.autoBlocks, Pick.VERSION_MIN..Pick.VERSION_MAX, { n -> SendRows.blocksText(Native.blocksFor(Pick.STEP * n), stats) }, { s.repick() }) { s.chooseBlocks(it) },
         if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
         else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) },
         // ai: the rings alone (2026-10-05): none chosen shows the default
-        ChipChoice("Ring", if (s.ring == -1) Pick.RING_DEFAULT else s.ring, Pick.RINGS.indices.map { it to "${Pick.RINGS[it]}" }) { s.chooseRing(it) },
+        ChipChoice("Ring", if (s.ring == -1) Pick.RING_DEFAULT else s.ring, SendRows.rings(stats)) { s.chooseRing(it) },
         // ai: two codes side by side for the receiver's 2:1 crop (send.html #codes)
-        ChipChoice("Codes", s.codes, listOf(1 to "One", 2 to "Two")) { s.chooseCodes(it) },
+        ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) },
         // ai: GPU and CPU alone: with neither chosen the encoder is auto's and the painter running is the chip marked (the
         // ai: GPU before a first send); a choice takes that one outright
         ChipChoice("Encoder", if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.chooseEnc(it) },
@@ -114,7 +115,10 @@ class DesktopSend(private val app: App) : SendHost {
     // ai: on Linux alone (X11's lease)
     override val experimental: List<Setting> get() = listOfNotNull(
         if (!Native.mac && !Native.windows) Choice("Exclusive fullscreen", s.exclusiveFull, listOf(false to "Off", true to "On")) { s.chooseExclusiveFull(it) } else null)
+    // ai: Show statistics, Receive's setting (ReceiveState.showStats, Prefs.Rx.stats), one switch for both screens (2026-11-07)
+    private val stats get() = app.recv.showStats
     override val tools: List<Setting> get() = listOf(
+        Choice("Show statistics", app.recv.showStats, listOf(false to "Off", true to "On")) { app.recv.chooseStats(it) },
         ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = !s.sending) { s.chooseTest(it) })
     override val readout get() = s.readout.takeIf { it.isNotEmpty() }?.let { Code(it, 12) }
     override val about get() = s.about

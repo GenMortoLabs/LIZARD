@@ -586,13 +586,14 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val settings: List<Setting> get() = listOfNotNull(
         // ai: what the symbol carries, then how this phone paints and shows it (one list since 2026-11-01; headed Code and
         // ai: Display from 2026-10-23)
-        // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size carries
-        autoSlide("Blocks", s.blocks, s.picked / Pick.STEP, Pick.VERSION_MIN..Pick.VERSION_MAX, { n -> blocksText(Native.blocksFor(Pick.STEP * n)) }, { s.settle() }) { s.chooseBlocks(it) },
+        // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size carries,
+        // ai: Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
+        autoSlide(SendRows.blocksTitle(stats), s.blocks, s.picked / Pick.STEP, Pick.VERSION_MIN..Pick.VERSION_MAX, { n -> SendRows.blocksText(Native.blocksFor(Pick.STEP * n), stats) }, { s.settle() }) { s.chooseBlocks(it) },
         if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
         else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) },
-        ChipChoice("Ring", s.ringIndex, Pick.RINGS.indices.map { it to "${Pick.RINGS[it]}" }) { s.chooseRing(it) },
+        ChipChoice("Ring", s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) },
         // ai: one code, or two side by side for a receiver's 2:1 crop (the web's #codes)
-        ChipChoice("Codes", s.codes, listOf(1 to "One", 2 to "Two")) { s.chooseCodes(it) },
+        ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) },
         // ai: with nothing chosen the setting stays auto and the painter running is the chip marked; a choice takes it outright
         ChipChoice("Encoder", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.choosePainter(it) },
         ChipChoice("VSync", s.vsyncOn, listOf(true to "On", false to "Off")) { s.chooseVsync(it) },
@@ -605,7 +606,10 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() })
     private var marginDrag by mutableStateOf<Int?>(null)
     override val experimental: List<Setting> get() = emptyList()
+    // ai: Show statistics, Receive's setting (Settings.stats), one switch for both screens (2026-11-07)
+    private val stats get() = a.settings.stats == "on"
     override val tools: List<Setting> get() = listOf(
+        Choice("Show statistics", a.settings.stats, listOf("off" to "Off", "on" to "On")) { a.change(a.settings.copy(stats = it)) },
         ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = s.phase != SendState.Phase.On && s.phase != SendState.Phase.Preparing) { s.test = it })
     override val readout get() = sendLab(s).takeIf { it.isNotEmpty() }?.let { Code(it) }
     override val about get() = a.aboutLine()
@@ -656,7 +660,6 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     companion object {
         // ai: Spacing (2026-10-31, the desktop's and the web's name): the gap between two codes' rings plus their two quiet zones
         const val SPACING_PAST = 2 * Pick.QUIET
-        private fun blocksText(b: Int) = "$b, ${"%.1f".format(Locale.ROOT, b * Pick.PAYLOAD / 1000.0)}\u00a0KB"
     }
 }
 

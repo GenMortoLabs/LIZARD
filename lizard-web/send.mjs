@@ -217,9 +217,23 @@ function showBlocks() {
 }
 // ai: the title says "Blocks a frame", so the value is the count and its bytes alone, which fit beside it in the 20rem column
 // ai: "54, 25.3 KB": the blocks a frame of the slider's size carries (the format's rate profile, 2026-10-07: 54 at
-// ai: its 30, LIZARD-480) and what they hold, under the title "Blocks" (2026-10-05; "60 blocks, ..." before); send.html's inline
-// ai: script draws the same before the first paint
-const blocksText = (v) => { const b = blocksFor(STEP * v); return `${b}, ${((b * PAYLOAD) / 1000).toFixed(1)} KB`; };
+// ai: its 30, LIZARD-480) and what they hold, under the title "Blocks" (2026-10-05; "60 blocks, ..." before); with Show
+// ai: statistics off (2026-11-07) the title "Density" and the bytes alone, "25.3 KB"; send.html's inline script draws the
+// ai: same before the first paint
+const statsOn = () => $("stats").value === "1";
+const blocksText = (v) => { const b = blocksFor(STEP * v), kb = `${((b * PAYLOAD) / 1000).toFixed(1)} KB`; return statsOn() ? `${b}, ${kb}` : kb; };
+// ai: The labels Show statistics sets (2026-11-07): on, Blocks and the ring by its cells, 64, 128, 256; off, Density and
+// ai: the ring by its border's look, Thin (the 256, its border 3% of the side), Medium (128) and Thick (64, 9%), in that
+// ai: order. The menu's values stay the cells, so a kept ring and ?ring= presets read alike either way.
+const RING_LOOK = { 64: "Thick", 128: "Medium", 256: "Thin" };
+function showStatsLabels() {
+  const on = statsOn(), r = $("ring"), v = r.value;
+  $("blocksTitle").textContent = on ? "Blocks" : "Density";
+  r.innerHTML = (on ? [...RINGS] : [...RINGS].reverse()).map((x) => `<option value="${x}">${on ? x : RING_LOOK[x]}</option>`).join("");
+  r.value = v;
+  showBlocks();
+}
+$("stats").addEventListener("change", showStatsLabels);
 $("blocks").addEventListener("input", () => { const v = +$("blocks").value; $("blocksOut").textContent = v > 1 ? blocksText(v) : "Auto"; });
 $("blocks").addEventListener("change", () => { const v = +$("blocks").value; $("subch").value = v > 1 ? String(STEP * v) : "auto"; $("subch").dispatchEvent(new Event("change")); });
 $("subch").addEventListener("change", showBlocks);
@@ -968,7 +982,8 @@ new ResizeObserver(paintSurround).observe(bgc.parentElement);
 // ai: Settings' controls as the user last left them (localStorage, since 2026-09-29), then
 // ai: the URL's presets over them for this load.
 // ai: and Developer Tools' payload (there since 2026-10-03), under the same keys
-for (const el of document.querySelectorAll("#dev select, #dev input, #logs select")) if (el.type !== "file" && !("view" in el.dataset)) persist(el, `send:${el.id}`);
+// ai: Show statistics kept under the receiver's key (data-shared, recv:stats): one switch for both pages
+for (const el of document.querySelectorAll("#dev select, #dev input, #logs select")) if (el.type !== "file" && !("view" in el.dataset)) persist(el, el.dataset.shared || `send:${el.id}`);
 // ai: a menu takes a preset only where it is one of its options (?ring=auto, from before the menu lost its auto, keeps the default)
 for (const [k, v] of URLP) { const el = $(k); if (el && "value" in el && el.type !== "file" && (el.tagName !== "SELECT" || [...el.options].some((o) => o.value === v))) el.value = v; }
 // ai: A preset that is no format, every multiple of 16 from 32 to 1024 (?subch=16, ?subch=24), is no symbol: back to
@@ -977,7 +992,7 @@ if ($("subch").value !== "auto" && !VERSIONS.includes(+$("subch").value)) {
   $("tx").textContent = `${$("subch").value} sub-channels is no format (a multiple of 16 from 32 to 1024): showing auto`;
   $("subch").value = "auto";
 }
-showBlocks();
+showStatsLabels();
 showEnc();
 showFps();
 showSize();
