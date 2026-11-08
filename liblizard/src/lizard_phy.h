@@ -165,7 +165,7 @@ int lizard_tiers_for(int subch, lizard_tier_t tier[LIZARD_TIERS]);
 // The blocks a frame of subch sub-channels carries under that profile (0 for no format).
 int lizard_blocks_for(int subch);
 // ai: Where the camera's optical axis falls in the image the calling thread decodes next, image px (2026-10-17): the
-// ai: border mesh fits the lens's radial field about it (acquire.c border_fill_axis). NaN, the default, is the image's
+// ai: anchors' lens model fits its radial field about it (acquire.c lensm_axis). NaN, the default, is the image's
 // ai: centre, right for a crop centred on the camera's frame; a 2:1 half's axis is the middle of its inner edge. Kept
 // ai: for the thread's later decodes until set again.
 void lizard_set_axis(float x, float y);

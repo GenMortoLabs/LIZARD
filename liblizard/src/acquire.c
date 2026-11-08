@@ -1528,13 +1528,14 @@ static int lens_fit(int K, int nn, const int *use, const float *qx, const float 
   for (int a = 0; a < p; a++) t[a] = A[a][LENS_P] / A[a][a];
   return 1;
 }
-static void border_fill_axis(const ob_layout_t *L, const homo_t *H, int iw, int ih, node_t *nodes) {
+// ai: Under OB_ANCH_MIN anchors the border alone carries the mesh: H's first-order change (lens_rows' eight terms, no
+// ai: radial one) fitted over the used nodes, H kept as it is where it does not fit, then a Coons patch over what the
+// ai: border's nodes leave of it. Radial terms about the camera's axis here (K = 0 to 3 by AICc, at most 1 with the axis
+// ai: inside the quad) were measured without effect (2026-11-07: 2 blocks more of 145,511 on the lens set without them,
+// ai: the six replays alike): the anchors carry the lens wherever it bends the code enough to cost.
+static void border_fill(const ob_layout_t *L, const homo_t *H, int iw, int ih, node_t *nodes) {
   const int nx = L->nx, ny = L->ny, nn = nx * ny;
-  float ax = ob_axis[0], ay = ob_axis[1];
-  if (!(ax == ax) || !(ay == ay)) { ax = iw * 0.5f; ay = ih * 0.5f; }
-  double R = 0;
-  for (int c = 0; c < 4; c++) { const double d = hypot((c & 1 ? iw : 0) - (double)ax, (c & 2 ? ih : 0) - (double)ay); if (d > R) R = d; }
-  if (!(R > 0)) R = 1;
+  const double ax = iw * 0.5, ay = ih * 0.5, R = hypot(ax, ay) > 0 ? hypot(ax, ay) : 1;
   float *qx = malloc((size_t)nn * sizeof(float)), *qy = malloc((size_t)nn * sizeof(float));
   int *use = malloc((size_t)nn * sizeof(int));
   for (int j = 0; j < ny; j++) for (int i = 0; i < nx; i++) {
@@ -1546,45 +1547,12 @@ static void border_fill_axis(const ob_layout_t *L, const homo_t *H, int iw, int 
     const int corner = (i == 0 || i == nx - 1) && (j == 0 || j == ny - 1);
     use[k] = nd->done && (corner || (L->node_mark[k] && nd->score >= 0.35f));
   }
-  // ai: is the axis (q = 0) inside the code's quad? Its corners in ring order; the axis is inside where it sits on the
-  // ai: same side of all four edges.
-  const int cn[4] = { 0, nx - 1, nn - 1, nn - nx };
-  int pos = 0, neg = 0;
-  for (int c = 0; c < 4; c++) {
-    const int a = cn[c], b = cn[(c + 1) & 3];
-    const double cr = (double)qx[a] * qy[b] - (double)qy[a] * qx[b];   // ai: (corner a - 0) x (corner b - 0)
-    pos += cr > 0; neg += cr < 0;
-  }
-  const int kmax = (pos == 4 || neg == 4) ? 1 : LENS_TERMS;
-  // ai: The model by AICc over the used nodes' 2n residuals (a node's dx and dy each): K = 0 to kmax radial terms;
-  // ai: H's fit kept as it is where none fits. Beside it a fit on three sides scored on the fourth chose as often on
-  // ai: the simulator and less well on every 2:1 replay (up to 2.5 blocks a half; STATUS "The lens about its axis").
-  double rx[LENS_P], ry[LENS_P];
-  int K = -1;
-  double best = INFINITY;
-  for (int k = 0; k <= kmax; k++) {
-    const int p = 8 + k;
-    double t[LENS_P] = { 0 }, rss = 0;
-    int n = 0;
-    if (!lens_fit(k, nn, use, qx, qy, nodes, t)) continue;
-    for (int m = 0; m < nn; m++) {
-      if (!use[m]) continue;
-      n += 2;
-      lens_rows(qx[m], qy[m], k, rx, ry);
-      double fx = 0, fy = 0;
-      for (int a = 0; a < p; a++) { fx += t[a] * rx[a]; fy += t[a] * ry[a]; }
-      rss += (nodes[m].dx - fx) * (nodes[m].dx - fx) + (nodes[m].dy - fy) * (nodes[m].dy - fy);
-    }
-    if (n - p - 1 <= 0) continue;
-    const double aicc = n * log(rss / n + 1e-30) + 2.0 * p + 2.0 * p * (p + 1) / (n - p - 1);
-    if (aicc < best) { best = aicc; K = k; }
-  }
-  double th[LENS_P] = { 0 };
-  if (K >= 0 && !lens_fit(K, nn, use, qx, qy, nodes, th)) K = -1;
+  double rx[LENS_P], ry[LENS_P], th[LENS_P] = { 0 };
+  const int fit = lens_fit(0, nn, use, qx, qy, nodes, th);
   float *mx = malloc((size_t)nn * sizeof(float)), *my = malloc((size_t)nn * sizeof(float));
   for (int k = 0; k < nn; k++) {
     double X = 0, Y = 0;
-    if (K >= 0) { lens_rows(qx[k], qy[k], K, rx, ry); for (int a = 0; a < 8 + K; a++) { X += th[a] * rx[a]; Y += th[a] * ry[a]; } }
+    if (fit) { lens_rows(qx[k], qy[k], 0, rx, ry); for (int a = 0; a < 8; a++) { X += th[a] * rx[a]; Y += th[a] * ry[a]; } }
     mx[k] = (float)X; my[k] = (float)Y;
   }
   #define EX(i, j) (nodes[(j) * nx + (i)].dx - mx[(j) * nx + (i)])
@@ -1607,8 +1575,7 @@ static void border_fill_axis(const ob_layout_t *L, const homo_t *H, int iw, int 
 // ---------------------------------------------------------------- the anchors
 
 // ai: The lens model over points: q a point's place about the axis over R, d its displacement from H in px; K = 0 to
-// ai: LENS_TERMS radial terms by AICc as border_fill_axis chooses them, with no cap inside a 1:1 crop (the anchors sample
-// ai: the interior's radii). Robust (isb given): a border point further from the model than the larger of tau_floor
+// ai: LENS_TERMS radial terms by AICc, with no cap inside a 1:1 crop (the anchors sample the interior's radii). Robust (isb given): a border point further from the model than the larger of tau_floor
 // ai: and three robust spreads (1.4826 MAD of the border's residuals) is dropped and the model refitted, three rounds.
 struct lensm { int K; double t[LENS_P], ax, ay, R; };
 typedef struct lensm lensm_t;
@@ -1618,7 +1585,7 @@ static void lensm_at(const struct lensm *m, double u, double v, float *dx, float
   for (int a = 0; a < 8 + m->K; a++) { fx += m->t[a] * rx[a]; fy += m->t[a] * ry[a]; }
   *dx = (float)fx; *dy = (float)fy;
 }
-// ai: the axis and R as border_fill_axis takes them
+// ai: the axis (ob_axis, else the image's centre) and R, its distance to the farthest image corner
 static void lensm_axis(int iw, int ih, lensm_t *m) {
   float x = ob_axis[0], y = ob_axis[1];
   if (!(x == x) || !(y == y)) { x = iw * 0.5f; y = ih * 0.5f; }
@@ -5061,7 +5028,7 @@ static int acquire_core(const ob_layout_t *const *Ls, int nL, const image_t *pim
   frame_buf_done(fb, bin);
   // the border is all there is to hang the mesh on
   if (have_alm) border_fill_anchors(L, &H, iw, ih, nodes, anchors, mpx);
-  else border_fill_axis(L, &H, iw, ih, nodes);
+  else border_fill(L, &H, iw, ih, nodes);
   float msum = 0;
   int mcount = 0;
   for (int k = 0; k < nn; k++) if (nodes[k].done) { msum += nodes[k].score; mcount++; }

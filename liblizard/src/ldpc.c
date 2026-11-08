@@ -14,11 +14,10 @@ enum { LDPC_SIGNS = 16384 };
 static int views_neon(ldpc_t *c);
 #endif
 
-// ai: x86-64's wider layer kernels (below) exist where the 128-bit vector path does and the compiler takes a function's
+// ai: x86-64's AVX2 form of the four-times kernel (below) exists where the 128-bit vector path does and the compiler takes a function's
 // ai: own instruction set (not clang-cl, whose MSVC-style link may lack the runtime the processor check calls)
 #if defined(OB_SIMD) && (defined(__x86_64__) || defined(_M_X64)) && (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
 #define OB_LDPC_WIDE 1
-static int wide_for(int zp);
 #endif
 
 // ai: The rate indices are the format's four, 2, 3, 4 and 6 (1/2, 2/3, 3/4, 7/8); 0, 1 and 5 (1/4, 1/3, 5/6) were lab
@@ -73,9 +72,6 @@ int ldpc_init(ldpc_t *c, int rate) {
   c->edges = e;
 
   c->zp = (z + 7) & ~7;
-#ifdef OB_LDPC_WIDE
-  c->wide = wide_for(c->zp);
-#endif
   c->lay_ptr = malloc((size_t)(mb + 1) * sizeof(int));
   c->lay_col = malloc((size_t)mb * kb * sizeof(int));
   c->lay_shift = malloc((size_t)mb * kb * sizeof(int));
@@ -104,8 +100,9 @@ int ldpc_init(ldpc_t *c, int rate) {
     c->w4 = malloc((size_t)c->kb * 4 * c->z * sizeof(int16_t) + ((size_t)c->slots_total + c->lay_ptr[mb]) * sizeof(int16_t *) + (size_t)mb * sizeof(int));
     if (!c->w4 || views_neon(c)) { ldpc_free(c); return -1; }
 #ifdef OB_LDPC_WIDE
-    // ai: x86-64: wide is then the four-times kernel's form: 0 SSE4.1, 1 AVX2 (where wide_for took AVX2)
-    if (c->wide) c->wide = ob_v3() ? 1 : 0;
+    // ai: x86-64: wide is then the four-times kernel's form: 0 SSE4.1, 1 AVX2 where the processor has it
+    __builtin_cpu_init();
+    c->wide = ob_v3();
 #endif
   }
 #endif
@@ -530,58 +527,6 @@ OB_V3 static void layer_kernel_four_avx2(int8_t *R, int ns, int zp, int norm, in
 }
 #endif
 #endif
-
-// x86-64: the same layer, 16 checks a vector (AVX2), compiled for
-// its own instruction set and taken by ldpc_init where the processor has it; lane for lane the 128-bit kernel's
-// operations, so every form decides alike (test/ldpc_wide.c holds them to the scalar twin).
-// ai: A code ldpc_init gives w4 runs on the four-times columns (x86-64's port above); these run a code it gives none.
-#ifdef OB_LDPC_WIDE
-#include <immintrin.h>
-OB_V3 static void layer_kernel_avx2(int16_t *Q, int8_t *R, int ns, int zp, int norm) {
-  const __m256i big = _mm256_set1_epi16(32767), cap = _mm256_set1_epi16(2047), top = _mm256_set1_epi16(127), vn = _mm256_set1_epi16((int16_t)norm);
-  const __m256i lo = _mm256_set1_epi16(-8191), hi = _mm256_set1_epi16(8191);
-  for (int i = 0; i < zp; i += 16) {
-    __m256i min1 = big, min2 = big, arg = _mm256_set1_epi16(-1), sgn = _mm256_setzero_si256();
-    for (int e = 0; e < ns; e++) {
-      int16_t *q = Q + e * zp + i;
-      __m256i v = _mm256_sub_epi16(_mm256_loadu_si256((const __m256i *)q), _mm256_cvtepi8_epi16(_mm_loadu_si128((const __m128i *)(R + e * zp + i))));
-      _mm256_storeu_si256((__m256i *)q, v);
-      __m256i a = _mm256_abs_epi16(v), lt = _mm256_cmpgt_epi16(min1, a);
-      sgn = _mm256_xor_si256(sgn, v);
-      min2 = _mm256_min_epi16(min2, _mm256_max_epi16(min1, a));
-      arg = _mm256_blendv_epi8(arg, _mm256_set1_epi16((int16_t)e), lt);
-      min1 = _mm256_min_epi16(min1, a);
-    }
-    __m256i m1 = _mm256_min_epi16(_mm256_srai_epi16(_mm256_mullo_epi16(_mm256_min_epi16(min1, cap), vn), 4), top);
-    __m256i m2 = _mm256_min_epi16(_mm256_srai_epi16(_mm256_mullo_epi16(_mm256_min_epi16(min2, cap), vn), 4), top);
-    for (int e = 0; e < ns; e++) {
-      int16_t *q = Q + e * zp + i;
-      __m256i v = _mm256_loadu_si256((const __m256i *)q);
-      __m256i mag = _mm256_blendv_epi8(m1, m2, _mm256_cmpeq_epi16(arg, _mm256_set1_epi16((int16_t)e)));
-      __m256i neg = _mm256_srai_epi16(_mm256_xor_si256(sgn, v), 15);
-      __m256i r = _mm256_sub_epi16(_mm256_xor_si256(mag, neg), neg);
-      // ai: the messages to bytes (within +-127, so the saturation never acts); PACKSSWB packs within each 128-bit half,
-      // ai: so the halves' first eight bytes are brought together
-      __m256i p = _mm256_permute4x64_epi64(_mm256_packs_epi16(r, r), 0xD8);
-      _mm_storeu_si128((__m128i *)(R + e * zp + i), _mm256_castsi256_si128(p));
-      _mm256_storeu_si256((__m256i *)q, _mm256_max_epi16(_mm256_min_epi16(_mm256_add_epi16(v, r), hi), lo));
-    }
-  }
-}
-// ai: The widest kernel the processor has (and the build allows), its z a whole number of the kernel's vectors.
-static int wide_for(int zp) {
-  __builtin_cpu_init();
-  if (zp % 16 == 0 && ob_v3()) return 1;   // ai: OB_X86_MAX 2 (simd.h) holds it at the 128-bit kernel
-  return 0;
-}
-#endif
-
-static void layer_kernel_for(const ldpc_t *c, int16_t *Q, int8_t *R, int ns) {
-#ifdef OB_LDPC_WIDE
-  if (c->wide == 1) { layer_kernel_avx2(Q, R, ns, c->zp, c->norm); return; }
-#endif
-  layer_kernel(Q, R, ns, c->zp, c->norm);
-}
 
 // Row r's slots, rotated into check order: data circulants, then the staircase bit shared with the
 // check before, then the check's own. Check 0 has no check before it; its slot holds a bit that is
@@ -1122,7 +1067,7 @@ int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_
       if (four) { layer_direct(c, r, R, ns, vw + c->lay_ptr[r] + 2 * r, cp + c->lay_ptr[r], ncp[r], it == 0); continue; }
 #endif
       layer_gather(c, r, Q);
-      layer_kernel_for(c, Q, R, ns);
+      layer_kernel(Q, R, ns, c->zp, c->norm);
       layer_scatter(c, r, Q);
     }
 #ifdef OB_LDPC_W4

@@ -20,9 +20,8 @@ typedef struct {
   int *lay_ptr, *lay_col, *lay_shift;
   int16_t *wl, *wq;   // posteriors (data in code order, parity transposed to [block row][position]); one layer's gathered rows
   int8_t *wr;         // check-to-bit messages, [slot][position]
-  int wide;           // the layer kernel ldpc_init chose: 0 the 128-bit one (or the scalar twin), 1 AVX2, 2 AVX-512; -1 set by a check:
-                      // the 128-bit kernel on today's layout, where arm64 or x86-64 would take its own. With w4 on x86-64, the
-                      // four-times kernel's form: 0 SSE4.1, 1 AVX2
+  int wide;           // x86-64 with w4: the four-times kernel's form ldpc_init chose, 0 SSE4.1, 1 AVX2; -1 set by a check: the
+                      // 128-bit kernel on today's layout, where arm64 or x86-64 would take its own
   int16_t *w4;        // arm64 (OB_NEON) and x86-64 (OB_X86), z a multiple of 32: the data columns four times over, kb x 4z, so the
                       // rotation of any slot is one run of z inside [z, 3z); 0 elsewhere
 } ldpc_t;
