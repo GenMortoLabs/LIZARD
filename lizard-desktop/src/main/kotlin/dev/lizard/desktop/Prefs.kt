@@ -105,7 +105,6 @@ object Prefs {
         var experimentalOpen: Boolean get() = bool("recvExperimental", false); set(v) { put("recvExperimental", v.toString()) }
         var settingsOpen: Boolean get() = bool("recvSettings", false); set(v) { put("recvSettings", v.toString()) }
         var toolsOpen: Boolean get() = bool("recvTools", false); set(v) { put("recvTools", v.toString()) }
-        var collapsed: Boolean get() = bool("recvCollapsed", false); set(v) { put("recvCollapsed", v.toString()) }
         var stats: Boolean get() = bool("stats", false); set(v) { put("stats", v.toString()) }
         // ai: Save replays, kept across starts (since 2026-11-02; every start began off before)
         var replays: Boolean get() = bool("replays", false); set(v) { put("replays", v.toString()) }

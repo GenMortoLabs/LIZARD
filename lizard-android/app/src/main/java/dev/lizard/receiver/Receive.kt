@@ -44,8 +44,8 @@ import dev.lizard.ui.Screen
 internal class AndroidFolds(private val a: MainActivity) : Folds {
     private fun key(k: FoldKey) = when (k) {
         FoldKey.RecvSettings -> "recvSettings"; FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
-        FoldKey.RecvCollapsed -> "recvCollapsed"; FoldKey.SendSettings -> "sendSettings"; FoldKey.SendExperimental -> "sendExperimental"
-        FoldKey.SendTools -> "sendAdvanced"; FoldKey.SendCollapsed -> "sendCollapsed"
+        FoldKey.SendSettings -> "sendSettings"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
+        FoldKey.Collapsed -> "collapsed"   // ai: one for both screens (2026-11-07; recvCollapsed and sendCollapsed before)
         FoldKey.HomeUnfinished -> "homeUnfinished"; FoldKey.HomeFiles -> "homeFiles"
     }
     override fun open(k: FoldKey) = a.isOpen(key(k))

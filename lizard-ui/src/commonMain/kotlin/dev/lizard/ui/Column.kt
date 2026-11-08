@@ -62,6 +62,9 @@ interface ColumnWidth {
     // ai: its floor it closes to the rail, and pulled out from the rail it opens again; no collapse button. False (the
     // ai: phone's): the collapse button alone and no edge, a drag at the screen's side being the system's swipe.
     val sash: Boolean get() = false
+    // ai: The platform's Send row carries a Fullscreen button (the desktop's; the phone's send is the whole screen): the
+    // ai: button itself (SendHost.fullscreen) and both screens' floor (columnFloor) count it
+    val fullscreen: Boolean get() = false
     fun default(screen: Dp): Dp
     fun save()
 }
@@ -88,6 +91,14 @@ fun RowFloor(buttons: List<Pair<List<String>, Dp>>): Dp {
     return buttons.fold(0.dp) { a, (labels, pad) -> a + maxOf(ButtonDefaults.MinWidth, labels.maxOf(::label) + pad * 2) } +
         8.dp * (buttons.size - 1) + SidePad * 2
 }
+
+// ai: The tool screens' one floor (2026-11-07): the widest row of buttons either screen puts in the column, Send's (Stop,
+// ai: Pause or Resume and, where the platform has it, Fullscreen; Receive's Start or Stop is narrower), so at one dragged
+// ai: width the column is as wide on Receive as on Send and closes to the rail at the same pull
+@Composable
+fun columnFloor(width: ColumnWidth): Dp = maxOf(
+    RowFloor(listOfNotNull(listOf("Stop") to 16.dp, listOf("Pause", "Resume") to 16.dp, if (width.fullscreen) listOf("Fullscreen") to 16.dp else null)),
+    RowFloor(listOf(listOf("Start", "Stop") to 20.dp)))
 
 // ai: The column's light at its start and before its hairline (its bar and its scrolling part alike)
 val SidePad = 12.dp

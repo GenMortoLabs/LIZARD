@@ -85,7 +85,6 @@ class ReceiveState(private val app: App) {
     var settingsOpen by mutableStateOf(Prefs.Rx.settingsOpen)
     var toolsOpen by mutableStateOf(Prefs.Rx.toolsOpen)
     var experimentalOpen by mutableStateOf(Prefs.Rx.experimentalOpen)
-    var collapsed by mutableStateOf(Prefs.Rx.collapsed)
     var showStats by mutableStateOf(Prefs.Rx.stats)
     // ai: Save replays: kept across starts, as the Android app's (Settings.replays)
     var replays by mutableStateOf(Prefs.Rx.replays)
@@ -380,7 +379,6 @@ class ReceiveState(private val app: App) {
     fun toggleSettings() { settingsOpen = !settingsOpen; Prefs.Rx.settingsOpen = settingsOpen }
     fun toggleTools() { toolsOpen = !toolsOpen; Prefs.Rx.toolsOpen = toolsOpen }
     fun toggleExperimental() { experimentalOpen = !experimentalOpen; Prefs.Rx.experimentalOpen = experimentalOpen }
-    fun toggleRail() { collapsed = !collapsed; Prefs.Rx.collapsed = collapsed }
     fun chooseStats(on: Boolean) { showStats = on; Prefs.Rx.stats = on }
     fun chooseReplays(on: Boolean) { replays = on; Prefs.Rx.replays = on; session?.replays(on, replayMeta()) }
 

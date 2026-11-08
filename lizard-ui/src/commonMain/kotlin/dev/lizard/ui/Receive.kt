@@ -42,8 +42,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import dev.lizard.readout.Readout
 
 // ai: The folds of the tool screens and Home's lists (HomeUnfinished, HomeFiles: the phone's Home, 2026-11-07), kept by
-// ai: each app under its own keys, closed until opened
-enum class FoldKey { RecvSettings, RecvExperimental, RecvTools, RecvCollapsed, SendSettings, SendExperimental, SendTools, SendCollapsed, HomeUnfinished, HomeFiles }
+// ai: each app under its own keys, closed until opened. Collapsed: the tool screens' column at its rail, one for Receive
+// ai: and Send (2026-11-07; each its own before)
+enum class FoldKey { RecvSettings, RecvExperimental, RecvTools, SendSettings, SendExperimental, SendTools, Collapsed, HomeUnfinished, HomeFiles }
 
 interface Folds {
     fun open(k: FoldKey): Boolean
@@ -117,10 +118,9 @@ fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
             Side(h)
         }
     } else {
-        // ai: the column's floor: Start or Stop, its one button (the received file's actions are the camera's area's)
-        val floor = RowFloor(listOf(listOf("Start", "Stop") to 20.dp))
-        ToolLandscape("Receive", h.folds.open(FoldKey.RecvCollapsed), { h.folds.toggle(FoldKey.RecvCollapsed) }, { h.goHome() },
-            if (h.swapInColumn) swap else null, h.width, floor, rail = { RailSquares(h) }, side = { Side(h) }) {
+        // ai: the column's floor, Send's too (columnFloor), so the column is the same on both screens
+        ToolLandscape("Receive", h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
+            if (h.swapInColumn) swap else null, h.width, columnFloor(h.width), rail = { RailSquares(h) }, side = { Side(h) }) {
             if (got) ReceivedPanel(h, Modifier.fillMaxSize(), column = 576.dp)
             else {
                 val w = minOf(maxHeight * ratio, maxWidth)

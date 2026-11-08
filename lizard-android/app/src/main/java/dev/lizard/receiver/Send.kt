@@ -551,7 +551,6 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override fun stop() = s.stop()
     override fun pause(on: Boolean) = s.pause(on)
     override val pauseShown get() = s.paused
-    override val fullscreen = false
     override fun toggleFull() {}
     // ai: what goes as elements from Start until Stop (lizard-ui SendRows.details, 2026-11-07; the state line "Sending
     // ai: <name>, <compressed> (<raw> raw)" over the rate before): the name, a spinner while it is made, Size, Files,
@@ -602,7 +601,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     // ai: the page only while paused; the collapser over it pauses and opens the page with the column
     override val codeAlone get() = on && !s.paused
     override val edgeTap = true
-    override fun leaveCodeAlone() { s.pause(true); if (a.isOpen("sendCollapsed")) a.toggle("sendCollapsed") }
+    override fun leaveCodeAlone() { s.pause(true); if (a.isOpen("collapsed")) a.toggle("collapsed") }
     override val codePadding = 16.dp
     // ai: the code's box, its shape the code's; while it holds the file upload, at least UPLOAD_ONE_ROW tall, so a 2:1
     // ai: box never hides the selection's card under its tiles (the card always there since 2026-11-07, "0 items" empty;

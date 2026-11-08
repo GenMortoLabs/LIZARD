@@ -73,7 +73,7 @@ interface SendHost {
     fun stop()
     fun pause(on: Boolean)
     val pauseShown: Boolean            // ai: Pause or Resume beside Stop (the desktop's while sending; the phone's paused)
-    val fullscreen: Boolean            // ai: a Fullscreen button (the desktop's; the phone's send is the whole screen)
+    val fullscreen: Boolean get() = width.fullscreen   // ai: a Fullscreen button (ColumnWidth.fullscreen)
     fun toggleFull()
     // ai: what goes, from Start until Stop (null otherwise): the file's or the test stream's block (Details: the name, a
     // ai: spinner while it is prepared, a row a fact), its rows the same from Start, so nothing moves as figures arrive
@@ -128,9 +128,9 @@ fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
                 code(if (size != null) Modifier.size(size.width, size.height) else Modifier.fillMaxWidth())
             }
             Side(h)
-        } else ToolLandscape("Send", h.folds.open(FoldKey.SendCollapsed), { h.folds.toggle(FoldKey.SendCollapsed) }, { h.goHome() },
+        } else ToolLandscape("Send", h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
             if (h.swapInColumn) ({ SwapBtn("Receiver") { h.goReceive() } }) else null, h.width,
-            sendRowFloor(h),
+            columnFloor(h.width),
             mainPadding = h.codePadding, room = h.edgeRoom, roomFill = h.codeFill, bare = h.codeAlone,
             rail = { SendRail(h) }, side = { Side(h) }) {
             val size = h.codeSize(maxWidth, maxHeight, false)
@@ -165,14 +165,10 @@ private fun CodeAlone(h: SendHost, code: @Composable (Modifier) -> Unit) {
     }
 }
 
-// ai: The Send column's floor: its widest row of buttons (Stop, Pause or Resume, Fullscreen where the platform has one)
-@Composable
-fun sendRowFloor(h: SendHost): Dp = RowFloor(listOfNotNull(listOf("Stop") to 16.dp, listOf("Pause", "Resume") to 16.dp, if (h.fullscreen) listOf("Fullscreen") to 16.dp else null))
-
 // ai: The Send column's width on a screen `screen` wide, as the landscape layout takes it (SideWidth: its default or
 // ai: the width its edge was dragged to, within its floor and three fifths of the screen)
 @Composable
-fun sendSideWidth(h: SendHost, screen: Dp): Dp = SideWidth(screen, h.width.dp, h.width.default(screen), sendRowFloor(h))
+fun sendSideWidth(h: SendHost, screen: Dp): Dp = SideWidth(screen, h.width.dp, h.width.default(screen), columnFloor(h.width))
 
 // ai: The column over the code alone (the desktop's full screen, 2026-11-07): the rail's collapser opens it over the
 // ai: code's left part, full screen kept (it was left before), the code keeping its size and format under it; the

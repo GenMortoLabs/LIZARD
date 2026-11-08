@@ -44,13 +44,15 @@ class DesktopFolds(private val app: App) : Folds {
     private var unfinishedOpen by mutableStateOf(Prefs.homeUnfinishedOpen)
     private var filesOpen by mutableStateOf(Prefs.homeFilesOpen)
     override fun open(k: FoldKey) = when (k) {
-        FoldKey.RecvSettings -> r.settingsOpen; FoldKey.RecvExperimental -> r.experimentalOpen; FoldKey.RecvTools -> r.toolsOpen; FoldKey.RecvCollapsed -> r.collapsed
-        FoldKey.SendSettings -> s.settingsOpen; FoldKey.SendExperimental -> s.experimentalOpen; FoldKey.SendTools -> s.toolsOpen; FoldKey.SendCollapsed -> s.collapsed
+        FoldKey.RecvSettings -> r.settingsOpen; FoldKey.RecvExperimental -> r.experimentalOpen; FoldKey.RecvTools -> r.toolsOpen
+        FoldKey.SendSettings -> s.settingsOpen; FoldKey.SendExperimental -> s.experimentalOpen; FoldKey.SendTools -> s.toolsOpen
+        FoldKey.Collapsed -> s.collapsed   // ai: one for both screens (2026-11-07), kept as Send's was (Prefs.collapsed)
         FoldKey.HomeUnfinished -> unfinishedOpen; FoldKey.HomeFiles -> filesOpen
     }
     override fun toggle(k: FoldKey) = when (k) {
-        FoldKey.RecvSettings -> r.toggleSettings(); FoldKey.RecvExperimental -> r.toggleExperimental(); FoldKey.RecvTools -> r.toggleTools(); FoldKey.RecvCollapsed -> r.toggleRail()
-        FoldKey.SendSettings -> s.toggleSettings(); FoldKey.SendExperimental -> s.toggleExperimental(); FoldKey.SendTools -> s.toggleTools(); FoldKey.SendCollapsed -> s.toggleRail()
+        FoldKey.RecvSettings -> r.toggleSettings(); FoldKey.RecvExperimental -> r.toggleExperimental(); FoldKey.RecvTools -> r.toggleTools()
+        FoldKey.SendSettings -> s.toggleSettings(); FoldKey.SendExperimental -> s.toggleExperimental(); FoldKey.SendTools -> s.toggleTools()
+        FoldKey.Collapsed -> s.toggleRail()
         FoldKey.HomeUnfinished -> { unfinishedOpen = !unfinishedOpen; Prefs.homeUnfinishedOpen = unfinishedOpen; Unit }
         FoldKey.HomeFiles -> { filesOpen = !filesOpen; Prefs.homeFilesOpen = filesOpen; Unit }
     }
@@ -58,6 +60,7 @@ class DesktopFolds(private val app: App) : Folds {
 
 // ai: The column's width on the desktop (2026-10-31: dragged as the phone's): the web's 20rem until its edge is dragged,
 // ai: kept in Prefs (sideDp), one width for Receive and Send; its rows of buttons never wider than the default's (2026-11-01).
+// ai: One floor for both too (columnFloor, 2026-11-07), counting Send's Fullscreen (fullscreen).
 // ai: Its edge a sash (2026-11-01): pulled under half the floor it closes to the rail, out from the rail it opens; no
 // ai: collapse button.
 class DesktopColumn : ColumnWidth {
@@ -65,6 +68,7 @@ class DesktopColumn : ColumnWidth {
     override var dragging by mutableStateOf(false)
     override val stretch = false
     override val sash = true
+    override val fullscreen = true
     override fun default(screen: Dp) = 320.dp
     override fun save() { Prefs.sideDp = dp }
 }

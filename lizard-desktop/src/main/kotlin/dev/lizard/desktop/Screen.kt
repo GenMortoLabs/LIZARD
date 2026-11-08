@@ -81,7 +81,6 @@ class DesktopSend(private val app: App) : SendHost {
     override fun stop() = s.stop()
     override fun pause(on: Boolean) = s.pause(on)
     override val pauseShown = true
-    override val fullscreen = true
     override fun toggleFull() = s.toggleFull()
     // ai: what goes as elements (SendState.details: Show statistics, Receive's own setting, names the rows it adds), the
     // ai: error a popup, and the spinner while a pick is walked or a bundle made (2026-11-07; the state line before)
