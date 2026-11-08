@@ -187,7 +187,7 @@ As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `glsl/back_transfor
 Formula and moments: section 1. The rule stage's soft pass, a dispatch a picture slot each (`glsl/back_tiers.mjs`):
 - **talign**, a workgroup a frame, a thread a block: the grid's shift by the pilots (each block's own tail against its
   known symbols and the block's sign from its own pilots' sum, zi = k zr (u dx + v dy) fitted by least squares twice,
-  kept where it stands `ALIGN_CHI` over the fit's residual variance), to the end of PILOT. A thread gathers its tail
+  kept wherever the fit stands, 8 pilots or more), to the end of PILOT. A thread gathers its tail
   once, straight-line (its index loads, then its S and UC loads); the first fit is about a zero shift, the second
   about the first's answer (the tail turned); each fit's seven sums over the 128 threads on 16 threads, then one.
 - **tsoft**, a workgroup an 8-sub-channel chunk of a frame, 256 threads = 8 sub-channels x 32 lanes x 10

@@ -8,12 +8,12 @@ import { STEP } from "../../sim/lizard_pick.mjs";
 // ai: 2 pi (u dx + v dy) / n. `talign` (one workgroup a frame, a thread a block, before the soft values in their pass
 // ai: and on their bind groups) reads every 7/8 and 3/4 block's 8 or 16 pilot coefficients (its tail, its last slots),
 // ai: each against its known symbol with the block's sign from its own pilots' sum, fits zi = k zr (u dx + v dy) by
-// ai: least squares twice (the second about the first's answer), and keeps the shift only where it stands ALIGN_CHI over the fit's residual variance (one
-// ai: chance in a thousand for noise), else 0, 0. It goes to the end of PILOT: PILOT[B blocksMax + 2 f] and the next.
+// ai: least squares twice (the second about the first's answer), and keeps the shift wherever the fit stands (8 pilots
+// ai: or more, its matrix invertible; the significance test ALIGN_CHI 13.8 went 2026-11-07, as the C's), else 0, 0. It
+// ai: goes to the end of PILOT: PILOT[B blocksMax + 2 f] and the next.
 // ai: The soft stage turns every coefficient back by it as it gathers (a turn leaves |y|, so the moments and the
 // ai: estimate read as before). UV's second half (from P.ucOff) is each coefficient's (u, v), u in the high 16 bits
 // ai: (signed), v in the low.
-export const ALIGN_CHI = 13.8;
 
 export const TIER_BLOCKS = 128;   // ai: blocks a frame at most (talign's and tblocks' lanes; the profile's top is 116)
 // ai: TT holds rows 0 to VERSIONS, the versions a word names (../wordcode.mjs VERSION_MAX); row 0 is zero (no format).

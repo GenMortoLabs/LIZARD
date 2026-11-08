@@ -1839,7 +1839,7 @@ frame (`lizard_phy.c:lizard_decode`, `lizard_acquire` then `lizard_finish`):
 7. **Erase and detrend**: the anchors' squares erased (6.13), the surface fitted (6.10).
 8. **Transform** along y a strip of 64 columns at a time, along x only the rows v < n / 2.
 9. **Pilot alignment, soft values, decline gate and LDPC** (8.5): the grid's shift fitted from the pilots' known
-   symbols and turned back where its chi-square passes 13.8 (`lizard_phy.c:pilot_align`).
+   symbols and turned back wherever the fit stands, 8 pilots or more (`lizard_phy.c:pilot_align`).
 10. **CRC-32C** (7.1).
 
 `lizard_acquire_quad`, `lizard_finish` and `lizard_finish_ext` take a quad, a sampled grid or soft values made elsewhere,

@@ -16,7 +16,7 @@
 // ai:     order of stop/rule.mjs scoreF32 and the trainer's (the WGSL leaves contraction to the driver);
 // ai:   a check's slot loops are unrolled ([[unroll]], GL_EXT_control_flow_attributes), as the drivers unroll naga's.
 import { VERSION, F16, STORAGE16, INT16, ATOMICS, UNROLL, uniformLoad, wgAdd, wgLoad, wgStore, wgXor } from "./common.mjs";
-import { TIER_BLOCKS, CHUNKS, KNOWN, NC, TTW, ALIGN_CHI, tierUniformWords } from "../plan/back_tiers.mjs";
+import { TIER_BLOCKS, CHUNKS, KNOWN, NC, TTW, tierUniformWords } from "../plan/back_tiers.mjs";
 import { SLOTS } from "../plan/common.mjs";
 import { CRC_CHUNKS } from "../wgsl/back_ldpc.mjs";
 
@@ -93,7 +93,7 @@ export const talignSource = ({ f16 = false, layout, codes }) => {
     for (const i of I) o += `    vec2 e${i} = ${z(i)};\n`;
     for (const i of I) o += `    sum += e${i}.x;\n`;
     o += `    float sg = sum < 0.0 ? -1.0 : 1.0;\n`;
-    for (const i of I) o += `    { float zr = sg * e${i}.x; float zi = sg * e${i}.y; vec2 uv = uvOf(u${i}); float cu = kk * zr * uv.x; float cv = kk * zr * uv.y; s0 += vec4(cu * cu, cu * cv, cv * cv, cu * zi); s1 += vec4(cv * zi, zi * zi, 0.0, 0.0); }\n`;
+    for (const i of I) o += `    { float zr = sg * e${i}.x; float zi = sg * e${i}.y; vec2 uv = uvOf(u${i}); float cu = kk * zr * uv.x; float cv = kk * zr * uv.y; s0 += vec4(cu * cu, cu * cv, cv * cv, cu * zi); s1 += vec4(cv * zi, 0.0, 0.0, 0.0); }\n`;
     return o + `    s1.z = float(cnt);\n`;
   };
   const decls = I.map((i) => `  vec2 z${i} = vec2(0.0);\n  uint u${i} = 0u;\n`).join("");
@@ -181,9 +181,8 @@ ${reduce(`    last0 = a0;\n    last1 = a1;\n`)}  if (t == 0u) {
     float det = a0.x * a0.z - a0.y * a0.y;
     if (a1.z >= 8.0 && det > 0.0) {
       vec2 e = vec2((a0.w * a0.z - a1.x * a0.y) / det, (a0.x * a1.x - a0.y * a0.w) / det);
-      float s2 = (a1.y - e.x * a0.w - e.y * a1.x) / (a1.z - 2.0);
       vec2 dd = d + e;
-      if (s2 > 0.0 && (dd.x * dd.x * a0.x + 2.0 * dd.x * dd.y * a0.y + dd.y * dd.y * a0.z) > ${ALIGN_CHI} * s2) { outv = dd; }
+      if (!any(isnan(dd))) { outv = dd; }
     }
     PILOT[P.B * P.blocksMax + 2u * f] = outv.x;
     PILOT[P.B * P.blocksMax + 2u * f + 1u] = outv.y;

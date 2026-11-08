@@ -200,11 +200,10 @@ static void map_in(const lizard_t *f, const struct lizard_ws *w, int t, int firs
 // ai: (known up to the block's sign, which the fit cancels: below): its imaginary part over its real one is the turn. The
 // ai: shift is the least squares fit of zi = k zr (u dx + v dy), k = 2 pi / n (each coefficient weighted by its own
 // ai: zr, so one that noise turned far counts little), fitted twice, the second time about the first's answer.
-// ai: It is taken only where the pilots tell it from no shift at all: d' M d over the fit's residual variance (M
-// ai: the fit's matrix) above ALIGN_CHI, a chance of one in a thousand for two numbers that are noise; a frame of
-// ai: few blocks, whose pilots say little, is left as it was read. Returns the pilots it used; d the shift or 0, 0.
+// ai: It is taken wherever the fit stands (8 pilots or more, its matrix invertible); the test that took it only where
+// ai: it stood out of the fit's noise (ALIGN_CHI 13.8, one chance in a thousand) went 2026-11-07: made for LIZARD-16's
+// ai: 32 pilot coefficients, it read +0.22% looser on today's formats. Returns the pilots it used; d the shift or 0, 0.
 #define ALIGN_TURNS 4096
-#define ALIGN_CHI 13.8
 // (u, v) back out of the packed index init() built: pos = (v / bw) n bw + ((u + n) % n) bw + v % bw.
 static inline void coef_uv(const lizard_t *f, int p, int *uu, int *vv) {
   const int n = f->n, bw = f->bw, nbw = n * bw, rem = p % nbw, uw = rem / bw;
@@ -286,10 +285,10 @@ static int pilot_align(const lizard_t *f, struct lizard_ws *w, float d[2]) {
   const int fast = f->bw == 64;
   const int64_t m = ((1ll << 31) + n - 1) / n;
 #endif
-  double dx = 0, dy = 0, a = 0, b = 0, c = 0, p = 0, q = 0, yy = 0;
+  double dx = 0, dy = 0, a = 0, b = 0, c = 0, p = 0, q = 0;
   int used = 0;
   for (int it = 0; it < 2; it++) {
-    a = b = c = p = q = yy = 0; used = 0;
+    a = b = c = p = q = 0; used = 0;
     for (int blk = 0; blk < f->blocks; blk++) {
       const ldpc_t *code = &f->code[f->block_tier[blk]];
       const int nb = block_bits(f, blk), first = f->block_slot[blk] / 2;
@@ -311,7 +310,7 @@ static int pilot_align(const lizard_t *f, struct lizard_ws *w, float d[2]) {
         const double xr = wh[2 * s] ? -1.0 : 1.0, xi = wh[2 * s + 1] ? -1.0 : 1.0;
         const double zr = yr * xr + yi * xi, zi = yi * xr - yr * xi;
         const double cu = k * zr * uu, cv = k * zr * vv;
-        a += cu * cu; b += cu * cv; c += cv * cv; p += cu * zi; q += cv * zi; yy += zi * zi;
+        a += cu * cu; b += cu * cv; c += cv * cv; p += cu * zi; q += cv * zi;
         used++;
       }
     }
@@ -319,11 +318,7 @@ static int pilot_align(const lizard_t *f, struct lizard_ws *w, float d[2]) {
     if (used < 8 || !(det > 0)) { d[0] = d[1] = 0; return used; }
     dx += (p * c - q * b) / det; dy += (a * q - b * p) / det;
   }
-  // ai: the last fit's residual variance (about its own answer), and the whole shift against it
-  const double det = a * c - b * b, ex = (p * c - q * b) / det, ey = (a * q - b * p) / det;
-  const double s2 = (yy - ex * p - ey * q) / (used - 2);
-  const double chi = s2 > 0 ? (dx * dx * a + 2 * dx * dy * b + dy * dy * c) / s2 : 0;
-  if (!(chi > ALIGN_CHI) || !(dx == dx) || !(dy == dy)) { d[0] = d[1] = 0; return used; }
+  if (!(dx == dx) || !(dy == dy)) { d[0] = d[1] = 0; return used; }
   d[0] = (float)dx; d[1] = (float)dy;
   return used;
 }
