@@ -1,5 +1,5 @@
 // ai: The Upload camera (2026-10-28, backends.h uploadOpen): a replay played as a camera, a .lizard (the phone's
-// ai: Download, liblizard/core/rx/lizfile.h) or a run's folder as Save replays leaves it, id upload:<path>. Never
+// ai: Download, liblizard/core/rx/lizfile.h), id upload:<path>, or a file:<path> that holds one (fileOpen). Never
 // ai: listed: Receive's Camera menu asks for the file. Its frames are the crops a receiver read: a 1:1 run's frames as
 // ai: they are; a 2:1 run's halves, two frames of one capture's time, set side by side (or one over the other, where
 // ai: their camera axes say the halves were stacked) into the frame the receiver's 2:1 crop takes them from again, a
@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -27,7 +28,7 @@ struct Capture { size_t a = 0, b = SIZE_MAX; double ms = NAN; };
 
 class UploadCamera : public Camera {
  public:
-  UploadCamera(std::string id, std::unique_ptr<lizfile::Reader> r) : r_(std::move(r)) {
+  UploadCamera(std::string id, const std::string& path, std::unique_ptr<lizfile::Reader> r) : r_(std::move(r)) {
     info_.id = std::move(id);
     const auto& fr = r_->frames();
     const bool two = r_->layout() == "2:1";
@@ -64,7 +65,7 @@ class UploadCamera : public Camera {
       std::nth_element(gaps.begin(), gaps.begin() + long(gaps.size() / 2), gaps.end());
       fps_ = 1000.0 / gaps[gaps.size() / 2];
     }
-    const std::string name = std::filesystem::u8path(info_.id.substr(7)).filename().u8string();
+    const std::string name = std::filesystem::u8path(path).filename().u8string();
     info_.name = name.empty() ? "Upload" : name;
     info_.backend = "upload";
     info_.detail = r_->layout() + ", " + std::to_string(caps_.size()) + " captures";
@@ -187,14 +188,29 @@ class UploadCamera : public Camera {
 
 }  // namespace
 
-std::unique_ptr<Camera> uploadOpen(const std::string& id, std::string& why) {
-  const std::string path = id.substr(std::strlen("upload:"));
+// ai: the replay at path played under id (upload:<path>, or file:<path> for one fileOpen found)
+static std::unique_ptr<Camera> uploadAt(const std::string& id, const std::string& path, std::string& why) {
   if (path.empty()) { why = "no file to upload"; return nullptr; }
   auto r = lizfile::Reader::open(path, why);
   if (!r) return nullptr;
-  auto c = std::make_unique<UploadCamera>(id, std::move(r));
+  auto c = std::make_unique<UploadCamera>(id, path, std::move(r));
   if (c->empty()) { why = path + " holds no capture to play"; return nullptr; }
   return c;
+}
+
+std::unique_ptr<Camera> uploadOpen(const std::string& id, std::string& why) { return uploadAt(id, id.substr(std::strlen("upload:")), why); }
+
+// ai: A file the receiver was handed (file:<path>, 2026-11-07): a .lizard (a ZIP: its first bytes PK, 3, 4) played as
+// ai: the Upload camera, anything else as an image or a video (media.cpp)
+std::unique_ptr<Camera> fileOpen(const std::string& id, std::string& why) {
+  const std::string path = id.substr(std::strlen("file:"));
+  if (path.empty()) { why = "no file"; return nullptr; }
+  std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
+  if (!in) { why = "cannot open " + path; return nullptr; }
+  char head[4] = {};
+  in.read(head, 4);
+  if (in.gcount() == 4 && head[0] == 'P' && head[1] == 'K' && head[2] == 3 && head[3] == 4) return uploadAt(id, path, why);
+  return mediaOpen(id, path, why);
 }
 
 }  // namespace lizard::cam

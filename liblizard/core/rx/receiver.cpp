@@ -123,6 +123,7 @@ class GpuReceiver : public Receiver {
   // ai: the camera's buffer is read in place only through the zero-copy ingest; a device without it (camera.h) takes
   // ai: the frame's luma plane, uploaded (enqueueLuma)
   bool wantsLuma() const override { return !zeroCopy; }
+  void waitForRoom(bool on) override { waits = on; }
   void record(std::shared_ptr<Replay> r) override { std::lock_guard<std::mutex> l(mu); rec = std::move(r); }
   void cameraClosed() override {
     std::unique_lock<std::shared_mutex> planHeld(planMu);   // ai: no push inside an enqueue meanwhile
@@ -157,6 +158,7 @@ class GpuReceiver : public Receiver {
   std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
   double now() const { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - epoch).count(); }
   std::atomic<bool> zeroCopy{false}, recovering{false};
+  std::atomic<bool> waits{false};          // ai: waitForRoom: a file's frames held for room, not dropped
   bool build(std::string& why);
   std::atomic<bool> stop{false};
   std::thread decoderThread, releaserThread;
@@ -360,13 +362,20 @@ void GpuReceiver::push(const CameraFrame& f) {
   // ai: handler may call back into the receiver)
   bool dropped = false;
   {
-    std::lock_guard<std::mutex> l(mu);
+    std::unique_lock<std::mutex> l(mu);
     if (!opened) openWindow(now);
     win.arrived++;
     stamps.put(f.tag, f.timestampNs, stream);
-    if (side == failedW) dropped = true;
+    if (side > shapeW && side != failedW) { shapeW = side; planned = false; failedW = 0; }
+    // ai: a file's frame (waitForRoom) waits here for the plan, the staging's room and the end of a recover, looked at
+    // ai: every 2 ms (the decoder thread takes the staging without a word); a stop or a side the plan refused still drops
+    if (waits)
+      while (!stop && side != failedW && (!planned || recovering || (int)staging.size() + crops > STAGE_BATCHES * batchSize)) {
+        if (!planned) cv.notify_all();
+        cv.wait_for(l, std::chrono::milliseconds(2));
+      }
+    if (side == failedW || stop) dropped = true;
     else {
-      if (side > shapeW) { shapeW = side; planned = false; failedW = 0; }
       if (!planned) {
         // ai: no ring covers this crop yet (the first frame, or a larger one than the plan's): the decoder thread
         // ai: plans on shapeW, and frames meanwhile are dropped, never held (the camera's pool is the reader's images,
@@ -685,8 +694,9 @@ class CpuReceiver : public Receiver {
   // ai: The workers stop before the transfer they feed goes, and while `pool` still points at the pool: a frame in a
   // ai: worker's hand ends in done(), whose rollWindow ticks the pool (a reset alone cleared the pointer first, a race
   // ai: ThreadSanitizer found through the library, 2026-10-03).
-  ~CpuReceiver() override { if (pool) pool->stop(); pool.reset(); }
+  ~CpuReceiver() override { closing = true; if (pool) pool->stop(); pool.reset(); }
   void push(const CameraFrame& f) override;
+  void waitForRoom(bool on) override { waits = on; }
   std::string stats() override;
   std::vector<double> series(double sinceMs) override { std::lock_guard<std::mutex> l(mu); return stamps.since(held.load(), sinceMs); }
   void batchCap(int) override {}   // ai: a frame at a time already
@@ -705,6 +715,7 @@ class CpuReceiver : public Receiver {
   // ai: the workers' frames go into it one at a time under its own lock (xfer_rx.h)
   std::shared_ptr<XferRx> xfer;
   std::unique_ptr<CpuPool> pool;
+  std::atomic<bool> waits{false}, closing{false};   // ai: waitForRoom; the receiver going (a waiting push lets go)
   std::mutex devMu;              // ai: guards `developed`, a raw frame's luma while its push runs
   std::vector<uint8_t> developed;
   std::mutex mu;           // ai: guards the stats window, the word and the error
@@ -780,7 +791,19 @@ void CpuReceiver::push(const CameraFrame& in) {
       { std::lock_guard<std::mutex> l(mu); flight.push_back(f.tag); }
       float a[2];
       axisOf(f, c, k, a);
-      if (pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.side, c.side, f.tag, held.load(), t, a[0], a[1])) {
+      bool took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.side, c.side, f.tag, held.load(), t, a[0], a[1]);
+      if (!took && waits) {
+        // ai: a file's frame (waitForRoom) waits for a worker, offered again each millisecond (a worker booting, or busy);
+        // ai: the wait counts once as the pressure a lost frame is, so the pool grows to meet a file as a camera's would
+        double share;
+        { std::lock_guard<std::mutex> l(mu); share = repeatShare; }
+        pool->lost(share);
+        while (!took && !closing) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.side, c.side, f.tag, held.load(), t, a[0], a[1]);
+        }
+      }
+      if (took) {
         // ai: Save replays: the crop a worker took, as it took it
         if (r) r->frame(f.luma + (size_t)c.y[k] * f.stride + c.x[k], c.side, c.side, f.stride, f.timestampNs / 1e6, false, a[0], a[1]);
         continue;

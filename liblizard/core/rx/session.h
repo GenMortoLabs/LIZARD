@@ -65,7 +65,8 @@ class Session {
   Done prepare();
   // ai: The camera by id (the one open before stopped and closed; the same id open already: nothing). "" is the first
   // ai: listed; an id that does not open and is not listed (a camera unplugged since it was chosen) the first listed in
-  // ai: its place (said in the log), but a phone typed by its address (phone:<ipv4>:<port>) or an upload (upload:<path>),
+  // ai: its place (said in the log), but a phone typed by its address (phone:<ipv4>:<port>), an upload (upload:<path>) or a
+  // ai: file (file:<path>: an image, a video or a .lizard, backends.h fileOpen),
   // ai: which no list holds. The cameras are listed only then (a listing probes devices and listens for phones). Its
   // ai: kept settings are taken up (zoom for the crop, exposure, gain: set after each start). A refusal is the phase's
   // ai: Error ("No camera was found." where none is listed).
@@ -100,7 +101,7 @@ class Session {
   // ai: The transfer in hand and its file let go (receiver.h clear), so the same file in the light is received anew
   // ai: (another transfer's finished file not yet taken out stays).
   Done clear();
-  // ai: Save replays on or off: a run recorded while on and the camera On (an upload's never: it is a replay), ended
+  // ai: Save replays on or off: a run recorded while on and the camera On (an upload's or a file's never), ended
   // ai: when either stops; meta, a JSON object of the platform's own fields for the run's meta.json (the app's build).
   // ai: A run that ends whole lets the runs before it go.
   Done replays(bool on, const std::string& meta);

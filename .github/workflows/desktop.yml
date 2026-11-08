@@ -102,6 +102,24 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive dpkg -i ~/mingw-debs/*.deb
           x86_64-w64-mingw32-g++-posix --version | head -1
 
+      # FFmpeg's decoding libraries for the file camera (liblizard/ffmpeg/build.sh: the pinned release, its SHA-256 checked;
+      # decoders only, LGPL), Windows' cross-built here before the library that compiles against its headers; cached by
+      # the script's hash
+      - name: FFmpeg for Windows (cached)
+        id: ffmpeg-win
+        uses: actions/cache@v4
+        with:
+          path: liblizard/build/ffmpeg/windows
+          key: ffmpeg-windows-${{ hashFiles('liblizard/ffmpeg/build.sh') }}
+
+      - name: FFmpeg for Windows
+        if: steps.ffmpeg-win.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends nasm
+          liblizard/ffmpeg/build.sh windows
+
       - name: Windows' native library and the receiver's tools (MinGW-w64)
         timeout-minutes: 20
         run: |
@@ -133,6 +151,8 @@ jobs:
             lizard-desktop/build/win/cam_check.exe
             lizard-desktop/build/win/lizard_receive.exe
             lizard-desktop/build/win/extra/
+            liblizard/build/ffmpeg/windows/bin/*.dll
+            liblizard/build/ffmpeg/windows/licenses/
 
   linux:
     needs: tree
@@ -148,6 +168,22 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: tree
+
+      # FFmpeg for the file camera (liblizard/ffmpeg/build.sh linux; nasm for its x86 kernels), cached by the script's hash
+      - name: FFmpeg (cached)
+        id: ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: liblizard/build/ffmpeg/linux
+          key: ffmpeg-linux-${{ hashFiles('liblizard/ffmpeg/build.sh') }}
+
+      - name: FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: |
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends nasm zlib1g-dev
+          liblizard/ffmpeg/build.sh linux
 
       # libturbojpeg: no header, its calls declared in liblizard/core/cam/jpeg.cpp and opened at run time, for the checks' MJPEG
       # cases (the package's Depends carry it for the app: packaging/deb-deps.sh)
@@ -350,6 +386,20 @@ jobs:
         run: |
           brew install libusb aravis
           lizard-desktop/packaging/macos-extra.sh lizard-desktop/build/native/extra
+
+      # FFmpeg for the file camera (liblizard/ffmpeg/build.sh macos: arm64, install names on @loader_path), cached by the
+      # script's hash
+      - name: FFmpeg (cached)
+        id: ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: liblizard/build/ffmpeg/macos
+          key: ffmpeg-macos-${{ hashFiles('liblizard/ffmpeg/build.sh') }}
+
+      - name: FFmpeg
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: liblizard/ffmpeg/build.sh macos
 
       - name: The native library, the C's tools and the receiver's
         id: native

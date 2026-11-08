@@ -50,7 +50,9 @@ reference the engine's C++ lock (`core/rx/phase_lock`) is held to; neither app c
    library's own folder, then the system's; Android's back cameras through Camera2's NDK, the camera's own buffer
    sampled in place by the GPU decoder; a phone streaming to the machine, over a tether or as an Android Open Accessory
    through libusb-1.0 loaded at run time, `LIZ_LIBUSB`, else the library's own folder, then the system's; a `.lizard`
-   replay played as a camera; the simulated camera of `LIZ_CAMERA_SIM`) into a receiver, and does
+   replay played as a camera; an image or a video file played as a camera, `file:<path>`, each of its frames decoded,
+   through FFmpeg's decoding libraries loaded at run time, `LIZ_FFMPEG`, else the library's own folder, then the
+   system's, built by `ffmpeg/build.sh`; the simulated camera of `LIZ_CAMERA_SIM`) into a receiver, and does
    around it what every receiving app does: the phase a screen shows, the camera's settings kept per camera, a verified
    file taken out of the store into the data folder's `kept/` for the app to place (`liz_kept`, `liz_kept_placed`), the
    camera stopped once a file is in, one session a data folder, Save replays, the stats and the preview; on a camera

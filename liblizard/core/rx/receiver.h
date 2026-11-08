@@ -73,8 +73,14 @@ class Receiver {
   // ai: transfer keeps the log it was made with (the first receiver's config's), which must outlive the new receiver.
   static std::unique_ptr<Receiver> create(const ReceiverConfig& c, std::function<void(uint64_t tag)> release, Receiver& from);
   virtual ~Receiver() = default;
-  // ai: Never blocks on the device: a frame that cannot be taken is released at once (dropped, counted).
+  // ai: Never blocks on the device: a frame that cannot be taken is released at once (dropped, counted). With
+  // ai: waitForRoom on, it waits instead until a decoder can take it.
   virtual void push(const CameraFrame& f) = 0;
+  // ai: A source whose frames may wait (a file's, cam::Camera::waits; 2026-11-07): push holds a frame until a decoder can
+  // ai: take it (a worker idle, the GPU's plan made and its staging under its bound) rather than drop it, so every frame
+  // ai: is decoded, as fast as the decoders go; the CPU pool still grows by the frames that waited, as by those a camera
+  // ai: loses. A stop, or a frame no decoder can take (a crop the GPU could not plan), is still dropped. Off, a camera's.
+  virtual void waitForRoom(bool on) { (void)on; }
   // ai: The page's snapshot as JSON: state, decoder, fps (camera, processed), goodput, blocks, the transfer's
   // ai: progress and file, the format last read, the GPU's ms a frame; the field names the web receiver's stats row uses
   // ai: where they mean the same (lizard-web/recv.mjs). `windowSecs`: the length of the window the goodput and

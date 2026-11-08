@@ -911,6 +911,8 @@ struct Session::Impl {
         camera->receiverWants(r->r->wantsLuma());
       } catch (const std::exception&) {
       }
+      // ai: a file's frames held for a decoder, a camera's dropped when none is free (camera.h waits)
+      r->r->waitForRoom(camera->waits());
     }
     armLock();
     // ai: set before the start, so a stream that ends at once (its Ended on the capture thread before start returns)
@@ -1117,7 +1119,7 @@ struct Session::Impl {
 #else
     const bool stuck = false;
 #endif
-    const bool typed = (id.rfind("phone:", 0) == 0 && id.rfind("phone:usb:", 0) != 0) || id.rfind("upload:", 0) == 0 || stuck;
+    const bool typed = (id.rfind("phone:", 0) == 0 && id.rfind("phone:usb:", 0) != 0) || id.rfind("upload:", 0) == 0 || id.rfind("file:", 0) == 0 || stuck;
     if (!first && !typed) {
       std::vector<std::string> notes;
       std::vector<cam::Info> listed;
@@ -1521,16 +1523,16 @@ struct Session::Impl {
       } catch (const std::exception&) {
       }
     }
-    // ai: a stream that ended by itself (a camera unplugged, a device's error, an upload played): the camera closed as
-    // ai: well as stopped, so the next start opens it again by its id (one unplugged and plugged in again is a new
-    // ai: device behind the same id); an upload's end is its file's, no error
+    // ai: a stream that ended by itself (a camera unplugged, a device's error, an upload or a file played): the camera
+    // ai: closed as well as stopped, so the next start opens it again by its id (one unplugged and plugged in again is a
+    // ai: new device behind the same id); an upload's or a file's end is its file's, no error
     std::string end;
     {
       std::lock_guard<std::mutex> l(endMu);
       end = ended;
     }
     if (camera && !streaming && !end.empty()) {
-      const bool upload = backend == "upload";
+      const bool upload = backend == "upload" || backend == "file";
       const uint64_t g = genNow();
       const bool was = running();
       closeLocked();
@@ -1849,7 +1851,7 @@ struct Session::Impl {
   }
 
   void replayTick() {
-    const bool want = replaysOn && phaseNow() == Phase::On && backend != "upload" && current();
+    const bool want = replaysOn && phaseNow() == Phase::On && backend != "upload" && backend != "file" && current();
     if (want && !recording && !replayRefused) beginReplay();
     else if (!want && recording) endReplay(false);
     if (recording && nowNs() - lastRow >= 1'000'000'000) {

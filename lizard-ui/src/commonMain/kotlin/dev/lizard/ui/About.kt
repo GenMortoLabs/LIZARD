@@ -30,6 +30,7 @@ val CREDITS = listOf(
     Credit("Zstandard", "BSD 3-Clause"),
     Credit("volk", "MIT"),
     Credit("JSON for Modern C++", "MIT"),
+    Credit("FFmpeg", "LGPLv2.1+"),
     Credit("Inter", "SIL OFL 1.1"),
     Credit("JetBrains Mono", "SIL OFL 1.1"),
 )

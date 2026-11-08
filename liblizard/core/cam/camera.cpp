@@ -105,6 +105,7 @@ std::unique_ptr<Camera> open(const std::string& id, std::string& why) {
   if (is("phone:")) return said(phoneOpen(id, why));
 #endif
   if (is("upload:")) return said(uploadOpen(id, why));
+  if (is("file:")) return said(fileOpen(id, why));
   if (is("sim:")) return said(simOpen(id, why));
   why = "no camera " + id;
   return nullptr;

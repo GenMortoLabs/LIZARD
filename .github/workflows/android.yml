@@ -71,6 +71,20 @@ jobs:
       - name: The GPU tree
         run: lizard-android/build.sh gen
 
+      # FFmpeg for the file camera (liblizard/ffmpeg/build.sh android: arm64, 16 KB pages), packed beside libliz.so by
+      # Gradle; cached by the script's hash
+      - name: FFmpeg for Android (cached)
+        id: ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: liblizard/build/ffmpeg/android
+          key: ffmpeg-android-${{ hashFiles('liblizard/ffmpeg/build.sh') }}
+
+      - name: FFmpeg for Android
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        timeout-minutes: 20
+        run: lizard-android/build.sh ffmpeg
+
       - name: The signing key
         env:
           KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}

@@ -69,10 +69,10 @@ struct Info {
   // ai: unique across backends and stable across runs where the system allows (a saved choice finds it again):
   // ai: v4l2:<the /dev/v4l/by-id link, else the node>, mf:<symbolic link>, avf:<unique id>, aravis:<Aravis's device
   // ai: id, vendor-model-serial>, sim:0 (the simulated camera, LIZ_CAMERA_SIM), upload:<path> (a replay played, never
-  // ai: listed)
+  // ai: listed), file:<path> (an image, a video or a replay, never listed; backends.h fileOpen)
   std::string id;
   std::string name;         // ai: the device's own
-  std::string backend;      // ai: uvc, aravis, phone, upload or sim
+  std::string backend;      // ai: uvc, aravis, phone, upload, file or sim
   std::string detail;       // ai: the bus, the driver
 };
 
@@ -145,6 +145,10 @@ class Camera {
   using StatsJson = std::function<std::string()>;
   virtual void readBack(Series series, StatsJson stats) { (void)series; (void)stats; }
 
+  // ai: Whether this source's frames may wait for the receiver (a file's, media.cpp, 2026-11-07: no light goes by while a
+  // ai: frame waits), so the session has the receiver hold each frame for a decoder rather than drop it
+  // ai: (Receiver::waitForRoom) and every frame is decoded, as fast as the decoders go; false, a camera's: never held
+  virtual bool waits() const { return false; }
   // ai: What a camera that can hand over either is told before each start (the session's, from the receiver: receiver.h
   // ai: wantsLuma): luma bytes (the C, the PC stream) or the camera's own buffer (the GPU decoder's zero copy). Android
   // ai: picks its reader's format and usage by it; every other camera hands luma whatever this says.

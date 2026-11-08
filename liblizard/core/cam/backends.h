@@ -45,9 +45,14 @@ std::vector<Info> phoneList(std::vector<std::string>* notes);
 std::string phoneStamp();   // ai: the beacons heard and the USB devices (camera.h listStamp)
 std::unique_ptr<Camera> phoneOpen(const std::string& id, std::string& why);
 #endif
-// ai: upload.cpp: a replay played as a camera (upload:<path>: a .lizard, or a run's folder; 2026-10-28), never listed:
-// ai: the receiver names the file; every system
+// ai: upload.cpp: a replay played as a camera (upload:<path>: a .lizard; 2026-10-28), never listed: the receiver names
+// ai: the file; every system. fileOpen: a file the receiver was handed (file:<path>, 2026-11-07): a .lizard as uploadOpen
+// ai: plays one, else mediaOpen's
 std::unique_ptr<Camera> uploadOpen(const std::string& id, std::string& why);
+std::unique_ptr<Camera> fileOpen(const std::string& id, std::string& why);
+// ai: media.cpp: an image or a video played as a camera (2026-11-07): its frames' luma, each held for the receiver
+// ai: (Camera::waits) and handed over as fast as it takes them; backend "file", never listed; every system
+std::unique_ptr<Camera> mediaOpen(const std::string& id, const std::string& path, std::string& why);
 // ai: sim.cpp: the simulated camera (sim:0), listed only where LIZ_CAMERA_SIM is set; its value is scene.h parse's
 // ai: spec, plus the camera's own keys: camfps (its frame rate, 60), camppm (its clock against the host's, 0), format
 // ai: (the Pix its frames come in, grey by default: yuyv, nv12, mjpeg exercise luma.h and jpeg.h)
