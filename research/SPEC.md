@@ -1920,9 +1920,10 @@ Numbers are kept so references hold; closed items are gone.
   reference's check (`scripts/exp/pilot_check.mjs`, `liblizard/test/pilot_wasm.mjs`); LIZARD-288's r2 read by the GPU
   decoder on clean captures of one paint, 0.83 to 0.86, is under the check's 0.9 where the C's is not.
 - **Item 29. The transfer's header version 4, the condition for leaving beta.**
-  - Compression is the default client's, for convenience, not the format's (as it is not QR's): the pinned compressor
-    of 7.6 goes; the manifest carries each chunk's bytes as sent by a hash, so that a receiver holding symbols of one
-    compression knows whether the symbols on air are of the same bytes.
+  - zstd leaves the transfer: the header's codec field (7.7) and 7.6's frames go, a chunk's fountain carrying the bytes
+    the transfer is handed, its length, root and chaining values theirs. Compression is a client's, applied to a file
+    before it enters the transfer (the default client's zstd, for convenience), as it is not QR's: it does not affect
+    the PHY. The codes, the fountain and the transfer's layouts stay sealed.
   - No encryption or signing: neither is part of the format, as neither is part of QR; an application over it may add
     its own.
 
