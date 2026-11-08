@@ -1,14 +1,19 @@
 package dev.lizard.receiver
 
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.OpenableColumns
 import android.util.Log
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.lizard.Session
@@ -102,6 +107,73 @@ class ReceiveState(private val a: MainActivity) {
     var camId by mutableStateOf("")                   // ai: the camera open (no "android:")
         private set
 
+    // ai: A file played as the camera (2026-11-07, liblizard/core/cam/media.cpp): an image, a video or a .lizard picked by
+    // ai: Settings' Camera menu's File (the system's picker), copied into the cache (receive/, the one before deleted)
+    // ai: and opened as file:<path> until a lens is chosen again; no permission or preview surface wanted, its frames
+    // ai: shown from the session's preview (pull). Not kept across the app's starts.
+    class Picked(val path: String, val name: String)
+    var file by mutableStateOf<Picked?>(null)
+        private set
+    var loadingFile by mutableStateOf(false)          // ai: a picked file being copied in
+        private set
+    fun chooseFile(uri: Uri) {
+        stop()   // ai: the camera running stopped while the file is copied in
+        loadingFile = true
+        opening = true
+        phaseTo(RxPhase.Starting)
+        Thread({
+            val got = runCatching { copyIn(uri) }
+            main.post {
+                loadingFile = false
+                opening = false
+                got.onSuccess { p -> file = p; preview = null; start() }
+                    .onFailure { e -> phaseTo(RxPhase.Error("File not read: ${e.message ?: "no data"}")) }
+            }
+        }, "lizard-file").start()
+    }
+    private fun copyIn(uri: Uri): Picked {
+        val name = a.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }?.takeIf { it.isNotBlank() } ?: "file"
+        val dir = File(a.cacheDir, "receive").apply { mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+        val f = File(dir, name.replace('/', '_'))
+        a.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } } ?: error("no data")
+        return Picked(f.path, name)
+    }
+    // ai: a lens chosen again (Settings' Camera): the file let go, its copy deleted
+    fun leaveFile() {
+        file?.let { File(it.path).delete() }
+        file = null
+        preview = null
+    }
+
+    // ai: A file's frames as the decoder reads them (session.h preview: the newest crop, grey, PREVIEW px on its long side
+    // ai: at most), pulled at each frame the screen draws while it plays (AndroidReceive's file picture), into one of two
+    // ai: bitmaps in turn
+    var preview by mutableStateOf<ImageBitmap?>(null)
+        private set
+    private val pbuf = ByteArray(PREVIEW * PREVIEW)
+    private var pseq = 0L
+    private var pixels = IntArray(0)
+    private val bitmaps = arrayOfNulls<Bitmap>(2)
+    private var flip = 0
+    fun pull() {
+        if (phase != RxPhase.On || file == null) return
+        val got = use { runCatching { it.preview(pseq, PREVIEW, pbuf) }.getOrNull() } ?: return
+        if (got.size < 3) return
+        val w = got[1].toInt()
+        val h = got[2].toInt()
+        if (w <= 0 || h <= 0 || w.toLong() * h > pbuf.size) return
+        pseq = got[0]
+        if (pixels.size != w * h) pixels = IntArray(w * h)
+        for (i in 0 until w * h) { val v = pbuf[i].toInt() and 255; pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v }
+        flip = flip xor 1
+        val bm = bitmaps[flip]?.takeIf { it.width == w && it.height == h } ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bitmaps[flip] = it }
+        bm.setPixels(pixels, 0, w, 0, 0, w, h)
+        preview = bm.asImageBitmap()
+    }
+
     init {
         Native.load()
         listLenses()
@@ -184,7 +256,7 @@ class ReceiveState(private val a: MainActivity) {
         opening = true
         phaseTo(RxPhase.Starting)
         val st = a.settings
-        val want = if (st.camera.isEmpty()) "" else "android:${st.camera}"
+        val want = file?.let { "file:" + it.path } ?: if (st.camera.isEmpty()) "" else "android:${st.camera}"
         val named = chosen
         chosen = null
         later {
@@ -203,6 +275,13 @@ class ReceiveState(private val a: MainActivity) {
             // ai: open camera of the same id, so a start after a stop went on in the same open; closed first, it opens again
             s.closeCamera()
             s.open(want)
+            // ai: a file: no preview surface to hand over and one mode, its own; started as soon as it opened
+            if (want.startsWith("file:")) {
+                val opened = parse(runCatching { s.camera }.getOrDefault(""))?.obj("info") != null
+                synchronized(startMu) { if (g == gen && opened) s.start("") }
+                main.post { if (g == gen) opening = false }
+                return
+            }
             // ai: the open done: the session's commands run in order, and the hand-over of the surface it holds waits for
             // ai: its turn (nothing changes for the camera); then the camera's answer, or none where the open refused (the
             // ai: phase's error says why)
@@ -500,6 +579,7 @@ class ReceiveState(private val a: MainActivity) {
     }
 
     companion object {
+        const val PREVIEW = 720   // ai: a file's preview's long side at most, px (the desktop's)
         // ai: the session's unfinished transfers (session.h partials), Home's Unfinished
         fun partialsOf(dataDir: File): List<Partial> = dev.lizard.ui.partialsOf(Session.partials(dataDir.path))
     }

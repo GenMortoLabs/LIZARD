@@ -17,6 +17,8 @@ const NOTICES = [
   ["Vulkan headers (liblizard/core/third_party/vulkan-headers)", "liblizard/core/third_party/vulkan-headers/LICENSE.md"],
   ["Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1", "liblizard/vendor/fonts/inter/LICENSE.txt"],
   ["JetBrains Mono (liblizard/vendor/fonts/jetbrains-mono), under the SIL Open Font License 1.1", "liblizard/vendor/fonts/jetbrains-mono/OFL.txt"],
+  // ai: FFmpeg, carried beside the native core (liblizard/ffmpeg/build.sh android writes it, headed with its source)
+  ["", "liblizard/build/ffmpeg/android/licenses/ffmpeg.txt"],
 ];
 
 const text = NOTICES.map(([t, f]) => (t ? `${t}\n\n` : "") + readFileSync(join(ROOT, f), "utf8").trimEnd()).join(`\n\n${"-".repeat(78)}\n\n`) + "\n";

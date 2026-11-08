@@ -59,6 +59,9 @@ android {
     androidResources { noCompress += listOf("spv", "bin", "json") }
     // ai: native libs uncompressed and 16 KB aligned in the APK
     packaging { jniLibs { useLegacyPackaging = false } }
+    // ai: the file camera's FFmpeg (../liblizard/ffmpeg/build.sh android, made by ./build.sh apk): libavutil, libavcodec and
+    // ai: libavformat beside libliz.so, loaded at run time by the core (core/cam/media.cpp)
+    sourceSets.getByName("main").jniLibs.srcDir(rootProject.layout.projectDirectory.dir("../liblizard/build/ffmpeg/android/jniLibs"))
 }
 
 kotlin {

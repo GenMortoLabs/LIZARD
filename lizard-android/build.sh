@@ -8,6 +8,9 @@
 #                        ./build.sh), wgsl2spv and glslang 16.6.0 (tools), and spirv-val and glslc: the NDK's
 #                        shader-tools (ANDROID_NDK_HOME, else $ANDROID_HOME/ndk/27.1.12297006, else
 #                        ~/Android/Sdk/ndk/27.1.12297006), else SPIRV-Tools and shaderc on the PATH
+#   ./build.sh ffmpeg    FFmpeg's decoding libraries for the phone (../liblizard/ffmpeg/build.sh android, the pinned release
+#                        fetched and checked): ../liblizard/build/ffmpeg/android, the file camera's (core/cam/media.cpp);
+#                        android, apk and install make it first where it is not there
 #   ./build.sh linux     ../liblizard/core for this desktop: build/linux/lizard_gpu_check (the 4090, the iGPU, lavapipe)
 #   ./build.sh android   ../liblizard/core for the phone with the NDK: build/android/lizard_gpu_check (arm64, API 29)
 #   ./build.sh phone [cmd...]   the phone build and out/ pushed to /data/local/tmp/lizard over adb, then cmd run there
@@ -21,6 +24,8 @@ LIB=../liblizard; OUT=$LIB/out; RESEARCH=../research
 NDK=${ANDROID_NDK_HOME:-${ANDROID_HOME:-$HOME/Android/Sdk}/ndk/27.1.12297006}
 PHONE=/data/local/tmp/lizard
 step=${1:-}; shift || true
+# ai: the phone's FFmpeg (the file camera's images and videos), made once
+ffmpeg_libs() { [ -f $LIB/build/ffmpeg/android/jniLibs/arm64-v8a/libavformat.so ] || $LIB/ffmpeg/build.sh android; }
 # ai: glslang for gen's GLSL modules (../liblizard/gen/gen.mjs GLSLANG): a module is named by its source, so the
 # ai: compiler is pinned; the release's own builds, each checked by the sha256 the release states for it
 GLSLANG=16.6.0
@@ -49,11 +54,15 @@ case $step in
   gen)
     node $LIB/gen/gen.mjs "$@"
     ;;
+  ffmpeg)
+    $LIB/ffmpeg/build.sh android
+    ;;
   linux)
     cmake -S $LIB/core -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null
     cmake --build build/linux -j"$(nproc)"
     ;;
   android)
+    ffmpeg_libs
     cmake -S $LIB/core -B build/android -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a \
       -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_static -DCMAKE_BUILD_TYPE=Release >/dev/null
     cmake --build build/android -j"$(nproc)"
@@ -71,10 +80,12 @@ case $step in
     adb shell "cd $PHONE && LIZ_OUT=out LIZ_BARCODE=research LIZ_CACHE=$PHONE/pipeline.cache ./lizard_gpu_check ${*:-info}"
     ;;
   apk)
+    ffmpeg_libs
     ./gradlew assembleDebug "$@"
     ;;
   install)
     adb get-state >/dev/null || { echo "no phone on adb (plug it in, USB debugging on)" >&2; exit 1; }
+    ffmpeg_libs
     ./gradlew installDebug "$@"
     adb shell pm grant dev.fosslabs.lizard android.permission.CAMERA
     ;;
