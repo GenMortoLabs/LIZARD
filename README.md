@@ -498,12 +498,11 @@ Install USB driver binds.
 LIZARD leaves beta when the transfer's header version 4 is in (SPEC 13, item 29), the last format change planned before
 1.0:
 
-- **Compression.** Every receiver decodes zstd frames (RFC 8878); a sender compresses a chunk or not, with any
-  compressor. Today the format pins one compressor's output (zstd 1.5.7 at level 9) so that a resumed transfer's
-  symbols stay valid; instead the manifest will carry a hash of each chunk's bytes as sent.
+- **Compression, the default client's.** Today the transfer pins one compressor's output (zstd 1.5.7 at level 9) so
+  that a resumed transfer's symbols stay valid; instead the manifest will carry a hash of each chunk's bytes as sent.
 
-Encryption and signing are not part of LIZARD, as they are not part of QR: an application that carries files over it
-may add its own.
+Compression, encryption and signing are not part of LIZARD, as they are not part of QR: the default client compresses
+with zstd for convenience, and an application that carries files over it may add its own.
 
 ## Layout
 
