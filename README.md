@@ -501,10 +501,9 @@ LIZARD leaves beta when the transfer's header version 4 is in (SPEC 13, item 29)
 - **Compression.** Every receiver decodes zstd frames (RFC 8878); a sender compresses a chunk or not, with any
   compressor. Today the format pins one compressor's output (zstd 1.5.7 at level 9) so that a resumed transfer's
   symbols stay valid; instead the manifest will carry a hash of each chunk's bytes as sent.
-- **Protection, optional and in suites.** A passphrase (Argon2id, then AES-256-GCM-SIV); recipients' public keys
-  (ML-KEM-1024 with X25519, then AES-256-GCM-SIV); signing (ML-DSA-87 with Ed25519). Under encryption the file's name,
-  type and root are hidden too. A range of suite numbers is left for private use, for integrations with their own
-  needs.
+
+Encryption and signing are not part of LIZARD, as they are not part of QR: an application that carries files over it
+may add its own.
 
 ## Layout
 
