@@ -275,10 +275,12 @@ class ReceiveState(private val a: MainActivity) {
             // ai: open camera of the same id, so a start after a stop went on in the same open; closed first, it opens again
             s.closeCamera()
             s.open(want)
-            // ai: a file: no preview surface to hand over and one mode, its own; started as soon as it opened
+            // ai: a file: no preview surface to hand over and one mode, its own; the start queued behind the open (the
+            // ai: session's commands run in order, and a start after an open that failed keeps the open's sentence). The
+            // ai: camera's description is not read here: the open is queued, so it may still be the camera before (the
+            // ai: first pick read the closed lens's and never started)
             if (want.startsWith("file:")) {
-                val opened = parse(runCatching { s.camera }.getOrDefault(""))?.obj("info") != null
-                synchronized(startMu) { if (g == gen && opened) s.start("") }
+                synchronized(startMu) { if (g == gen) s.start("") }
                 main.post { if (g == gen) opening = false }
                 return
             }
@@ -531,8 +533,8 @@ class ReceiveState(private val a: MainActivity) {
     }
 
     // ai: One hint, the first that holds, while the camera reads a word (dev.lizard.ui hintOf; the desktop's rules): a
-    // ai: camera the phase lock holds takes no rate hint
-    fun hint(j: JsonObject?): Warn? = hintOf(j, phase == RxPhase.On, locked = lock?.let { "off" !in it } == true)
+    // ai: camera the phase lock holds takes no rate hint, nor a file (no rate of its own: as fast as it is decoded)
+    fun hint(j: JsonObject?): Warn? = hintOf(j, phase == RxPhase.On, upload = file != null, locked = lock?.let { "off" !in it } == true)
 
 
     // ai: A second's line for the log while a symbol is in view (Engine.rx before; tools/phone read it): what the receiver
