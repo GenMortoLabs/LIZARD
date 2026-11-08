@@ -6,7 +6,8 @@
 // ai:   page to worker: { type: "config", config } ({ version, spec: sim/phy.mjs blindSpec }); { type: "frame", tag,
 // ai:     w, h, rgba, delay, prof }, the buffer transferred (the canvas grab); or { type: "frame", tag, frame,
 // ai:     x, y, w, h, delay, prof, verify }: the camera's VideoFrame, transferred, and the crop the grab would
-// ai:     have read (whole pixels inside its display size), copied to luma here (lumaOf) and then decoded as a luma frame.
+// ai:     have read (whole pixels inside its display size), copied to luma here (lumaOf) and then decoded as a luma frame;
+// ai:     or { type: "frame", tag, w, h, luma, delay, prof }: a file's frame, its crop's luma already (media-worker.mjs).
 // ai:   worker to page: { type: "ready", version, frames, framesWhy } (frames: this worker takes a VideoFrame); one
 // ai:     { type: "result", ... } per frame (test and judged: the frame was judged the test stream's and its data blocks
 // ai:     held to it; vf: the VideoFrame's pixel format when it came as one; probe: the crop's corners under verify;
@@ -45,14 +46,14 @@ async function frame(m) {
   }
   // The canvas grab sends RGBA and the decoder converts it to luma inside wasm, vectorized.
   // ai: A VideoFrame is copied to luma here, one byte a pixel, which the decoder takes as it is.
-  let isRgba = !m.frame, px, vf = null;
+  let isRgba = !m.frame && !m.luma, px, vf = null;
   if (m.frame) {
     try { ({ luma: px, format: vf } = await lumaOf(m.frame, m.x, m.y, w, h)); }
     catch (e) {
       // ai: This frame is lost, as a busy skip is; the page sends the grab from here on.
       return postMessage(undecoded(tag, { noFrames: String(e?.message ?? e) }));
     }
-  } else px = new Uint8Array(m.rgba);
+  } else px = new Uint8Array(m.luma ?? m.rgba);
   const t = performance.now();
   const r = phy.decode(px, w, h, null, isRgba)[0];
   // heap: the page watches this for a step, which is a heap growth and a stall the ms above already paid for.

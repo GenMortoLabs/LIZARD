@@ -31,14 +31,17 @@ const PAGES = ["lizard-web/index.html", "lizard-web/send.html", "lizard-web/recv
 // ai: decoder's tree (liblizard/gpu/webgpu.zst)
 const SHIP = new Set([".html", ".css", ".mjs", ".js", ".svg", ".wasm", ".safetensors", ".json", ".woff2", ".zst"]);
 const SCAN = new Set([".html", ".css", ".mjs", ".js", ".svg"]);
-// ai: emscripten's output (-O3): no comments, and its own string literals are the bare names it loads (lizard.wasm)
-const GLUE = new Set(["liblizard/bindings/wasm/dist/lizard.mjs"]);
+// ai: emscripten's output (-O3): no comments, and its own string literals are the bare names it loads (lizard.wasm,
+// ai: lizard-media.wasm)
+const GLUE = new Set(["liblizard/bindings/wasm/dist/lizard.mjs", "liblizard/bindings/wasm/dist/lizard-media.mjs"]);
 // ai: liblizard/build.sh's output, built and not in git: the crawl drops a name whose file is not there, so before
 // ai: 2026-10-04 an app was built without the codec and the fountain where they were not built. Each must ship: the
 // ai: path the tree imports the codec by (build/ob.mjs) and the module it names, Wirehair and zstd inside since
 // ai: 2026-10-25. The library's WebAssembly 1.0 fallback (dist/lizard-mvp.mjs) is its loader's (bindings/wasm/index.mjs),
-// ai: which no page imports: the app is SIMD-only.
-const BUILT = { "liblizard/build/ob.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.wasm": "liblizard/build.sh" };
+// ai: which no page imports: the app is SIMD-only. The file camera's module (dist/lizard-media.mjs, FFmpeg's reader;
+// ai: since 2026-11-07), reached by the receiver's media worker.
+const BUILT = { "liblizard/build/ob.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.wasm": "liblizard/build.sh",
+  "liblizard/bindings/wasm/dist/lizard-media.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard-media.wasm": "liblizard/build.sh" };
 const fail = (msg) => { console.error(`build: ${msg}`); process.exit(1); };
 const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
 
@@ -134,10 +137,12 @@ writeFileSync(join(OUT, "service-worker.js"), sw);
 writeFileSync(join(OUT, "_headers"), "/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n");
 // ai: The licenses the app ships under, one text beside the pages, outside the worker's shell as _headers is: its wasm
 // ai: carries the codec, BLAKE3, Wirehair and Zstandard (both BSD 3-Clause, which asks for its notice with a binary),
-// ai: and the build strips every comment.
+// ai: the file camera's wasm FFmpeg (LGPL, its text headed with its source and configuration) and zlib, and the build
+// ai: strips every comment.
 const NOTICES = [["", "LICENSE"], ["", "NOTICE"], ["Wirehair (liblizard/vendor/wirehair)", "liblizard/vendor/wirehair/LICENSE"],
   ["Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option", "liblizard/vendor/zstd/LICENSE"],
   ["BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option", "liblizard/vendor/blake3/LICENSE_A2"],
+  ["", "liblizard/build/ffmpeg/wasm/licenses/ffmpeg.txt"], ["", "liblizard/build/ffmpeg/wasm/licenses/zlib.txt"],
   ["Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1", "liblizard/vendor/fonts/inter/LICENSE.txt"],
   ["JetBrains Mono (liblizard/vendor/fonts/jetbrains-mono), under the SIL Open Font License 1.1", "liblizard/vendor/fonts/jetbrains-mono/OFL.txt"]];
 writeFileSync(join(OUT, "LICENSES.txt"), NOTICES.map(([t, f]) => (t ? `${t}\n\n` : "") + readFileSync(join(ROOT, f), "utf8").trimEnd()).join(`\n\n${"-".repeat(78)}\n\n`) + "\n");

@@ -236,9 +236,9 @@ export function buildInfo() { return document.querySelector('meta[name="lizard-b
 // ai: about(el): the About line, the build this page is.
 // ai: About's text (2026-11-06, the apps' AboutFold, lizard-ui About.kt): the build line (the build's time alone, none on
 // ai: the rig's pages, 2026-10-02), LIZARD's license, the design it is based on, then a line a license of what the web
-// ai: app carries (its LICENSES.txt: BLAKE3, Wirehair and Zstandard in the codec's wasm, the two fonts), in the order the
-// ai: apps' CREDITS first name them. el: the fold's .about-text.
-const CREDITS = [["BLAKE3", "Apache 2.0 / CC0 1.0"], ["Wirehair", "BSD 3-Clause"], ["Zstandard", "BSD 3-Clause"], ["Inter", "SIL OFL 1.1"], ["JetBrains Mono", "SIL OFL 1.1"]];
+// ai: app carries (its LICENSES.txt: BLAKE3, Wirehair and Zstandard in the codec's wasm, FFmpeg in the file camera's, the
+// ai: two fonts), in the order the apps' CREDITS first name them. el: the fold's .about-text.
+const CREDITS = [["BLAKE3", "Apache 2.0 / CC0 1.0"], ["Wirehair", "BSD 3-Clause"], ["Zstandard", "BSD 3-Clause"], ["FFmpeg", "LGPLv2.1+"], ["Inter", "SIL OFL 1.1"], ["JetBrains Mono", "SIL OFL 1.1"]];
 export function about(el, failed = false) {
   const b = buildInfo(), groups = new Map();
   for (const [name, license] of CREDITS) groups.set(license, [...(groups.get(license) ?? []), name]);

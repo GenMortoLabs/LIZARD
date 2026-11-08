@@ -5,7 +5,7 @@
 // ai: makes the file, as for the C pool. Blocks are judged from the light (sim/phy.mjs blockJudge) as the C's are.
 // ai:   page to worker: { type: "config", config } (as recv-worker.mjs); { type: "frame", tag, frame, x, y, w, h } (a
 // ai:     VideoFrame, transferred, and its crop, copied to luma here: vframes.mjs lumaOf) or { type: "frame", tag, w, h,
-// ai:     rgba } (the canvas grab).
+// ai:     rgba } (the canvas grab), or { type: "frame", tag, w, h, luma } (a file's frame, luma already: media-worker.mjs).
 // ai:   worker to page: { type: "ready", version, frames: true, take, adapter } (take: frames the page may have out at
 // ai:     once, the ring's slots); a { type: "result", ... } a frame, recv-worker.mjs's fields; { type: "error", tag,
 // ai:     message, fatal } (fatal: no GPU decoder here or the device lost; the page goes back to the C pool).
@@ -66,7 +66,8 @@ async function frame(m) {
   if (m.frame) {
     try { ({ luma: px, format: vf } = await lumaOf(m.frame, m.x, m.y, w, h)); }
     catch (e) { return postMessage(undecoded(tag, { noFrames: String(e?.message ?? e) })); }
-  } else {
+  } else if (m.luma) px = new Uint8Array(m.luma);   // ai: a file's frame, luma already (media-worker.mjs)
+  else {
     const rgba = new Uint8Array(m.rgba);
     px = new Uint8Array(w * h);
     for (let i = 0, j = 0; i < px.length; i++, j += 4) px[i] = (77 * rgba[j] + 150 * rgba[j + 1] + 29 * rgba[j + 2] + 128) >> 8;   // ai: the rig's formula (src/acquire.c), as lumaOf's

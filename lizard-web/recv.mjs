@@ -434,7 +434,7 @@ function vfWhyNot(slot = null) {
 // ai: The newest VideoFrame the page can hand over, at the video's size (the crop is the video's). False: it is not
 // ai: that size, so the caller grabs instead. Null: the tap has nothing new since the last take.
 function vfTake() {
-  tap ??= frameTap(track, video);   // ai: a file's: no track, the <video>'s kind
+  tap ??= frameTap(track, video);
   const vf = tap.take();
   if (!vf) return null;
   if (vf.displayWidth !== video.videoWidth || vf.displayHeight !== video.videoHeight) {
@@ -814,7 +814,7 @@ function second() {
   // ai: while the word is live; the sender's own control for it is Settings' FPS slider ("Receiving with" went
   // ai: 2026-10-02).
   // ai: as status labels (2026-11-07): "Too fast for a browser", its most a value; "Washed out" (sentences before)
-  ui.why = [lead && [lead, ""], clipping && ["Washed out", ""], live && band.fps > WEB_FPS && ["Too fast for a browser", `max ${WEB_FPS}\u00a0fps`]].filter(Boolean);
+  ui.why = [lead && [lead, ""], clipping && ["Washed out", ""], live && !media && band.fps > WEB_FPS && ["Too fast for a browser", `max ${WEB_FPS}\u00a0fps`]].filter(Boolean);   // ai: a file's every frame is read: no rate is too fast
   showState();
   // ai: The frame path's diagnostics go to the console (read over adb DevTools) and the stats row, not the page, which
   // ai: keeps what a user aims and judges by (2026-09-25).
@@ -952,14 +952,7 @@ function probeCorners(px, w, h) { cropProbe = cornerProbe(px, w, h, 4); }
 let frameHandle = 0;
 function onFrame(now, meta) {
   frameHandle = video.requestVideoFrameCallback ? video.requestVideoFrameCallback(onFrame) : requestAnimationFrame(onFrame);
-  takeFrame(meta);
-}
-// ai: The frame on the <video> now: a camera's, or a file's (meta null: the frame a file's video was paused on, taken
-// ai: again by fileRoom). A file's frame waits for a decoder where a camera's is skipped: the video paused on it and the
-// ai: pool told it lost one, so it grows as for a camera (the apps' Receiver waits for room for a file the same way).
-function takeFrame(meta) {
   if (!video.videoWidth) return;
-  if (media && config && !room()) { if (!media.waiting) grow(); media.waiting = true; video.pause(); return; }
   // One camera frame must count once. A callback that repeats the previous frame's timestamp is the same
   // picture again (seen when a second loop was started, and possible on compositors faster than the camera).
   const stamp = meta?.captureTime ?? meta?.mediaTime;
@@ -1060,7 +1053,7 @@ let wake = null;
 function stopCamera() {
   tap?.stop(); tap = null;
   track?.stop(); track = null; video.srcObject = null;
-  if (media) { video.onended = null; video.pause(); video.removeAttribute("src"); video.load(); URL.revokeObjectURL(media.url); media = null; }
+  if (media) { mediaW?.postMessage({ type: "close" }); media = null; }
   if (looping) { (video.cancelVideoFrameCallback ? video.cancelVideoFrameCallback(frameHandle) : cancelAnimationFrame(frameHandle)); looping = false; }
   wake?.release().catch(() => {}); wake = null;
   while (pool.length > 1 && !FIXED) kill(pool.pop());
@@ -1152,55 +1145,72 @@ async function startCamera() {
   camAt = performance.now(); firstDecodeMs = null; answered = false;
   if (!looping) { looping = true; onFrame(); }   // a second loop would count every frame twice
 }
-// ai: A file as the camera (2026-11-07; the apps' File, which read any image or video through FFmpeg): here what the
-// ai: browser decodes. An image is one frame (createImageBitmap: its centre square drawn on #shot, the preview, and sent
-// ai: as RGBA, stillFrame); a video plays on the <video> (its object URL) and its frames go as a camera's do, each one
-// ai: decoded (takeFrame waits for room). Its end, every frame back, stops the run with no error, as the apps' (Start
-// ai: plays it again); a file the browser cannot open is "File not read". The page's crop is 1:1 alone, so a 2:1 run's
-// ai: halves side by side do not read here.
+// ai: A file as the camera (2026-11-07; the apps' File): read by the apps' own reader, FFmpeg in WebAssembly
+// ai: (media-worker.mjs over liblizard's lizard-media module, the worker made at the first file): an image is one frame,
+// ai: a video its frames in order. A frame is read only while none waits (one ahead of the decoders) and goes when a
+// ai: decoder has room, so every frame is decoded (a camera's frame is skipped instead); one waiting tells the pool it
+// ai: lost one, so it grows as for a camera. The crop is the camera's rule (rectOf, the centre square), cut in the
+// ai: worker; the frames go as luma, drawn on #shot as they go (at most every 50 ms). The end, every frame back, stops
+// ai: the run with no error, as the apps' (Start plays it again). What it cannot read: "File not read: <name>". The
+// ai: page's crop is 1:1 alone, so a 2:1 run's halves side by side do not read here.
+// ai: media: { id (each run's, the worker's answers matched to it), name, rect, opened (the open's resolve), asked (a
+// ai: read out), ready (a frame read, waiting for room), grew (the frame that told the pool), ended, drawn }
+let mediaW = null, mediaId = 0, sImg = null;
+function mediaWorker() {
+  if (mediaW) return mediaW;
+  mediaW = new Worker(new URL("./media-worker.mjs", import.meta.url), { type: "module" });
+  mediaW.onmessage = ({ data: m }) => onMedia(m);
+  mediaW.onerror = (e) => { e.preventDefault?.(); onMedia({ type: "error", id: media?.id, why: e.message ?? "the file reader did not start" }); };
+  return mediaW;
+}
 async function startFile() {
-  const f = picked, url = URL.createObjectURL(f);
-  media = { name: f.name, url, kind: "video", waiting: false, ended: false, still: null };
-  const bmp = f.type.startsWith("video/") ? null : await createImageBitmap(f).catch(() => null);
-  if (bmp) {
-    const r = rectOf(bmp.width, bmp.height);
-    shot.width = r.w; shot.height = r.h; sctx.drawImage(bmp, -r.x, -r.y); bmp.close();
-    Object.assign(media, { kind: "image", still: r });
-    preview("shot"); showCrop();
-  } else {
-    video.srcObject = null; video.src = url; video.loop = false;
-    video.onended = () => { if (media?.url === url) { media.ended = true; fileRoom(); } };
-    try { await video.play(); }
-    catch (e) { console.error("file not played:", e); throw Object.assign(new Error(`not played: ${e?.name}`), { said: `File not read: ${f.name}` }); }
-  }
+  const f = picked, run = media = { id: ++mediaId, name: f.name, rect: null, opened: null, asked: false, ready: null, grew: null, ended: false, drawn: 0 };
+  const o = await new Promise((ok) => { run.opened = ok; mediaWorker().postMessage({ type: "open", id: run.id, file: f }); });
+  if (o.type !== "opened") { console.error(`file not read: ${o.why}`); throw Object.assign(new Error(o.why), { said: `File not read: ${f.name}` }); }
+  if (media !== run) return;   // ai: stopped while it opened
+  run.rect = rectOf(o.w, o.h);
+  shot.width = run.rect.w; shot.height = run.rect.h; sImg = null;
+  preview("shot"); showCrop();
   cur = fresh(); buckets = []; lastPresented = 0; prevArrive = 0; lastStamp = undefined;
   poolVfOff = ""; vfFormat = ""; tapNone = 0;
   best = freshBest();
   resize();
   camAt = performance.now(); firstDecodeMs = null; answered = false;
-  if (media.kind === "image") stillFrame();
-  else if (!looping) { looping = true; onFrame(); }
+  fileRoom();
 }
-// ai: The image's one frame to a decoder, once one is free (else fileRoom sends it as one frees)
-function stillFrame() {
-  const slot = freeSlot();
-  if (!slot) { media.waiting = true; return; }
-  media.waiting = false; media.ended = true;
-  const r = media.still, rgba = sctx.getImageData(0, 0, r.w, r.h).data.buffer, tag = performance.now();
-  cur.captured++;
-  trackTags.set(tag, r);
-  send(slot, { type: "frame", rgba, w: r.w, h: r.h, tag, delay: DELAY, prof: PROF }, [rgba]);
+// ai: The reader's answers: the open's, then each read's (a frame, or the end); an answer to a run stopped or replaced is let go
+function onMedia(m) {
+  const run = media;
+  if (!run || m.id !== run.id) return;
+  if (run.opened) { const ok = run.opened; run.opened = null; ok(m); return; }
+  run.asked = false;
+  if (m.type === "frame") run.ready = m;
+  else { run.ended = true; if (m.why) console.warn(`file: ${m.why}`); }
+  fileRoom();
 }
-// ai: A decoder free again (each answer, and once a second): a file's frame that waited goes, the video playing on from
-// ai: it; a file at its end with every frame back stops the run (second() first, so its row carries the last of it).
+// ai: A decoder free again (each answer, the reader's too, and once a second): the waiting frame goes where there is
+// ai: room, the next read asked, and a file at its end with every frame back stops the run (second() first, so its row
+// ai: carries the last of it; ended cleared first, since second() asks here again)
 function fileRoom() {
-  if (!media) return;
-  if (media.waiting && room()) {
-    if (media.kind === "image") stillFrame();
-    else { media.waiting = false; takeFrame(null); if (media && !media.waiting && !video.ended) video.play().catch(() => {}); }
-  }
-  // ai: ended cleared first: second() asks here again
-  if (media?.ended && !media.waiting && (gpu?.up ? gpu.out === 0 : !pool.some((c) => c.busy))) { media.ended = false; second(); stopCamera(); showState(); }
+  const run = media;
+  if (!run?.rect) return;
+  if (run.ready && config && room()) {
+    const m = run.ready, slot = freeSlot(), tag = performance.now();
+    run.ready = null;
+    if (tag - run.drawn > 50) { drawLuma(m.luma, m.w, m.h); run.drawn = tag; }
+    cur.captured++;
+    trackTags.set(tag, run.rect);
+    send(slot, { type: "frame", luma: m.luma, w: m.w, h: m.h, tag, delay: DELAY, prof: PROF }, [m.luma]);
+  } else if (run.ready && run.grew !== run.ready) { run.grew = run.ready; grow(); }
+  if (!run.asked && !run.ready && !run.ended) { run.asked = true; mediaW.postMessage({ type: "next", id: run.id, ...run.rect }); }
+  if (run.ended && !run.ready && (gpu?.up ? gpu.out === 0 : !pool.some((c) => c.busy))) { run.ended = false; second(); stopCamera(); showState(); }
+}
+// ai: a frame's luma onto #shot, the preview
+function drawLuma(buf, w, h) {
+  if (!sImg || sImg.width !== w || sImg.height !== h) sImg = sctx.createImageData(w, h);
+  const px = new Uint8Array(buf), d = sImg.data;
+  for (let i = 0, j = 0; i < px.length; i++, j += 4) { d[j] = d[j + 1] = d[j + 2] = px[i]; d[j + 3] = 255; }
+  sctx.putImageData(sImg, 0, 0);
 }
 // ai: The centre square at the source (2026-09-25). Every camera frame reaches Chrome's GPU process
 // ai: whole, and at 1440 and 4K that process fell half a second behind on frames whose pixels the crop mostly throws
