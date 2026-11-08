@@ -1,0 +1,4 @@
+- Read any image or video file in place of the camera: Camera, File. Every frame is decoded.
+- The sidebar works the same on Send and Receive, with Back at its foot.
+- On a PC in full screen, the sidebar opens over the code.
+- Reads and sends 0.9.1's codes: the format is unchanged.

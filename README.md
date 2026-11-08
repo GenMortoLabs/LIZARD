@@ -6,7 +6,7 @@ carries about 4 MB/s (see [Status](#status)).
 
 - **Demo:** [fosslabs.dev](https://fosslabs.dev)
 - **How it works:** [an example on video](https://www.youtube.com/shorts/pjcAtQ7GcVQ)
-- **Apps:** [0.9.1 (beta)](https://github.com/FNWTalon/LIZARD/releases/tag/v0.9.1): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable
+- **Apps:** [0.9.2 (beta)](https://github.com/FNWTalon/LIZARD/releases/tag/v0.9.2): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
 
 ## The idea
 
