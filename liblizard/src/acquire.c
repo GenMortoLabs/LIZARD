@@ -3751,9 +3751,8 @@ static void meet(const fline_t *v, const fline_t *hz, float *x, float *y) {
 // it survives, or line, track and word merged into one (depth OB_THIN_FMT + 1) once it does not. binarize
 // marks a pixel dark when it is under its 40 px neighbourhood's mean, so a gap blurred to mid grey closes as soon
 // as that neighbourhood is bright, which a border wider than six modules makes it (traced at 1.5 px of defocus:
-// every fitted side 2.5 to 3.1 modules inside the truth, track score 0.01). find_frame tries both; every reader
-// below has to agree with it about which one a curve is. One decode at a time, so a file static serves.
-static OB_TLS float thin_edge_depth = 1 + OB_THIN_LINE;
+// every fitted side 2.5 to 3.1 modules inside the truth, track score 0.01). find_frame tries both and
+// hands the pass's depth (de) to every read below that takes the curves; a read without curves places none.
 
 // A point of the border pattern in the image. H places it as if the sides were straight; a lens bows
 // them, by more than the solid line is wide when the distortion is strong. The fitted curve of that
@@ -3813,12 +3812,12 @@ static inline __attribute__((always_inline)) void trk_uv(const trk_map_t *p, __m
   *v = _mm_mul_ps(_mm_add_ps(_mm_set1_ps(p->kv), _mm_mul_ps(t, _mm_set1_ps(p->hv))), r);
 }
 #endif
-// a side as one depth reads it: its point's map, and the bow (thin_point): the map at the curves' depth, the curve
+// a side as one depth reads it: its point's map, and the bow (thin_point): the map at the curves' depth de, the curve
 // of image side m, odd where m is (the curve gives u from v)
 typedef struct { trk_map_t pt, bw; float c, a, b, mid; int odd, bow; } trk_side_t;
-static inline trk_side_t trk_side(const ob_layout_t *L, const homo_t *H, const fline_t *cv, int m, int side, float d) {
-  trk_side_t s = { trk_map(L, H, side, d), trk_map(L, H, side, thin_edge_depth), 0, 0, 0, 0, m & 1, cv != NULL };
-  if (cv) { s.c = cv->c; s.a = cv->a; s.b = cv->b; s.mid = cv->mid; }
+static inline trk_side_t trk_side(const ob_layout_t *L, const homo_t *H, const fline_t *cv, float de, int m, int side, float d) {
+  trk_side_t s = { .pt = trk_map(L, H, side, d), .odd = m & 1, .bow = cv != NULL };
+  if (cv) { s.bw = trk_map(L, H, side, de); s.c = cv->c; s.a = cv->a; s.b = cv->b; s.mid = cv->mid; }
   return s;
 }
 // the frame as sample() reads it
@@ -3902,8 +3901,8 @@ static const uint32_t *trk_signs(int side) {
 #else
 // thin_point and the read for four points of one side, at module positions `along` and depth d: the same
 // operations in the same order as the scalar pair, so the same floats.
-static inline v128_t thin_sample4(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *cv, int m, int side, v128_t along, float d) {
-  const float *h = H->h, ds = thin_edge_depth;
+static inline v128_t thin_sample4(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *cv, float de, int m, int side, v128_t along, float d) {
+  const float *h = H->h, ds = de;
   const v128_t one = wasm_f32x4_splat(1);
   v128_t x = along, y = along, xs = along, ys = along;
   if (side == 0 || side == 2) { y = wasm_f32x4_splat(side == 0 ? d : L->h - d); ys = wasm_f32x4_splat(side == 0 ? ds : L->h - ds); }
@@ -3924,21 +3923,20 @@ static inline v128_t thin_sample4(const ob_layout_t *L, const image_t *im, const
 #endif
 #endif
 
-// Grey levels of the solid line and of the light line inside it, and the threshold from the track pairs where
-// `map` puts them. The line and the gap are the same for every rotation and mirror image of a quad, so the contrast
+// Grey levels of the solid line and of the light line inside it, and the threshold from the track pairs.
+// The line and the gap are the same for every rotation and mirror image of a quad, so the contrast
 // alone rejects a quad (a bezel is dark where the light line should be).
 #ifdef OB_NEON
 // ai: arm64's form: each side's three depths taken into locals once (trk_side), four steps a vector, a last vector's
 // ai: lanes past the side's end read and dropped; the sums in the steps' order
-static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, const int *map, float *ref, float *con) {
+static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H, float *ref, float *con) {
   const float dl = 1 + OB_THIN_LINE / 2.0f;
   const trk_img_t g = trk_img(im);
   float dark = 0, light = 0, trk = 0;
   int nref = 0;
   for (int side = 0; side < 4; side++) {
     const int end = (side & 1 ? L->h : L->w) - L->reserve;
-    const fline_t *c = cv ? cv[map[side]] : NULL;
-    const trk_side_t sl = trk_side(L, H, c, map[side], side, dl), sp = trk_side(L, H, c, map[side], side, OB_GAP_MID), st = trk_side(L, H, c, map[side], side, OB_TRACK_MID);
+    const trk_side_t sl = trk_side(L, H, NULL, 0, side, side, dl), sp = trk_side(L, H, NULL, 0, side, side, OB_GAP_MID), st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
     for (int t = L->reserve; t < end; t += 64) {
       const float32x4_t at = { t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f };
       // The pair near each of the four points, taken through the macro for the reason TRACK_AT4 gives.
@@ -3956,15 +3954,14 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
 }
 #elif defined(OB_X86)
 // ai: x86-64: arm64's form (above), its own floats
-static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, const int *map, float *ref, float *con) {
+static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H, float *ref, float *con) {
   const float dl = 1 + OB_THIN_LINE / 2.0f;
   const trk_img_t g = trk_img(im);
   float dark = 0, light = 0, trk = 0;
   int nref = 0;
   for (int side = 0; side < 4; side++) {
     const int end = (side & 1 ? L->h : L->w) - L->reserve;
-    const fline_t *c = cv ? cv[map[side]] : NULL;
-    const trk_side_t sl = trk_side(L, H, c, map[side], side, dl), sp = trk_side(L, H, c, map[side], side, OB_GAP_MID), st = trk_side(L, H, c, map[side], side, OB_TRACK_MID);
+    const trk_side_t sl = trk_side(L, H, NULL, 0, side, side, dl), sp = trk_side(L, H, NULL, 0, side, side, OB_GAP_MID), st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
     for (int t = L->reserve; t < end; t += 64) {
       const __m128 at = _mm_setr_ps(t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f);
       #define PAIR_AT(k, w) ((float)(L->reserve + OB_TRACK_AT(OB_PAIR_J(t + 16 * (k) - L->reserve) + (w))) + OB_CELL_MID)
@@ -3980,8 +3977,8 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
   return *con >= 0.08f;
 }
 #else
-static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, const int *map, float *ref, float *con) {
-  float dark = 0, light = 0, trk = 0, u, v, x, y, xs, ys, dl = 1 + OB_THIN_LINE / 2.0f;
+static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H, float *ref, float *con) {
+  float dark = 0, light = 0, trk = 0, u, v, x, y, dl = 1 + OB_THIN_LINE / 2.0f;
   int nref = 0;
   for (int side = 0; side < 4; side++) for (int t = L->reserve; t < (side & 1 ? L->h : L->w) - L->reserve; t += 16, nref++) {
 #ifdef OB_SIMD
@@ -3993,25 +3990,23 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
                    cb = wasm_f32x4_make(PAIR_AT(0, 1), PAIR_AT(1, 1), PAIR_AT(2, 1), PAIR_AT(3, 1));
       #undef PAIR_AT
       float D[4], G[4], A[4], B[4];
-      wasm_v128_store(D, thin_sample4(L, im, H, cv ? cv[map[side]] : NULL, map[side], side, along, dl));
-      wasm_v128_store(G, thin_sample4(L, im, H, cv ? cv[map[side]] : NULL, map[side], side, along, OB_GAP_MID));
-      wasm_v128_store(A, thin_sample4(L, im, H, cv ? cv[map[side]] : NULL, map[side], side, ca, OB_TRACK_MID));
-      wasm_v128_store(B, thin_sample4(L, im, H, cv ? cv[map[side]] : NULL, map[side], side, cb, OB_TRACK_MID));
+      wasm_v128_store(D, thin_sample4(L, im, H, NULL, 0, side, side, along, dl));
+      wasm_v128_store(G, thin_sample4(L, im, H, NULL, 0, side, side, along, OB_GAP_MID));
+      wasm_v128_store(A, thin_sample4(L, im, H, NULL, 0, side, side, ca, OB_TRACK_MID));
+      wasm_v128_store(B, thin_sample4(L, im, H, NULL, 0, side, side, cb, OB_TRACK_MID));
       for (int l = 0; l < 4; l++) { dark += D[l]; light += G[l]; trk += A[l]; trk += B[l]; }
       t += 48; nref += 3;
       continue;
     }
 #endif
-    side_xy(L, side, t + 0.5f, thin_edge_depth, &xs, &ys);   // on the curve: the first dark run's inner edge
     side_xy(L, side, t + 0.5f, dl, &x, &y);
-    thin_point(H, cv, map[side], x, y, xs, ys, &u, &v); dark += sample(im, u, v);
+    project(H, x, y, &u, &v); dark += sample(im, u, v);
     side_xy(L, side, t + 0.5f, OB_GAP_MID, &x, &y);
-    thin_point(H, cv, map[side], x, y, xs, ys, &u, &v); light += sample(im, u, v);
+    project(H, x, y, &u, &v); light += sample(im, u, v);
     for (int k = 0; k < 2; k++) {
       const float ct = L->reserve + OB_TRACK_AT(OB_PAIR_J(t - L->reserve) + k) + OB_CELL_MID;
-      side_xy(L, side, ct, thin_edge_depth, &xs, &ys);
       side_xy(L, side, ct, OB_TRACK_MID, &x, &y);
-      thin_point(H, cv, map[side], x, y, xs, ys, &u, &v); trk += sample(im, u, v);
+      project(H, x, y, &u, &v); trk += sample(im, u, v);
     }
   }
   // The threshold the TRACK is read against is the track's own. A pair of track cells is one dark and one light
@@ -4033,7 +4028,7 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
 #ifdef OB_NEON
 // ai: arm64's form: four cells a vector, the clamped levels (by the contrast's reciprocal) summed a lane each and the
 // ai: stop tested on the lanes' total every eight cells: the sum its own floats, the stop as sound (the same margin).
-static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, const int *map, float ref, float con, float beat) {
+static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H, float ref, float con, float beat) {
   int n = 0, total = 0;
   for (int side = 0; side < 4; side++) total += ob_track_cells(side & 1 ? L->h : L->w, L->reserve);
   const float need = (beat - 0.001f) * total;
@@ -4042,7 +4037,7 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
   float32x4_t acc = vdupq_n_f32(0);
   for (int side = 0; side < 4; side++) {
     const int nj = ob_track_cells(side & 1 ? L->h : L->w, L->reserve);
-    const trk_side_t st = trk_side(L, H, cv ? cv[map[side]] : NULL, map[side], side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
     const uint32_t *fl = trk_signs(side);
     for (int j = 0; j < nj; j += 4) {
       const float32x4_t q = vmulq_f32(vsubq_f32(rf, trk_get_any(&st, &g, vreinterpretq_f32_s32(TRACK_AT4(L, j)))), rc);
@@ -4054,7 +4049,7 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
 }
 #elif defined(OB_X86)
 // ai: x86-64: arm64's form (above), its own floats
-static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, const int *map, float ref, float con, float beat) {
+static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H, float ref, float con, float beat) {
   int n = 0, total = 0;
   for (int side = 0; side < 4; side++) total += ob_track_cells(side & 1 ? L->h : L->w, L->reserve);
   const float need = (beat - 0.001f) * total;
@@ -4063,7 +4058,7 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
   __m128 acc = _mm_setzero_ps();
   for (int side = 0; side < 4; side++) {
     const int nj = ob_track_cells(side & 1 ? L->h : L->w, L->reserve);
-    const trk_side_t st = trk_side(L, H, cv ? cv[map[side]] : NULL, map[side], side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
     const uint32_t *fl = trk_signs(side);
     for (int j = 0; j < nj; j += 4) {
       const __m128 q = _mm_mul_ps(_mm_sub_ps(rf, trk_get_any(&st, &g, _mm_castsi128_ps(TRACK_AT4(L, j)))), rc);
@@ -4074,8 +4069,8 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
   return trk_sum4(acc) / n;
 }
 #else
-static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, const int *map, float ref, float con, float beat) {
-  float u, v, x, y, xs, ys, score = 0;
+static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H, float ref, float con, float beat) {
+  float u, v, x, y, score = 0;
   int n = 0, total = 0;
   for (int side = 0; side < 4; side++) total += ob_track_cells(side & 1 ? L->h : L->w, L->reserve);
   const float need = (beat - 0.001f) * total;   // the margin is a thousand times the sum's rounding
@@ -4085,7 +4080,7 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
     if (j + 3 < nj) {
       float Q[4];
       // The lane positions come from the macro, one per cell, never from a stride off the first (TRACK_AT4).
-      const v128_t smp = thin_sample4(L, im, H, cv ? cv[map[side]] : NULL, map[side], side, TRACK_AT4(L, j), OB_TRACK_MID);
+      const v128_t smp = thin_sample4(L, im, H, NULL, 0, side, side, TRACK_AT4(L, j), OB_TRACK_MID);
       const v128_t q4 = wasm_f32x4_div(wasm_f32x4_sub(wasm_f32x4_splat(ref), smp), wasm_f32x4_splat(con));
       wasm_v128_store(Q, wasm_f32x4_pmax(wasm_f32x4_pmin(q4, wasm_f32x4_splat(0.5f)), wasm_f32x4_splat(-0.5f)));
       for (int l = 0; l < 4; l++) {
@@ -4096,8 +4091,8 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
       continue;
     }
 #endif
-    side_xy(L, side, t + OB_CELL_MID, OB_TRACK_MID, &x, &y); side_xy(L, side, t + OB_CELL_MID, thin_edge_depth, &xs, &ys);
-    thin_point(H, cv, map[side], x, y, xs, ys, &u, &v);
+    side_xy(L, side, t + OB_CELL_MID, OB_TRACK_MID, &x, &y);
+    project(H, x, y, &u, &v);
     float q = (ref - sample(im, u, v)) / con;
     if (q > 0.5f) q = 0.5f; else if (q < -0.5f) q = -0.5f;
     score += ob_thin_track(side, j) ? q : -q;
@@ -4124,7 +4119,7 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
 // ai: contrast has passed, each side's pairs are summed from s in the steps' order. The line and the gap four steps a
 // ai: vector, a last vector's lanes past the side's end read and dropped. The pairs were 256 of a quad's 896 reads at
 // ai: the 128 ring.
-static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float *s, float *pair, int npts, int *nref) {
+static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float de, float *s, float *pair, int npts, int *nref) {
   const int W = L->w, end = W - L->reserve;
   const float dl = 1 + OB_THIN_LINE / 2.0f;
   const trk_img_t g = trk_img(im);
@@ -4133,7 +4128,7 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   int nr = 0;
   for (int side = 0; side < 4; side++) {
     // ai: the line's point and the gap's share the bow, made once
-    const trk_side_t sl = trk_side(L, H, cv ? cv[side] : NULL, side, side, dl);
+    const trk_side_t sl = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, dl);
     const trk_map_t gp = trk_map(L, H, side, OB_GAP_MID);
     for (int t = L->reserve; t < end; t += 64) {
       const float32x4_t at = { t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f };
@@ -4153,7 +4148,7 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   if (con < 0.08f) return 0;
   const float *pos = s + 8 * npts;
   for (int side = 0; side < 4; side++) {
-    const trk_side_t st = trk_side(L, H, cv ? cv[side] : NULL, side, side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, OB_TRACK_MID);
     for (int dir = 0; dir < 2; dir++) {
       // ai: against the side, the cell at W - ct: W + ct * -1, rounded once as the subtraction is
       float *out = s + (dir * 4 + side) * npts;
@@ -4170,7 +4165,7 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
 }
 #elif defined(OB_X86)
 // ai: x86-64: arm64's form (above), its own floats
-static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float *s, float *pair, int npts, int *nref) {
+static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float de, float *s, float *pair, int npts, int *nref) {
   const int W = L->w, end = W - L->reserve;
   const float dl = 1 + OB_THIN_LINE / 2.0f;
   const trk_img_t g = trk_img(im);
@@ -4178,7 +4173,7 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   float dark = 0, light = 0;
   int nr = 0;
   for (int side = 0; side < 4; side++) {
-    const trk_side_t sl = trk_side(L, H, cv ? cv[side] : NULL, side, side, dl);
+    const trk_side_t sl = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, dl);
     const trk_map_t gp = trk_map(L, H, side, OB_GAP_MID);
     for (int t = L->reserve; t < end; t += 64) {
       const __m128 at = _mm_setr_ps(t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f);
@@ -4198,7 +4193,7 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   if (con < 0.08f) return 0;
   const float *pos = s + 8 * npts;
   for (int side = 0; side < 4; side++) {
-    const trk_side_t st = trk_side(L, H, cv ? cv[side] : NULL, side, side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, OB_TRACK_MID);
     for (int dir = 0; dir < 2; dir++) {
       float *out = s + (dir * 4 + side) * npts;
       const __m128 w0 = _mm_set1_ps(dir ? (float)W : 0), sg = _mm_set1_ps(dir ? -1.0f : 1.0f);
@@ -4213,7 +4208,7 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   return con;
 }
 #else
-static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float *s, float *pair, int npts, int *nref) {
+static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float de, float *s, float *pair, int npts, int *nref) {
   const int W = L->w;
   const float dl = 1 + OB_THIN_LINE / 2.0f;
   float dark = 0, light = 0, u, v, x, y, xs, ys;
@@ -4231,18 +4226,18 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
         #undef PAIR_AT
         const fline_t *c = cv ? cv[side] : NULL;
         float D[4], G[4], A[4], B[4], RA[4], RB[4];
-        wasm_v128_store(D, thin_sample4(L, im, H, c, side, side, along, dl));
-        wasm_v128_store(G, thin_sample4(L, im, H, c, side, side, along, OB_GAP_MID));
-        wasm_v128_store(A, thin_sample4(L, im, H, c, side, side, ca, OB_TRACK_MID));
-        wasm_v128_store(B, thin_sample4(L, im, H, c, side, side, cb, OB_TRACK_MID));
-        wasm_v128_store(RA, thin_sample4(L, im, H, c, side, side, wasm_f32x4_sub(w4, ca), OB_TRACK_MID));
-        wasm_v128_store(RB, thin_sample4(L, im, H, c, side, side, wasm_f32x4_sub(w4, cb), OB_TRACK_MID));
+        wasm_v128_store(D, thin_sample4(L, im, H, c, de, side, side, along, dl));
+        wasm_v128_store(G, thin_sample4(L, im, H, c, de, side, side, along, OB_GAP_MID));
+        wasm_v128_store(A, thin_sample4(L, im, H, c, de, side, side, ca, OB_TRACK_MID));
+        wasm_v128_store(B, thin_sample4(L, im, H, c, de, side, side, cb, OB_TRACK_MID));
+        wasm_v128_store(RA, thin_sample4(L, im, H, c, de, side, side, wasm_f32x4_sub(w4, ca), OB_TRACK_MID));
+        wasm_v128_store(RB, thin_sample4(L, im, H, c, de, side, side, wasm_f32x4_sub(w4, cb), OB_TRACK_MID));
         for (int l = 0; l < 4; l++) { dark += D[l]; light += G[l]; *fw += A[l]; *fw += B[l]; *bw += RA[l]; *bw += RB[l]; }
         t += 48; nr += 3;
         continue;
       }
 #endif
-      side_xy(L, side, t + 0.5f, thin_edge_depth, &xs, &ys);
+      side_xy(L, side, t + 0.5f, de, &xs, &ys);
       side_xy(L, side, t + 0.5f, dl, &x, &y);
       thin_point(H, cv, side, x, y, xs, ys, &u, &v); dark += sample(im, u, v);
       side_xy(L, side, t + 0.5f, OB_GAP_MID, &x, &y);
@@ -4251,7 +4246,7 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
         const float ct = (float)(L->reserve + OB_TRACK_AT(OB_PAIR_J(t - L->reserve) + k)) + OB_CELL_MID;
         for (int dir = 0; dir < 2; dir++) {
           const float at = dir ? W - ct : ct;
-          side_xy(L, side, at, thin_edge_depth, &xs, &ys);
+          side_xy(L, side, at, de, &xs, &ys);
           side_xy(L, side, at, OB_TRACK_MID, &x, &y);
           thin_point(H, cv, side, x, y, xs, ys, &u, &v);
           *(dir ? bw : fw) += sample(im, u, v);
@@ -4268,13 +4263,13 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
 #ifdef OB_SIMD
       if (i + 3 < npts) {
         const v128_t at = dir ? wasm_f32x4_sub(wasm_f32x4_splat((float)W), TRACK_AT4(L, i)) : TRACK_AT4(L, i);
-        wasm_v128_store(out + i, thin_sample4(L, im, H, cv ? cv[side] : NULL, side, side, at, OB_TRACK_MID));
+        wasm_v128_store(out + i, thin_sample4(L, im, H, cv ? cv[side] : NULL, de, side, side, at, OB_TRACK_MID));
         i += 3;
         continue;
       }
 #endif
       const float ct = (float)(L->reserve + OB_TRACK_AT(i)) + OB_CELL_MID, at = dir ? W - ct : ct;
-      side_xy(L, side, at, OB_TRACK_MID, &x, &y); side_xy(L, side, at, thin_edge_depth, &xs, &ys);
+      side_xy(L, side, at, OB_TRACK_MID, &x, &y); side_xy(L, side, at, de, &xs, &ys);
       thin_point(H, cv, side, x, y, xs, ys, &u, &v);
       out[i] = sample(im, u, v);
     }
@@ -4450,7 +4445,7 @@ int ob_test_thin_score(const ob_layout_t *L, const uint8_t *img, int w, int h, c
   image_t im;
   ob_image_init(&im, img, w, h, 1.0f);
   const float m = mark_form_mid(L, merged), msrc[8] = { m, m, L->w - m, m, L->w - m, L->h - m, m, L->h - m };
-  const int rot = hyp & 3, mir = hyp >> 2, map[4] = { 0, 1, 2, 3 };
+  const int rot = hyp & 3, mir = hyp >> 2;
   float d2[8], ref = 0, con = 0, nc[8];
   homo_t H;
   for (int k = 0; k < 21; k++) out[k] = 0;
@@ -4460,10 +4455,10 @@ int ob_test_thin_score(const ob_layout_t *L, const uint8_t *img, int w, int h, c
   for (int k = 0; k < 9; k++) out[4 + k] = H.h[k];
   corner_coords(L, nc);
   for (int k = 0; k < 4; k++) project(&H, nc[2 * k], nc[2 * k + 1], &out[13 + 2 * k], &out[14 + 2 * k]);
-  const int lv = thin_levels(L, &im, &H, NULL, map, &ref, &con);
+  const int lv = thin_levels(L, &im, &H, &ref, &con);
   out[0] = (float)lv; out[1] = ref; out[2] = con;
   if (!lv) return 1;
-  out[3] = thin_score(L, &im, &H, NULL, map, ref, con, -1e9f);
+  out[3] = thin_score(L, &im, &H, ref, con, -1e9f);
   return 1;
 }
 
@@ -4682,17 +4677,16 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
     if (form == 0 && scale == 1 && li == 0) ob_finder_info[7] = (float)nq;
     for (int h0 = 0; h0 < 8 && !(h0 == 4 && rotation_holds(best, *orient)); h0 += 4)
     for (int qi = 0; qi < nq; qi++) for (int hyp = h0; hyp < h0 + 4; hyp++) {
-      int rot = hyp & 3, mir = hyp >> 2, map[4];
+      int rot = hyp & 3, mir = hyp >> 2;
       float d2[8], ref = 0, con = 0, nc[8];
       homo_t H;
       for (int k = 0; k < 4; k++) { int from = (rot + (mir ? 4 - k : k)) & 3; d2[2 * k] = mq[qi].q[from].x; d2[2 * k + 1] = mq[qi].q[from].y; }
       if (!homography(msrc, d2, &H)) continue;
-      for (int sd = 0; sd < 4; sd++) { int ia = (rot + (mir ? 4 - ENDS[sd][0] : ENDS[sd][0])) & 3, ib = (rot + (mir ? 4 - ENDS[sd][1] : ENDS[sd][1])) & 3; map[sd] = ((ia + 1) & 3) == ib ? ia : ib; }
       int lv;
-      PROF(PROF_FF_TRACK, lv = thin_levels(L, im, &H, NULL, map, &ref, &con));
+      PROF(PROF_FF_TRACK, lv = thin_levels(L, im, &H, &ref, &con));
       if (!lv) continue;
       float sc;
-      PROF(PROF_FF_TRACK, sc = thin_score(L, im, &H, NULL, map, ref, con, best));
+      PROF(PROF_FF_TRACK, sc = thin_score(L, im, &H, ref, con, best));
       if (sc <= best) continue;
       best = sc; *orient = hyp; *which = li;
       ob_finder_info[0] = best; ob_finder_info[1] = (float)hyp; ob_finder_info[2] = (float)form; ob_finder_info[3] = (float)qi; ob_finder_info[4] = 0;
@@ -4708,9 +4702,8 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
   ob_prof_ms[PROF_FF_SCORE] += ob_now_ms() - tp; tp = ob_now_ms();
   // THE SCAN AND THE LINE FIT, only if the marks settled nothing. A settled mark quad already cleared `ok`,
   // which skipped the 81 combinations below; what it could not skip was the scan and the fit that feed them,
-  // and those were being paid for on every capture. Hoisting the marks above them changes no output (nothing
-  // between the two writes thin_edge_depth, and mark_rect reads `bin` and its own candidate array, never
-  // `pts`), so this is the same finder with the wasted half of it skipped when it is wasted.
+  // and those were being paid for on every capture. Hoisting the marks above them changes no output (mark_rect
+  // reads `bin` and its own candidate array, never `pts`), so this is the same finder with the wasted half of it skipped when it is wasted.
   if (ok) {
   // ai: the line path reads the capture binarized at full resolution (made already unless no mark search reached scale 1)
   if (!made) { PROF(PROF_BINARIZE, binarize(im->px, w, h, bin, cb, fb)); made = 1; tp = ob_now_ms(); }
@@ -4778,7 +4771,7 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
   if (!track_s || !track_sign) { free(track_s); free(track_sign); break; }
   for (int sd = 0; sd < 4; sd++) for (int i = 0; i < npts; i++) track_sign[sd * npts + i] = (int8_t)ob_thin_track(sd, i);
 #endif
-  // Two passes, one per depth the curves may run at (thin_edge_depth). Blur is the same all round the symbol, so
+  // Two passes, one per depth the curves may run at (de). Blur is the same all round the symbol, so
   // the four sides share one state and this is two hypotheses, not sixteen. The second runs only when the first
   // settled nothing, so a capture sharp enough for the gap to survive pays for one.
   //
@@ -4788,8 +4781,8 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
   // each side both ways, not eight reads: on the line path a decode went from 2.7 to 2.9 ms at n = 256 and from
   // 15.5 to 15.8 at 1024 (an ideal image, mark cores painted out).
   for (int pass = 0; pass < 2 && !(pass && rotation_holds(best, *orient)); pass++) {
-  thin_edge_depth = pass ? OB_THIN : 1 + OB_THIN_LINE;   // OB_THIN: the picture's edge, which is what line, track and ring merge to
-  { const float e = thin_edge_depth, se[8] = { e, e, L->w - e, e, L->w - e, L->h - e, e, L->h - e }; memcpy(src, se, sizeof src); }
+  const float de = pass ? OB_THIN : 1 + OB_THIN_LINE;   // OB_THIN: the picture's edge, which is what line, track and ring merge to
+  { const float e = de, se[8] = { e, e, L->w - e, e, L->w - e, L->h - e, e, L->h - e }; memcpy(src, se, sizeof src); }
   for (int combo = 0; ok && combo < combos; combo++) {
     int pick[4] = { combo % SIDE_LINES, (combo / SIDE_LINES) % SIDE_LINES, (combo / (SIDE_LINES * SIDE_LINES)) % SIDE_LINES, combo / (SIDE_LINES * SIDE_LINES * SIDE_LINES) }, skip = 0;
     for (int s = 0; s < 4; s++) skip |= pick[s] >= nl[s];
@@ -4808,7 +4801,7 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
     // The track is read once, the way up the quad is and both ways along each side (thin_read_both), and each
     // hypothesis takes its sides from that reading with its own threshold and signs: the score its own map gives,
     // without eight reads. The one that wins gets its own homography for the corners it hands back.
-    if (!homography(src, dst, &H0) || !(con = thin_read_both(L, im, &H0, cv, track_s, pair, npts, &nref))) continue;
+    if (!homography(src, dst, &H0) || !(con = thin_read_both(L, im, &H0, cv, de, track_s, pair, npts, &nref))) continue;
 #if defined(OB_NEON) || defined(OB_X86)
     float hsc[8];
     int scored = 0;
@@ -4869,7 +4862,6 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
   free(track_s); free(track_sign);
 #endif
   }
-  thin_edge_depth = 1 + OB_THIN_LINE;
   ob_prof_ms[PROF_FF_SCORE] += ob_now_ms() - tp;
   for (int s = 0; s < 4; s++) free(pts[s]);
   *score_out = best;

@@ -1,7 +1,8 @@
 // ai: The finder's track reads (src/acquire.c thin_levels, thin_score, thin_read_both and the eight hypotheses' scores
 // ai: from its reading) on synthetic captures: codes of the three rings painted through a homography with a little
-// ai: perspective, sharp and blurred, over noise, read through the true map with and without fitted curves (both
-// ai: parities of the bow), at gamma 1 (arm64's and x86-64's sample4r) and 2.2 (sample4), under two side maps.
+// ai: perspective, sharp and blurred, over noise, read through the true map (thin_levels and thin_score take no curves and so
+// ai: no side map: the corner marks' quads have none), and thin_read_both with and without fitted curves at the solid line's depth
+// ai: (both parities of the bow), at gamma 1 (arm64's and x86-64's sample4r) and 2.2 (sample4), under two side maps.
 // ai: arm64's and x86-64's forms have their own floats, so they are held to the scalar twins within a tolerance: the
 // ai: scalar build (-DOB_SCALAR) prints its readings, a value a line, and a build given that list compares its own with
 // ai: it: the flags and counts equal, a grey or a mean within 1e-3, a sum of k greys within k 1e-3, a score within 1e-3;
@@ -96,9 +97,10 @@ int main(int argc, char **argv) {
     // ai: fitted curves near the true sides at the curves' depth: through the side's two ends there, a small bow
     fline_t curve[4];
     const fline_t *cvp[4];
+    const float de = 1 + OB_THIN_LINE;   // ai: the line path's first pass's depth
     for (int m = 0; m < 4; m++) {
       float x0, y0, x1, y1, u0, v0, u1, v1;
-      const float e = thin_edge_depth, len = m & 1 ? (float)L.h : (float)L.w;
+      const float e = de, len = m & 1 ? (float)L.h : (float)L.w;
       side_xy(&L, m, 0, e, &x0, &y0); side_xy(&L, m, len, e, &x1, &y1);
       project(&H, x0, y0, &u0, &v0); project(&H, x1, y1, &u1, &v1);
       const float a0 = m & 1 ? v0 : u0, a1 = m & 1 ? v1 : u1, c0 = m & 1 ? u0 : v0, c1 = m & 1 ? u1 : v1;
@@ -109,18 +111,17 @@ int main(int argc, char **argv) {
     const int npts = ob_track_cells(L.w, L.reserve);
     float *s = malloc((size_t)9 * npts * sizeof(float));
     for (int i = 0; i < npts; i++) s[8 * npts + i] = (float)(L.reserve + OB_TRACK_AT(i)) + OB_CELL_MID;
+    {
+      float ref = 0, con = 0;
+      const int lv = thin_levels(&L, &im, &H, &ref, &con);
+      put(lv, 0, 0); put(ref, 1, 1); put(con, 1, 1);
+      if (lv) put(thin_score(&L, &im, &H, ref, con, -1e9f), 3, 1);
+    }
     for (int bend = 0; bend < 2; bend++) {
       const fline_t *const *cv = bend ? cvp : NULL;
-      for (int mi = 0; mi < 2; mi++) {
-        const int map[4] = { mi, (mi + 1) & 3, (mi + 2) & 3, (mi + 3) & 3 };
-        float ref = 0, con = 0;
-        const int lv = thin_levels(&L, &im, &H, cv, map, &ref, &con);
-        put(lv, 0, 0); put(ref, 1, 1); put(con, 1, 1);
-        if (lv) put(thin_score(&L, &im, &H, cv, map, ref, con, -1e9f), 3, 1);
-      }
       float pair[8], sc[8];
       int nref = 0;
-      const float con = thin_read_both(&L, &im, &H, cv, s, pair, npts, &nref);
+      const float con = thin_read_both(&L, &im, &H, cv, de, s, pair, npts, &nref);
       put(con > 0, 0, 0); put(nref, 0, 0); put(con, 1, 1);
       if (con > 0) {
         for (int k = 0; k < 8 * npts; k++) put(s[k], 1, 1);

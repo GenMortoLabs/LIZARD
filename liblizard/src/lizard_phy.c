@@ -1553,22 +1553,11 @@ static int acquire_hold(const lizard_t *f, const image_t *pim, ob_reg_t *reg_in,
   return 1;
 }
 
-// The rest of the decode. grid: n * n samples the caller took, in strip order (strip s at s * n * LIZARD_STRIP,
-// n rows of LIZARD_STRIP, which is the shape the transform wants), or NULL to sample here the way it always did.
-// A supplied grid is transformed IN PLACE, so it is scratch the caller does not read again. ext_llr and ext_est,
-// where given, are soft values made elsewhere (lizard_phy.h): the decline gate, the LDPC and the CRC are then this path's,
-// so a block whose soft values came from a GPU is accepted on exactly the terms one read here is.
-int lizard_finish_ext(const lizard_t *f, float *grid, const int8_t *ext_llr, const float *ext_est, uint8_t *blocks, uint8_t *ok, ob_result_t *res) {
-  struct lizard_ws *w = f->ws;
-  memset(ok, 0, (size_t)f->blocks);
-  if (!w->hold_valid) return 0;
-  image_t im = w->hold_im;
-  ob_reg_t reg = w->hold_reg;
-  w->hold_valid = 0;
-  double t0 = ob_now_ms();
+// ai: The frame's spectrum from its samples (lizard_finish_ext): the anchors' squares set to the picture's shading, the
+// ai: brightness surface's projections summed as the strips are sampled, each strip transformed, then each block's
+// ai: columns, and the surface taken off; into w->tre and w->tim
+static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t *im, const ob_reg_t *reg, float *grid) {
   const int n = f->n, bw = f->bw, sw = LIZARD_STRIP;
-  const int armed = ob_debug_hash != 0;
-  uint32_t hsh = 2166136261u;
   // A screen is never evenly lit, and a brightness ramp across the picture is not periodic: its spectrum falls off
   // as 1 / k along both axes and buries the coefficients nearest zero frequency, which are the ones meant to be the
   // most robust. So the least-squares surface 1, x, y, xy, x^2, y^2 comes out. On a symmetric grid, with the mean of
@@ -1585,9 +1574,6 @@ int lizard_finish_ext(const lizard_t *f, float *grid, const int8_t *ext_llr, con
   __m128d vpx = _mm_setzero_pd(), vpy = vpx, vpxy = vpx, vpxx = vpx, vpyy = vpx;
 #endif
   const float g0 = f->margin + 0.5f / f->scale, step = 1.0f / f->scale;
-  // A caller that brings its own soft values brings the spectrum's whole product with them, so none of this
-  // runs. The registration still has to be let go, which is why the free below is outside the guard.
-  if (ext_llr) { ob_reg_free(&reg); goto have_llr; }
   // ai: the anchors (SPEC 6.13): every sample an anchor's square touches and OB_ANCH_MARGIN round it set to the
   // ai: picture's shading there, on every frame, however many anchors its acquisition found, before the detrend and the
   // ai: transform (the margin measured: on the S26's lenses an erased sample more costs about 0.2 dB in a 1:1 crop, one
@@ -1603,7 +1589,7 @@ int lizard_finish_ext(const lizard_t *f, float *grid, const int8_t *ext_llr, con
     // ai: the samples on every eighth row and column: a caller's grid read in place, or one call into the strip's
     // ai: buffer (n / 8 squared, within its n by LIZARD_STRIP), sample (8 kx, 8 ky) at wre[ky c + kx]
     const int c = n / 8;
-    if (!grid) ob_sample_grid_pic(&f->frame, &im, &reg, g0, g0, 8 * step, 0, c, 0, c, w->wre, c);
+    if (!grid) ob_sample_grid_pic(&f->frame, im, reg, g0, g0, 8 * step, 0, c, 0, c, w->wre, c);
     double rhs[6] = {0};
     for (int ky = 0; ky < c; ky++) {
       const int y = 8 * ky, iy = in_square(w, y);
@@ -1626,7 +1612,7 @@ int lizard_finish_ext(const lizard_t *f, float *grid, const int8_t *ext_llr, con
     // paths differ in this one pointer and nothing else.
     float *z = grid ? grid + (size_t)(x0 / sw) * n * sw : w->wre;
     if (!grid) {
-      ob_sample_grid_pic(&f->frame, &im, &reg, g0, g0, step, x0, sw, 0, n, w->wre, sw);
+      ob_sample_grid_pic(&f->frame, im, reg, g0, g0, step, x0, sw, 0, n, w->wre, sw);
       for (int i = 0; i < OB_ANCH_K; i++) {
         const int xl = elo[i] > x0 ? elo[i] : x0, xh = ehi[i] < x0 + sw - 1 ? ehi[i] : x0 + sw - 1;
         if (xl > xh) continue;
@@ -1673,7 +1659,6 @@ int lizard_finish_ext(const lizard_t *f, float *grid, const int8_t *ext_llr, con
     unpack_turn(f, x0, z);
     ob_prof_ms[PROF_F_FFT] += ob_now_ms() - tc;
   }
-  ob_reg_free(&reg);
 #ifdef OB_NEON
   px = vaddvq_f64(vpx); py = vaddvq_f64(vpy); pxy = vaddvq_f64(vpxy); pxx = vaddvq_f64(vpxx); pyy = vaddvq_f64(vpyy);
 #elif defined(OB_X86)
@@ -1710,7 +1695,15 @@ int lizard_finish_ext(const lizard_t *f, float *grid, const int8_t *ext_llr, con
     w->tre[at] -= (float)(n * (py * w->x1r[v] + pyy * w->x2r[v])); w->tim[at] -= (float)(n * (py * w->x1i[v] + pyy * w->x2i[v]));
   }
   ob_prof_ms[PROF_F_DETREND] += ob_now_ms() - td;
-have_llr:
+}
+
+// ai: The blocks from the frame's soft values (lizard_finish_ext): made here from the spectrum (the pilots' turn, each
+// ai: sub-channel's moments) or handed in (ext_llr, ext_est); then each block's pilots, the decline gate, the LDPC and
+// ai: the CRC, the same either way. t0: when the decode's back half began, for res->ms_sample.
+static int frame_blocks(const lizard_t *f, struct lizard_ws *w, const int8_t *ext_llr, const float *ext_est, uint8_t *blocks, uint8_t *ok, ob_result_t *res, double t0) {
+  const int n = f->n, bw = f->bw;
+  const int armed = ob_debug_hash != 0;
+  uint32_t hsh = 2166136261u;
   if (w->dbg_coef) for (int i = 0; i < f->subch * LIZARD_SUB; i++) { w->dbg_coef[2 * i] = w->tre[f->pos[i]]; w->dbg_coef[2 * i + 1] = w->tim[f->pos[i]]; }
   if (armed) { hsh = fnv(hsh, w->tre, (size_t)f->vblocks * n * bw * sizeof(float)); hsh = fnv(hsh, w->tim, (size_t)f->vblocks * n * bw * sizeof(float)); }
   res->ms_sample = (float)(ob_now_ms() - t0);
@@ -1868,6 +1861,26 @@ have_llr:
   res->tiles_ok = good;
   res->ms_decode = (float)(ob_now_ms() - t0);
   return good;
+}
+
+// The rest of the decode. grid: n * n samples the caller took, in strip order (strip s at s * n * LIZARD_STRIP,
+// n rows of LIZARD_STRIP, which is the shape the transform wants), or NULL to sample here the way it always did.
+// A supplied grid is transformed IN PLACE, so it is scratch the caller does not read again. ext_llr and ext_est,
+// where given, are soft values made elsewhere (lizard_phy.h): the decline gate, the LDPC and the CRC are then this path's,
+// so a block whose soft values came from a GPU is accepted on exactly the terms one read here is.
+int lizard_finish_ext(const lizard_t *f, float *grid, const int8_t *ext_llr, const float *ext_est, uint8_t *blocks, uint8_t *ok, ob_result_t *res) {
+  struct lizard_ws *w = f->ws;
+  memset(ok, 0, (size_t)f->blocks);
+  if (!w->hold_valid) return 0;
+  image_t im = w->hold_im;
+  ob_reg_t reg = w->hold_reg;
+  w->hold_valid = 0;
+  const double t0 = ob_now_ms();
+  // A caller that brings its own soft values brings the spectrum's whole product with them, so it is not made; the
+  // registration is let go either way.
+  if (!ext_llr) frame_spectrum(f, w, &im, &reg, grid);
+  ob_reg_free(&reg);
+  return frame_blocks(f, w, ext_llr, ext_est, blocks, ok, res, t0);
 }
 
 // The format word from soft values read elsewhere (sim/ob.mjs fmtCheck), [ok, q0..]: what lizard_acquire does with
