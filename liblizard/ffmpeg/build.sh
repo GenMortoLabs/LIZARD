@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ai: build.sh <linux|windows|android|macos> [out]: FFmpeg's decoding libraries for the file camera (../core/cam/media.cpp,
+# ai: build.sh <linux|windows|android|macos|wasm> [out]: FFmpeg's decoding libraries for the file camera (../core/cam/media_source.cpp,
 # ai: 2026-11-07): the pinned release (FFMPEG, FFMPEG_SHA256) fetched once into ../.tools/ffmpeg and checked against its
 # ai: SHA-256, configured LGPL (no GPL or non-free part) with everything off but reading files and decoding the formats
 # ai: listed (DEMUXERS, DECODERS, PARSERS), built as shared libraries into out (../build/ffmpeg/<platform> unless given):
@@ -10,11 +10,14 @@
 # ai:   android  the NDK's clang (ANDROID_NDK_HOME, else $ANDROID_HOME/ndk/27.1.12297006), arm64, API 29; the NDK's zlib;
 # ai:            aligned for 16 KB pages, as the app's own library; also out/jniLibs/arm64-v8a/, the APK's layout
 # ai:   macos    the host's clang (on a Mac), arm64; the system's zlib; install names @loader_path, so each finds the others
+# ai:   wasm     Emscripten's emcc (source <emsdk>/emsdk_env.sh): static libraries for the web's module (../CMakeLists.txt
+# ai:            lizard_media), no threads (no SharedArrayBuffer), no assembly, WebAssembly SIMD as the codec's module; zlib
+# ai:            built in from its pinned release, libz.a beside them
 # ai: x86 assembly where nasm is on the PATH (the decode about twice as fast), else none. About 1 to 3 minutes a platform.
 set -euo pipefail
 cd "$(dirname "$0")"
 HERE=$PWD
-PLATFORM=${1:?usage: build.sh <linux|windows|android|macos> [out]}
+PLATFORM=${1:?usage: build.sh <linux|windows|android|macos|wasm> [out]}
 OUT=${2:-$HERE/../build/ffmpeg/$PLATFORM}
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd)   # ai: absolute (macOS has no realpath -m)
 CACHE=$HERE/../.tools/ffmpeg
@@ -74,7 +77,21 @@ case $PLATFORM in
   macos)
     FLAGS+=(--arch=arm64 --cc=clang --install-name-dir=@loader_path)
     ;;
-  *) echo "platform: linux, windows, android or macos" >&2; exit 2 ;;
+  wasm)
+    command -v emcc >/dev/null || { echo "wasm: no emcc on the PATH (source <emsdk>/emsdk_env.sh)" >&2; exit 1; }
+    tar -xf "$(fetch zlib https://github.com/madler/zlib/releases/download/v${ZLIB#zlib-}/$ZLIB.tar.gz $ZLIB_SHA256)" -C "$WORK"
+    ( cd "$WORK/$ZLIB" && CFLAGS="-O3 -msimd128" emconfigure ./configure --static > /dev/null && emmake make -s libz.a > /dev/null )
+    export CFLAGS="-I$WORK/$ZLIB" LDFLAGS="-L$WORK/$ZLIB"
+    # ai: static libraries in the shared ones' place, nothing position independent
+    STATIC=()
+    for f in "${FLAGS[@]}"; do
+      case $f in --enable-shared) STATIC+=(--disable-shared) ;; --disable-static) STATIC+=(--enable-static) ;; --enable-pic) ;; *) STATIC+=("$f") ;; esac
+    done
+    FLAGS=("${STATIC[@]}" --target-os=none --arch=x86_32 --enable-cross-compile --disable-asm --disable-pthreads
+      --disable-runtime-cpudetect --cc=emcc --cxx=em++ --ar=emar --ranlib=emranlib --nm=emnm --dep-cc=emcc
+      --extra-cflags=-msimd128)
+    ;;
+  *) echo "platform: linux, windows, android, macos or wasm" >&2; exit 2 ;;
 esac
 
 rm -rf "$OUT"
@@ -85,18 +102,19 @@ mkdir -p "$OUT"
 cp -a "$WORK/stage/ffmpeg/." "$OUT/"
 rm -rf "$OUT/share" "$OUT/lib/pkgconfig"
 if [ "$PLATFORM" = android ]; then mkdir -p "$OUT/jniLibs/arm64-v8a" && cp "$OUT"/lib/libav*.so "$OUT/jniLibs/arm64-v8a/"; fi
+if [ "$PLATFORM" = wasm ]; then cp "$WORK/$ZLIB/libz.a" "$OUT/lib/"; fi
 # ai: the configuration the libraries were built with, for the credits' source offer (README.md)
 # ai: (the build machine's paths named by role: the output, the scratch folder, the NDK)
 grep -m1 'FFMPEG_CONFIGURATION' "$SRC/config.h" | sed 's/^#define FFMPEG_CONFIGURATION //' |
   sed -e "s|$OUT|<out>|g" -e "s|$WORK|<scratch>|g" -e "s|${TC:-/nonexistent}|<ndk toolchain>|g" > "$OUT/configuration.txt"
 # ai: the license texts the apps carry beside the libraries (out/licenses): FFmpeg's LGPL, headed with what it covers and
-# ai: where its source is; Windows' zlib, built into libavcodec there
+# ai: where its source is; Windows' and the web's zlib, built into libavcodec there
 mkdir -p "$OUT/licenses"
 { echo "FFmpeg ${FFMPEG#ffmpeg-} (libavutil, libavcodec, libavformat), under the GNU Lesser General Public License 2.1 or later."
   echo "Built unmodified from https://ffmpeg.org/releases/$FFMPEG.tar.xz (SHA-256 $FFMPEG_SHA256) by"
   echo "liblizard/ffmpeg/build.sh in LIZARD's source; configured: $(cat "$OUT/configuration.txt")"
   echo; cat "$SRC/COPYING.LGPLv2.1"; } > "$OUT/licenses/ffmpeg.txt"
-if [ "$PLATFORM" = windows ]; then
-  { echo "zlib ${ZLIB#zlib-} (built into libavcodec on Windows), under the zlib license."; echo; cat "$WORK/$ZLIB/LICENSE"; } > "$OUT/licenses/zlib.txt"
+if [ "$PLATFORM" = windows ] || [ "$PLATFORM" = wasm ]; then
+  { echo "zlib ${ZLIB#zlib-} (built into libavcodec on Windows and in the web's module), under the zlib license."; echo; cat "$WORK/$ZLIB/LICENSE"; } > "$OUT/licenses/zlib.txt"
 fi
 echo "$PLATFORM: $(du -sh "$OUT" | cut -f1) in $OUT"

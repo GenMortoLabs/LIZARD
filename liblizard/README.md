@@ -118,6 +118,10 @@ cd bindings/kotlin && ./gradlew :lizard:test                    # after the jvm 
 cd bindings/kotlin && ./gradlew :lizard-android:assembleRelease # the AAR
 ```
 
+Beside the codec's module the default `./build.sh` makes the web receiver's file reader, `dist/lizard-media.mjs` and its
+`.wasm` (`lizard_media`, `LIZ_WASM_MEDIA`: the file camera's reader, `core/cam/media_source.cpp`, over FFmpeg built for
+WebAssembly by `ffmpeg/build.sh wasm`); it is the web app's, not part of the package below.
+
 The wasm package holds two builds of one module. `dist/lizard.mjs` runs the codec's vector paths on WebAssembly SIMD
 and throws C++ exceptions as wasm's own (wasm exception handling); `dist/lizard-mvp.mjs` is WebAssembly 1.0 with no
 extension (the codec's scalar paths, exceptions through JS; emscripten's libc has its sign extension, bulk memory and

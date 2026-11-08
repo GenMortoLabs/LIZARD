@@ -67,6 +67,14 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
 
+      # FFmpeg for the web's file camera (liblizard/ffmpeg/build.sh wasm), which the codec's build links into
+      # lizard-media.wasm and builds where it is missing; cached by the script's hash and Emscripten's version
+      - name: FFmpeg for wasm (cached)
+        uses: actions/cache@v4
+        with:
+          path: liblizard/build/ffmpeg/wasm
+          key: ffmpeg-wasm-${{ env.EMSDK_VERSION }}-${{ hashFiles('liblizard/ffmpeg/build.sh') }}
+
       - name: The codec
         run: |
           source ~/emsdk/emsdk_env.sh

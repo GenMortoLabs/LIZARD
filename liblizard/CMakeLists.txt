@@ -132,6 +132,28 @@ endif()
 if(NOT EMSCRIPTEN)
   set_target_properties(lizard PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 endif()
+# ai: The web's file camera (2026-11-07; LIZ_WASM_MEDIA, which build.sh's default build turns on): the apps' reader
+# ai: (core/cam/media_source.cpp) with FFmpeg's static libraries linked in (ffmpeg/build.sh wasm, LIZ_FFMPEG_WASM), a
+# ai: module of its own beside the codec's, lizard-media.mjs and its .wasm in LIZ_WASM_DIST: the page loads it only where
+# ai: a file is played. Its file system takes a picked File mounted read-only (WORKERFS, in a worker).
+option(LIZ_WASM_MEDIA "the web's file camera module (lizard-media.mjs), over ffmpeg/build.sh wasm" OFF)
+if(EMSCRIPTEN AND LIZ_WASM_MEDIA)
+  set(LIZ_FFMPEG_WASM ${CMAKE_CURRENT_SOURCE_DIR}/build/ffmpeg/wasm CACHE PATH "FFmpeg built for wasm (ffmpeg/build.sh wasm)")
+  if(NOT EXISTS ${LIZ_FFMPEG_WASM}/lib/libavcodec.a)
+    message(FATAL_ERROR "no FFmpeg for wasm in ${LIZ_FFMPEG_WASM}: run ffmpeg/build.sh wasm first")
+  endif()
+  add_executable(lizard_media bindings/wasm/media.cpp core/cam/media_source.cpp)
+  target_include_directories(lizard_media SYSTEM PRIVATE ${LIZ_FFMPEG_WASM}/include)
+  target_compile_definitions(lizard_media PRIVATE LIZ_HAVE_FFMPEG=1 LIZ_FFMPEG_STATIC=1)
+  target_compile_options(lizard_media PRIVATE -Wall -Wextra)
+  target_link_libraries(lizard_media PRIVATE ${LIZ_FFMPEG_WASM}/lib/libavformat.a ${LIZ_FFMPEG_WASM}/lib/libavcodec.a
+      ${LIZ_FFMPEG_WASM}/lib/libavutil.a ${LIZ_FFMPEG_WASM}/lib/libz.a)
+  set_target_properties(lizard_media PROPERTIES OUTPUT_NAME lizard-media SUFFIX ".mjs" RUNTIME_OUTPUT_DIRECTORY ${LIZ_WASM_DIST})
+  target_link_options(lizard_media PRIVATE -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker,node -sALLOW_MEMORY_GROWTH=1
+      -sFORCE_FILESYSTEM=1 -lworkerfs.js
+      -sEXPORTED_FUNCTIONS=_lizm_open,_lizm_w,_lizm_h,_lizm_frames,_lizm_fps,_lizm_image,_lizm_next,_lizm_why,_lizm_close
+      -sEXPORTED_RUNTIME_METHODS=FS,HEAPU8,ccall,UTF8ToString)
+endif()
 if(WIN32)
   set_target_properties(lizard PROPERTIES PREFIX "")   # ai: lizard.dll, as the Kotlin binding's loader names it
 endif()
