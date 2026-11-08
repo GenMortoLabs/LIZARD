@@ -49,6 +49,12 @@ val moltenVk = rootDir.resolve("build/native/libMoltenVK.dylib")
 // ai: libraries, Windows' driver helper lizard_usb.exe (packaging/windows-extra.sh, packaging/macos-extra.sh), and in
 // ai: licenses/ their license texts, which licenseText adds; none on Linux, whose package depends on the system's
 val extraNative = rootDir.resolve("build/native/extra")
+// ai: the file camera's FFmpeg (2026-11-07; ../liblizard/ffmpeg/build.sh <platform>, decoders only, LGPL): libavutil,
+// ai: libavcodec and libavformat carried beside the library, which loads them at run time from its own folder
+// ai: (liblizard/core/cam/media.cpp); each under its soname alone (Linux's version links copied whole would triple it);
+// ai: its license text (and Windows' zlib's, built into libavcodec there) into licenseText
+val ffmpegDir = rootDir.resolve("../liblizard/build/ffmpeg/" + when { hostOs.contains("win") -> "windows"; onMac -> "macos"; else -> "linux" })
+val ffmpegLibs = if (hostOs.contains("win")) "bin" to "av*-??.dll" else if (onMac) "lib" to "libav*.??.dylib" else "lib" to "libav*.so.??"
 // ai: the TAB blob send.json names (the paint's codes); a tree without liblizard/out or the native library (a fresh clone) still
 // ai: configures, and bundleInputs says what to run (a Sync with no files is skipped, its own actions too)
 val sendJson = liblizardOut.resolve("setup/send.json")
@@ -60,6 +66,8 @@ val bundleInputs by tasks.registering {
     doLast {
         if (!nativeLib.isFile) throw GradleException("no $nativeLib: cmake -S native -B build/native && cmake --build build/native")
         if (onMac && !moltenVk.isFile) throw GradleException("no $moltenVk: libMoltenVK.dylib from a MoltenVK release (MoltenVK/dynamic/dylib/macOS)")
+        if (ffmpegDir.resolve(ffmpegLibs.first).listFiles()?.none { it.name.contains("avformat") } != false)
+            throw GradleException("no FFmpeg in ${ffmpegDir.normalize()}: ../liblizard/ffmpeg/build.sh ${ffmpegDir.name}")
         if (tab == null) throw GradleException("no GPU painter's files in ${liblizardOut.normalize()}: ../lizard-android/build.sh tools, then gen")
         decoderSetups.filter { !liblizardOut.resolve("setup/$it.json").isFile }.let {
             if (it.isNotEmpty()) throw GradleException("no decoder setup ${it.joinToString()} in ${liblizardOut.normalize()}: ../lizard-android/build.sh tools, then gen")
@@ -72,6 +80,7 @@ val bundle by tasks.registering(Sync::class) {
     from(nativeLib) { into("lizard/native") }
     if (onMac) from(moltenVk) { into("lizard/native") }
     from(extraNative) { exclude("licenses/**"); into("lizard/native") }
+    from(ffmpegDir.resolve(ffmpegLibs.first)) { include(ffmpegLibs.second); into("lizard/native") }
     from(liblizardOut) {
         include("setup/*.json", "blobs/*.bin", "spv/*.spv")
         exclude("spv/*.raw.spv")
@@ -147,6 +156,8 @@ val licenseText by tasks.registering(LicenseText::class) {
     if (onMac) { titles.add("MoltenVK (Vulkan over Metal, macOS)"); parts.from(rootDir.resolve("build/native/MoltenVK.LICENSE")) }
     // ai: the libraries carried beside the library (extraNative), each text headed with what it covers
     extraNative.resolve("licenses").listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.forEach { titles.add(""); parts.from(it) }
+    // ai: FFmpeg's (and Windows' zlib's), each text headed with what it covers and where its source is
+    ffmpegDir.resolve("licenses").listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.forEach { titles.add(""); parts.from(it) }
     out.set(layout.buildDirectory.file("license/copyright.txt"))
 }
 

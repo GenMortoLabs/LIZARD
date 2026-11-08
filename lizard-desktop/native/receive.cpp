@@ -8,8 +8,9 @@
 // ai:     (liblizard/core/rx/lizfile.h; 2026-10-28): "packed N frames, B B" or "unpacked N frames", exit 0; FAIL, exit 1
 // ai:   lizard_receive [--camera ID] [--mode INDEX|WxH[@FPS]] [--layout 1:1|2:1] [--decoder auto|gpu|cpu]
 // ai:                  [--assets DIR] [--data DIR] [--out DIR] [--secs S] [--set CONTROL=VALUE|auto]... [--json]
-// ai: --camera upload:<a .lizard or a run's folder> plays a replay (cam/upload.cpp), --layout its crop; its end ends the
-// ai: run as --secs does.
+// ai: --camera upload:<a .lizard> plays a replay (cam/upload.cpp), --layout its crop; --camera file:<path> an image, a
+// ai: video or a .lizard (cam/media.cpp: every frame decoded, as fast as the decoder goes; LIZ_FFMPEG the folder of the
+// ai: FFmpeg libraries, else this program's own); either's end ends the run as --secs does.
 // ai: The camera: the one named, else the simulated one (sim:0) where LIZ_CAMERA_SIM is set (nothing listed), else the
 // ai: first listed (list and this probe every /dev/video* unless LIZ_V4L2_NODES names the nodes: set and empty, none).
 // ai: Its mode: by index, or the first of that size and rate (a rate within half a frame a second; none given, any),
@@ -416,7 +417,9 @@ static int run(int argc, char** argv) {
       double next = 1;
       Found found;
       int idle = 0;   // ai: polls with the camera stopped and nothing taken (the take shows a poll later than the stop)
-      const bool upload = a.camera.rfind("upload:", 0) == 0;
+      const bool upload = a.camera.rfind("upload:", 0) == 0 || a.camera.rfind("file:", 0) == 0;
+      int settled = 0;        // ai: polls since a played file's last frame came out of the decoders
+      double lastFrames = -1;
       for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         found.poll(*s);
@@ -457,12 +460,21 @@ static int run(int argc, char** argv) {
           std::fflush(stdout);
           next += 1;
         }
-        // ai: an upload's end is its file's (cam/upload.cpp), the run as --secs ends it; any other stop a failure
+        // ai: an upload's or a file's end is its file's (cam/upload.cpp, cam/media.cpp), the run as --secs ends it; any
+        // ai: other stop a failure
         const bool played = upload && !s->streaming();
         idle = s->streaming() || played ? 0 : idle + 1;
         if (idle > 10) fail("the camera stopped" + (text(j, "why").empty() ? std::string() : ": " + text(j, "why")));
-        if (gQuit || played || (a.secs > 0 && t >= a.secs)) {
+        // ai: a played file's frames still in the decoders go on into the totals (the session keeps the receiver past
+        // ai: the stream's end): the run ends once the totals have held still for a second
+        if (played) {
+          const double frames = j.contains("totals") ? num(j["totals"], "frames") : 0;
+          settled = frames == lastFrames ? settled + 1 : 0;
+          lastFrames = frames;
+        }
+        if (gQuit || (played && settled >= 10) || (a.secs > 0 && t >= a.secs)) {
           found.poll(*s);
+          if (a.json) std::printf("%s\n", dump(j).c_str());
           summary(j, found, t, false);
           status = j.contains("totals") && num(j["totals"], "blocks") > 0 ? 0 : 1;
           break;

@@ -203,16 +203,18 @@ class ReceiveState(private val app: App) {
     private fun phoneLayout(cams: List<Cam>, id: String) =
         cams.firstOrNull { it.id == id && it.backend == "phone" }?.detail?.substringBefore(",")?.trim()?.takeIf { it == "1:1" || it == "2:1" }
     val phone get() = info?.backend == "phone" || camera.startsWith("phone:")
-    // ai: The Upload camera (2026-10-28, cam/upload.cpp): a .lizard (the phone's Download) or a replay's folder played
-    // ai: as a camera, upload:<path>, asked for by the Camera menu's Upload (Chooser); never listed, never kept as the
-    // ai: camera chosen, its crop the file's (its detail, as a phone's), its end the stream's
+    // ai: A file played as a camera (2026-11-07; the Upload camera's .lizard alone, upload:<path>, from 2026-10-28): an
+    // ai: image, a video or a .lizard, file:<path>, asked for by the Camera menu's File (Chooser); never listed, never kept
+    // ai: as the camera chosen, its end the stream's (cam/media.cpp, upload.cpp). A .lizard among them plays as the Upload
+    // ai: camera, its crop the file's (its detail, as a phone's): `upload`; an image's or a video's crop is the setting's.
     val upload get() = info?.backend == "upload" || camera.startsWith("upload:")
+    val played get() = upload || info?.backend == "file" || camera.startsWith("file:")
     // ai: frames that are another device's crop at its own rate (a phone, an upload): no modes, crop or controls here
     val fixed get() = phone || upload
-    val uploaded: String? get() = camera.takeIf { it.startsWith("upload:") }
-    fun chooseUpload() {
+    val fileChosen: String? get() = camera.takeIf { it.startsWith("upload:") || it.startsWith("file:") }
+    fun chooseFile() {
         val owner = app.frame ?: return
-        Chooser.choose(owner, "Choose a .lizard file", false, false) { f -> f.firstOrNull()?.let { chooseCamera("upload:" + it.path) } }
+        Chooser.choose(owner, "Choose a file", false, false) { f -> f.firstOrNull()?.let { chooseCamera("file:" + it.path) } }
     }
     // ai: A phone by its address (2026-10-27, beside the beacon and the gateways, which a firewall or a route may defeat): the
     // ai: Camera menu's last entry asks for it (askAddress); the address typed is the camera's id, phone:<ip>:<port>
@@ -223,12 +225,12 @@ class ReceiveState(private val app: App) {
     // ai: names the camera open, not its blank "Camera", 2026-11-02)
     val cameraOptions: List<Pair<String, String>> get() =
         cameras.map { it.id to it.label } + listOfNotNull(info?.takeIf { i -> cameras.none { it.id == i.id } }?.let { it.id to it.name }) + usb?.devices.orEmpty().map { it.id to "${it.name} (no USB driver)" } + listOfNotNull(typedPhone?.let { it to "Phone at ${it.removePrefix("phone:").removeSuffix(":$PHONE_PORT")}" }) +
-            listOfNotNull(uploaded?.let { it to File(it.removePrefix("upload:")).name }) + ("phone:" to "Phone by address") + ("upload:" to "Upload")
+            listOfNotNull(fileChosen?.let { it to File(it.substringAfter(':')).name }) + ("phone:" to "Phone by address") + ("file:" to "File")
     fun chooseCameraOption(id: String) {
         askAddress = id == "phone:"
         driverFor = usb?.devices?.firstOrNull { it.id == id }
         if (driverFor != null) return
-        if (id == "upload:") chooseUpload() else if (id != "phone:") chooseCamera(id)
+        if (id == "file:") chooseFile() else if (id != "phone:") chooseCamera(id)
     }
     fun choosePhoneAddress(typed: String) {
         val a = typed.trim()
@@ -309,7 +311,7 @@ class ReceiveState(private val app: App) {
     fun chooseCamera(id: String) {
         if (id == camera && info?.id == id) return
         camera = id
-        if (!id.startsWith("upload:")) Prefs.Rx.camera = id
+        if (!id.startsWith("upload:") && !id.startsWith("file:")) Prefs.Rx.camera = id
         layout = phoneLayout(cameras, id) ?: Prefs.Rx.layout   // ai: a phone's crop its own; another camera's the one kept
         zoom = null; exposure = null; gain = null
         chosenMode = null
@@ -651,7 +653,7 @@ class ReceiveState(private val app: App) {
     // ai: PC's is held by the phase lock; the mode's rate where the camera agreed to none
     // ai: locked: the phase lock on the camera (a GenICam camera's software trigger, cam/aravis.cpp, since 2026-11-01;
     // ai: UVC's lock is {"off": why}, a stream whose trigger did not arm {})
-    val hint: Warn? get() = hintOf(stats, on, phone, upload,
+    val hint: Warn? get() = hintOf(stats, on, phone, played,
         locked = (stats?.get("lock") as? JsonObject)?.let { it.isNotEmpty() && "off" !in it } == true, modeFps = mode?.fps ?: 0.0)
 
     // ai: The readout (Developer Tools; the app's devReadout): a labelled line or two a part, from the stats (receiver.cpp
