@@ -16,14 +16,15 @@ export function cornerProbe(px, w, h, stride) {
 // ai: The camera's frames as VideoFrames: the newest off the track through a MediaStreamTrackProcessor where the
 // ai: browser has one on the page (Chrome), else the <video>'s current frame (new VideoFrame(video): Safari). take()
 // ai: hands over a frame the caller must transfer or close, or null when the track has delivered none since the last
-// ai: take. Only the newest is held, an older one closed as the next arrives: every open frame holds a camera buffer.
+// ai: take; with no track (a file playing on the <video>, recv.mjs startFile) always the <video>'s, which holds the frame
+// ai: it is paused on. Only the newest is held, an older one closed as the next arrives: every open frame holds a camera buffer.
 // ai: stat, since the last resetStat(): frames the track delivered, those closed unseen (a second came before a take),
 // ai: and the largest gap in ms between two deliveries; a tap on the <video> delivers nothing on its own, so its stat
 // ai: stays at zero.
 export function frameTap(track, video) {
   const stat = { delivered: 0, closedUnseen: 0, gapMax: 0 };
   const resetStat = () => { stat.delivered = 0; stat.closedUnseen = 0; stat.gapMax = 0; };
-  if (typeof MediaStreamTrackProcessor !== "function") return { kind: "video", stat, resetStat, take: () => { try { return new VideoFrame(video); } catch { return null; } }, stop() {} };
+  if (!track || typeof MediaStreamTrackProcessor !== "function") return { kind: "video", stat, resetStat, take: () => { try { return new VideoFrame(video); } catch { return null; } }, stop() {} };
   const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
   let newest = null, stopped = false, lastAt = 0;
   const tap = {

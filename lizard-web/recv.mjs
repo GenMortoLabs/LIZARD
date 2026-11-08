@@ -83,7 +83,7 @@ let gpu = null, gpuWhy = "";
 function startGpu() {
   const w = new Worker(new URL("./recv-gpu-worker.mjs", import.meta.url), { type: "module" });
   gpu = { gpu: true, w, ready: false, up: false, frames: true, out: 0, cap: 0, adapter: "" };
-  w.onmessage = ({ data: m }) => onGpu(m);
+  w.onmessage = ({ data: m }) => { onGpu(m); fileRoom(); };
   w.onerror = (e) => { e.preventDefault?.(); gpuFail(`the GPU worker: ${e.message ?? "failed to start"}`); };
   if (config) w.postMessage({ type: "config", config });
   showDecoder();
@@ -114,6 +114,11 @@ function showDecoder() { $("dec").querySelector('option[value="auto"]').textCont
 const decodersUp = () => (gpu?.up ? [gpu] : pool);
 // ai: config: what the decoders are told, always set (lizardConfig): nothing but the picture sizes to build.
 let config = null, track = null, file = "", next = 0, busySkips = 0;
+// ai: A file played as the camera (2026-11-07, the apps' File: the Camera menu's last entry; recv.mjs startFile): picked,
+// ai: the File the menu names (its option "picked"), kept until another is picked or the page goes; media, the one playing
+// ai: (null while none plays). sourceOn(): a camera or a file running.
+let picked = null, media = null;
+const sourceOn = () => !!(track || media), fileChosen = () => !!picked && $("cam").value === "picked";
 let photoCaps = {}, levels = null;   // what the camera says it can be told, and the grey range it actually delivers
 // The last format word read out of a symbol (src/fmt.h): the version, and the rate the sender means to paint at.
 // ai: LIZARD's decoders read everything from the light; this is what the light last said of the format, as shown
@@ -173,7 +178,7 @@ function plainVerdict(text) {
   return text;
 }
 function showState() {
-  const on = !!track, h = xferNow?.header, go = $("go"), offered = !!h && xferNow.done && h.root === ui.received?.root;
+  const on = sourceOn(), h = xferNow?.header, go = $("go"), offered = !!h && xferNow.done && h.root === ui.received?.root;
   // ai: What the column shows as elements (ui.mjs details, 2026-11-07; the apps' Readout.line and lizard-ui Details;
   // ai: "Receiving x" over "49%, 147 of 300 KB, 2 s left" before): the file's name with its percentage, the meter,
   // ai: Received, Size, Time left and Speed; the test stream its name and Speed; a file in only with Show statistics on
@@ -235,6 +240,7 @@ function showState() {
   // ai: ReceiveScreen; over the box with the rail's red triangle before): said once, OK closing it until another comes
   const idle = !on && !ui.starting;
   $("idle").hidden = !idle;
+  $("idleText").textContent = fileChosen() ? picked.name : "Camera off";   // ai: the apps' too: a file chosen is named
   $("loading").hidden = idle || !(ui.starting || loading);
   if (!ui.err) ui.said = "";
   else if (ui.err !== ui.said) { ui.said = ui.err; sayErr(ui.err); }
@@ -363,7 +369,7 @@ function kill(slot) {
 function newWorker(slot) {
   kill(slot);
   Object.assign(slot, { w: new Worker(new URL("./recv-worker.mjs", import.meta.url), { type: "module" }), busy: false, ready: false, frames: false, sentAt: 0, bootAt: performance.now(), readyAt: null, secMs: 0, secN: 0, setupMs: null, firstMs: null, buildMs: 0 });
-  slot.w.onmessage = ({ data: m }) => onResult(slot, m);
+  slot.w.onmessage = ({ data: m }) => { onResult(slot, m); fileRoom(); };
   // ai: counted, and named on the readout's workers line (workerErrs, lastErr), as a worker's own error message is
   slot.w.onerror = (e) => { e.preventDefault?.(); workerErrs++; lastErr = `decoder worker: ${e.message ?? "failed to start"}`; revive(slot); };
   if (config) slot.w.postMessage({ type: "config", config });
@@ -404,6 +410,9 @@ let camLabel = "", camRate = 0;
 function showCamera() {
   const a = $("cam").querySelector('option[value="auto"]');
   if (a) a.textContent = camLabel || "Camera";
+  // ai: a file has no resolution, rate or zoom of the camera's (the apps' hide theirs)
+  $("resRow").hidden = $("fpsRow").hidden = fileChosen();
+  if (fileChosen()) $("zoomRow").hidden = true;
   $("fps").querySelector('option[value="auto"]').textContent = String(camRate || 60);
 }
 // ai: The camera's frame as a VideoFrame (lizard-web/vframes.mjs), with the crop the grab would have read back, in place of the
@@ -425,7 +434,7 @@ function vfWhyNot(slot = null) {
 // ai: The newest VideoFrame the page can hand over, at the video's size (the crop is the video's). False: it is not
 // ai: that size, so the caller grabs instead. Null: the tap has nothing new since the last take.
 function vfTake() {
-  tap ??= frameTap(track, video);
+  tap ??= frameTap(track, video);   // ai: a file's: no track, the <video>'s kind
   const vf = tap.take();
   if (!vf) return null;
   if (vf.displayWidth !== video.videoWidth || vf.displayHeight !== video.videoHeight) {
@@ -495,7 +504,7 @@ function showFile(name, data, how = "checksum ok", type = "", sent = 0) {
   // ai: The camera off once the file is in (2026-10-01):
   // ai: nothing is left to read, and the phone cools. Once a file (the fountain offers it once), so Start after
   // ai: it reads on.
-  if (track) { second(); stopCamera(); }
+  if (sourceOn()) { second(); stopCamera(); }
   showState();
   if (SAVE_POST) logPost(`/api/file?name=${encodeURIComponent(name)}`, blob);
 }
@@ -666,7 +675,9 @@ function setConfig(c, newTransfer) {
 // ai: showFile just before the camera stops itself, so the row that carries the finished file is posted (a stopped
 // ai: camera posts none; the rates are over the time the window really took).
 function second() {
-  if (!track) return;
+  if (!sourceOn()) return;
+  fileRoom();   // ai: a file's frame held past a worker the watchdog replaces, and its end, are not missed
+  if (!sourceOn()) return;
   // A worker that dies mid-frame, or one whose result is lost, never clears its busy flag, and the pool
   // quietly runs a worker short for the rest of the session while the allocator adds more to make up for
   // it. How long is long enough to say so is STUCK_WAIT. Copied first, because reviving a slot can drop it.
@@ -682,7 +693,7 @@ function second() {
   cur.dt = (performance.now() - cur.t0) / 1000; buckets.push(cur); cur = fresh();
   if (buckets.length > 5) buckets.shift();
   const w = fresh(); for (const b of buckets) { for (const k in w) if (k !== "t0" && k !== "prof" && k !== "loaf") w[k] = MAXED.has(k) ? Math.max(w[k], b[k]) : w[k] + b[k]; for (const k in b.prof) w.prof[k] = (w.prof[k] ?? 0) + b.prof[k]; for (const k in b.loaf) { const a = (w.loaf[k] ??= { n: 0, ms: 0 }); a.n += b.loaf[k].n; a.ms += b.loaf[k].ms; } }
-  const dt = w.dt, s = track.getSettings(), per = (v) => (w.processed ? v / w.processed : 0);
+  const dt = w.dt, s = track?.getSettings() ?? {}, per = (v) => (w.processed ? v / w.processed : 0);
   // Goodput is THIS second's payload over this second's own measured length, not the window's. Both come from
   // counters that are exact: freshBytes is a count of blocks new to the transfer times the block size, and the
   // length is two performance.now() readings. A five-second mean lags the link by seconds and smooths away
@@ -831,8 +842,9 @@ setInterval(second, 1000);
 let trackBox = null, trackTags = new Map();
 const TRACK_MARGIN = 0.10, TRACK_QUANT = 32, TRACK_MIN = 96;
 
-function baseRect() {
-  const vw = video.videoWidth, vh = video.videoHeight, side = Math.min(vw, vh);
+function baseRect() { return rectOf(video.videoWidth, video.videoHeight); }
+function rectOf(vw, vh) {
+  const side = Math.min(vw, vh);
   return CROP === "square" ? { x: Math.floor((vw - side) / 2), y: Math.floor((vh - side) / 2), w: side, h: side } : { x: 0, y: 0, w: vw, h: vh };
 }
 
@@ -940,7 +952,14 @@ function probeCorners(px, w, h) { cropProbe = cornerProbe(px, w, h, 4); }
 let frameHandle = 0;
 function onFrame(now, meta) {
   frameHandle = video.requestVideoFrameCallback ? video.requestVideoFrameCallback(onFrame) : requestAnimationFrame(onFrame);
+  takeFrame(meta);
+}
+// ai: The frame on the <video> now: a camera's, or a file's (meta null: the frame a file's video was paused on, taken
+// ai: again by fileRoom). A file's frame waits for a decoder where a camera's is skipped: the video paused on it and the
+// ai: pool told it lost one, so it grows as for a camera (the apps' Receiver waits for room for a file the same way).
+function takeFrame(meta) {
   if (!video.videoWidth) return;
+  if (media && config && !room()) { if (!media.waiting) grow(); media.waiting = true; video.pause(); return; }
   // One camera frame must count once. A callback that repeats the previous frame's timestamp is the same
   // picture again (seen when a second loop was started, and possible on compositors faster than the camera).
   const stamp = meta?.captureTime ?? meta?.mediaTime;
@@ -999,6 +1018,8 @@ function onFrame(now, meta) {
   send(slot, { type: "frame", rgba, w, h, tag: before, delay: DELAY, prof: PROF }, [rgba]);
 }
 
+// ai: room(): a frame would go now (freeSlot's test, without taking the slot)
+const room = () => (gpu?.up ? gpu.ready && gpu.out < gpu.cap : pool.some((c) => c.ready && !c.busy));
 // Round robin over the idle workers, so none goes cold and captures of one display frame spread out.
 function freeSlot() {
   if (gpu?.up) return config && gpu.ready && gpu.out < gpu.cap ? gpu : null;
@@ -1025,6 +1046,9 @@ const booting = () => pool.some((c) => !c.ready && performance.now() - c.bootAt 
 // A frame was lost because every worker was busy. Whether that is worth a worker is lizard-web/pool.mjs.
 function busy() {
   cur.skipped++;
+  grow();
+}
+function grow() {
   if (gpu?.up) return;
   busySkips++;
   if (policy.lost({ allReady: !booting(), size: pool.length, ceiling: limit(), repeatShare })) spawn();
@@ -1036,6 +1060,7 @@ let wake = null;
 function stopCamera() {
   tap?.stop(); tap = null;
   track?.stop(); track = null; video.srcObject = null;
+  if (media) { video.onended = null; video.pause(); video.removeAttribute("src"); video.load(); URL.revokeObjectURL(media.url); media = null; }
   if (looping) { (video.cancelVideoFrameCallback ? video.cancelVideoFrameCallback(frameHandle) : cancelAnimationFrame(frameHandle)); looping = false; }
   wake?.release().catch(() => {}); wake = null;
   while (pool.length > 1 && !FIXED) kill(pool.pop());
@@ -1058,12 +1083,13 @@ async function start() {
   if (avgAt && ui.stoppedAt) avgAt += performance.now() - ui.stoppedAt;
   ui.stoppedAt = 0;
   showState();
-  try { await startCamera(); }
-  catch (e) { console.error("camera did not start:", e); if (track) stopCamera(); ui.err = startError(e); }
+  try { await (fileChosen() ? startFile() : startCamera()); }
+  catch (e) { console.error("camera did not start:", e); if (sourceOn()) stopCamera(); ui.err = startError(e); }
   finally { ui.starting = false; showState(); }
 }
 function startError(e) {
   // ai: what happened, then what it touched or what to do (2026-11-07; sentences before)
+  if (e?.said) return e.said;
   if (!navigator.mediaDevices) return "Insecure page: camera needs https or localhost";
   switch (e?.name) {
     case "NotAllowedError": return "Camera blocked: allow it in site settings";
@@ -1125,6 +1151,56 @@ async function startCamera() {
   resize();
   camAt = performance.now(); firstDecodeMs = null; answered = false;
   if (!looping) { looping = true; onFrame(); }   // a second loop would count every frame twice
+}
+// ai: A file as the camera (2026-11-07; the apps' File, which read any image or video through FFmpeg): here what the
+// ai: browser decodes. An image is one frame (createImageBitmap: its centre square drawn on #shot, the preview, and sent
+// ai: as RGBA, stillFrame); a video plays on the <video> (its object URL) and its frames go as a camera's do, each one
+// ai: decoded (takeFrame waits for room). Its end, every frame back, stops the run with no error, as the apps' (Start
+// ai: plays it again); a file the browser cannot open is "File not read". The page's crop is 1:1 alone, so a 2:1 run's
+// ai: halves side by side do not read here.
+async function startFile() {
+  const f = picked, url = URL.createObjectURL(f);
+  media = { name: f.name, url, kind: "video", waiting: false, ended: false, still: null };
+  const bmp = f.type.startsWith("video/") ? null : await createImageBitmap(f).catch(() => null);
+  if (bmp) {
+    const r = rectOf(bmp.width, bmp.height);
+    shot.width = r.w; shot.height = r.h; sctx.drawImage(bmp, -r.x, -r.y); bmp.close();
+    Object.assign(media, { kind: "image", still: r });
+    preview("shot"); showCrop();
+  } else {
+    video.srcObject = null; video.src = url; video.loop = false;
+    video.onended = () => { if (media?.url === url) { media.ended = true; fileRoom(); } };
+    try { await video.play(); }
+    catch (e) { console.error("file not played:", e); throw Object.assign(new Error(`not played: ${e?.name}`), { said: `File not read: ${f.name}` }); }
+  }
+  cur = fresh(); buckets = []; lastPresented = 0; prevArrive = 0; lastStamp = undefined;
+  poolVfOff = ""; vfFormat = ""; tapNone = 0;
+  best = freshBest();
+  resize();
+  camAt = performance.now(); firstDecodeMs = null; answered = false;
+  if (media.kind === "image") stillFrame();
+  else if (!looping) { looping = true; onFrame(); }
+}
+// ai: The image's one frame to a decoder, once one is free (else fileRoom sends it as one frees)
+function stillFrame() {
+  const slot = freeSlot();
+  if (!slot) { media.waiting = true; return; }
+  media.waiting = false; media.ended = true;
+  const r = media.still, rgba = sctx.getImageData(0, 0, r.w, r.h).data.buffer, tag = performance.now();
+  cur.captured++;
+  trackTags.set(tag, r);
+  send(slot, { type: "frame", rgba, w: r.w, h: r.h, tag, delay: DELAY, prof: PROF }, [rgba]);
+}
+// ai: A decoder free again (each answer, and once a second): a file's frame that waited goes, the video playing on from
+// ai: it; a file at its end with every frame back stops the run (second() first, so its row carries the last of it).
+function fileRoom() {
+  if (!media) return;
+  if (media.waiting && room()) {
+    if (media.kind === "image") stillFrame();
+    else { media.waiting = false; takeFrame(null); if (media && !media.waiting && !video.ended) video.play().catch(() => {}); }
+  }
+  // ai: ended cleared first: second() asks here again
+  if (media?.ended && !media.waiting && (gpu?.up ? gpu.out === 0 : !pool.some((c) => c.busy))) { media.ended = false; second(); stopCamera(); showState(); }
 }
 // ai: The centre square at the source (2026-09-25). Every camera frame reaches Chrome's GPU process
 // ai: whole, and at 1440 and 4K that process fell half a second behind on frames whose pixels the crop mostly throws
@@ -1252,7 +1328,7 @@ $("firstStart").onclick = () => {
   start();
 };
 $("firstCancel").onclick = () => $("first").close();
-$("go").onclick = () => (track ? stopCamera() : limitSeen() ? start() : $("first").showModal());
+$("go").onclick = () => (sourceOn() ? stopCamera() : fileChosen() || limitSeen() ? start() : $("first").showModal());
 $("railCam").onclick = () => $("go").onclick();
 // A new resolution, rate or camera needs a new stream.
 // ai: Not in the middle of a start, which would be stopped under itself: the choice then takes effect at the next start.
@@ -1262,20 +1338,43 @@ $("dec").onchange = () => {
   else { gpuWhy = ""; if (!gpu) startGpu(); }
   showDecoder();
 };
-$("res").onchange = $("cam").onchange = $("fps").onchange = () => { showRates(); if (track && !ui.starting) { stopCamera(); start(); } };
+const restart = () => { showRates(); if (sourceOn() && !ui.starting) { stopCamera(); start(); } };
+$("res").onchange = $("fps").onchange = restart;
+// ai: Camera: a camera, the file picked (its name), or File, which opens the chooser and leaves the menu as it was until
+// ai: a file is picked; the camera kept as recv:cam (a file never: it is not there at the next load)
+let camWas = "auto";
+$("cam").onchange = () => {
+  const sel = $("cam");
+  if (sel.value === "file") { sel.value = camWas; $("media").click(); return; }
+  camWas = sel.value;
+  if (sel.value !== "picked") try { localStorage.setItem("recv:cam", sel.value); } catch {}
+  showCamera(); restart();
+};
+// ai: A file picked: named in the menu and played at once (the apps')
+$("media").onchange = async () => {
+  const f = $("media").files[0];
+  $("media").value = "";
+  if (!f) return;
+  picked = f;
+  await listCameras("picked");
+  if (sourceOn()) stopCamera();
+  if (!ui.starting) start();
+};
 // Which cameras this device has. A phone reports its rear lenses separately (wide, ultrawide, tele) and
 // facingMode picks one of them for you, which is often not the one that focuses closest; this menu says which.
 // Before permission the browser hands back one unnamed entry with an empty id, so there is nothing to list yet.
-async function listCameras() {
-  const sel = $("cam"), want = sel.value;
+async function listCameras(choose) {
+  const sel = $("cam"), want = choose ?? sel.value;
   const devs = (await navigator.mediaDevices?.enumerateDevices?.().catch(() => []) ?? []).filter((d) => d.kind === "videoinput" && d.deviceId);
   const auto = new Option(camLabel || "Camera", "auto");
   auto.hidden = auto.disabled = true;
-  sel.replaceChildren(auto, ...devs.map((d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId)));
-  sel.value = [...sel.options].some((o) => o.value === want) ? want : "auto";
+  sel.replaceChildren(auto, ...devs.map((d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId)), ...(picked ? [new Option(picked.name, "picked")] : []), new Option("File", "file"));
+  sel.value = [...sel.options].some((o) => o.value === want) && want !== "file" ? want : "auto";
   // ai: the camera last chosen here, once the list has it (a list read at load, before any start, where the browser gives
   // ai: ids; never under a running camera, which would then not be the one the menu names)
   if (!track && sel.value === "auto" && !new URLSearchParams(location.search).has("cam")) restoreSaved(sel, "recv:cam");
+  if (sel.value === "file") sel.value = "auto";
+  camWas = sel.value;
   showCamera();
 }
 navigator.mediaDevices?.addEventListener?.("devicechange", listCameras);
@@ -1284,7 +1383,7 @@ document.addEventListener("visibilitychange", async () => { if (track && documen
 // Controls can be preset from the URL: recv.html?workers=4&res=1280x720&auto
 // ai: Settings' menus as the user last left them (localStorage, since 2026-09-29);
 // ai: the URL's presets after, so a scripted run still gets what it names. The camera's menu fills later (listCameras).
-for (const el of document.querySelectorAll("#dev select, #logs select")) persist(el, `recv:${el.id}`);
+for (const el of document.querySelectorAll("#dev select:not(#cam), #logs select")) persist(el, `recv:${el.id}`);
 // ai: Show statistics (Developer Tools, the apps'): on, the green line once a file is in and the lab line and readouts
 $("stats").addEventListener("change", () => { document.body.classList.toggle("stats", $("stats").value === "1"); showState(); });
 document.body.classList.toggle("stats", $("stats").value === "1");
