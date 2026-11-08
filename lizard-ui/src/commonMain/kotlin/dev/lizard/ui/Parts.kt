@@ -271,6 +271,20 @@ fun Fold(title: String, open: Boolean, onToggle: () -> Unit, count: String = "",
     }
 }
 
+// ai: Home at the foot of the tool screens' column, under its last fold (2026-11-07): a fold's row, its hairline, title and
+// ai: height, with the back arrow in the chevron's place; the expanded column's way Home, as the rail's foot is the
+// ai: collapsed one's (landscape and the desktop; portrait has its bar's arrow)
+@Composable
+fun HomeRow(onHome: () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        HorizontalDivider(color = Line)
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = onHome), verticalAlignment = Alignment.CenterVertically) {
+            Text("Home", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = Fg, modifier = Modifier.weight(1f))
+            Icon(Icons.back, contentDescription = null, Modifier.size(20.dp), tint = Muted)
+        }
+    }
+}
+
 // ai: Settings' fields one rhythm (2026-10-02): 16 dp apart (Fields; a fold's whole content, its readouts and buttons
 // ai: too, none spaced on its own).
 @Composable

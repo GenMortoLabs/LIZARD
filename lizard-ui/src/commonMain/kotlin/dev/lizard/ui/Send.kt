@@ -132,7 +132,7 @@ fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
             if (h.swapInColumn) ({ SwapBtn("Receiver") { h.goReceive() } }) else null, h.width,
             columnFloor(h.width),
             mainPadding = h.codePadding, room = h.edgeRoom, roomFill = h.codeFill, bare = h.codeAlone,
-            rail = { SendRail(h) }, side = { Side(h) }) {
+            rail = { SendRail(h) }, side = { Side(h, home = true) }) {
             val size = h.codeSize(maxWidth, maxHeight, false)
             code(if (size != null) Modifier.size(size.width, size.height) else Modifier.fillMaxSize())
         }
@@ -183,7 +183,7 @@ fun SendSideOver(h: SendHost, width: Dp, onClose: () -> Unit) = Row(Modifier.fil
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val scroll = rememberScrollState()
             Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = SidePad)) {
-                CompositionLocalProvider(LocalButtonsFill provides h.width.stretch) { Side(h) }
+                CompositionLocalProvider(LocalButtonsFill provides h.width.stretch) { Side(h, home = true) }
             }
             LocalScrollbar.current(scroll, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
         }
@@ -208,7 +208,7 @@ fun SendRail(h: SendHost) {
 }
 
 @Composable
-private fun Side(h: SendHost) {
+private fun Side(h: SendHost, home: Boolean = false) {
     Spacer(Modifier.height(12.dp))
     val fill = LocalButtonsFill.current
     Row(if (fill) Modifier.fillMaxWidth() else Modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -237,6 +237,7 @@ private fun Side(h: SendHost) {
         Settings(h.tools)
         h.readout?.let { CodeBlock(it.text, it.size) }
     }
+    if (home) HomeRow { h.goHome() }
     Spacer(Modifier.height(24.dp))
 }
 

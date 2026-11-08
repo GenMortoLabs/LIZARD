@@ -120,7 +120,7 @@ fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
     } else {
         // ai: the column's floor, Send's too (columnFloor), so the column is the same on both screens
         ToolLandscape("Receive", h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
-            if (h.swapInColumn) swap else null, h.width, columnFloor(h.width), rail = { RailSquares(h) }, side = { Side(h) }) {
+            if (h.swapInColumn) swap else null, h.width, columnFloor(h.width), rail = { RailSquares(h) }, side = { Side(h, home = true) }) {
             if (got) ReceivedPanel(h, Modifier.fillMaxSize(), column = 576.dp)
             else {
                 val w = minOf(maxHeight * ratio, maxWidth)
@@ -183,11 +183,12 @@ private fun RailSquares(h: ReceiveHost) {
 }
 
 @Composable
-private fun Side(h: ReceiveHost) {
+private fun Side(h: ReceiveHost, home: Boolean = false) {
     TransferPanel(h)
     Fold("Settings", h.folds.open(FoldKey.RecvSettings), { h.folds.toggle(FoldKey.RecvSettings) }) { Settings(h.settings) }
     if (h.experimental.isNotEmpty()) Fold("Experimental", h.folds.open(FoldKey.RecvExperimental), { h.folds.toggle(FoldKey.RecvExperimental) }) { Settings(h.experimental) }
     Fold("Developer Tools", h.folds.open(FoldKey.RecvTools), { h.folds.toggle(FoldKey.RecvTools) }) { Settings(h.tools) }
+    if (home) HomeRow { h.goHome() }
     Spacer(Modifier.height(24.dp))
 }
 
