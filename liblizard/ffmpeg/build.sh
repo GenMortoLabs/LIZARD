@@ -31,7 +31,8 @@ JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 fetch() {
   local name=$1 url=$2 sum=$3 file=$CACHE/$(basename "$2")
   mkdir -p "$CACHE"
-  [ -f "$file" ] || curl -sSfL -o "$file.part" "$url" && { [ -f "$file" ] || mv "$file.part" "$file"; }
+  # ai: a connection the server drops is tried again (ffmpeg.org reset one on CI's macOS runner, 2026-11-08)
+  [ -f "$file" ] || curl -sSfL --retry 5 --retry-all-errors --retry-delay 5 -o "$file.part" "$url" && { [ -f "$file" ] || mv "$file.part" "$file"; }
   local got
   got=$( (sha256sum "$file" 2>/dev/null || shasum -a 256 "$file") | cut -d' ' -f1)
   [ "$got" = "$sum" ] || { echo "$name: $file is $got, not the pinned $sum" >&2; rm -f "$file"; exit 1; }
