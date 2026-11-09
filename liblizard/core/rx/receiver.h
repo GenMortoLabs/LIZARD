@@ -86,7 +86,8 @@ class Receiver {
   // ai: where they mean the same (lizard-web/recv.mjs). `windowSecs`: the length of the window the goodput and
   // ai: the registered share are over (a window opens at a stream's first frame and closes a second or more on, at the
   // ai: next frame the C is handed or decodes, the next batch the GPU delivers; the figures 0 until a stream's first
-  // ai: closes: cameraClosed); `B` and `cap` (the GPU decoder): the batcher's size and batchCap's n; `anchors` (the GPU
+  // ai: closes: cameraClosed); `B`, `cap` and `fill` (the GPU decoder): the batcher's size, batchCap's n and
+  // ai: fillBatches' switch; `anchors` (the GPU
   // ai: decoder): the median of the anchors it read over the window's found frames (SPEC 6.13), null with the C.
   virtual std::string stats() = 0;
   // ai: The newest frames with no JSON, for a reader that asks at every capture (the app's phase lock, Engine.kt):
@@ -99,6 +100,11 @@ class Receiver {
   // ai: a launch still goes as soon as a frame is staged and a lane is free, with every frame then staged up to n; 0,
   // ai: the batcher's size (32 where memory allows). 1 decodes each frame alone. The C decodes a frame at a time.
   virtual void batchCap(int n) = 0;
+  // ai: Full batches (2026-11-08): on, a GPU launch waits until the most it takes (the batcher's size, 32 where memory
+  // ai: allows, or batchCap's n) are staged, the oldest staged has waited FILL_MS (500 ms) or the camera closed; off (the
+  // ai: default), a launch goes as soon as a frame is staged and a lane is free (the phase lock's short loop: a reading
+  // ai: each launch). The receive session turns it on where no lock steers the frames' camera. The C: nothing to fill.
+  virtual void fillBatches(bool on) { (void)on; }
   // ai: The received file's path once its root is verified, else empty.
   virtual std::string file() = 0;
   // ai: Forget the transfer and its file (the page's Clear).

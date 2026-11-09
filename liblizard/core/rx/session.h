@@ -96,6 +96,14 @@ class Session {
   // ai: Phase Loading at the call where the camera was asked to run. A refusal: the camera closed, the phase's Error.
   Done reconfigure(const std::string& decoder, const std::string& layout);
   Done batchCap(int n);   // ai: receiver.h batchCap, kept for a receiver made later
+  // ai: The phase lock (the user's setting, on unless set; 2026-11-08): on, a camera that can delay a capture (camera.h
+  // ai: delayBar "") runs the lock and at most LOCK_FPS captures a second (a faster mode asked or kept runs at the fastest
+  // ai: of its size and format at or under it, lockMode); off, the lock idles and every mode the camera lists runs as
+  // ai: asked. Turned on: a kept mode past LOCK_FPS kept as that slower one, a stream running past it started again in
+  // ai: it. The lab's switch (debug.lizard.phase, LIZ_PHASE) can only hold it off. Where no lock steers the camera
+  // ai: (off, or a camera that cannot delay a capture) the GPU decoder fills its batches (receiver.h fillBatches), but
+  // ai: for a phone streaming here, whose own lock reads this decoder's series.
+  Done phaseLock(bool on);
   // ai: An unfinished transfer let go by its root or its folder's id (receiver.h forget; no receiver: its folder).
   Done forget(const std::string& root);
   // ai: The transfer in hand and its file let go (receiver.h clear), so the same file in the light is received anew
@@ -105,6 +113,9 @@ class Session {
   // ai: when either stops; meta, a JSON object of the platform's own fields for the run's meta.json (the app's build).
   // ai: A run that ends whole lets the runs before it go.
   Done replays(bool on, const std::string& meta);
+  // ai: Replay size: the cap of a run's kept frames' raw bytes (held to REPLAY_BYTES_MIN .. REPLAY_BYTES_MAX), the run
+  // ai: recording trimmed to it at once, the next run made with it.
+  Done replayBytes(int64_t bytes);
   // ai: The platform's own fields (a JSON object: heat, power), merged into the stats, each replay row and a run's meta
   // ai: (its end's) from now on.
   void extra(const std::string& json);
@@ -142,11 +153,13 @@ class Session {
   // ai:   replays [{run, path, state "recording" | "saving" | "ready" | "failed", frames, bytes, error}], on (the switch);
   // ai:   lock: the phase lock's state (phase_lock.h State: arm, state, a, b, k, se, n, gain, pace, stood, edge, flatMs,
   // ai:   delays, refreshMs, multiple, frameMs, landMs, row; NaN as null; {} before its first decision), or {"off": why}
-  // ai:   where the camera started last cannot delay a capture (camera.h delayBar); a replay's rows and meta carry the same
+  // ai:   where the camera started last cannot delay a capture (camera.h delayBar) or the lock is turned off ("turned
+  // ai:   off", phaseLock); a replay's rows and meta carry the same
   // ai:   under "phase" (the Android app's key); camera.report: the camera's own (camera.h report);
   // ai:   and extra's fields. With no receiver yet: the session's fields alone.
   std::string stats();
-  // ai: The camera open: {"info", "modes", "pick", "controls" (values as last read), "mode" (the index started last, -1
+  // ai: The camera open: {"info", "modes", "pick", "controls" (values as last read), "lockBar" (why it cannot delay a
+  // ai: capture, camera.h delayBar; "" it can: the phase lock's setting applies), "mode" (the index started last, -1
   // ai: none), "streaming", "kept": {"mode" (the index start("") takes, -1 none), "zoom" (its crop's), "exposure",
   // ai: "gain" (null: the camera's own)}}; {} with none. Never waits.
   std::string camera();

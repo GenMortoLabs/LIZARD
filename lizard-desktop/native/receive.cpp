@@ -7,7 +7,13 @@
 // ai:     a replay's folder (Save replays: meta.json, stats.jsonl, NNNN.gray) as one .lizard, and back
 // ai:     (liblizard/core/rx/lizfile.h; 2026-10-28): "packed N frames, B B" or "unpacked N frames", exit 0; FAIL, exit 1
 // ai:   lizard_receive [--camera ID] [--mode INDEX|WxH[@FPS]] [--layout 1:1|2:1] [--decoder auto|gpu|cpu]
-// ai:                  [--assets DIR] [--data DIR] [--out DIR] [--secs S] [--set CONTROL=VALUE|auto]... [--json]
+// ai:                  [--assets DIR] [--data DIR] [--out DIR] [--secs S] [--set CONTROL=VALUE|auto]... [--lock on|off]
+// ai:                  [--batch N] [--replays MB] [--json]
+// ai: --batch: the most frames a GPU launch takes (receiver.h batchCap; 0, the batcher's size, unless named).
+// ai: --replays: Save replays on from the start, its Replay size MB (session.h replayBytes: 256 to 8192), the runs in the
+// ai: data folder's replays/ (with --data, kept).
+// ai: --lock: the phase lock (session.h phaseLock; on unless named, as the apps' setting): off, a mode past 60 runs and the
+// ai: GPU decoder fills its batches where it would launch at once (2026-11-08).
 // ai: --camera upload:<a .lizard> plays a replay (cam/upload.cpp), --layout its crop; --camera file:<path> an image, a
 // ai: video or a .lizard (cam/media.cpp: every frame decoded, as fast as the decoder goes; LIZ_FFMPEG the folder of the
 // ai: FFmpeg libraries, else this program's own); either's end ends the run as --secs does.
@@ -70,7 +76,8 @@ std::atomic<bool> gQuit{false};
 struct Args {
   bool list = false, json = false;
   std::string tool, from, to;   // ai: pack or unpack, its two paths
-  std::string camera, mode, layout = "1:1", decoder = "auto", assets = LIZ_ASSETS, data, out = ".";
+  std::string camera, mode, layout = "1:1", decoder = "auto", assets = LIZ_ASSETS, data, out = ".", lock = "on";
+  int batch = 0, replayMb = 0;
   double secs = 0;
   std::vector<std::string> sets;
 };
@@ -80,7 +87,8 @@ struct Args {
                "%s%susage: lizard_receive list\n"
                "       lizard_receive pack RUN FILE.lizard | unpack FILE.lizard RUN\n"
                "       lizard_receive [--camera ID] [--mode INDEX|WxH[@FPS]] [--layout 1:1|2:1] [--decoder auto|gpu|cpu]\n"
-               "                      [--assets DIR] [--data DIR] [--out DIR] [--secs S] [--set CONTROL=VALUE|auto]... [--json]\n",
+               "                      [--assets DIR] [--data DIR] [--out DIR] [--secs S] [--set CONTROL=VALUE|auto]... [--lock on|off]\n"
+               "                      [--batch N] [--replays MB] [--json]\n",
                why.c_str(), why.empty() ? "" : "\n");
   std::exit(2);
 }
@@ -113,6 +121,9 @@ Args parse(int argc, char** argv) {
       else if (k == "--mode") a.mode = v;
       else if (k == "--layout") a.layout = v;
       else if (k == "--decoder") a.decoder = v;
+      else if (k == "--lock") a.lock = v;
+      else if (k == "--batch") a.batch = std::stoi(v);
+      else if (k == "--replays") a.replayMb = std::stoi(v);
       else if (k == "--assets") a.assets = v;
       else if (k == "--data") a.data = v;
       else if (k == "--out") a.out = v;
@@ -123,6 +134,7 @@ Args parse(int argc, char** argv) {
   }
   if (a.layout != "1:1" && a.layout != "2:1") usage("--layout is 1:1 or 2:1");
   if (a.decoder != "auto" && a.decoder != "gpu" && a.decoder != "cpu") usage("--decoder is auto, gpu or cpu");
+  if (a.lock != "on" && a.lock != "off") usage("--lock is on or off");
   if (a.secs < 0) usage("--secs is 0 (no end) or more");
   for (const auto& s : a.sets)
     if (s.find('=') == std::string::npos || s.front() == '=') usage("--set is CONTROL=VALUE or CONTROL=auto: " + s);
@@ -374,6 +386,9 @@ static int run(int argc, char** argv) {
       c.log = [](const std::string& m) { std::fprintf(stderr, "lizard: %s\n", m.c_str()); };
       s = lizard::Session::create(c, why);
       if (!s) fail(why);
+      s->phaseLock(a.lock == "on");
+      if (a.batch > 0) s->batchCap(a.batch);
+      if (a.replayMb > 0) { s->replayBytes((int64_t)a.replayMb << 20); s->replays(true, "{}"); }
       std::string id = a.camera;
       // ai: the simulated camera where one is set up (LIZ_CAMERA_SIM), with nothing listed: a test's run never reaches a
       // ai: real camera by default (2026-10-25, as V4L2 came to probe /dev/video* unless LIZ_V4L2_NODES says otherwise)

@@ -38,8 +38,11 @@ import dev.lizard.ui.RxPhase
 import dev.lizard.ui.Setting
 import dev.lizard.ui.Slide
 import dev.lizard.ui.flag
+import dev.lizard.ui.lockedRates
 import dev.lizard.ui.num
 import dev.lizard.ui.obj
+import dev.lizard.ui.phaseLockSetting
+import dev.lizard.ui.replaySizeSetting
 import dev.lizard.ui.runLine
 import dev.lizard.ui.str
 import java.util.Locale
@@ -190,7 +193,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
 
     // ai: Settings (2026-10-02, the web's): the decoder (auto shows what it runs on; PC only while a PC receiver is heard
     // ai: on the link), the PC link while a cable is in, the PC decoder's Compression, the GPU's Batch size, the camera
-    // ai: (the back lenses), its mode (Resolution, Format and Frame rate, the session's), Zoom, Crop
+    // ai: (the back lenses), its mode (Resolution, Format, Phase lock and Frame rate, the session's), Zoom, Crop
     override val settings: List<Setting> get() {
         val out = mutableListOf<Setting>()
         val sizes = r.modes.map { it.size }.toSet()
@@ -235,8 +238,13 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
             r.modes.any { it.format == k && (k.startsWith("raw") || it.size == res) } && !(k == "private" && (s.decoder == "cpu" || s.decoder == "pc"))
         }
         if (fmts.size > 1 || fmt != "auto") out += Choice("Format", fmt, listOf("auto" to "Auto") + fmts) { r.chooseFormat(it) }
-        // ai: the rates the lens offers at this size and format, up to 60 (cam/android.cpp ratesOf), where there is a choice
-        val rates = r.modes.filter { it.size == res && it.format == fmt }.map { it.fps }.distinct().sortedDescending()
+        // ai: Phase lock (2026-11-08), above the rates: On or Off where the lens can delay a capture, else greyed "Not
+        // ai: supported" (as if it can until the session describes the lens)
+        val locks = r.lockBar?.isEmpty() ?: true
+        out += phaseLockSetting(s.lock != "off", locks) { on -> a.change(s.copy(lock = if (on) "on" else "off")) }
+        // ai: the rates the lens offers at this size and format (cam/android.cpp ratesOf), at most 60 while it holds the
+        // ai: lock, where there is a choice
+        val rates = lockedRates(r.modes.filter { it.size == res && it.format == fmt }.map { it.fps }.distinct().sortedDescending(), locks && s.lock != "off")
         val fps = r.mode?.fps ?: rates.firstOrNull() ?: 0.0
         if (rates.size > 1) out += Choice("Frame rate", fpsText(fps), rates.map { fpsText(it) to fpsText(it) }) { v ->
             rates.firstOrNull { fpsText(it) == v }?.let { r.chooseFps(it) }
@@ -280,7 +288,10 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override val tools: List<Setting> get() {
         val out = mutableListOf<Setting>()
         out += Choice("Show statistics", s.stats, listOf("off" to "Off", "on" to "On")) { a.change(s.copy(stats = it)) }
-        if (s.decoder != "pc" && r.file == null) out += Choice("Save replays", s.replays, listOf("off" to "Off", "on" to "On")) { a.change(s.copy(replays = it)) }
+        if (s.decoder != "pc" && r.file == null) {
+            out += Choice("Save replays", s.replays, listOf("off" to "Off", "on" to "On")) { a.change(s.copy(replays = it)) }
+            if (s.replays == "on") out += replaySizeSetting(s.replayMb) { a.change(s.copy(replaySize = it.toString())) }
+        }
         for (rp in r.runs) {
             if (s.stats == "on") out += Code(runLine(rp), 12)
             if (rp.state == RunState.Ready) out += Press(Act(if (MainActivity.exporting == rp.run) "Downloading" else "Download") { a.downloadReplay(rp) },

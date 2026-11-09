@@ -157,6 +157,10 @@ struct Batcher {
   FrontHalf* fh = nullptr;
   double budget = 0, capMs = 400;
   int size = 0, ceiling = 0, Bmax = 0, lanes = 2, inflight = 2;
+  // ai: the ring's batches (2026-11-08): 1, a batch's frames and RING_SLACK (a launch goes as soon as a frame is
+  // ai: staged); inflight + 1 where the receiver fills its batches (Receiver::fillBatches), so a full batch stages while
+  // ai: the batches in flight still read theirs. Set before a plan.
+  int ringBatches = 1;
   double perFrame = 0, shared = 0, room = 0, slotBytes = 0, planMs = 0;
   int cap = 0;
   std::string capWhy, bound, BmaxWhy;
@@ -217,6 +221,9 @@ class FrontHalf {
   // ai: and whether the forms are still to be timed on the first batch
   int ldpcForm = 0;
   bool ldpcPending = false;
+  // ai: the forms still to be timed on a finished batch (the classifier's int8 twin, the LDPC kernel's forms: measureTwins,
+  // ai: measureLdpc, on the decoder's thread over that batch's frames); the receiver fills no batch meanwhile
+  bool measuring() const { return !twinForms.is_null() || ldpcPending; }
   std::vector<bool> ldpcBuilt;   // ai: a form a device holds, every kernel of it built (Setup's unbuilt)
   // ai: The forms' trial (dec/trial.h, 2026-10-31) sets the form a batch runs by hand and leaves out a form that was
   // ai: wrong or hung on the known frames, for good: the first batch's timing then picks among the rest. trialling:

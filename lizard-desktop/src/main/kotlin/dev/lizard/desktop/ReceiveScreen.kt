@@ -29,6 +29,9 @@ import dev.lizard.ui.Setting
 import dev.lizard.ui.Slide
 import dev.lizard.ui.Typed
 import dev.lizard.ui.Warn
+import dev.lizard.ui.lockedRates
+import dev.lizard.ui.phaseLockSetting
+import dev.lizard.ui.replaySizeSetting
 import dev.lizard.ui.runLine
 import java.util.Locale
 import kotlin.math.exp
@@ -139,7 +142,12 @@ class DesktopReceive(private val app: App) : ReceiveHost {
             // ai: the pixel formats at this size, where there is a choice (a webcam's uncompressed one against its Motion-JPEG)
             val formats = ci.modes.filter { it.size == m.size }.map { it.format }.distinct()
             if (formats.size > 1) out += Choice("Format", m.format, formats.map { it to it }) { r.chooseFormat(it) }
-            val rates = ci.modes.filter { it.size == m.size && it.format == m.format }.map { it.fps }.distinctBy { ReceiveState.fpsText(it) }.sorted()
+            // ai: Phase lock (2026-11-08), above the rates: On or Off on a camera that can delay a capture (Aravis on its
+            // ai: software trigger), greyed "Not supported" on one that cannot (UVC); with it on, the rates at most 60
+            val locks = ci.lockBar.isEmpty()
+            out += phaseLockSetting(r.lockOn, locks) { r.chooseLock(it) }
+            val rates = lockedRates(ci.modes.filter { it.size == m.size && it.format == m.format }.map { it.fps }.distinctBy { ReceiveState.fpsText(it) }.sorted(),
+                locks && r.lockOn)
             out += Choice("Frame rate", ReceiveState.fpsText(m.fps), rates.map { ReceiveState.fpsText(it) to ReceiveState.fpsText(it) }) { v ->
                 rates.firstOrNull { ReceiveState.fpsText(it) == v }?.let { r.chooseFps(it) }
             }
@@ -208,7 +216,10 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         val out = mutableListOf<Setting>()
         out += Choice("Show statistics", r.showStats, listOf(false to "Off", true to "On")) { r.chooseStats(it) }
         // ai: none for a file: no light is captured
-        if (!r.played) out += Choice("Save replays", r.replays, listOf(false to "Off", true to "On")) { r.chooseReplays(it) }
+        if (!r.played) {
+            out += Choice("Save replays", r.replays, listOf(false to "Off", true to "On")) { r.chooseReplays(it) }
+            if (r.replays) out += replaySizeSetting(r.replayMb) { r.chooseReplayMb(it) }
+        }
         if (r.showStats) {
             for (run in r.runs) {
                 out += Code(runLine(run), 12)

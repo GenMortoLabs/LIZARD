@@ -9,8 +9,9 @@
 // ai: luma by the receiver: ingest/develop.h). P010 is not offered here: the NDK's image reader takes no YCBCR_P010 and
 // ai: its outputs no dynamic range profile. The rates (since 2026-11-01, a mode each): every fixed range the lens
 // ai: lists for a regular capture session (CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES; the constrained high-speed
-// ai: session's own list is never read) up to 60, the fastest first, so the session's pick at 60 is the default; with
-// ai: none fixed, the highest top. Each mode carries its preview size: the largest PRIVATE size of the capture's shape
+// ai: session's own list is never read: the NDK has no such session), past 60 too since 2026-11-08 (the session runs a
+// ai: rate past 60 only with the phase lock off: session.h phaseLock), the fastest first; the session's pick at 60 is
+// ai: the default; with none fixed, the highest top. Each mode carries its preview size: the largest PRIVATE size of the capture's shape
 // ai: up to 1280 wide (it is only for aiming), else the capture's.
 // ai: The request (TEMPLATE_RECORD), each enhancement off where the lens lists its off mode (the camera is a machine
 // ai: vision camera: STATUS "The ISP's enhancements off"): noise reduction, edge enhancement, hot pixel correction,
@@ -204,17 +205,15 @@ Size largest(const std::vector<Size>& v) {
   return b;
 }
 
-// ai: a phone's camera runs at 60 a second at most (the root's Settled: nothing past 60 captured but a machine vision
-// ai: camera's)
-constexpr int32_t MAX_FPS = 60;
-// ai: the rates a mode can take: each fixed range up to MAX_FPS (a fixed range holds the exposure time to the frame),
-// ai: the fastest first; with none, the highest top up to MAX_FPS; {{0, 0}} where none is listed
+// ai: the most a second a camera runs at before a mode is asked (the phase lock's rate, session.cpp LOCK_FPS)
+constexpr int32_t OPEN_FPS = 60;
+// ai: the rates a mode can take: each fixed range (a fixed range holds the exposure time to the frame), the fastest
+// ai: first; with none, the highest top; {{0, 0}} where none is listed. Past 60 since 2026-11-08 (with the lock off)
 std::vector<std::pair<int32_t, int32_t>> ratesOf(const Chars& c) {
   const std::vector<int32_t> v = c.i32s(ACAMERA_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
   std::vector<std::pair<int32_t, int32_t>> fixed;
   std::pair<int32_t, int32_t> top{0, 0};
   for (size_t i = 0; i + 1 < v.size(); i += 2) {
-    if (v[i + 1] > MAX_FPS) continue;
     if (v[i] == v[i + 1] && std::find(fixed.begin(), fixed.end(), std::make_pair(v[i], v[i + 1])) == fixed.end())
       fixed.push_back({v[i], v[i + 1]});
     if (v[i + 1] > top.second) top = {v[i], v[i + 1]};
@@ -356,7 +355,12 @@ class AndroidCamera : public Camera {
     info_.detail = std::string("back") + (logical ? ", logical" : "");
     modes_ = modesOf(*ch_);
     bar_ = lockBarOf(*ch_);
-    fps_ = ratesOf(*ch_).front();
+    {
+      // ai: the fastest rate at most OPEN_FPS until a mode is asked (start), else the slowest listed
+      const auto rs = ratesOf(*ch_);
+      const auto r = std::find_if(rs.begin(), rs.end(), [](const auto& x) { return x.second <= OPEN_FPS; });
+      fps_ = r != rs.end() ? *r : rs.back();
+    }
     // ai: the zoom's range: CONTROL_ZOOM_RATIO_RANGE from API 30, else 1 to the largest digital zoom (a crop region)
     const std::vector<float> zr = ch_->floats(ACAMERA_CONTROL_ZOOM_RATIO_RANGE);
     if (api() >= 30 && zr.size() >= 2) {

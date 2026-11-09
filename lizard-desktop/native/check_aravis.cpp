@@ -40,9 +40,10 @@
 // ai:              lock off, and blocks a second at least twice the run with it off and 400 (2026-11-01, this machine:
 // ai:              45 to 100% clean and 660 to 896 blocks a second with the lock over eight runs, 0 and 0 off; the lock's
 // ai:              delays 21 to 146 in 14 s, its pace wandering about the schedule's 0);
-// ai:   lock 120   the camera at 120 against the 60 Hz screen, lock on, 10 s: the schedule at 8.325 ms, under 1% of
-// ai:              its triggers lost, and the stream reading; what the lock makes of it said, not judged (it takes
-// ai:              the camera's frame for the refresh; every picture captured twice).
+// ai:   lock 120   the camera asked for 120 against the 60 Hz screen, 6 s with the session's phase lock on and 6 s
+// ai:              with it turned off (2026-11-08, the setting): on, it runs at 60, the schedule at 16.650 ms; off, at
+// ai:              120, the schedule at 8.325 ms and the stats' lock {"off": "turned off"}; each under 1% of its
+// ai:              triggers lost and the stream reading (until 2026-11-08 the lock on at 120, said, not judged).
 // ai: Where Aravis does not load and LIZ_ARAVIS is not set (the receiver does without it), or LIZ_ARAVIS is set and
 // ai: empty (off), every case is a skip line with why and the check holds (kHeld: Aravis is every PC system's, so not
 // ai: kNotHere); where LIZ_ARAVIS names a library that does not load, load fails. A build without lizard_fakegv (no
@@ -716,9 +717,11 @@ void triggerCase(Report& r, Camera& c) {
 // ai: One run of the session on a fake filming the simulated screen at a bad start (--start-phase 0.1: a capture
 // ai: beginning a tenth into the picture on screen, which at the 8 ms exposure and the scene's scan reads near
 // ai: nothing), the screen's clock as fast as the schedule (ppm 1000: no slide, so a free schedule stays where it
-// ai: starts), the lock as LIZ_PHASE says; the stats every 250 ms and the receiver's series gathered
+// ai: starts), the lock as LIZ_PHASE says and the session's setting (setting: -1 left as made, on; 0 off; 1 on); the
+// ai: stats every 250 ms and the receiver's series gathered, the rate of the mode the session ran and its last lock
 struct LockRun {
-  std::string why, report;
+  std::string why, report, lock;
+  double modeFps = 0;
   struct Poll { double t, blocks; bool stood; int delays; double landMs, pace; std::string state; };
   std::vector<Poll> polls;
   std::vector<std::array<double, 8>> frames;   // ai: the series' frames, each once
@@ -743,7 +746,7 @@ struct LockRun {
   }
 };
 
-LockRun lockRun(const fs::path& exe, const char* phase, double fps, double secs) {
+LockRun lockRun(const fs::path& exe, const char* phase, double fps, double secs, int setting = -1) {
   LockRun run;
   run.secs = secs;
   std::random_device rd;
@@ -775,10 +778,14 @@ LockRun lockRun(const fs::path& exe, const char* phase, double fps, double secs)
           if (cj["modes"][i].value("format", "") == "Mono8" && std::fabs(cj["modes"][i].value("fps", 0.0) - fps) < 0.01) { mi = int(i); break; }
       if (mi < 0) why = "no Mono8 mode at " + fmt("%.0f", fps);
     }
+    if (s && setting >= 0) done(s->phaseLock(setting == 1), why);
     if (!s) run.why = "the session: " + why;
     else if (mi < 0) run.why = why;
     else if (!done(s->start(std::to_string(mi)), why)) run.why = "start: " + why;
     else {
+      const auto cj = nlohmann::json::parse(s->camera(), nullptr, false);
+      const int ran = cj.is_object() ? cj.value("mode", -1) : -1;
+      if (ran >= 0 && cj.contains("modes") && size_t(ran) < cj["modes"].size()) run.modeFps = cj["modes"][size_t(ran)].value("fps", 0.0);
       const auto t0 = std::chrono::steady_clock::now();
       double since = -1;
       for (;;) {
@@ -793,6 +800,7 @@ LockRun lockRun(const fs::path& exe, const char* phase, double fps, double secs)
                           k.is_object() && k.contains("pace") && k["pace"].is_number() ? k["pace"].get<double>() : NAN,
                           k.is_object() ? k.value("state", std::string()) : std::string()};
           run.polls.push_back(p);
+          run.lock = k.dump();
           if (j.contains("camera") && j["camera"].is_object() && j["camera"].contains("report")) run.report = j["camera"]["report"].dump();
         }
         const auto a = s->series(since);
@@ -850,23 +858,37 @@ void lockCase(Report& r, const fs::path& exe) {
   r.say(bad.empty(), name, bad.empty() ? said : all + " (" + said + ")");
 }
 
-// ai: The camera at 120 against the 60 Hz screen, lock on (what the lock makes of a camera twice the display's rate:
-// ai: said, not judged), held to the schedule running at 8.325 ms with no trigger lost and the stream reading
+// ai: The camera asked for 120 against the 60 Hz screen (2026-11-08, the phase lock's setting): with the lock on it
+// ai: runs at 60 (session.h phaseLock: at most 60 captures a second while it locks), the schedule at 16.650 ms; turned
+// ai: off through the session it runs at 120, the schedule at 8.325 ms, the stats' lock {"off": "turned off"}; each with
+// ai: no trigger lost and the stream reading
 void lock120Case(Report& r, const fs::path& exe) {
   const char* name = "lock 120";
-  const LockRun on = lockRun(exe, nullptr, 120, 10);
-  if (!on.why.empty()) { r.fail(name, on.why); return; }
-  const auto rep = nlohmann::json::parse(on.report, nullptr, false);
-  const auto sch = rep.is_object() ? rep.value("schedule", nlohmann::json()) : nlohmann::json();
-  const bool ran = sch.is_object() && sch.value("periodNs", int64_t(0)) == int64_t(1e9 / 120 * (1 - 0.001)) &&
-                   sch.value("lost", 1e9) <= 0.01 * sch.value("fired", 0.0);
-  size_t n = 0;
-  const double b = on.rate(6), cl = on.clean(6, &n);
-  const auto& last = on.polls.back();
-  r.say(ran && b > 0, name,
-        fmt("the schedule %s; %.0f blocks a second over the last 6 s, %.0f%% of %zu captures clean; the lock %s, %d delays "
-            "asked, %s (it takes the camera's 8.325 ms frame for the display's refresh; each picture captured twice)",
-            sch.dump().c_str(), b, 100 * cl, n, last.state.c_str(), last.delays, last.stood ? "its hold standing" : "its hold not yet standing"));
+  const LockRun on = lockRun(exe, nullptr, 120, 6, 1), off = lockRun(exe, nullptr, 120, 6, 0);
+  if (!on.why.empty() || !off.why.empty()) { r.fail(name, on.why.empty() ? "off: " + off.why : on.why); return; }
+  const auto period = [](const LockRun& x) {
+    const auto rep = nlohmann::json::parse(x.report, nullptr, false);
+    const auto sch = rep.is_object() ? rep.value("schedule", nlohmann::json()) : nlohmann::json();
+    return std::make_pair(sch.is_object() ? sch.value("periodNs", int64_t(0)) : int64_t(0),
+                          sch.is_object() && sch.value("lost", 1e9) <= 0.01 * sch.value("fired", 0.0));
+  };
+  const auto [pOn, okOn] = period(on);
+  const auto [pOff, okOff] = period(off);
+  const auto lk = nlohmann::json::parse(off.lock, nullptr, false);
+  std::vector<std::string> bad;
+  if (std::fabs(on.modeFps - 60) > 0.5 || pOn != int64_t(1e9 / 60 * (1 - 0.001)) || !okOn)
+    bad.push_back(fmt("with the lock on: %.0f a second, the schedule %lld ns%s", on.modeFps, (long long)pOn, okOn ? "" : ", triggers lost"));
+  if (std::fabs(off.modeFps - 120) > 0.5 || pOff != int64_t(1e9 / 120 * (1 - 0.001)) || !okOff)
+    bad.push_back(fmt("with it off: %.0f a second, the schedule %lld ns%s", off.modeFps, (long long)pOff, okOff ? "" : ", triggers lost"));
+  if (!lk.is_object() || lk.value("off", std::string()) != "turned off") bad.push_back("its lock with it off: " + off.lock);
+  if (!(on.rate(4) > 0) || !(off.rate(4) > 0)) bad.push_back(fmt("%.0f and %.0f blocks a second", on.rate(4), off.rate(4)));
+  std::string all;
+  for (const auto& b : bad) all += (all.empty() ? "" : "; ") + b;
+  r.say(bad.empty(), name,
+        bad.empty() ? fmt("120 asked: with the lock on the camera ran at %.0f (the schedule %lld ns), %.0f blocks a second; turned off "
+                          "it ran at %.0f (%lld ns), the lock %s, %.0f blocks a second",
+                          on.modeFps, (long long)pOn, on.rate(4), off.modeFps, (long long)pOff, off.lock.c_str(), off.rate(4))
+                    : all);
 }
 
 void sessionCase(Report& r, const fs::path& exe) {

@@ -106,6 +106,8 @@ class ReceiveState(private val a: MainActivity) {
         private set
     var camId by mutableStateOf("")                   // ai: the camera open (no "android:")
         private set
+    var lockBar by mutableStateOf<String?>(null)      // ai: why the camera open cannot lock ("" it can; null none described)
+        private set
 
     // ai: A file played as the camera (2026-11-07, liblizard/core/cam/media.cpp): an image, a video or a .lizard picked by
     // ai: Settings' Camera menu's File (the system's picker), copied into the cache (receive/, the one before deleted)
@@ -203,7 +205,9 @@ class ReceiveState(private val a: MainActivity) {
                 a.settings.layout)
         }.onSuccess { s ->
             s.batchCap(a.settings.frames)
+            s.phaseLock(a.settings.lock != "off")
             s.replays(replaysOn, replayMeta())
+            s.replayBytes(dev.lizard.ui.replayBytes(a.settings.replayMb))
             rw.write { session = s }
             made++
         }.onFailure { e ->
@@ -271,6 +275,7 @@ class ReceiveState(private val a: MainActivity) {
         run {
             s.reconfigure(st.decoder, st.layout)
             s.batchCap(st.frames)
+            s.phaseLock(st.lock != "off")
             // ai: every start opens the camera afresh (2026-11-01): a stop keeps it open and the session's open keeps an
             // ai: open camera of the same id, so a start after a stop went on in the same open; closed first, it opens again
             s.closeCamera()
@@ -354,7 +359,11 @@ class ReceiveState(private val a: MainActivity) {
     // ai: another decoder or crop: a new receiver on the transfer in hand (the camera started again around it)
     fun reconfigure() { val st = a.settings; use { it.reconfigure(st.decoder, st.layout) } }
     fun batch(n: Int) { use { it.batchCap(n) } }
+    // ai: Phase lock (session.h phaseLock): on, a mode past 60 kept or running goes to 60
+    fun phaseLock(on: Boolean) { use { it.phaseLock(on) } }
     fun replays(on: Boolean) { replaysOn = on; use { it.replays(on, replayMeta()) } }
+    // ai: Replay size (session.h replayBytes): the run recording trimmed to it at once
+    fun replayBytes(mb: Int) { use { it.replayBytes(dev.lizard.ui.replayBytes(mb)) } }
     fun clear() { use { it.clear() } }
     // ai: an unfinished transfer deleted (Home's Delete): forgotten by the session where one is (the receiver's, or its
     // ai: folder), else its folder deleted off the main thread (session.h deletePartial: one of this process's sessions
@@ -493,6 +502,7 @@ class ReceiveState(private val a: MainActivity) {
         val j = parse(cj) ?: return
         val info = j.obj("info") ?: return
         camId = info.str("id").removePrefix("android:")
+        lockBar = j.str("lockBar")
         val ms = modesOf(j)
         modes = ms
         val started = if ("mode" in j) j.num("mode").toInt() else -1

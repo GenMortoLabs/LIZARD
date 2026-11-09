@@ -19,10 +19,12 @@ import dev.lizard.ui.*
 // ai: Upload camera's upload:<a .lizard> too, whose file's end
 // ai: ends the run as secs does; unless named the simulated camera sim:0 where LIZ_CAMERA_SIM
 // ai: is set, else the first listed); mode (an index into the camera's modes, or WxH@fps); layout 1:1 or 2:1; decoder
-// ai: auto, gpu or cpu; replays 0|1 (Save replays on from the start); steps, comma separated
+// ai: auto, gpu or cpu; replays 0|1 (Save replays on from the start); lock 0|1 (Settings' Phase lock from the start, 1
+// ai: unless named); steps, comma separated
 // ai: <seconds>:<action> from the first answer, each as its control does it:
 // ai: start, stop (Start and Stop), swap (the bar's swap: to Send, or back to Receive), home (Home), receive
-// ai: (Home's Receive), layout=1:1|2:1, decoder=auto|gpu|cpu, res=<W>x<H>, format=<name> and fps=<rate> (Settings' menus), zoom=<v>,
+// ai: (Home's Receive), layout=1:1|2:1, decoder=auto|gpu|cpu, res=<W>x<H>, format=<name>, lock=0|1 and fps=<rate> (Settings'
+// ai: menus), settings (Settings' fold opened or closed, its header pressed), tools (Developer Tools' the same), replaymb=<MB> (Replay size's slider, 256 to 8192), zoom=<v>,
 // ai: exposure=<us>|auto and gain=<v>|auto (Settings' bars, a value the camera's own units), driver (Windows: the first
 // ai: device UsbDriver lists as needing one chosen in the Camera menu and Install USB driver pressed; its outcome
 // ai: logged as "usb: ..." and in the line's "usb"), undriver (Remove USB driver); logged on stderr as "step
@@ -30,7 +32,7 @@ import dev.lizard.ui.*
 // ai: Receive, or by itself once a file is in, is no failure; one stopped by an error is.
 class ReceiverTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
     companion object {
-        private val KEYS = setOf("secs", "camera", "mode", "layout", "decoder", "replays", "steps")
+        private val KEYS = setOf("secs", "camera", "mode", "layout", "decoder", "replays", "lock", "steps")
         // ai: how long the camera and the receiver may take to answer (a cold pipeline build on a slow device)
         private const val START_SECS = 60.0
 
@@ -46,6 +48,7 @@ class ReceiverTest private constructor(private val secs: Double, private val kv:
             kv["layout"]?.let { if (it != "1:1" && it != "2:1") fail("LIZ_RECEIVER_TEST: layout=$it") }
             kv["decoder"]?.let { if (it !in setOf("auto", "gpu", "cpu")) fail("LIZ_RECEIVER_TEST: decoder=$it") }
             kv["replays"]?.let { if (it != "0" && it != "1") fail("LIZ_RECEIVER_TEST: replays=$it") }
+            kv["lock"]?.let { if (it != "0" && it != "1") fail("LIZ_RECEIVER_TEST: lock=$it") }
             return ReceiverTest(secs, kv)
         }
 
@@ -69,6 +72,7 @@ class ReceiverTest private constructor(private val secs: Double, private val kv:
         kv["layout"]?.let { r.layout = it }
         kv["decoder"]?.let { r.decoder = it }
         kv["replays"]?.let { r.replays = it == "1" }   // ai: Save replays (Developer Tools), into LIZ_DATA's replays/
+        kv["lock"]?.let { r.lockOn = it == "1" }        // ai: Phase lock (Settings), held in memory as the rest
         (kv["camera"] ?: if (System.getenv("LIZ_CAMERA_SIM") != null) "sim:0" else null)?.let { r.testCamera = it }
         kv["mode"]?.let { r.testMode = it }
     }
@@ -149,6 +153,11 @@ class ReceiverTest private constructor(private val secs: Double, private val kv:
             "receive" -> { app.go(Screen.Receive); return away }
             "layout" -> if (v == "1:1" || v == "2:1") r.chooseLayout(v) else fail("LIZ_RECEIVER_TEST: step $act")
             "decoder" -> if (v in setOf("auto", "gpu", "cpu")) r.chooseDecoder(v) else fail("LIZ_RECEIVER_TEST: step $act")
+            "lock" -> if (v == "0" || v == "1") r.chooseLock(v == "1") else fail("LIZ_RECEIVER_TEST: step $act")
+            "settings" -> r.toggleSettings()
+            "tools" -> r.toggleTools()
+            "replaymb" -> v.toIntOrNull()?.takeIf { it in dev.lizard.ui.REPLAY_MB_MIN..dev.lizard.ui.REPLAY_MB_MAX }?.let { r.chooseReplayMb(dev.lizard.ui.replayMb(it)) }
+                ?: fail("LIZ_RECEIVER_TEST: step $act: Replay size is 256 to 8192 MB")
             // ai: Resolution and Frame rate as their menus take them: a size or a rate the camera offers (a restart; the
             // ai: mode key's choice gives way to the menus' from then on)
             "res" -> if (r.info?.modes?.any { it.size == v } == true) { r.testMode = null; r.chooseRes(v) } else fail("LIZ_RECEIVER_TEST: step $act: no such size")

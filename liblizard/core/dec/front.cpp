@@ -535,7 +535,7 @@ void FrontHalf::makeLanes(int n) {
       B = Bmax;
       for (int i = 0; i < n; i++) lanes.push_back(lane(Bmax));
       for (auto& l : lanes) ensure(*l, planned->W, planned->H);
-      makeRing(Bmax + (int)C.RING_SLACK, planned->W, planned->H);
+      makeRing(Bmax * bt.ringBatches + (int)C.RING_SLACK, planned->W, planned->H);
       dev.flush();
       break;
     } catch (const wg::OutOfMemory& e) {
@@ -1362,8 +1362,8 @@ void Batcher::log(const std::string& m) { fh->log("batch auto: " + m); }
 std::pair<int, std::string> Batcher::limitFor(int n) const {
   const double slot = slotBytes;
   char m[400];
-  int Bm = (int)std::floor((room - fh->C.RING_SLACK * slot) / (n * perFrame + slot));
-  snprintf(m, sizeof m, "memory: %d lanes of %d and a ring of %d fill the %.1f MB budget (a frame %.1f MB a lane and %.1f MB on the ring, %.1f MB shared)", n, Bm, Bm + (int)fh->C.RING_SLACK, budget / MiB, perFrame / MiB, slot / MiB, shared / MiB);
+  int Bm = (int)std::floor((room - fh->C.RING_SLACK * slot) / (n * perFrame + ringBatches * slot));
+  snprintf(m, sizeof m, "memory: %d lanes of %d and a ring of %d fill the %.1f MB budget (a frame %.1f MB a lane and %.1f MB on the ring, %.1f MB shared)", n, Bm, Bm * ringBatches + (int)fh->C.RING_SLACK, budget / MiB, perFrame / MiB, slot / MiB, shared / MiB);
   std::string why = m;
   if (cap < Bm) { Bm = cap; why = capWhy; }
   if (Bm > (int)fh->C.B_CEIL) { Bm = (int)fh->C.B_CEIL; why = "the ceiling of " + std::to_string(fh->C.B_CEIL) + " a batch (past it there is nothing left to amortise)"; }

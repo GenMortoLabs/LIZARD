@@ -114,6 +114,8 @@
       <label>Decoder <select id="dec"><option value="auto" selected hidden disabled>GPU</option><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
       <label id="camRow">Camera <select id="cam"><option value="auto" selected hidden disabled>Camera</option></select></label>
       <label id="resRow">Resolution <select id="res"><option value="1280x720">1280 x 720</option><option value="1920x1080" selected>1920 x 1080</option><option value="2560x1440">2560 x 1440</option><option value="3840x2160">3840 x 2160</option></select></label>
+      <!-- ai: the apps' Phase lock (2026-11-08): a browser cannot delay a capture, so greyed, never kept -->
+      <label id="lockRow">Phase lock <select id="lock" disabled><option selected>Not supported</option></select></label>
       <label id="fpsRow">Frame rate <select id="fps"><option value="auto" selected hidden disabled>60</option><option value="30">30</option><option value="60">60</option></select></label>
       <!-- ai: the camera's own zoom, where the browser exposes it (2026-11-06; the apps' Zoom: the value a ratio of its least) -->
       <div id="zoomRow" class="blocks" hidden><span class="row"><span>Zoom</span><span id="zoomOut"></span></span><input id="zoom" type="range" aria-label="Zoom"></div>

@@ -410,8 +410,8 @@ let camLabel = "", camRate = 0;
 function showCamera() {
   const a = $("cam").querySelector('option[value="auto"]');
   if (a) a.textContent = camLabel || "Camera";
-  // ai: a file has no resolution, rate or zoom of the camera's (the apps' hide theirs)
-  $("resRow").hidden = $("fpsRow").hidden = fileChosen();
+  // ai: a file has no resolution, rate, phase lock or zoom of the camera's (the apps' hide theirs)
+  $("resRow").hidden = $("fpsRow").hidden = $("lockRow").hidden = fileChosen();
   if (fileChosen()) $("zoomRow").hidden = true;
   $("fps").querySelector('option[value="auto"]').textContent = String(camRate || 60);
 }
@@ -1393,7 +1393,7 @@ document.addEventListener("visibilitychange", async () => { if (track && documen
 // Controls can be preset from the URL: recv.html?workers=4&res=1280x720&auto
 // ai: Settings' menus as the user last left them (localStorage, since 2026-09-29);
 // ai: the URL's presets after, so a scripted run still gets what it names. The camera's menu fills later (listCameras).
-for (const el of document.querySelectorAll("#dev select:not(#cam), #logs select")) persist(el, `recv:${el.id}`);
+for (const el of document.querySelectorAll("#dev select:not(#cam):not(#lock), #logs select")) persist(el, `recv:${el.id}`);
 // ai: Show statistics (Developer Tools, the apps'): on, the green line once a file is in and the lab line and readouts
 $("stats").addEventListener("change", () => { document.body.classList.toggle("stats", $("stats").value === "1"); showState(); });
 document.body.classList.toggle("stats", $("stats").value === "1");

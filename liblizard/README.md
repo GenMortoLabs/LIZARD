@@ -56,7 +56,10 @@ reference the engine's C++ lock (`core/rx/phase_lock`) is held to; neither app c
    around it what every receiving app does: the phase a screen shows, the camera's settings kept per camera, a verified
    file taken out of the store into the data folder's `kept/` for the app to place (`liz_kept`, `liz_kept_placed`), the
    camera stopped once a file is in, one session a data folder, Save replays, the stats and the preview; on a camera
-   that can delay a capture (Android's) the phase lock (`core/rx/phase_lock`, fed from the camera's capture results).
+   that can delay a capture (Android's, a GenICam camera on its software trigger) the phase lock (`core/rx/phase_lock`,
+   fed from the camera's capture results), on unless `liz_session_phase_lock` turns it off: on, such a camera runs at
+   most 60 captures a second; off, at any rate it lists. Where no lock steers the camera the GPU decoder fills its
+   batches (a launch waits for a full batch, half a second at most) rather than launching each frame as it comes.
    Android's hooks: the app's preview surface as the camera's second stream (`liz_session_preview_window`), the PC
    link's decoder "pc" and, process-wide with no session, its link (`liz_link`, `liz_link_pack`, `liz_link_state`) and
    a USB accessory (`liz_usb_accessory`), refused elsewhere. A take that fails leaves the file in the store, which

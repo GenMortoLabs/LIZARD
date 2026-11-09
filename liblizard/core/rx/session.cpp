@@ -75,7 +75,9 @@ void osUnlock(intptr_t handle);
 
 constexpr int64_t PREVIEW_HOLD_NS = 1'000'000'000;   // ai: how long a preview asked keeps the capture thread copying crops
 constexpr int TICK_MS = 100;                         // ai: the rules' period between commands
-constexpr int REPLAY_FRAMES = 300;                   // ai: a run's frames (the web's and the apps' 300)
+// ai: a run's cap, the kept frames' raw bytes (Replay size: 256 MiB to 8 GiB, 1 GiB until set; the newest 300 frames
+// ai: until 2026-11-09)
+constexpr int64_t REPLAY_BYTES = int64_t(1) << 30, REPLAY_BYTES_MIN = int64_t(256) << 20, REPLAY_BYTES_MAX = int64_t(8) << 30;
 constexpr size_t REPLAY_ROWS = 60;                   // ai: a run's stats rows, one a second
 const char* const BUSY = "another LIZARD window is receiving";
 // ai: the stats' figures of the receiver's last window (receiver.cpp stats): a stream's, so none while none runs
@@ -256,7 +258,7 @@ json describe(cam::Camera& c, const std::vector<cam::Mode>& modes, const std::ve
   for (const auto& k : controls)
     ks.push_back({{"id", k.id}, {"name", k.name}, {"unit", k.unit}, {"min", k.min}, {"max", k.max}, {"step", k.step},
                   {"def", k.def}, {"value", k.value}, {"canAuto", k.canAuto}, {"isAuto", k.isAuto}});
-  return {{"info", infoJson(c.info())}, {"modes", ms}, {"pick", cam::pick(modes, 1920, 1080, 60)}, {"controls", ks}};
+  return {{"info", infoJson(c.info())}, {"modes", ms}, {"pick", cam::pick(modes, 1920, 1080, 60)}, {"controls", ks}, {"lockBar", c.delayBar()}};
 }
 
 // ai: An object others may still hold for the length of one call (a stats, a series) let go here, on this thread, once
@@ -915,6 +917,7 @@ struct Session::Impl {
       r->r->waitForRoom(camera->waits());
     }
     armLock();
+    applyFill();
     // ai: set before the start, so a stream that ends at once (its Ended on the capture thread before start returns)
     // ai: leaves it false
     streaming = true;
@@ -1020,9 +1023,80 @@ struct Session::Impl {
   std::mutex lockMu;
   std::string lockBar;                   // ai: lockMu: why the camera started last cannot delay a capture ("" it can)
   uint64_t lockCaps = 0;                 // ai: the camera's thread's: its results since its capture session began
+  std::atomic<bool> lockOn{true};        // ai: the user's setting (Session::phaseLock), on unless set
 
-  // ai: the platform's switch: Android's debug.lizard.phase, elsewhere LIZ_PHASE (2026-11-01: a GenICam camera's
-  // ai: trigger, aravis.cpp) (track, or unset or empty, tracks; anything else off), the tools' starts from random phases
+  // ai: The most captures a second a camera runs at while it holds the lock (2026-11-08: past it the lock has nothing to
+  // ai: hold, each picture captured twice by a camera at twice the screen's rate; with the lock off any mode the camera
+  // ai: lists runs, a phone's past 60 included)
+  static constexpr double LOCK_FPS = 60.0;
+  // ai: The mode a camera runs in for the mode asked, m: m itself where the lock is off, the camera cannot delay a
+  // ai: capture, or m is at most LOCK_FPS; else the fastest of m's size and format at most LOCK_FPS, else of its size
+  // ai: (uncompressed first), else camera.h pick's for its size at LOCK_FPS
+  int lockMode(int m) const {
+    if (m < 0 || size_t(m) >= modes.size() || !lockOn || !camera || !camera->delayBar().empty()) return m;
+    const cam::Mode& a = modes[size_t(m)];
+    const double top = LOCK_FPS * 1.005;
+    if (a.fps <= top) return m;
+    int best = -1, near = -1;
+    for (size_t i = 0; i < modes.size(); i++) {
+      const cam::Mode& x = modes[i];
+      if (x.width != a.width || x.height != a.height || x.fps > top) continue;
+      if (x.format == a.format && (best < 0 || x.fps > modes[size_t(best)].fps)) best = int(i);
+      if (near < 0 || x.fps > modes[size_t(near)].fps || (x.fps == modes[size_t(near)].fps && modes[size_t(near)].compressed && !x.compressed)) near = int(i);
+    }
+    if (best >= 0) return best;
+    if (near >= 0) return near;
+    const int p = cam::pick(modes, a.width, a.height, LOCK_FPS);
+    return p >= 0 && modes[size_t(p)].fps <= top ? p : m;
+  }
+
+  // ai: Full batches (Receiver::fillBatches, 2026-11-08): the GPU decoder waits for a full batch wherever no lock steers
+  // ai: the camera (the setting or the lab's switch off, or a camera that cannot delay a capture: UVC, a file), but for a
+  // ai: phone streaming to this machine, whose own lock reads this decoder's series: its frames go at once
+  void applyFill() {
+    std::string bar;
+    {
+      std::lock_guard<std::mutex> l(lockMu);
+      bar = lockBar;
+    }
+    const bool locks = lockOn && bar.empty() && platformMode() == PhaseLock::Mode::Track;
+    const bool phone = camera && camera->info().backend == "phone";
+    if (const auto r = current()) r->r->fillBatches(!locks && !phone);
+  }
+
+  // ai: The setting (Session::phaseLock): on, a kept mode past LOCK_FPS kept as lockMode's and a stream past it started
+  // ai: again there; the receiver's full batches as the lock now asks
+  std::string doPhaseLock(bool on) {
+    lockOn = on;
+    applyFill();
+    if (on && camera) {
+      const int k = keptMode(), lk = lockMode(k);
+      if (lk != k) save("mode", lk, false);
+      const int r = lockMode(mode);
+      if (streaming && r != mode) {
+        std::string w;
+        say("phase lock on: the camera from " + gnum(modes[size_t(mode)].fps) + " to " + gnum(modes[size_t(r)].fps) + " a second");
+        stopLocked();
+        if (!startLocked(r, w)) {
+          const uint64_t g = genNow();
+          closeLocked();
+          told(g, Phase::Error, "Camera not started: " + w);
+          return w;
+        }
+        told(genNow(), Phase::Loading);
+        return "";
+      }
+    }
+    try {
+      describeNow();
+    } catch (const std::exception&) {
+    }
+    return "";
+  }
+
+  // ai: the lab's switch: Android's debug.lizard.phase, elsewhere LIZ_PHASE (2026-11-01: a GenICam camera's
+  // ai: trigger, aravis.cpp) (track, or unset or empty, tracks; anything else off), the tools' starts from random phases;
+  // ai: it can only hold the lock off: the user's setting (lockOn) is the switch
   static PhaseLock::Mode platformMode() {
 #if defined(__ANDROID__)
     char v[PROP_VALUE_MAX] = "";
@@ -1060,7 +1134,7 @@ struct Session::Impl {
       phaseLock->opened(bar);
       lockCaps = 0;
     }
-    if (lockCaps++ % 30 == 15) phaseLock->want(platformMode());
+    if (lockCaps++ % 30 == 15) phaseLock->want(lockOn ? platformMode() : PhaseLock::Mode::Off);
     phaseLock->captured(c.ns, c.delayed);
   }
 
@@ -1073,6 +1147,7 @@ struct Session::Impl {
       bar = lockBar;
     }
     if (!bar.empty()) return {{"off", bar}};
+    if (!lockOn) return {{"off", "turned off"}};
     const std::optional<PhaseLock::State> st = phaseLock->state();
     if (!st) return json::object();
     const auto nz = [](double x) { return std::isfinite(x) ? json(x) : json(); };
@@ -1249,8 +1324,11 @@ struct Session::Impl {
     }
     if (!haveRx(w)) return refuse(w);
     bool named = false;
-    const int m = modeFor(spec, named, w);
-    if (m < 0) return refuse(w);
+    const int asked = modeFor(spec, named, w);
+    if (asked < 0) return refuse(w);
+    // ai: past LIZARD's lock rate while the lock is on: the slower mode, which a named one is kept as
+    const int m = lockMode(asked);
+    if (m != asked) say("phase lock on: " + gnum(modes[size_t(asked)].fps) + " a second runs at " + gnum(modes[size_t(m)].fps));
     if (named) save("mode", m, false);
     stopLocked();
     if (!startLocked(m, w)) return refuse(w);
@@ -1338,8 +1416,8 @@ struct Session::Impl {
     std::string w;
     if (!camera) return "no camera is open";
     if (control == "mode") {
-      const int i = int(value);
-      if (i < 0 || size_t(i) >= modes.size()) return "the camera has no mode " + gnum(value);
+      if (int(value) < 0 || size_t(int(value)) >= modes.size()) return "the camera has no mode " + gnum(value);
+      const int i = lockMode(int(value));
       save("mode", i, false);
       if (streaming) {
         stopLocked();
@@ -1636,6 +1714,7 @@ struct Session::Impl {
   bool replayRefused = false;      // ai: the worker's: a run not begun: none asked again until the switch moves
   std::string replayMeta;          // ai: the worker's: the platform's fields for the meta
   std::shared_ptr<Replay> recording;   // ai: the worker's
+  int64_t replayCap = REPLAY_BYTES;    // ai: the worker's: Replay size
   std::string recordingRun;
   std::deque<std::string> rows;    // ai: the worker's
   int64_t lastRow = 0;
@@ -1756,7 +1835,7 @@ struct Session::Impl {
     std::shared_ptr<Replay> rp;
     std::string w;
     try {
-      rp = std::make_shared<Replay>(file.u8string(), run, REPLAY_FRAMES);
+      rp = std::make_shared<Replay>(file.u8string(), run, replayCap);
       if (!rp->live()) w = rp->error().empty() ? "not begun" : rp->error();
     } catch (const std::exception& x) {
       w = x.what();
@@ -2202,6 +2281,12 @@ Session::Done Session::batchCap(int n) {
   });
 }
 
+Session::Done Session::phaseLock(bool on) {
+  Impl& p = *p_;
+  p.lockOn = on;   // ai: at once for the camera's thread; the kept mode and a running stream on the session's
+  return p.post([&p, on] { return p.doPhaseLock(on); });
+}
+
 Session::Done Session::forget(const std::string& root) {
   Impl& p = *p_;
   return p.post([&p, root] { return p.doForget(root); });
@@ -2225,6 +2310,16 @@ Session::Done Session::replays(bool on, const std::string& meta) {
     p.replaysOn = on;
     p.replayMeta = meta;
     p.replayRefused = false;
+    return std::string();
+  });
+}
+
+Session::Done Session::replayBytes(int64_t bytes) {
+  Impl& p = *p_;
+  const int64_t b = std::clamp(bytes, REPLAY_BYTES_MIN, REPLAY_BYTES_MAX);
+  return p.post([&p, b] {
+    p.replayCap = b;
+    if (p.recording) p.recording->cap(b);
     return std::string();
   });
 }

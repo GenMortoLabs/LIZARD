@@ -358,6 +358,10 @@ LIZ_API void liz_session_stop(liz_session *s);
 /* ai: Another decoder or crop: the receiver made again on the transfer in hand, which goes on. */
 LIZ_API void liz_session_reconfigure(liz_session *s, const char *decoder, const char *layout);
 LIZ_API void liz_session_batch_cap(liz_session *s, int frames);
+/* ai: The phase lock, on (the default) or off: on, a camera that can delay a capture (liz_session_camera's "lockBar" "")
+ * ai: runs the lock and at most 60 captures a second (a faster mode runs at the fastest of its size and format at or under
+ * ai: 60); off, every mode the camera lists runs as asked. */
+LIZ_API void liz_session_phase_lock(liz_session *s, int on);
 
 /* ai: The receiver's stats and the session's: phase ("idle", "starting", "loading", "on", "error") and why, the camera,
  * ai: live, asked, autoRan, kept {taken, root, error}, replays, the platform's fields (session.h stats). Never waits. */
@@ -376,6 +380,9 @@ LIZ_API void liz_session_clear(liz_session *s);
  * ai: fields for the run's meta.json. liz_session_extra: the platform's own fields (a JSON object: heat, power), merged
  * ai: into the stats and each replay row from then on. */
 LIZ_API void liz_session_replays(liz_session *s, int on, const char *meta_json);
+/* ai: Replay size: a run's cap, the raw bytes of the frames it keeps (the newest that fit; the oldest dropped as new ones
+ * ai: come), held to 256 MiB .. 8 GiB, 1 GiB until set; the run recording takes it at once. */
+LIZ_API void liz_session_replay_bytes(liz_session *s, long long bytes);
 LIZ_API void liz_session_extra(liz_session *s, const char *json);
 
 /* ai: The platform's hooks, Android's (elsewhere LIZ_E_UNSUPPORTED). The app's preview surface (an ANativeWindow*,

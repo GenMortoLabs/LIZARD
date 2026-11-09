@@ -388,6 +388,8 @@ class MainActivity : ComponentActivity() {
         if (s.layout != old.layout && usb.connected) receive.linkUp(s.layout)   // ai: the crop the PC's hello names
         if (s.pcPack != old.pcPack) receive.linkPack(s.pcPack != "off")         // ai: from the next frame queued on
         if (s.frames != old.frames) receive.batch(s.frames)
+        if (s.lock != old.lock) receive.phaseLock(s.lock != "off")
+        if (s.replayMb != old.replayMb) receive.replayBytes(s.replayMb)
         if (s.decoder != old.decoder && s.decoder != "auto") autoRan = ""
         if (s.decoder != old.decoder || s.layout != old.layout) receive.reconfigure()
         if (s.camera != old.camera) receive.cameraChosen(running)

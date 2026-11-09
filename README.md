@@ -195,7 +195,8 @@ times, camera axes, the crop) and its statistics. The format is specified in
 [research/SPEC.md](research/SPEC.md) section 15; any ZIP tool lists and tests one.
 
 - **Recording.** Receive › Developer Tools › Save replays, in the Android app and the desktop app, keeps the newest
-  300 frames while the camera runs and writes the `.lizard` when it stops. The Android app's Download puts it in the
+  frames while the camera runs, as many as fit in Replay size (256 MB to 8 GB of raw frames, 1 GB unless set; the
+  earliest dropped as new ones come), and writes the `.lizard` when it stops. The Android app's Download puts it in the
   phone's Downloads folder; the desktop app's is in its data folder (Show in folder).
 - **Playing.** The desktop app's Receive › Settings › Camera › Upload asks for a `.lizard` and plays it as a camera at
   its recorded times, a 2:1 run's halves put side by side again; the crop is the file's. Headless:
@@ -482,13 +483,16 @@ driver, macOS on a build service's machine), each screenshot of it read back by 
 not how steadily it paces on real hardware. The desktop app's receiver (UVC cameras through V4L2, Media Foundation or
 AVFoundation) is checked against fake camera devices and a simulated camera filming a simulated screen; with a real
 camera it has run once, a 2013 USB webcam (a Logitech C930e on Linux) reading 90 to 120 kB/s (reported, not logged),
-which no phase lock helps: a webcam cannot delay a single frame, so a sender for one paints at most half its rate.
+which no phase lock helps: a webcam cannot delay a single frame (Settings' Phase lock is greyed for one), so a sender
+for one paints at most half the webcam's rate, and a webcam capturing at twice the screen's rate or more reads every
+picture.
 It also takes a phone as its camera ([A phone as a PC's camera](#a-phone-as-a-pcs-camera)): the phone sends its
 camera's crop as `.lizard` frames over a USB tether or, as an Android Open Accessory, over the cable alone. The
 accessory has run over a USB 2 cable on Linux (the link steady at 41 to 42 MB/s); the tether and the accessory on
 Windows and macOS have not run on a cable yet. Machine vision cameras (GenICam: USB3 Vision and GigE Vision) are read
 through [Aravis](https://github.com/AravisProject/aravis), which the Windows and macOS packages carry and the Debian
-package recommends; they run free, at any rate the camera offers, including past 60 frames a second. They are checked
+package recommends; with Settings' Phase lock on (the default) the host's trigger holds their phase at up to 60 frames a
+second, and with it off they run at any rate the camera offers, past 60 included. They are checked
 against Aravis's simulated GigE camera on loopback (60 and 120 frames a second on Linux) and have not run on a real
 camera yet. On Windows a USB3 Vision camera, like a phone on the cable, needs the WinUSB driver, which the app's
 Install USB driver binds.

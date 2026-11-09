@@ -22,7 +22,7 @@ object Prefs {
     val forgotten get() = off
 
     // ai: The receiver's (2026-10-25, the web's recv:<id> keys, the Android app's "lizard" preferences): the camera (its
-    // ai: id, camera.h Info::id), the crop (1:1, 2:1), the decoder (auto, gpu, cpu), the batch size (1 to 32), the folds
+    // ai: id, camera.h Info::id), the crop (1:1, 2:1), the decoder (auto, gpu, cpu), the batch size (1 to 32), Phase lock, the folds
     // ai: and the rail, Show statistics. Each camera's own mode, zoom, exposure and gain
     // ai: are the receive session's since 2026-10-31 (Native.data/cameras.json, liblizard/core/rx/session.h), taken over
     // ai: once from the keys this node held for them (camerasMoved). Under forget() the node is the run's own, in memory
@@ -102,12 +102,16 @@ object Prefs {
         var layout: String get() = str("layout", "1:1").let { if (it == "2:1") it else "1:1" }; set(v) { put("layout", v) }
         var decoder: String get() = str("decoder", "auto").let { if (it == "gpu" || it == "cpu") it else "auto" }; set(v) { put("decoder", v) }
         var batch: Int get() = int("batch", 32).coerceIn(1, 32); set(v) { put("batch", v.toString()) }
+        // ai: Phase lock (2026-11-08; the session's phaseLock): on unless set off
+        var lock: Boolean get() = bool("lock", true); set(v) { put("lock", v.toString()) }
         var experimentalOpen: Boolean get() = bool("recvExperimental", false); set(v) { put("recvExperimental", v.toString()) }
         var settingsOpen: Boolean get() = bool("recvSettings", false); set(v) { put("recvSettings", v.toString()) }
         var toolsOpen: Boolean get() = bool("recvTools", false); set(v) { put("recvTools", v.toString()) }
         var stats: Boolean get() = bool("stats", false); set(v) { put("stats", v.toString()) }
         // ai: Save replays, kept across starts (since 2026-11-02; every start began off before)
         var replays: Boolean get() = bool("replays", false); set(v) { put("replays", v.toString()) }
+        // ai: Replay size, MB (2026-11-09; the session's replayBytes): 1024 unless set
+        var replayMb: Int get() = dev.lizard.ui.replayMb(int("replayMb", dev.lizard.ui.REPLAY_MB_DEFAULT)); set(v) { put("replayMb", v.toString()) }
     }
     private fun str(k: String, d: String) = p?.get(k, d) ?: d
     private fun int(k: String, d: Int) = p?.getInt(k, d) ?: d

@@ -1,5 +1,6 @@
 // ai: Save replays (Developer Tools, 2026-10-03; the web receiver's Record 300 frames, lizard-web/recv.mjs saveRun, as
-// ai: a rolling window): the newest frames the decoder is handed, kept as raw luma in a scratch folder beside the
+// ai: a rolling window): the newest frames the decoder is handed, as many as their raw bytes fit in the run's cap
+// ai: (Replay size, 256 MB to 8 GB; the newest 300 frames until 2026-11-09), kept as raw luma in a scratch folder beside the
 // ai: replay's file while the run records (<file>.frames/, a frame a file, cheap on the camera's side), then at the
 // ai: run's end packed into the replay, a .lizard (lizfile.h, 2026-10-28: a folder of NNNN.gray, meta.json and
 // ai: stats.jsonl before), the scratch removed. The frames are the crops the decoder reads: the GPU decoder's off its
@@ -20,13 +21,15 @@ namespace lizard {
 
 class Replay {
  public:
-  // ai: file: the replay, a .lizard (refused where it exists, or its scratch folder holds anything); keep: the frames
-  // ai: kept, the newest
-  Replay(std::string file, std::string run, int keep);
+  // ai: file: the replay, a .lizard (refused where it exists, or its scratch folder holds anything); maxBytes: the
+  // ai: window's cap, the kept frames' raw bytes (w x h each): past it the oldest go, the newest always kept
+  Replay(std::string file, std::string run, int64_t maxBytes);
   Replay(const Replay&) = delete;
   Replay& operator=(const Replay&) = delete;
   // ai: whether it still takes frames: false once the run is ending or ended, or a write failed
   bool live();
+  // ai: the cap changed while the run records (Replay size moved): the oldest frames past it go at once
+  void cap(int64_t maxBytes);
   // ai: The GPU decoder's frames come a batch after it takes them (read back with their batch): it holds each as it
   // ai: stages it (false: the replay takes no more), hands it over with frame(..., true), and releases the ones that
   // ai: will not come (dropped before their batch, a batch that failed). finish waits for the held ones.
@@ -34,7 +37,7 @@ class Replay {
   void release(int n);
   // ai: a frame: w x h bytes, rows `stride` apart; ms, its capture's time on the camera's clock; held, one hold()'s;
   // ai: ax, ay where the camera's optical axis fell in it (NaN: its centre). Written as it comes, and the oldest past
-  // ai: `keep` deleted.
+  // ai: the cap deleted.
   void frame(const uint8_t* px, uint32_t w, uint32_t h, uint32_t stride, double ms, bool held = false, float ax = NAN, float ay = NAN);
   // ai: The run's end, once the held frames have come (or a few seconds have passed): the file written, the frames
   // ai: kept oldest first (each scratch frame removed once it is in), then stats.jsonl (`rows`, a row a line), then
@@ -59,7 +62,7 @@ class Replay {
   std::atomic<bool> closing{false};  // ai: the run's end has begun: no more holds, no more frames but held ones
   std::atomic<bool> dead{false};     // ai: a write failed or the folder could not be made: no more frames
   const std::string file, dir, run;   // ai: dir: the scratch folder
-  const int keep;
+  int64_t maxB;             // ai: mu: the cap, the kept frames' raw bytes
   bool ended = false;       // ai: mu: renamed and written; nothing comes in after
   std::string err;          // ai: mu: what stopped the frames (a write, the folder), kept for meta.json
   bool broken = false;      // ai: mu: the folder could not be made: nothing to finish
@@ -69,6 +72,7 @@ class Replay {
   std::vector<uint8_t> rowsBuf;   // ai: a frame's rows packed where they come `stride` apart
   std::string path(uint64_t i) const;
   bool put(const std::string& p, const void* data, size_t n);
+  void trim();               // ai: mu held: the oldest frames deleted while the kept ones pass the cap, the newest kept
 };
 
 }  // namespace lizard

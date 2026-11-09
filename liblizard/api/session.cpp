@@ -91,6 +91,7 @@ LIZ_API void liz_session_reconfigure(liz_session* s, const char* decoder, const 
   });
 }
 LIZ_API void liz_session_batch_cap(liz_session* s, int frames) { guard([&] { need(s, "a session"); s->s->batchCap(frames); return LIZ_OK; }); }
+LIZ_API void liz_session_phase_lock(liz_session* s, int on) { guard([&] { need(s, "a session"); s->s->phaseLock(on != 0); return LIZ_OK; }); }
 
 LIZ_API size_t liz_session_stats(liz_session* s, char* json, size_t cap) {
   size_t n = 0;
@@ -127,6 +128,9 @@ LIZ_API void liz_session_forget(liz_session* s, const char* root) {
 LIZ_API void liz_session_clear(liz_session* s) { guard([&] { need(s, "a session"); s->s->clear(); return LIZ_OK; }); }
 LIZ_API void liz_session_replays(liz_session* s, int on, const char* meta) {
   guard([&] { need(s, "a session"); s->s->replays(on != 0, str(meta)); return LIZ_OK; });
+}
+LIZ_API void liz_session_replay_bytes(liz_session* s, long long bytes) {
+  guard([&] { need(s, "a session"); s->s->replayBytes(bytes); return LIZ_OK; });
 }
 LIZ_API void liz_session_extra(liz_session* s, const char* json) { guard([&] { need(s, "a session"); s->s->extra(str(json)); return LIZ_OK; }); }
 

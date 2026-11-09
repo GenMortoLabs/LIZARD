@@ -83,6 +83,7 @@ void reconfigure(JNIEnv* e, jclass, jlong h, jstring decoder, jstring layout) {
   liz_session_reconfigure(ss(h), str(e, decoder).c_str(), str(e, layout).c_str());
 }
 void batchCap(JNIEnv*, jclass, jlong h, jint n) { liz_session_batch_cap(ss(h), n); }
+void phaseLock(JNIEnv*, jclass, jlong h, jboolean on) { liz_session_phase_lock(ss(h), on ? 1 : 0); }
 
 jstring stats(JNIEnv* e, jclass, jlong h) { return jstr(e, grown([h](char* b, size_t n) { return liz_session_stats(ss(h), b, n); })); }
 jstring camera(JNIEnv* e, jclass, jlong h) { return jstr(e, grown([h](char* b, size_t n) { return liz_session_camera(ss(h), b, n); })); }
@@ -107,6 +108,7 @@ jlongArray preview(JNIEnv* e, jclass, jlong h, jlong since, jint side, jbyteArra
 void forget(JNIEnv* e, jclass, jlong h, jstring root) { liz_session_forget(ss(h), str(e, root).c_str()); }
 void clear(JNIEnv*, jclass, jlong h) { liz_session_clear(ss(h)); }
 void replays(JNIEnv* e, jclass, jlong h, jboolean on, jstring meta) { liz_session_replays(ss(h), on == JNI_TRUE, str(e, meta).c_str()); }
+void replayBytes(JNIEnv*, jclass, jlong h, jlong bytes) { liz_session_replay_bytes(ss(h), (long long)bytes); }
 void extra(JNIEnv* e, jclass, jlong h, jstring json) { liz_session_extra(ss(h), str(e, json).c_str()); }
 
 // ai: The Android hooks (lizard.h): "" done, else why. previewWindow takes an android.view.Surface (null drops it)
@@ -160,12 +162,14 @@ const JNINativeMethod METHODS[] = {
     M(stop, "(J)V"),
     M(reconfigure, "(J" S S ")V"),
     M(batchCap, "(JI)V"),
+    M(phaseLock, "(JZ)V"),
     M(stats, "(J)" S),
     M(camera, "(J)" S),
     M(preview, "(JJI[B)[J"),
     M(forget, "(J" S ")V"),
     M(clear, "(J)V"),
     M(replays, "(JZ" S ")V"),
+    M(replayBytes, "(JJ)V"),
     M(extra, "(J" S ")V"),
     M(previewWindow, "(JLjava/lang/Object;)" S),
     M(link, "(Z" S ")" S),

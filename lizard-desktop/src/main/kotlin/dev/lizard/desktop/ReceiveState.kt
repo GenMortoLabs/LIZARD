@@ -52,8 +52,9 @@ class ReceiveState(private val app: App) {
     }
     class Control(val id: String, val name: String, val unit: String, val min: Double, val max: Double, val step: Double, val def: Double,
                   val value: Double, val canAuto: Boolean, val isAuto: Boolean)
+    // ai: lockBar: why it cannot delay a capture for the phase lock ("" it can: an Aravis camera on its software trigger)
     class CamInfo(val id: String, val name: String, val backend: String, val detail: String, val modes: List<Mode>, val pick: Int,
-                  val controls: List<Control>) {
+                  val controls: List<Control>, val lockBar: String) {
         fun control(id: String) = controls.firstOrNull { it.id == id && it.max > it.min }
     }
 
@@ -73,6 +74,7 @@ class ReceiveState(private val app: App) {
     var decoder by mutableStateOf(Prefs.Rx.decoder)
     var layout by mutableStateOf(Prefs.Rx.layout)
     var batch by mutableStateOf(Prefs.Rx.batch)
+    var lockOn by mutableStateOf(Prefs.Rx.lock)                // ai: Phase lock (session.h phaseLock)
     var zoom by mutableStateOf<Double?>(null)                  // ai: the camera's settings as Settings shows them (null: its own)
     var exposure by mutableStateOf<Double?>(null)
     var gain by mutableStateOf<Double?>(null)
@@ -88,6 +90,8 @@ class ReceiveState(private val app: App) {
     var showStats by mutableStateOf(Prefs.Rx.stats)
     // ai: Save replays: kept across starts, as the Android app's (Settings.replays)
     var replays by mutableStateOf(Prefs.Rx.replays)
+    // ai: Replay size, MB (Settings.kt replaySizeSetting): kept across starts
+    var replayMb by mutableStateOf(Prefs.Rx.replayMb)
     var files by mutableStateOf<List<Received.Entry>>(emptyList())
     // ai: why the newest file is not in Downloads (Received.Filed's why; it is in the app's own folder then, listed from
     // ai: there), "" where it is; shown under the state line until a later filing of it puts it there
@@ -148,7 +152,9 @@ class ReceiveState(private val app: App) {
                 taken = -1L   // ai: a new session counts its takes from 0
                 seq = 0L; preview = null   // ai: and its frames from 0: the last session's picture is not this one's
                 s.batchCap(batch)
+                s.phaseLock(lockOn)
                 s.replays(replays, replayMeta())
+                s.replayBytes(dev.lizard.ui.replayBytes(replayMb))
                 timer.start()
             }
         } catch (e: Exception) {
@@ -249,7 +255,7 @@ class ReceiveState(private val app: App) {
                 c.num("value"), c.flag("canAuto"), c.flag("isAuto")) }
         }
         return CamInfo(i.str("id"), i.str("name"), i.str("backend"), i.str("detail"), modes, (j["pick"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toInt() ?: -1,
-            controls)
+            controls, j.str("lockBar"))
     }
     // ai: the camera open as the session describes it now (its controls' values as last read; never waits), "{}" with
     // ai: none (the test hook's last line)
@@ -271,6 +277,7 @@ class ReceiveState(private val app: App) {
         val id = testCamera ?: camera
         s.reconfigure(decoder, layout)
         s.batchCap(batch)
+        s.phaseLock(lockOn)
         // ai: every start opens the camera afresh (2026-11-01): a Stop keeps it open and the session's open keeps an open
         // ai: camera of the same id, so a Start after a Stop went on in the same open; closed first, it opens again
         s.closeCamera()
@@ -377,12 +384,19 @@ class ReceiveState(private val app: App) {
     fun exposureTo(us: Double?) { exposure = us; session?.set("exposure", us ?: 0.0, us == null) }
     fun gainTo(v: Double?) { gain = v; session?.set("gain", v ?: 0.0, v == null) }
     fun chooseBatch(n: Int) { batch = n.coerceIn(1, 32); Prefs.Rx.batch = batch }
+    // ai: Phase lock: on, a mode past 60 kept or running goes to 60 (the session's); off, the camera's every rate offered
+    fun chooseLock(on: Boolean) {
+        if (on == lockOn) return
+        lockOn = on; Prefs.Rx.lock = on
+        session?.phaseLock(on)
+    }
     fun commitBatch() { session?.batchCap(batch) }
     fun toggleSettings() { settingsOpen = !settingsOpen; Prefs.Rx.settingsOpen = settingsOpen }
     fun toggleTools() { toolsOpen = !toolsOpen; Prefs.Rx.toolsOpen = toolsOpen }
     fun toggleExperimental() { experimentalOpen = !experimentalOpen; Prefs.Rx.experimentalOpen = experimentalOpen }
     fun chooseStats(on: Boolean) { showStats = on; Prefs.Rx.stats = on }
     fun chooseReplays(on: Boolean) { replays = on; Prefs.Rx.replays = on; session?.replays(on, replayMeta()) }
+    fun chooseReplayMb(mb: Int) { replayMb = mb; Prefs.Rx.replayMb = mb; session?.replayBytes(dev.lizard.ui.replayBytes(mb)) }
 
     // ai: the cameras read again (the Camera menu opening, the camera watch's stamp moved), off the UI thread: a backend's
     // ai: listing opens each device (V4L2's nodes, Media Foundation's sources)

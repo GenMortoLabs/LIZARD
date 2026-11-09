@@ -29,6 +29,9 @@ class Session(
   // ai: another decoder or crop: the receiver made again, the transfer in hand going on
   fun reconfigure(decoder: String, layout: String) = SessionNative.reconfigure(live(), decoder, layout)
   fun batchCap(frames: Int) = SessionNative.batchCap(live(), frames)
+  // ai: the phase lock (on by default): on, a camera that can delay a capture (camera's "lockBar" "") locks and runs at
+  // ai: most 60 captures a second; off, any mode it lists
+  fun phaseLock(on: Boolean) = SessionNative.phaseLock(live(), on)
   // ai: the receiver's stats with the session's (phase, why, camera, live, asked, autoRan, kept, replays); never waits
   val stats: String get() = SessionNative.stats(live())
   // ai: the camera open ({info, modes, pick, controls, mode, streaming, kept}), "{}" none; never waits
@@ -40,6 +43,8 @@ class Session(
   fun clear() = SessionNative.clear(live())
   // ai: Save replays on or off; meta the platform's fields for each run's meta.json (a JSON object)
   fun replays(on: Boolean, meta: String = "{}") = SessionNative.replays(live(), on, meta)
+  // ai: Replay size: a run's cap, the raw bytes of the frames it keeps (256 MiB .. 8 GiB; the run recording trimmed at once)
+  fun replayBytes(bytes: Long) = SessionNative.replayBytes(live(), bytes)
   // ai: the platform's own fields (a JSON object), merged into the stats and each replay row
   fun extra(json: String) = SessionNative.extra(live(), json)
 
@@ -91,12 +96,14 @@ internal object SessionNative {
   @JvmStatic external fun stop(h: Long)
   @JvmStatic external fun reconfigure(h: Long, decoder: String, layout: String)
   @JvmStatic external fun batchCap(h: Long, n: Int)
+  @JvmStatic external fun phaseLock(h: Long, on: Boolean)
   @JvmStatic external fun stats(h: Long): String
   @JvmStatic external fun camera(h: Long): String
   @JvmStatic external fun preview(h: Long, since: Long, side: Int, out: ByteArray): LongArray?
   @JvmStatic external fun forget(h: Long, root: String)
   @JvmStatic external fun clear(h: Long)
   @JvmStatic external fun replays(h: Long, on: Boolean, meta: String)
+  @JvmStatic external fun replayBytes(h: Long, bytes: Long)
   @JvmStatic external fun extra(h: Long, json: String)
   @JvmStatic external fun previewWindow(h: Long, surface: Any?): String
   @JvmStatic external fun link(up: Boolean, layout: String): String

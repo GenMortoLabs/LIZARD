@@ -3,6 +3,8 @@ package dev.lizard.receiver
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import dev.lizard.ui.REPLAY_MB_DEFAULT
+import dev.lizard.ui.replayMb
 import org.json.JSONObject
 
 // ai: The app's switches, in SharedPreferences "lizard"; Receive's Settings but replays and stats, which are Developer
@@ -17,10 +19,14 @@ import org.json.JSONObject
 // ai:   replays     off | on: Save replays (Developer Tools, 2026-10-03; the session's): the newest frames the decoder is
 // ai:               handed kept while the camera runs; kept across starts like the rest (since 2026-11-02; every start
 // ai:               began off before)
+// ai:   replaySize  256 to 8192: Replay size, MB (Developer Tools, 2026-11-09; under Save replays while it is on, the
+// ai:               session's replayBytes): a run's cap on its frames' raw bytes; 1024 by default, kept
 // ai:   stats       on | off: Show statistics (Developer Tools, 2026-10-10): off hides Receive's green line once a file
 // ai:               is in and Developer Tools' lab line and readout; off by default, kept
 // ai:   pcPack      on | off: the PC decoder's frames packed as .lizard frames (the default) or sent raw (a phone too weak
 // ai:               or too warm to pack them)
+// ai:   lock        on | off: Phase lock (Receive's Settings, 2026-11-08; the session's phaseLock): on by default; off, the
+// ai:               lens's rates past 60 offered
 // ai: A camera's own settings are the receive session's since 2026-10-31, kept per camera in <data>/cameras.json: its
 // ai: mode (Resolution and Format; the rate is the camera's fixed one, [60,60] where offered) and its zoom in each crop
 // ai: (1.5 unless set). Before that they were keys here (resolution@<id>, format@<id>, zoom@<id>/<layout>), moved into
@@ -33,12 +39,16 @@ data class Settings(
     val replays: String = "off",
     val stats: String = "off",
     val pcPack: String = "on",
+    val lock: String = "on",
+    val replaySize: String = REPLAY_MB_DEFAULT.toString(),
 ) {
     val frames get() = batch.toIntOrNull()?.coerceIn(1, 32) ?: 32
+    val replayMb get() = replayMb(replaySize.toIntOrNull() ?: REPLAY_MB_DEFAULT)
     fun save(ctx: Context) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("decoder", decoder).putString("layout", layout).putString("camera", camera)
-            .putString("batch", batch).putString("replays", replays).putString("stats", stats).putString("pcPack", pcPack).apply()
+            .putString("batch", batch).putString("replays", replays).putString("stats", stats).putString("pcPack", pcPack)
+            .putString("lock", lock).putString("replaySize", replaySize).apply()
     }
 
     companion object {
@@ -52,7 +62,8 @@ data class Settings(
             val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val d = Settings()
             return Settings(p.getString("decoder", d.decoder)!!, p.getString("layout", d.layout)!!, p.getString("camera", d.camera)!!,
-                p.getString("batch", d.batch)!!, p.getString("replays", d.replays)!!, p.getString("stats", d.stats)!!, p.getString("pcPack", d.pcPack)!!)
+                p.getString("batch", d.batch)!!, p.getString("replays", d.replays)!!, p.getString("stats", d.stats)!!, p.getString("pcPack", d.pcPack)!!,
+                p.getString("lock", d.lock)!!, p.getString("replaySize", d.replaySize)!!)
         }
 
         // ai: The cameras' settings the app kept before the session kept them, as cameras.json (session.h's header):

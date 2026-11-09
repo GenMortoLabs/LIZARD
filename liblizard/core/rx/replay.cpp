@@ -1,5 +1,5 @@
-// ai: Save replays (replay.h): a frame a scratch file as it comes, the window of the newest `keep` held by deleting the
-// ai: oldest, the run's .lizard written at its end.
+// ai: Save replays (replay.h): a frame a scratch file as it comes, the window of the newest frames whose raw bytes fit
+// ai: the cap held by deleting the oldest, the run's .lizard written at its end.
 #include "replay.h"
 
 #include "json.hpp"
@@ -29,8 +29,8 @@ constexpr auto HELD_WAIT = std::chrono::seconds(4);
 // ai: A file and a scratch folder of its own: a file there already is refused, as is a scratch folder that holds anything,
 // ai: never emptied (emptying it, a proposed fix for a reused folder, would have deleted whatever a replay was pointed at
 // ai: by mistake: a run, the captures; 2026-10-03).
-Replay::Replay(std::string file_, std::string run_, int keep_)
-    : file(std::move(file_)), dir(file + ".frames"), run(std::move(run_)), keep(std::max(1, keep_)) {
+Replay::Replay(std::string file_, std::string run_, int64_t maxBytes_)
+    : file(std::move(file_)), dir(file + ".frames"), run(std::move(run_)), maxB(std::max<int64_t>(1, maxBytes_)) {
   std::error_code ec;
   const fs::path p = fs::u8path(dir);
   if (fs::exists(fs::u8path(file), ec)) err = "the replay " + file + " exists already";
@@ -109,12 +109,22 @@ void Replay::frame(const uint8_t* px, uint32_t w, uint32_t h, uint32_t stride, d
   if (!put(path(taken), b, (size_t)w * h)) { dead = true; return; }
   kept.push_back({taken++, w, h, ms, ax, ay});
   held += (int64_t)w * h;
-  while ((int)kept.size() > keep) {
+  trim();
+}
+
+void Replay::trim() {
+  while (held > maxB && kept.size() > 1) {
     std::error_code ec;
     fs::remove(fs::u8path(path(kept.front().i)), ec);
     held -= (int64_t)kept.front().w * kept.front().h;
     kept.pop_front();
   }
+}
+
+void Replay::cap(int64_t maxBytes) {
+  std::lock_guard<std::mutex> l(mu);
+  maxB = std::max<int64_t>(1, maxBytes);
+  if (!ended) trim();
 }
 
 int Replay::finish(const std::string& rxStats, const std::string& rows, const std::string& more) {
@@ -162,7 +172,7 @@ int Replay::finish(const std::string& rxStats, const std::string& rows, const st
   for (auto& f : kept) {
     sizes.push_back({f.w, f.h}); ms.push_back(f.ms); axes.push_back(std::isnan(f.ax) || std::isnan(f.ay) ? ojson() : ojson({f.ax, f.ay}));
   }
-  ojson meta = {{"run", run}, {"w", kept.empty() ? 0 : kept[0].w}, {"h", kept.empty() ? 0 : kept[0].h}, {"frames", kept.size()}, {"of", keep},
+  ojson meta = {{"run", run}, {"w", kept.empty() ? 0 : kept[0].w}, {"h", kept.empty() ? 0 : kept[0].h}, {"frames", kept.size()}, {"maxBytes", maxB},
                 {"sizes", sizes}, {"ms", ms}, {"axes", axes}, {"taken", taken}, {"config", config},
                 {"decoder", st.is_object() ? st.value("decoder", "") : ""}, {"layout", st.is_object() ? st.value("layout", "") : ""}};
   if (!stopped.empty()) meta["error"] = stopped;
