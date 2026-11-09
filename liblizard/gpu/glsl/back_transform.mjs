@@ -124,18 +124,19 @@ const store = (prec) => ({
   st: (name, i, x) => (prec === "f16" ? `${name}[${i}] = f16vec2(${x});` : `${name}[${i}] = ${x};`),
 });
 
-// ai: The stages after the first (the WGSL's laterStages, lanes the same): the decoder's sizes, 256 to 1024 (TRANSFORM_DOWN),
-// ai: are 8 x 2^k or 8 x 3 x 2^k, so an odd stage is a 3 and the last (radix3Stage); the sender's 5s and earlier 3s
-// ai: (oddStage, oddLastStage) stay the sender's WGSL.
+// ai: The stages after the first (the WGSL's laterStages, lanes the same). Since 2026-11-08 every picture is transformed
+// ai: at its own size (384 to 1536: 8 x 2^a 3^b 5^c), so an odd stage may come before the last (1152's two 3s: oddStage)
+// ai: or be a 5 (1280's: oddLastStage), the sender's WGSL stages (gpu/wgsl/inverse.mjs) in GLSL; a last 3 stays
+// ai: radix3Stage.
 function laterStages(n, prec, lanes = [["v", "buf"]]) {
   const { ld, st } = store(prec);
   const T = n / 8, stages = stagesOf(n);
   let Ns = stages[0], out = "";
   for (let s = 1; s < stages.length; s++) {
     if (stages[s] === 3 || stages[s] === 5) {
-      if (stages[s] === 5 || s < stages.length - 1) throw new Error(`the GLSL transform of ${n}: an odd stage other than a last radix 3`);
-      out += radix3Stage(n, prec, lanes);
-      Ns *= 3; continue;
+      const R = stages[s];
+      out += s < stages.length - 1 ? oddStage(n, R, Ns, prec, lanes) : R === 3 ? radix3Stage(n, prec, lanes) : oddLastStage(n, R, prec, lanes);
+      Ns *= R; continue;
     }
     const R = stages[s], per = 8 / R, span = n / R, step = n / (Ns * R);
     out += `  // stage ${s + 1}: radix ${R}, Ns ${Ns}\n`;
@@ -162,6 +163,61 @@ function laterStages(n, prec, lanes = [["v", "buf"]]) {
     Ns *= R;
   }
   return out;
+}
+
+// ai: A radix-3 or radix-5 butterfly (the WGSL's oddButterfly): p(r) the r-th input (twiddled), put(r, e) its r-th
+// ai: output's store.
+function oddButterfly(R, p, put, ind) {
+  let out = `${ind}{\n`;
+  for (let r = 0; r < R; r++) out += `${ind}  vec2 p${r} = ${p(r)};\n`;
+  if (R === 3) {
+    out += `${ind}  vec2 t1 = p1 + p2;\n${ind}  vec2 t2 = mneg_i(p1 - p2) * S3;\n${ind}  vec2 m = p0 - 0.5 * t1;\n`;
+    out += `${ind}  ${put(0, "p0 + t1")}\n${ind}  ${put(1, "m + t2")}\n${ind}  ${put(2, "m - t2")}\n`;
+  } else {
+    out += `${ind}  vec2 t1 = p1 + p4;\n${ind}  vec2 t2 = p2 + p3;\n${ind}  vec2 t3 = p1 - p4;\n${ind}  vec2 t4 = p2 - p3;\n`;
+    out += `${ind}  vec2 m1 = p0 + 0.30901699437494742 * t1 - 0.80901699437494742 * t2;\n${ind}  vec2 m2 = p0 - 0.80901699437494742 * t1 + 0.30901699437494742 * t2;\n`;
+    out += `${ind}  vec2 n1 = mneg_i(0.95105651629515357 * t3 + 0.58778525229247313 * t4);\n${ind}  vec2 n2 = mneg_i(0.58778525229247313 * t3 - 0.95105651629515357 * t4);\n`;
+    out += `${ind}  ${put(0, "p0 + t1 + t2")}\n${ind}  ${put(1, "m1 + n1")}\n${ind}  ${put(4, "m1 - n1")}\n${ind}  ${put(2, "m2 + n2")}\n${ind}  ${put(3, "m2 - n2")}\n`;
+  }
+  return out + `${ind}}\n`;
+}
+
+// ai: An odd stage before the last (radix R, 3 or 5, at Ns; the WGSL's oddStage): Stockham as the even stages (read
+// ai: buf[j + r n / R], twiddle by exp(-2 pi i r k / (Ns R)), k = j mod Ns, write buf[(j - k) R + k + r Ns]), its n / R
+// ai: butterflies over T = n / 8 threads, Q = ceil(n / R / T) a thread, their points held in registers across the
+// ai: barrier; each twiddle read whole from the table, tw[r k n / (Ns R)]. Ns is not a power of two after another odd
+// ai: stage (k by a modulo there).
+function oddStage(n, R, Ns, prec, lanes) {
+  const { ld, st } = store(prec);
+  const T = n / 8, M = n / R, Q = Math.ceil(M / T), step = n / (Ns * R), pow2 = (Ns & (Ns - 1)) === 0;
+  const jOf = (q) => (q === 0 ? "tid" : `(tid + ${q * T}u)`), open = (q) => ((q + 1) * T > M ? `    if (${jOf(q)} < ${M}u) {\n` : `    {\n`);
+  let out = `  // stage: radix ${R}, Ns ${Ns}\n  {\n`;
+  for (const [v] of lanes) out += `    vec2 ${v}g[${Q * R}];\n`;
+  for (let q = 0; q < Q; q++) {
+    out += open(q);
+    for (const [v, buf] of lanes) for (let r = 0; r < R; r++) out += `      ${v}g[${q * R + r}] = ${ld(buf, `${jOf(q)} + ${r * M}u`)};\n`;
+    out += `    }\n`;
+  }
+  out += `    barrier();\n`;
+  for (let q = 0; q < Q; q++) {
+    out += open(q) + `      uint j = ${jOf(q)};\n      uint k = ${pow2 ? `j & ${Ns - 1}u` : `j % ${Ns}u`};\n      uint d = (j - k) * ${R}u + k;\n`;
+    for (let r = 1; r < R; r++) out += `      vec2 w${r} = tw[k * ${r * step}u];\n`;
+    for (const [v, buf] of lanes) out += oddButterfly(R, (r) => (r === 0 ? `${v}g[${q * R}]` : `cmul(${v}g[${q * R + r}], w${r})`), (r, e) => st(buf, `d + ${r * Ns}u`, e), "      ");
+    out += `    }\n`;
+  }
+  return out + `    barrier();\n  }\n`;
+}
+
+// ai: The last stage when it is odd and not radix 3 (the WGSL's oddLastStage, radix3Stage's in-place form for any R):
+// ai: Ns = n / R, a butterfly reads and writes the same R points, buf[j + r n / R], j = tid, tid + T, ... below n / R,
+// ai: its twiddles tw[r j].
+function oddLastStage(n, R, prec, lanes) {
+  const { ld, st } = store(prec);
+  const T = n / 8, Ns = n / R;
+  let out = `  // stage: radix ${R}, Ns ${Ns}, in place\n  for (uint j = tid; j < ${Ns}u; j += ${T}u) {\n`;
+  for (let r = 1; r < R; r++) out += `    vec2 w${r} = tw[${r === 1 ? "" : `${r}u * `}j];\n`;
+  for (const [, buf] of lanes) out += oddButterfly(R, (r) => (r === 0 ? ld(buf, "j") : `cmul(${ld(buf, `j + ${r * Ns}u`)}, w${r})`), (r, e) => st(buf, r === 0 ? "j" : `j + ${r * Ns}u`, e), "    ");
+  return out + `  }\n  barrier();\n`;
 }
 
 // ai: The last stage when n has a factor of 3, in place (the WGSL's radix3Stage).
@@ -254,23 +310,23 @@ vec2 anchMesh(AnchHerm h, uint col) {
 `;
 // ai: the squares' fill (ANCH_FIT's surface, plan/back_transform.mjs ANCH_SURF): u = m sk + so of a module coordinate m
 const anchHead = () => `  uint ab = f * ${ANCH_REC}u;\n  vec4 ahd = arec[ab];\n  bool aon = ahd.x > 0.5;\n  vec4 sfa = arec[ab + ${ANCH_SURF}u];\n  vec2 sfb = arec[ab + ${ANCH_SURF + 1}u].xy;\n  vec4 sgeo = arec[ab + 3u];\n  float sk = 2.0 / sgeo.z;\n  float so = -2.0 * sgeo.w / sgeo.z - 1.0;\n`;
-const anchErase = (n, picture) => `      if (tid < ${ANCH_SIDE}u) {
+// ai: the squares' samples as the C erases them (src/lizard_phy.c, SPEC 6.13): floor((m0 - margin) n / span) - E to
+// ai: ceil((m0 + a - margin) n / span) - 1 + E on either axis, E = ANCH_ERASE; n (m0 + a - margin) stays under 2^20
+const anchErase = (n) => `      if (tid < ${ANCH_SIDE}u) {
         vec4 ag = arec[ab + 3u];
         int ia = f2i(ag.y);
+        int isp = f2i(ag.z);
         int img = f2i(ag.w);
         int im0 = f2i(aknot(ab, tid + 1u)) - ia / 2;
-        int ed = ${128 * picture} * ia;
-        int el = ${n} * (${2 * picture} * (im0 - img) - ${64 * (2 * ANCH_ERASE + 2)} * ia);
-        int eu = ${n} * (${2 * picture} * (im0 - img + ia) + ${128 * ANCH_ERASE} * ia);
-        anLo[tid] = max((el + ed - 1) / ed, 0);
-        anHi[tid] = min(eu / ed, ${n - 1});
+        anLo[tid] = max(${n} * (im0 - img) / isp - ${ANCH_ERASE}, 0);
+        anHi[tid] = min((${n} * (im0 - img + ia) + isp - 1) / isp + ${ANCH_ERASE - 1}, ${n - 1});
       }
 `;
 
-// ai: Pass 1 (the WGSL's pass1Source): n the transform's size, prec, B, picture the picture's own size. Every workgroup
-// ai: variable is written before the barrier that precedes its reads (the anchors' only where the record is on, and
-// ai: read only there), so none is zeroed.
-export function pass1Source({ n, prec, B, picture = n }) {
+// ai: Pass 1 (the WGSL's pass1Source): n the picture's size, prec, B. Every workgroup variable is written before the
+// ai: barrier that precedes its reads (the anchors' only where the record is on, and read only there), so none is
+// ai: zeroed.
+export function pass1Source({ n, prec, B }) {
   const cpw = CPW, { ty, ld } = store(prec);
   const T = n / 8, quads = cpw / 4, f16 = prec === "f16";
   const lanes = [["v0", "buf0"], ["v1", "buf1"]];
@@ -281,7 +337,7 @@ export function pass1Source({ n, prec, B, picture = n }) {
     // ai: the fill along this quad's columns: fa its terms in u alone, fb the coefficient of w (b4 w^2 apart)
     body += `    vec4 sux = vec4(mx0, mx1, mx2, mx3) * sk + so;\n    vec4 fa = sfa.x + sux * (sfa.y + sux * sfa.z);\n    vec4 fb = sfa.w + sfb.y * sux;\n`;
     body += `    bvec4 aix = bvec4(false);\n    if (aon) {\n`;
-    body += `      if (tid < ${ANCH_SIDE + 2}u) { anK[tid] = aknot(ab, tid); }\n` + anchErase(n, picture) + `      barrier();\n      if (tid < 4u) { anCol[tid] = anchIn(int(xq + tid)) ? 1u : 0u; }\n`;
+    body += `      if (tid < ${ANCH_SIDE + 2}u) { anK[tid] = aknot(ab, tid); }\n` + anchErase(n) + `      barrier();\n      if (tid < 4u) { anCol[tid] = anchIn(int(xq + tid)) ? 1u : 0u; }\n`;
     body += `      for (uint ai = tid; ai < ${4 * ANCH_ROWS}u; ai += T) {\n        uint arow = ai % ${ANCH_ROWS}u;\n        vec2 aev = vec2(0.0);\n`;
     body += `        if (arow >= 2u && arow <= ${ANCH_SIDE + 1}u) { aev = anchE(ab, g0 + float(xq + ai / ${ANCH_ROWS}u) * gstep, arow - 1u); }\n        anE[ai] = aev;\n      }\n      barrier();\n`;
     body += `      aix = bvec4(${[0, 1, 2, 3].map((k) => `anCol[${k}] != 0u`).join(", ")});\n    }\n`;

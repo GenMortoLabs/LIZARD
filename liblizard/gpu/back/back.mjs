@@ -9,7 +9,7 @@
 //
 //   const bh = await BackHalf.build(device, { B, sizes, precision, picture });
 import { Transform } from "./transform.mjs";
-import { transformTables, TRANSFORM_DOWN } from "./disc.mjs";
+import { transformTables } from "./disc.mjs";
 import { build as buildSoft } from "./soft.mjs";
 import { build as buildLdpc } from "./ldpc.mjs";
 import { derived } from "./dims.mjs";
@@ -40,11 +40,11 @@ export class BackHalf {
     for (let s = 0; s < SLOTS; s++) {
       const z = sizes[s] ?? null;
       if (!z) { want.push(null); continue; }
-      // ai: pass 1 reads a picture at the size below its own (transform.mjs TRANSFORM_DOWN)
-      const nt = TRANSFORM_DOWN[z.n] ?? z.n;
-      const need = pass1WorkgroupBytes(nt, precision);
+      // ai: pass 1 reads a picture at its own size (since 2026-11-08; the ladder size below it before, whose band left so
+      // ai: little to spare that what lay outside it, an undersampled camera's alias images, folded back into it)
+      const need = pass1WorkgroupBytes(z.n, precision);
       if (need > limit) { log(`size ${s} (${z.n}/${z.subch}) not built: pass 1 needs ${need} B of workgroup memory, the device offers ${limit}`); want.push(null); continue; }
-      want.push({ n: z.n, subch: z.subch, nt });
+      want.push({ n: z.n, subch: z.subch });
     }
     const tables = await transformTables(want);
     const bsizes = tables.map((tb) => (tb ? { n: tb.n, subch: tb.subch, blocks: tb.blocks } : null));

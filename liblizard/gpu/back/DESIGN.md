@@ -177,11 +177,14 @@ As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `glsl/back_transfor
   (f16) or two `vec4f`. A scalar load a column a row is bound by the cache lines a wave's load touches; a wider tile,
   a twiddle table or sincos do not help that. Twiddles: the base twiddle from the table, the rest by multiplication.
   Workgroup memory, at the size pass 1 runs (next bullet): two exchange buffers plus 16 B a thread of partials and
-  the anchors' 460 B (`pass1WorkgroupBytes`): for the 1536 picture, run at 1024, 10,700 B in f16 and 18,892 B in f32,
-  so a 32 KB device builds every picture in either.
-- Pass 1 reads a picture at the ladder size below its own (`disc.mjs` `TRANSFORM_DOWN`; 256 below 384): n is the
-  first ladder size of at least 3 R, so the one below holds 2 R and every coefficient the picture carries. 1152 and 1280 read at
-  1024, as 1536 does: 1024 holds 2 R for both sizes' tops, and 1152 would take pass 1 a third wave of 64 lanes.
+  the anchors' 460 B (`pass1WorkgroupBytes`): for the 1536 picture, run at its own size, 18,908 B in f16 and 31,196 B in
+  f32, so a 32 KB device builds every picture in either.
+- Pass 1 reads a picture at its own size (since 2026-11-08), every size of the ladder (384 to 1536, 8 x 2^a 3^b
+  5^c: 1152's two radix-3 stages and 1280's radix 5 by `oddStage` and `oddLastStage`). Until then it read at the
+  ladder size below (256 below 384; 1152, 1280 and 1536 at 1024), which still held every coefficient the picture
+  carries (n is the first ladder size of at least 3 R, so the one below holds 2 R) but left the band so little to
+  spare that what lies outside it, an undersampled camera's alias images, folded back into it: a 1024 picture on a
+  capture spanning about 650 pixels read at 768 a third of the blocks it reads at 1024.
 ## 4. Soft values
 
 Formula and moments: section 1. The rule stage's soft pass, a dispatch a picture slot each (`glsl/back_tiers.mjs`):
@@ -373,7 +376,7 @@ const bh = await BackHalf.build(device, { B, sizes, precision, picture, log }); 
   a time, so build the back half while no other `Lizard` is in use.
 - `precision: "f16"` keeps Y and S in f16 where the device has `shader-f16` and falls back to f32 with a log.
 - Device limits: workgroup memory at the adapter's maximum. The LDPC needs up to 31,748 B (the 1/2 code with its stop);
-  pass 1 at most 18,892 B (f32, the 1536 picture; section 3). Each stage binds at most 8 storage buffers.
+  pass 1 at most 31,196 B (f32, the 1536 picture; section 3). Each stage binds at most 8 storage buffers.
 
 ### A lane's buffers
 
@@ -425,7 +428,7 @@ Pass 1 samples each picture itself: no grid is written or read.
   spectral subtraction read PART and COEF.
 - The anchors (SPEC 6.13): pass 1 reads the front half's record a frame (binding 10, written by F7a's ANCH_FIT),
   adds the knots' tensor cubic Hermite mesh (the C's `anch_herm4`) to every sample's position before its bilinear
-  read, and sets every sample within the square's half side plus 2.5 of the picture's samples of an anchor's centre,
+  read, and sets the samples the C erases, floor((m0 - margin) n / span) - 2 to ceil((m0 + a - margin) n / span) + 1
   on both axes, to the picture's shading there (the surface ANCH_FIT fits in the detrend's functions over the picture
   outside the squares, six coefficients in the record) before z and the detrend's sums, the erased ranges decided in
   integers on pass 1's own grid (no device's rounding decides a sample).

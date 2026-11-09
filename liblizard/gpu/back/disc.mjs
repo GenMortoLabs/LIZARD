@@ -82,34 +82,7 @@ export function rowsByCount({ n, bw, blocks, npos }, pos) {
 // ai: The disc rows a frame of version v takes at a size's tables (transformTables): the gate's rows table by version.
 export const rowsOfVersion = (tb, v) => tb.rowsBy[Math.min(CHUNKS * v, tb.blocks)];
 
-// ai: The transform size a picture of n samples is read at by the fused pass 1: the ladder size below n, 256 below
-// ai: 384 (2026-10-21). n is the first ladder size of at least 3 R, so the one below it holds 2 R and every coefficient
-// ai: the picture carries; sampled on the picture's own square from its first sample, at n / nt of its step, a picture
-// ai: band-limited to R gives the same coefficients at nt (each pass divides by its own size).
-// ai: 1152 and 1280 (2026-10-29) at 1024, not at the ladder size below: their formats (LIZARD-576 to -880) were read at
-// ai: 1024 from 1536 and keep that size and cost. 1024 holds 2R for both tops (LIZARD-720, R 383; -880, R 423), and
-// ai: 1152 would be pass 1's third 64-lane wave (nt / 8 threads): measured on the iGPU, about 10% of the frame for 1.9
-// ai: to 3.6% more blocks.
-export const TRANSFORM_DOWN = { 384: 256, 512: 384, 768: 512, 1024: 768, 1152: 1024, 1280: 1024, 1536: 1024 };
-
-// ai: The detrend's basis and its transforms at m points, as src/lizard_phy.c init defines them (in double, then f32):
-// ai: cx, qx, then x12 (x1r, x1i, x2r, x2i a u), sx2 and sq2.
-function detrendTables(m) {
-  const cx = new Float32Array(m), qx = new Float32Array(m), x12 = new Float32Array(4 * m), er = new Float64Array(m), ei = new Float64Array(m);
-  let m2 = 0, sq2 = 0;
-  for (let i = 0; i < m; i++) { const c = (2 * i + 1 - m) / m; m2 += c * c; er[i] = Math.cos(-2 * 3.14159265358979323846 * i / m); ei[i] = Math.sin(-2 * 3.14159265358979323846 * i / m); }
-  const sx2 = m2;
-  m2 /= m;
-  for (let i = 0; i < m; i++) { const c = (2 * i + 1 - m) / m, q = c * c - m2; cx[i] = c; qx[i] = q; sq2 += q * q; }
-  for (let u = 0; u < m; u++) {
-    let ar = 0, ai = 0, br = 0, bi = 0;
-    for (let i = 0; i < m; i++) { const c = (2 * i + 1 - m) / m, q = c * c - m2, k = (u * i) % m; ar += c * er[k]; ai += c * ei[k]; br += q * er[k]; bi += q * ei[k]; }
-    x12.set([ar, ai, br, bi], 4 * u);
-  }
-  return { cx, qx, x12, sx2: Math.fround(sx2), sq2: Math.fround(sq2) };
-}
-
-// ai: The tables for every picture size, from the codec: sizes = [{ n, subch, nt }] with a size's index its position
+// ai: The tables for every picture size, from the codec: sizes = [{ n, subch }] with a size's index its position
 // ai: (gpu/tables.mjs PICTURES) and null where a size is not built. A picture's tables do not depend on the ring it
 // ai: is painted in, so the codec is set up in its default ring. Besides A's own tables each entry carries what the
 // ai: soft values bind to (UV, UC) and its blocks. Read once a build; the wasm holds one configuration at a time, so
@@ -118,7 +91,7 @@ export async function transformTables(sizes) {
   await init();
   return sizes.map((z) => {
     if (!z) return null;
-    const { n, subch } = z, nt = z.nt ?? n;
+    const { n, subch } = z;
     if (SIZES.indexOf(n) < 0) throw new Error(`picture size ${n}`);
     const fc = new Lizard(n, subch, 1);
     // ai: blocks here are 8-sub-channel chunks, the rows' and the soft values' unit (a version is CHUNKS of them),
@@ -127,13 +100,11 @@ export async function transformTables(sizes) {
     const shape = { ...fc.shape(), blocks: subch / 8 }, pos = fc.posTable(), tab = fc.tables();
     const disc = discLayout(shape, pos), rowsBy = rowsByCount(shape, pos);
     if (rowsBy[shape.blocks] !== disc.V) throw new Error(`${n}/${subch}: the blocks take ${rowsBy[shape.blocks]} rows of the disc's ${disc.V}`);
-    // ai: the transform's tables at nt: the codec's own where nt is n, else the same definitions at nt
-    let x12 = new Float32Array(4 * n), sx2 = tab[6 * n], sq2 = tab[6 * n + 1], cx = tab.slice(0, n), qx = tab.slice(n, 2 * n);
+    const x12 = new Float32Array(4 * n), sx2 = tab[6 * n], sq2 = tab[6 * n + 1], cx = tab.slice(0, n), qx = tab.slice(n, 2 * n);
     for (let u = 0; u < n; u++) x12.set([tab[2 * n + u], tab[3 * n + u], tab[4 * n + u], tab[5 * n + u]], 4 * u);
-    if (nt !== n) ({ x12, sx2, sq2, cx, qx } = detrendTables(nt));
-    const tw = new Float32Array(2 * nt);
-    for (let m = 0; m < nt; m++) { const th = -2 * Math.PI * m / nt; tw[2 * m] = Math.cos(th); tw[2 * m + 1] = Math.sin(th); }
+    const tw = new Float32Array(2 * n);
+    for (let m = 0; m < n; m++) { const th = -2 * Math.PI * m / n; tw[2 * m] = Math.cos(th); tw[2 * m + 1] = Math.sin(th); }
     fc.free();
-    return { n, subch, blocks: shape.blocks, shape, pos, V: disc.V, rowsBy, rows: disc.rows, off: disc.off, UV: disc.UV, UC: disc.UC, npos: shape.npos, x12, tw, sx2, sq2, m2: sx2 / nt, cx, qx, nt };
+    return { n, subch, blocks: shape.blocks, shape, pos, V: disc.V, rowsBy, rows: disc.rows, off: disc.off, UV: disc.UV, UC: disc.UC, npos: shape.npos, x12, tw, sx2, sq2, m2: sx2 / n, cx, qx };
   });
 }

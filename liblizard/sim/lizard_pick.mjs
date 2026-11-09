@@ -172,8 +172,8 @@ export const SUBCH_CAP = (n) => Math.floor(Math.PI * n * n / (8 * 320));
 // ai: decoder's picture slots are this list's indices (gpu/tables.mjs PICTURES, gpu/plan/back_transform.mjs SIZES).
 // ai: src/lizard_phy.c LIZARD_PICTURES is the same list.
 // ai: 1152 (9 x 2^7) and 1280 (5 x 2^8) since 2026-10-29: LIZARD-576 to -720 and -728 to -888 (n / 2R 1.50 to 1.68)
-// ai: paint and read 0.56 and 0.69 of 1536's samples; the GPU decoder reads both at 1024 as it did their 1536
-// ai: (gpu/back/transform.mjs TRANSFORM_DOWN). 256 left the list (2026-11-06): it held versions 1 and 2 alone, which
+// ai: paint and read 0.56 and 0.69 of 1536's samples; the GPU decoder reads every picture at its own size since
+// ai: 2026-11-08 (at the ladder size below before). 256 left the list (2026-11-06): it held versions 1 and 2 alone, which
 // ai: are no formats.
 export const PICTURE_SIZES = [384, 512, 768, 1024, 1152, 1280, 1536];
 export const N_FOR = (subch) => PICTURE_SIZES.find((n) => n >= 3 * R_RING(subch)) ?? PICTURE_SIZES.at(-1);

@@ -64,11 +64,10 @@ export class Transform {
     t.reduce = []; t.pass2 = []; t.pass1f = [];
     const set = (arr, s) => (p) => { arr[s] = p; };
     for (const s of t.built) {
-      // ai: pass 1 at the size's nt with the picture's own n for the anchors' erase
-      const { nt: n, n: picture } = tables[s];
+      const { n } = tables[s];
       jobs.push(pipe(t.redBgl, { glsl: reduceSource({ n, B }) }, `back reduce ${n}`).then(set(t.reduce, s)));
       jobs.push(pipe(t.p2Bgl, { glsl: pass2Source({ n, prec: precision, B }) }, `back pass2 ${n}`).then(set(t.pass2, s)));
-      jobs.push(pipe(t.p1fBgl, { glsl: pass1Source({ n, prec: precision, B, picture }) }, `back pass1 fused ${n}`).then(set(t.pass1f, s)));
+      jobs.push(pipe(t.p1fBgl, { glsl: pass1Source({ n, prec: precision, B }) }, `back pass1 fused ${n}`).then(set(t.pass1f, s)));
     }
     const done = await Promise.all(jobs);
     t.gate = done[0];
@@ -90,9 +89,8 @@ export class Transform {
       const ab = new ArrayBuffer(16 * RING_COUNT + 4 * RING_COUNT * LATTICE_MAX), fl = new Float32Array(ab);
       picture.forEach((rg, r) => {
         if (rg.lattice.length > LATTICE_MAX || rg.lattice.length < 2) throw new Error(`${rg.lattice.length} lattice nodes a side in ring ${r}: PIC holds 2 to ${LATTICE_MAX}`);
-        // ai: the picture's own grid, from its first sample at n / nt of its step where it is read at nt
         const { g0, step } = gridOf(rg, tables[s].n);
-        fl.set([g0, (step * tables[s].n) / tables[s].nt, rg.lattice.length, r * LATTICE_MAX], 4 * r);
+        fl.set([g0, step, rg.lattice.length, r * LATTICE_MAX], 4 * r);
         fl.set(rg.lattice, 4 * RING_COUNT + r * LATTICE_MAX);
       });
       t.picUnis[s] = up(new Uint8Array(ab), U.UNIFORM);
@@ -102,7 +100,7 @@ export class Transform {
     const gate = new Uint32Array(gateWords(counts));
     for (const s of t.built) {
       const tb = tables[s];
-      gate.set([tb.nt / CPW, tb.V, tb.blocks / CHUNKS, 0], 4 * s);
+      gate.set([tb.n / CPW, tb.V, tb.blocks / CHUNKS, 0], 4 * s);
       for (let v = 0; v < counts; v++) gate[gateRowsAt(v, s)] = rowsOfVersion(tb, v);
     }
     for (let v = 0; v < counts; v++) gate[gateCodesAt(counts, v)] = codes[v] ?? 0;
@@ -110,9 +108,9 @@ export class Transform {
     // Per frame strides, the largest built size's (a batch may mix sizes).
     // ai: Y holds V rows a frame where pass 1 writes V - 1, and the column means ride in PART's w (no Y0 buffer).
     const over = (f) => Math.max(...t.built.map((s) => f(tables[s])));
-    t.yStride = over((tb) => tb.V * tb.nt);
+    t.yStride = over((tb) => tb.V * tb.n);
     t.sStride = over((tb) => tb.npos);
-    t.partStride = over((tb) => tb.nt);
+    t.partStride = over((tb) => tb.n);
     return t;
   }
 }

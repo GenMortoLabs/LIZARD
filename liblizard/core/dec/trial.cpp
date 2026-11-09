@@ -25,9 +25,9 @@ constexpr int TRIAL_BATCH = 8;   // ai: frames a launch at most (every picture s
 constexpr uint32_t ID_TAG = 0x7a000000u;   // ai: a known block's id: ID_TAG | frame << 8 | block
 // ai: a known frame's least pixels a module, in its own paint: at one, the finder misses LIZARD-80 in the 256 ring at
 // ai: some noises and not others (a camera never samples a module once, square on); and a paint at one shown at a whole
-// ai: multiple is a picture of sharp pixel steps, which the GPU's read below the picture's size (TRANSFORM_DOWN) folds
-// ai: into the lowest frequencies, a few percent of the first block's soft values turned (a camera's lens blurs such
-// ai: steps away), so a frame takes a ring whose paint has this many
+// ai: multiple is a picture of sharp pixel steps (a camera's lens blurs such steps away), which the GPU's read below the
+// ai: picture's size folded into the lowest frequencies until 2026-11-08 (every picture read at its own size since), so
+// ai: a frame takes a ring whose paint has this many
 constexpr int MIN_PXM = 2;
 
 double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
