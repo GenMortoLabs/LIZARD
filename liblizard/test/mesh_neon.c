@@ -13,9 +13,9 @@
 #include "acquire.c"
 #include <stdio.h>
 uint32_t ob_debug_hash;
-#define SCALAR_HASH 0xf42c8b6f71af790eull
-#define NEON_HASH 0xba9af2ba4a56adc7ull
-#define X86_HASH 0x79e76f9d730624feull
+#define SCALAR_HASH 0x8d32ff36f81bf02full
+#define NEON_HASH 0xced999361467b5a7ull
+#define X86_HASH 0xc78a9f0682037445ull
 static uint64_t hs = 1469598103934665603ull;
 static void mix(const void *p, size_t n) { const uint8_t *b = p; for (size_t i = 0; i < n; i++) { hs ^= b[i]; hs *= 1099511628211ull; } }
 static uint32_t rs = 1;
@@ -50,7 +50,7 @@ int main(void) {
     corner_coords(&L, src);
     homo_t Hi;
     homography(quad, src, &Hi);
-    const int a = ob_anchor_side(&L);
+    const int a = ob_anchor_side(&L), K = ob_anchor_k(&L);
     for (int y = 0; y < ih; y++) for (int x = 0; x < iw; x++) {
       float mx, my;
       project(&Hi, x + 0.5f, y + 0.5f, &mx, &my);
@@ -59,8 +59,8 @@ int main(void) {
       if (ix >= 0 && iy >= 0 && ix < L.w && iy < L.h) {
         const int k = L.kind[iy * L.w + ix];
         v = k != CELL_DATA ? ((k & 3) == CELL_DARK ? 50 : 200) + (int)(rnd() % 21) - 10 : (int)(rnd() & 255);
-        for (int q = 0; q < OB_ANCH_K * OB_ANCH_K && a > 0; q++) {
-          const float x0 = (float)ob_anchor_m0(&L, q % OB_ANCH_K), y0 = (float)ob_anchor_m0(&L, q / OB_ANCH_K);
+        for (int q = 0; q < K * K && a > 0; q++) {
+          const float x0 = (float)ob_anchor_m0(&L, q % K), y0 = (float)ob_anchor_m0(&L, q / K);
           if (mx < x0 || mx >= x0 + a || my < y0 || my >= y0 + a) continue;
           const float dc = fmaxf(fabsf(mx - x0 - a * 0.5f), fabsf(my - y0 - a * 0.5f)) / (a * 0.5f);
           v = dc < 0.25f || dc >= 0.6f ? 210 : 40;
@@ -196,7 +196,7 @@ int main(void) {
         isb[i] = (unsigned char)(rnd() & 1); drop[i] = 0;
       }
       t0 = ob_now_ms();
-      const int ok = lensm_fit(np, qx, qy, dx, dy, fi & 1 ? isb : 0, drop, 0.3, &m);
+      const int ok = lensm_fit(np, qx, qy, dx, dy, fi & 1 ? isb : 0, drop, 0.3, LENS_TERMS, &m);
       tfit += ob_now_ms() - t0;
       mix(&ok, sizeof ok); mix(&m.K, sizeof m.K); mix(m.t, sizeof m.t); mix(drop, (size_t)np);
     }

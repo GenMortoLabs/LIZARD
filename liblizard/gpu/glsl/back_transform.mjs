@@ -271,10 +271,11 @@ shared int anHi[${ANCH_SIDE}];
 shared uint anCol[4];
 struct AnchHerm { int b; vec4 w; uint i; };
 float aknot(uint ab, uint i) { return arec[ab + 1u + (i >> 2u)][i & 3u]; }
-AnchHerm anchHerm(float x) {
-  if (!(x >= anK[0] && x <= anK[8])) { return AnchHerm(0, vec4(0.0), 9u); }
+// ai: S, the ring's grid a side (ANCH_FIT's record, arec[ab].y): S + 2 knots an axis, anK[0] to anK[S + 1]
+AnchHerm anchHerm(float x, uint S) {
+  if (!(x >= anK[0] && x <= anK[S + 1u])) { return AnchHerm(0, vec4(0.0), 9u); }
   uint i = 0u;
-  for (uint j = 1u; j < 8u; j++) { i += (x >= anK[j]) ? 1u : 0u; }
+  for (uint j = 1u; j < S + 1u; j++) { i += (x >= anK[j]) ? 1u : 0u; }
   float ta = anK[i];
   float tb = anK[i + 1u];
   float hc = tb - ta;
@@ -285,23 +286,23 @@ AnchHerm anchHerm(float x) {
   float hb = (s3 - s2) * hc;
   vec4 w = vec4(0.0, 2.0 * s3 - 3.0 * s2 + 1.0, -2.0 * s3 + 3.0 * s2, 0.0);
   if (i > 0u) { float d = tb - anK[i - 1u]; w.x -= ha / d; w.z += ha / d; } else { w.y -= ha / hc; w.z += ha / hc; }
-  if (i < 7u) { float d = anK[i + 2u] - ta; w.y -= hb / d; w.w += hb / d; } else { w.y -= hb / hc; w.z += hb / hc; }
+  if (i < S) { float d = anK[i + 2u] - ta; w.y -= hb / d; w.w += hb / d; } else { w.y -= hb / hc; w.z += hb / hc; }
   return AnchHerm(int(i) - 1, w, i);
 }
-bool anchIn(int x) {
+bool anchIn(int x, uint S) {
   bool hit = false;
-  for (uint i = 0u; i < ${ANCH_SIDE}u; i++) { hit = hit || (x >= anLo[i] && x <= anHi[i]); }
+  for (uint i = 0u; i < S; i++) { hit = hit || (x >= anLo[i] && x <= anHi[i]); }
   return hit;
 }
-vec2 aval(uint ab, int c, uint r) {
-  if (c < 1 || c > ${ANCH_SIDE}) { return vec2(0.0); }
+vec2 aval(uint ab, int c, uint r, uint S) {
+  if (c < 1 || c > int(S)) { return vec2(0.0); }
   uint q = ${ANCH_SIDE}u * (r - 1u) + uint(c - 1);
   vec4 v = arec[ab + 4u + (q >> 1u)];
   return ((q & 1u) == 1u) ? v.zw : v.xy;
 }
-vec2 anchE(uint ab, float x, uint r) {
-  AnchHerm h = anchHerm(x);
-  return h.w.x * aval(ab, h.b, r) + h.w.y * aval(ab, h.b + 1, r) + h.w.z * aval(ab, h.b + 2, r) + h.w.w * aval(ab, h.b + 3, r);
+vec2 anchE(uint ab, float x, uint r, uint S) {
+  AnchHerm h = anchHerm(x, S);
+  return h.w.x * aval(ab, h.b, r, S) + h.w.y * aval(ab, h.b + 1, r, S) + h.w.z * aval(ab, h.b + 2, r, S) + h.w.w * aval(ab, h.b + 3, r, S);
 }
 vec2 anchMesh(AnchHerm h, uint col) {
   uint o = ${ANCH_ROWS}u * col + uint(h.b + 1);
@@ -309,10 +310,10 @@ vec2 anchMesh(AnchHerm h, uint col) {
 }
 `;
 // ai: the squares' fill (ANCH_FIT's surface, plan/back_transform.mjs ANCH_SURF): u = m sk + so of a module coordinate m
-const anchHead = () => `  uint ab = f * ${ANCH_REC}u;\n  vec4 ahd = arec[ab];\n  bool aon = ahd.x > 0.5;\n  vec4 sfa = arec[ab + ${ANCH_SURF}u];\n  vec2 sfb = arec[ab + ${ANCH_SURF + 1}u].xy;\n  vec4 sgeo = arec[ab + 3u];\n  float sk = 2.0 / sgeo.z;\n  float so = -2.0 * sgeo.w / sgeo.z - 1.0;\n`;
+const anchHead = () => `  uint ab = f * ${ANCH_REC}u;\n  vec4 ahd = arec[ab];\n  bool aon = ahd.x > 0.5;\n  uint aS = f2u(ahd.y);\n  vec4 sfa = arec[ab + ${ANCH_SURF}u];\n  vec2 sfb = arec[ab + ${ANCH_SURF + 1}u].xy;\n  vec4 sgeo = arec[ab + 3u];\n  float sk = 2.0 / sgeo.z;\n  float so = -2.0 * sgeo.w / sgeo.z - 1.0;\n`;
 // ai: the squares' samples as the C erases them (src/lizard_phy.c, SPEC 6.13): floor((m0 - margin) n / span) - E to
 // ai: ceil((m0 + a - margin) n / span) - 1 + E on either axis, E = ANCH_ERASE; n (m0 + a - margin) stays under 2^20
-const anchErase = (n) => `      if (tid < ${ANCH_SIDE}u) {
+const anchErase = (n) => `      if (tid < aS) {
         vec4 ag = arec[ab + 3u];
         int ia = f2i(ag.y);
         int isp = f2i(ag.z);
@@ -337,12 +338,12 @@ export function pass1Source({ n, prec, B }) {
     // ai: the fill along this quad's columns: fa its terms in u alone, fb the coefficient of w (b4 w^2 apart)
     body += `    vec4 sux = vec4(mx0, mx1, mx2, mx3) * sk + so;\n    vec4 fa = sfa.x + sux * (sfa.y + sux * sfa.z);\n    vec4 fb = sfa.w + sfb.y * sux;\n`;
     body += `    bvec4 aix = bvec4(false);\n    if (aon) {\n`;
-    body += `      if (tid < ${ANCH_SIDE + 2}u) { anK[tid] = aknot(ab, tid); }\n` + anchErase(n) + `      barrier();\n      if (tid < 4u) { anCol[tid] = anchIn(int(xq + tid)) ? 1u : 0u; }\n`;
+    body += `      if (tid < ${ANCH_SIDE + 2}u) { anK[tid] = aknot(ab, tid); }\n` + anchErase(n) + `      barrier();\n      if (tid < 4u) { anCol[tid] = anchIn(int(xq + tid), aS) ? 1u : 0u; }\n`;
     body += `      for (uint ai = tid; ai < ${4 * ANCH_ROWS}u; ai += T) {\n        uint arow = ai % ${ANCH_ROWS}u;\n        vec2 aev = vec2(0.0);\n`;
-    body += `        if (arow >= 2u && arow <= ${ANCH_SIDE + 1}u) { aev = anchE(ab, g0 + float(xq + ai / ${ANCH_ROWS}u) * gstep, arow - 1u); }\n        anE[ai] = aev;\n      }\n      barrier();\n`;
+    body += `        if (arow >= 2u && arow <= aS + 1u) { aev = anchE(ab, g0 + float(xq + ai / ${ANCH_ROWS}u) * gstep, arow - 1u, aS); }\n        anE[ai] = aev;\n      }\n      barrier();\n`;
     body += `      aix = bvec4(${[0, 1, 2, 3].map((k) => `anCol[${k}] != 0u`).join(", ")});\n    }\n`;
     body += `    for (uint j = tid; j <= T; j += T) {\n      float my = g0 + float(8u * j) * gstep;\n      float v = coonsT(my, first, nn);\n      vec2 lf = curve(f, 3u, my, first, nn);\n      vec2 rg = curve(f, 1u, my, first, nn);\n`;
-    body += `      vec2 m0 = vec2(0.0);\n      vec2 m3 = vec2(0.0);\n      if (aon) { AnchHerm ah = anchHerm(my); m0 = anchMesh(ah, 0u); m3 = anchMesh(ah, 3u); }\n`;
+    body += `      vec2 m0 = vec2(0.0);\n      vec2 m3 = vec2(0.0);\n      if (aon) { AnchHerm ah = anchHerm(my, aS); m0 = anchMesh(ah, 0u); m3 = anchMesh(ah, 3u); }\n`;
     body += `      vec2 p0 = toImage(M, vec2(mx0, my));\n      vec2 p3 = toImage(M, vec2(mx3, my));\n`;
     body += `      nodeP[j] = vec4(p0 + lensAt(lz, p0) + coonsMix(u0, v, tp0, bt0, lf, rg, cn) + m0, p3 + lensAt(lz, p3) + coonsMix(u3, v, tp3, bt3, lf, rg, cn) + m3);\n    }\n    barrier();\n`;
     body += `    vec4 z[8] = vec4[8](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));\n`;
@@ -352,7 +353,7 @@ export function pass1Source({ n, prec, B }) {
       body += `      vec4 nA = nodeP[y / 8u];\n      vec4 nB = nodeP[y / 8u + 1u];\n      float fy = float(y % 8u) * 0.125;\n      vec2 pL = mix(nA.xy, nB.xy, fy);\n      vec2 pR = mix(nA.zw, nB.zw, fy);\n`;
       body += `      vec4 zz = vec4(0.0);\n      if (aon) {\n`;
       body += `        zz = vec4(bilinH(f, pL, hhi, hinv), bilinH(f, mix(pL, pR, 1.0 / 3.0), hhi, hinv), bilinH(f, mix(pL, pR, 2.0 / 3.0), hhi, hinv), bilinH(f, pR, hhi, hinv));\n`;
-      body += `        bool ay = anchIn(int(y));\n        float suy = (g0 + float(y) * gstep) * sk + so;\n        zz = mix(zz, fa + suy * (fb + suy * sfb.x), bvec4(aix.x && ay, aix.y && ay, aix.z && ay, aix.w && ay));\n      }\n`;
+      body += `        bool ay = anchIn(int(y), aS);\n        float suy = (g0 + float(y) * gstep) * sk + so;\n        zz = mix(zz, fa + suy * (fb + suy * sfb.x), bvec4(aix.x && ay, aix.y && ay, aix.z && ay, aix.w && ay));\n      }\n`;
       body += `      z[${r}] = zz;\n`;
       body += `      float c = float(2 * int(y) + 1 - int(N)) / float(N);\n      s1 += zz;\n      sc += zz * c;\n      sq += zz * (c * c - P.m2);\n    }\n`;
     }

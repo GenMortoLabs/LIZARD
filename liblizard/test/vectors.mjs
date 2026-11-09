@@ -80,7 +80,8 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
 }
 // ai: 6.12 P2, LIZARD-64, every payload byte zero: n 384 in the 128 ring: side 572, pxm 2, the picture resampled by 4/3
 // ai: from pixel 30, the resampled square [24, 548) (modules 12 to 273: the picture and its 3-module guard,
-// ai: LIZARD_CP = 3), the anchors (SPEC 6.13) 4 modules from modules 31, 68, 104, 141, 178, 214, 251.
+// ai: LIZARD_CP = 3), the anchors (SPEC 6.13) 5 x 5 of 6 modules from modules 38, 89, 140, 191, 242 (7 x 7 of 4 until
+// ai: 2026-11-09).
 // ai: (LIZARD-32 at n 256 in the 64 ring until 2026-11-01, LIZARD-16 until 2026-10-31.)
 {
   const e = encode(384, 64, () => {}, true, 256);
@@ -90,23 +91,24 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
   want("P2 drive row 30 cols 30..33", Array.from(e.drive.subarray(30 * 572 + 30, 30 * 572 + 34), (v) => v.toFixed(7)).join(", "), "0.4596732, 0.4953838, 0.7447616, 1.0000000");
   want("P2 grey row 30 cols 30..45", greyRow(e, 30, 30, 16), "117 126 190 255 255 190 96 86 177 250 246 170 76 54 104 156");
   want("P2 grey row 345 cols 345..360", greyRow(e, 345, 345, 16), "201 177 144 124 141 192 243 245 183 96 34 18 29 54 103 180");
-  want("P2 grey row 64 cols 60..71 (anchor 0, 0)", greyRow(e, 64, 60, 12), "74 148 255 255 0 0 0 0 255 255 98 94");
+  want("P2 grey row 81 cols 74..89 (anchor 0, 0)", greyRow(e, 81, 74, 16), "91 127 255 255 0 0 0 255 255 0 0 0 255 255 118 60");
   const sq = greySquare(e, 24, 548);
-  want("P2 square sha256", sha(sq), "1c871c67613d37558d22c2198134e30005b2645f31e272514d13823151639ef6");
-  want("P2 square zeros / 255s", `${sq.filter((v) => v === 0).length} / ${sq.filter((v) => v === 255).length}`, "4959 / 6964");
-  want("P2 whole drive sha256", sha(greySquare(e, 0, 572)), "2664b748d54f7318b341c85c34f40d67c1e374b8226c0cf90bcc4d346f1485d7");
+  want("P2 square sha256", sha(sq), "9fd1323dcf7e1c422da633e4f4d60f6dbd54ba4b631a3ea010b43d7154a1c34b");
+  want("P2 square zeros / 255s", `${sq.filter((v) => v === 0).length} / ${sq.filter((v) => v === 255).length}`, "5869 / 6486");
+  want("P2 whole drive sha256", sha(greySquare(e, 0, 572)), "d6411f1df392a2ad81759a20858b9de20d465283a69a11005ffe58c07d21feaa");
 }
 // ai: 6.12 P3, LIZARD-64, every payload byte zero: n 384 in the 64 ring, side 474, pxm 3 (a copy), the picture
-// ai: from pixel 45, the resampled square [36, 438), the anchors as P2's.
+// ai: from pixel 45, the resampled square [36, 438), the anchors (SPEC 6.13) 3 x 3 of 4 modules from modules 34, 77,
+// ai: 120 (7 x 7 of 2 until 2026-11-09).
 {
   const e = encode(nFor(64), 64, () => {});
   want("P3 slot bits sha256", sha(e.slots), "8f2adac0fa137c0fa12c53cf2812dc8e71703a5058465119b3023b951632391f");
   want("P3 packed first 16 (P2's)", hex(pack(e.slots).subarray(0, 16)), "04043e000efd03e0f8ffffcc020c0c03");
   want("P3 drive side", String(e.side), "474");
   want("P3 grey row 45 cols 45..60", greyRow(e, 45, 45, 16), "128 163 255 255 139 81 199 255 184 67 76 141 153 135 144 175");
-  want("P3 grey row 71 cols 66..77 (anchor 0, 0)", greyRow(e, 71, 66, 12), "32 48 101 255 0 255 255 0 255 65 89 115");
-  want("P3 square sha256", sha(greySquare(e, 36, 438)), "da77280e156a17d3ecfb499e3cb9c45a93fc0ef79f1ec38a82d99f4f4a22fffc");
-  want("P3 whole drive sha256", sha(greySquare(e, 0, 474)), "e1ee594820057537017186dd177012dea8b08b57dcb27a3bffab03a91fbc89ab");
+  want("P3 grey row 107 cols 100..115 (anchor 0, 0)", greyRow(e, 107, 100, 16), "177 181 255 255 0 0 0 255 255 0 0 0 255 255 143 102");
+  want("P3 square sha256", sha(greySquare(e, 36, 438)), "d2614e0c291e3da3868c5d85a691d3dd8d33dc60baee923fa1f2d5837d4a01df");
+  want("P3 whole drive sha256", sha(greySquare(e, 0, 474)), "e06a1bcb79744f8ee12978519987c88621071672e9e608da688432e71bafd66b");
 }
 // ai: 7.4, LIZARD-64 (7/8 x 4, 3/4, 2/3 and 1/2 blocks from frame slots 0, 4496, 8992, 13,488, 17,984, 23,136 and
 // ai: 28,896, the padding from 36,576 to 40,960; LIZARD-32 until 2026-11-01, LIZARD-16 until 2026-10-31), block b = id b

@@ -36,7 +36,7 @@ registers the symbol and carries the format word, one Reed-Solomon codeword that
 picture size and the blocks) and the display rate. The payload travels in blocks of 476 bytes (a 32-bit block id and
 472 payload bytes) with a CRC-32C, each coded by a QC-LDPC code onto consecutive sub-channels of 320 coefficients at a
 rate that follows the frequency: 7/8, 3/4, 2/3 and 1/2 from the inside out (the rate profile, 3.1). Every symbol also
-carries pilots in its blocks' tails (7.3) and 49 anchors painted over its picture (6.13). Blocks from any frame feed a
+carries pilots in its blocks' tails (7.3) and anchors painted over its picture, 9, 25 or 49 by the ring (6.13). Blocks from any frame feed a
 Wirehair fountain per chunk of the file, described by header and manifest blocks and verified against the file's
 BLAKE3 hash, all in the light (7.5 to 7.10).
 
@@ -64,7 +64,7 @@ dead at one resolution.
 | mark | a corner mark, the 12 x 12 module square at each corner (4.5) |
 | band, cell | depths 5 and 6, in cells of 2 x 2 modules: track cells and word cells (4.6) |
 | word | the format word, one Reed-Solomon codeword over the band's word cells (section 5) |
-| anchor | one of 49 squares of span / 64 modules painted over the picture on a 7 x 7 grid (6.13) |
+| anchor | one of the squares painted over the picture on the ring's grid: 3 x 3 of 4 modules in the 64 ring, 5 x 5 of 6 in the 128, 7 x 7 of 8 in the 256 (6.13) |
 | top ring | the outermost frequency a format uses, radius R in cycles across the picture (3.2) |
 | coefficient | one frequency (u, v) of the picture's 2D DFT; it carries one QPSK symbol, two slots |
 | slot | one transmitted bit: the sign of a coefficient's real or imaginary part |
@@ -244,8 +244,8 @@ scale = n / span                                              samples a module
 ```
 
 pxm is the painted pixels a module, a whole number, so no module is split across pixels. On the seven sizes an
-anchor's square (6.13, span / 64 modules) is at least 6 pixels a side: the smallest, n = 384, paints 3 pixels a module in
-the 64 ring (squares of 2 modules), 2 in the 128 (4 modules) and 1 in the 256 (8 modules). The picture keeps its n samples and is
+anchor's square (6.13) is at least 8 pixels a side: the smallest, n = 384, paints 3 pixels a module in the 64 ring
+(squares of 4 modules, 12 pixels), 2 in the 128 (6 modules, 12 pixels) and 1 in the 256 (8 modules, 8 pixels). The picture keeps its n samples and is
 resampled to fill its span modules, upscaled by pxm / scale, never shrunk (6.8); where pxm = scale the resampling is an
 exact copy. Six pairs resample: n = 384 and 1152 in the 128 ring; 384, 768, 1152 and 1280 in the 256 ring. Every
 picture in the 64 ring is a copy.
@@ -1009,13 +1009,13 @@ enlarged by 4/3 through the taps of 6.8.
   values at row 30, columns 30 to 33 (the picture's first pixel row and column): 0.4596732, 0.4953838, 0.7447616, 1.0000000
 - grey bytes at row 30, columns 30 to 45: `117 126 190 255 255 190 96 86 177 250 246 170 76 54 104 156`
 - grey bytes at row 345, columns 345 to 360: `201 177 144 124 141 192 243 245 183 96 34 18 29 54 103 180`
-- the anchors (6.13): a = 4 modules, 8 pixels, from modules 31, 68, 104, 141, 178, 214, 251 on either axis. Grey bytes at
-  row 64 (anchor (0, 0)'s third pixel row), columns 60 to 71, the square at columns 62 to 69:
-  `74 148 255 255 0 0 0 0 255 255 98 94`
+- the anchors (6.13): 5 x 5, a = 6 modules, 12 pixels, from modules 38, 89, 140, 191, 242 on either axis. Grey bytes
+  at row 81 (anchor (0, 0)'s sixth pixel row), columns 74 to 89, the square at columns 76 to 87:
+  `91 127 255 255 0 0 0 255 255 0 0 0 255 255 118 60`
 - grey bytes of the resampled square, pixels [24, 548) on both axes (modules [12, 274)), row by row, 274,576 bytes:
-  SHA-256 `1c871c67613d37558d22c2198134e30005b2645f31e272514d13823151639ef6`; 4959 of them are 0 and 6964 are 255
+  SHA-256 `9fd1323dcf7e1c422da633e4f4d60f6dbd54ba4b631a3ea010b43d7154a1c34b`; 5869 of them are 0 and 6486 are 255
 - grey bytes of the whole drive, border included, 327,184 bytes: SHA-256
-  `2664b748d54f7318b341c85c34f40d67c1e374b8226c0cf90bcc4d346f1485d7`
+  `d6411f1df392a2ad81759a20858b9de20d465283a69a11005ffe58c07d21feaa`
 
 **P3, LIZARD-64 (n = 384, 7 blocks) in the 64 ring, every payload byte zero.** pxm = 3, scale 3: a copy. Its slot bits
 are P2's.
@@ -1024,35 +1024,37 @@ are P2's.
 - drive 474 x 474 (S = 158, pxm = 3; scale = 3, so the picture is copied one pixel a sample); the picture starts at
   pixel 45
 - grey bytes at row 45, columns 45 to 60: `128 163 255 255 139 81 199 255 184 67 76 141 153 135 144 175`
-- the anchors (6.13): a = 2 modules, 6 pixels, from modules 23, 41, 60, 78, 96, 115, 133 on either axis. Grey bytes at
-  row 71 (anchor (0, 0)'s third pixel row), columns 66 to 77, the square at columns 69 to 74: `32 48 101 255 0 255 255 0 255 65 89 115`
+- the anchors (6.13): 3 x 3, a = 4 modules, 12 pixels, from modules 34, 77, 120 on either axis. Grey bytes at row 107
+  (anchor (0, 0)'s sixth pixel row), columns 100 to 115, the square at columns 102 to 113:
+  `177 181 255 255 0 0 0 255 255 0 0 0 255 255 143 102`
 - grey bytes of the resampled square, pixels [36, 438) (modules [12, 146)), 161,604 bytes: SHA-256
-  `da77280e156a17d3ecfb499e3cb9c45a93fc0ef79f1ec38a82d99f4f4a22fffc`
+  `d2614e0c291e3da3868c5d85a691d3dd8d33dc60baee923fa1f2d5837d4a01df`
 - grey bytes of the whole drive, 474 x 474, 224,676 bytes: SHA-256
-  `e1ee594820057537017186dd177012dea8b08b57dcb27a3bffab03a91fbc89ab`. The border holds the RS(16, 3) word (5.2)
+  `e06a1bcb79744f8ee12978519987c88621071672e9e608da688432e71bafd66b`. The border holds the RS(16, 3) word (5.2)
 
 **Digests over the ladder.** `node test/vectors.mjs [ob.mjs]`, run from `liblizard/`, checks 5.2, P2, P3, 7.4 and 9.3
 against a build and prints three digests to diff two builds, each over LIZARD-64 to -1024 in steps of 16 in the 64
 ring: every format's cell map at five rates (with its layout dimensions), its drive on a fixed payload, and the P1
-offsets: cells `7e4f838d46272fd7`, drives `1970af181753f5fc`, order `830c1e79ca55f85b`.
+offsets: cells `7e4f838d46272fd7`, drives `3a0a77255011dedd`, order `830c1e79ca55f85b`.
 
 ### 6.13 Anchors (normative)
 
-Every symbol carries 49 anchors: squares painted over the picture on a 7 x 7 grid, whose middles give a receiver the
-geometry inside the border.
+Every symbol carries anchors: squares painted over the picture on a k x k grid, whose middles give a receiver the
+geometry inside the border. The ring the border names sets the grid; nothing else signals it.
 
-- **Geometry.** In ring B (span = 2B) a square is a = span / 64 modules a side: 2, 4 and 8 in the 64, 128 and 256
-  rings. Square (i, j), 0 <= i, j < 7, covers module columns [m0(i), m0(i) + a) and rows [m0(j), m0(j) + a), with
-  m0(i) = floor(15 + span (i + 0.5) / 7 - a / 2 + 0.5) in double precision, the same on both axes
-  (`acquire.c:ob_anchor_m0`). The squares cover 1.2% of the picture.
+- **Geometry.** In ring B (span = 2B) the grid is k x k squares of a modules a side: 3 x 3 of 4 in the 64 ring, 5 x 5
+  of 6 in the 128 and 7 x 7 of 8 in the 256 (`acquire.c:ob_anchor_k`, `ob_anchor_side`). Square (i, j), 0 <= i, j < k,
+  covers module columns [m0(i), m0(i) + a) and rows [m0(j), m0(j) + a), with
+  m0(i) = floor(15 + span (i + 0.5) / k - a / 2 + 0.5) in double precision, the same on both axes
+  (`acquire.c:ob_anchor_m0`). The squares cover 0.88%, 1.37% and 1.2% of the picture in the 64, 128 and 256 rings.
 
-| ring B | a, modules | m0(0) to m0(6) |
-|---|---|---|
-| 64 | 2 | 23, 41, 60, 78, 96, 115, 133 |
-| 128 | 4 | 31, 68, 104, 141, 178, 214, 251 |
-| 256 | 8 | 48, 121, 194, 267, 340, 413, 486 |
+| ring B | k | a, modules | m0(0) to m0(k - 1) |
+|---|---|---|---|
+| 64 | 3 | 4 | 34, 77, 120 |
+| 128 | 5 | 6 | 38, 89, 140, 191, 242 |
+| 256 | 7 | 8 | 48, 121, 194, 267, 340, 413, 486 |
 
-- **Pattern.** A square is a pxm drive pixels a side, never under 6 (3.3). Its drive pixel (x, y), 0 <= x, y < a pxm,
+- **Pattern.** A square is a pxm drive pixels a side, never under 8 (3.3). Its drive pixel (x, y), 0 <= x, y < a pxm,
   with h = a pxm / 2 and d = max(|x + 0.5 - h|, |y + 0.5 - h|) / h, is light (1.0) where d < 0.25 or d >= 0.6 and dark
   (0.0) otherwise: a light middle, a dark ring, a light rim.
 - **Painting.** After the picture is resampled into the drive (6.8), every square overwrites the drive pixels it
@@ -1060,12 +1062,12 @@ geometry inside the border.
 - **Erasing (a receiver MUST).** Before the detrend (6.10) and the transform, on every frame, whether or not it found
   the anchors, a receiver sets every picture sample a square touches and 2 samples beyond it on each side to a value
   that carries none of the picture's signal: on either axis the samples from floor((m0(i) - 15) scale) - 2 to
-  ceil((m0(i) + a - 15) scale) - 1 + 2, clamped to [0, n - 1], for each i, the 49 products of the 7 ranges on the two
+  ceil((m0(i) + a - 15) scale) - 1 + 2, clamped to [0, n - 1], for each i, the k^2 products of the k ranges on the two
   axes (`lizard_phy.c:lizard_finish_ext`).
 - **The reference's fill** is the picture's shading at the sample: the least-squares surface in 1, c(x), q(x), c(y),
-  q(y) and c(x) c(y) (6.10's basis) over the samples (x, y) with x and y multiples of 8 that lie outside the 49
+  q(y) and c(x) c(y) (6.10's basis) over the samples (x, y) with x and y multiples of 8 that lie outside the k^2
   products (its normal matrix depends on the format alone, `ws_init`). A square then reads 0 once the detrend has
-  taken the surface off. A constant fill, the picture's mean, leaves the shading at the 49 places instead: a lattice
+  taken the surface off. A constant fill, the picture's mean, leaves the shading at the k^2 places instead: a lattice
   whose spectrum is the shading's lowest frequencies around every point of the squares' reciprocal lattice, where the
   innermost blocks sit.
 - **Reading them** is the receiver's (10.1, 10.2).
@@ -1830,7 +1832,7 @@ frame (`lizard_phy.c:lizard_decode`, `lizard_acquire` then `lizard_finish`):
    same way.
 4. **Register** (`acquire.c:acquire_core`): a homography from the quad with its corner nodes refined; the anchors (6.13)
    found by the pattern's normalised correlation, accepted at 0.6, held to a robust rule, and used where 12 or more
-   remain; the border nodes refined against the painted border (4.10); the interior from the border (and the anchors) as
+   remain (8 of the 64 ring's 9; where fewer than 11 are fitted alone, the lens model takes no more terms than anchors); the border nodes refined against the painted border (4.10); the interior from the border (and the anchors) as
    a homography's first-order change plus radial terms about the camera's axis, their count chosen by AICc, then a Coons
    patch and, with the anchors, a cubic mesh.
 5. **Format word** (5.4) in the ring that registered; the blind receiver hands the registration over to the picture
@@ -1891,6 +1893,7 @@ about 10% (25 levels), where the reference finder's fixed grey-level thresholds 
 | LINEAR the only bit map, whitened | whitening breaks up payload runs; LINEAR spreads every run of the code over the block |
 | Pilots in every format; no more of them | the tails are free; more pilots would come out of the code and not remove a mix |
 | Anchors in every symbol, unsignalled | the border cannot see a lens's bend inside the picture |
+| The anchors' grid by the ring: 3 x 3 squares of 4 modules in the 64 ring, 5 x 5 of 6 in the 128, 7 x 7 of 8 in the 256 | at range a far code is close to a homography, which the border holds, so found anchors add no block there and their area is the cost: the fewest and smallest squares read most, and 4 modules is the smallest side still found at range (9 of 9 at a quarter of a 1080 crop, lens-free and through fisheyes); through a fisheye the anchors are what read; close up the 5 x 5 holds the 128 ring's full size where a 3 x 3 does not; the counts 9, 25 and 49 tell the three rings apart. 7 x 7 squares of span / 64 modules in every ring before (2 modules in the 64 ring, lost from about 0.45 of the crop through a fisheye) |
 | The display rate in the word | the one property of an animated symbol no single frame shows |
 | The transfer in the light: chunk ids, header and manifest blocks, BLAKE3 per chunk | a camera alone recovers and verifies a file, chunk by chunk |
 | zstd a chunk at a time | a ratio near the best at a speed a phone keeps ahead of the channel with |

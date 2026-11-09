@@ -12,7 +12,7 @@ import { COONS } from "./sample.mjs";
 import { LATTICE_MAX, ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF } from "../plan/back_transform.mjs";
 import { RING_COUNT } from "../plan/finder.mjs";
 import { NODES_MAX, RESID, WMIN, LENS_P } from "../plan/register.mjs";
-import { ANCH_TS, ANCH_PEAK, ANCH_MIN, ANCH_ROUNDS, ANCH_FILL, ANCH_BAND2 } from "../plan/anchors.mjs";
+import { ANCH_TS, ANCH_PEAK, ANCH_ROUNDS, ANCH_FILL, ANCH_BAND2 } from "../plan/anchors.mjs";
 import { lensNode, lensAccumulate, lensModel, lensNormalSolve, SIDE_FITS, SIDE_DECL } from "./register.mjs";
 
 const RR = ANCH_TS, TC = ANCH_TS / 2, RC = RR / 2, WC = TC + 2 * RC, W1C = WC + 1, OC = 2 * RC + 1;
@@ -34,9 +34,12 @@ layout(set = 0, binding = 2, std430) readonly buffer Maps { float maps[][16]; };
 layout(set = 0, binding = 3, std430) readonly buffer Sel { uvec4 sel[]; };
 layout(set = 0, binding = 4, std430) readonly buffer Resid { vec4 resid[]; };
 layout(set = 0, binding = 5, std140) uniform Lattice { uvec4 at[${RING_COUNT}]; vec4 lat[${(RING_COUNT * LATTICE_MAX) / 4}]; } LT;
-layout(set = 0, binding = 6, std140) uniform Anchors { vec4 k[${3 * RING_COUNT}]; vec4 g[${9 * RING_COUNT}]; } A;
+layout(set = 0, binding = 6, std140) uniform Anchors { vec4 k[${3 * RING_COUNT}]; vec4 g[${9 * RING_COUNT}]; vec4 s[${RING_COUNT}]; } A;
 float latAt(uint i) { return LT.lat[i >> 2u][i & 3u]; }
 float knot(uint r, uint i) { return A.k[3u * r + (i >> 2u)][i & 3u]; }
+// ai: ring r's grid a side (3, 5, 7) and the anchors its geometry takes (plan/anchors.mjs anchMin)
+uint gridOf(uint r) { return f2u(A.s[r].x); }
+uint gridMin(uint r) { return f2u(A.s[r].y); }
 ` + COONS + LUM0 + /* glsl */ `
 vec2 mapAt(uint f, float M[16], Lens lz, uint first, uint nn, vec2 m) {
   vec2 p = toImage(M, m);
@@ -72,12 +75,26 @@ const integral = (I1, I2, w, w1) => /* glsl */ `
     else { for (uint y = 1u; y <= ${w}u; y++) { a += ${I2}[y * ${w1}u + c]; ${I2}[y * ${w1}u + c] = a; } }
   }
   barrier();`;
-const samples = (I1, I2, w, w1) => /* glsl */ `
+// ai: area (the fine window, 2026-11-07): where a template step spans more than 2 image px (ms > 1: a square close up,
+// ai: 4 to 8 modules at 6 to 12 px a module, 24 to 96 px, its 16 points 1.5 to 6 px apart), each point
+// ai: is the mean of ms x ms bilinear reads spread over its own cell (ex, ey: a step along each axis in image px at the
+// ai: square's middle), so the sharp pattern is not aliased by reading single pixels a step apart (read so, squares of
+// ai: 8 modules painted at 8 to 12 px a module were located 1 to 1.5 px off, which the mesh then bent the picture by); at
+// ai: 2 px or less a single read as before
+const samples = (I1, I2, w, w1, area = false) => /* glsl */ `
   for (uint t = li; t < ${w * w}u; t += ${AL}u) {
     uint wx = t % ${w}u;
     uint wy = t / ${w}u;
     vec2 p0 = toImage(M, vec2(wcx[wx], wry[wy]));
-    float v = bilin0(f, p0 + lensAt(lz, p0) + coonsMix(wcu[wx], wrv[wy], wct[wx], wcb[wx], wrl[wy], wrr[wy], cn), fw, fh);
+    vec2 pq = p0 + lensAt(lz, p0) + coonsMix(wcu[wx], wrv[wy], wct[wx], wcb[wx], wrl[wy], wrr[wy], cn);
+    float v;
+    ${area ? `if (ms == 1u) { v = bilin0(f, pq, fw, fh); } else {
+      float sv = 0.0;
+      for (uint b = 0u; b < ms; b++) for (uint c = 0u; c < ms; c++) {
+        sv += bilin0(f, pq + ex * ((float(c) + 0.5) / float(ms) - 0.5) + ey * ((float(b) + 0.5) / float(ms) - 0.5), fw, fh);
+      }
+      v = sv / float(ms * ms);
+    }` : `v = bilin0(f, pq, fw, fh);`}
     uint o = (wy + 1u) * ${w1}u + wx + 1u;
     ${I1}[o] = v;
     ${I2}[o] = v * v;
@@ -138,6 +155,11 @@ void main() {
     return;
   }
   uint rgi = pick.x;
+  uint S = gridOf(rgi);
+  if (k % ${ANCH_SIDE}u >= S || k / ${ANCH_SIDE}u >= S) {
+    if (li == 0u) { anch[${ANCH_K}u * f + k] = vec4(0.0); }
+    return;
+  }
   float a = A.k[3u * rgi + 2u].y;
   float h = a / float(TS);
   int rr = RR;
@@ -164,8 +186,14 @@ void main() {
   int cx = clamp(2 * (int(oc % ${OC}u) - ${RC}), FD - rr, rr - FD);
   int cy = clamp(2 * (int(oc / ${OC}u) - ${RC}), FD - rr, rr - FD);
   ${coords(WF, { x: "cx - FD", y: "cy - FD" }, 1)}
+  // ai: a fine step in image px at the square's middle, and the reads a point's side takes (area, above)
+  vec2 xm = vec2(x0 + 0.5 * a, y0 + 0.5 * a);
+  vec2 pm = mapAt(f, M, lz, first, nn, xm);
+  vec2 ex = mapAt(f, M, lz, first, nn, xm + vec2(h, 0.0)) - pm;
+  vec2 ey = mapAt(f, M, lz, first, nn, xm + vec2(0.0, h)) - pm;
+  uint ms = clamp(f2u(ceil(max(length(ex), length(ey)) * 0.5)), 1u, 4u);
   barrier();
-  ${samples("IF1", "IF2", WF, W1F)}
+  ${samples("IF1", "IF2", WF, W1F, true)}
   ${integral("IF1", "IF2", WF, W1F)}
   for (uint o = li; o < ${OF * OF}u; o += ${AL}u) {
     float s = scoreF(o % ${OF}u, o / ${OF}u);
@@ -206,22 +234,24 @@ shared uint kn[${ANCH_K}];
 shared uint kn2[${ANCH_K}];
 shared float red[${6 * 64}];
 shared uint wfound;
-vec3 around(uint q) {
+// ai: a knot's found 4-neighbours within the ring's S x S grid (indices j SIDE + i; those past it never read)
+vec3 around(uint q, uint S) {
   uint i = q % SIDE;
   uint j = q / SIDE;
   vec2 s = vec2(0.0);
   float c = 0.0;
   if (i > 0u && kn[q - 1u] == 1u) { s += kv[q - 1u]; c += 1.0; }
-  if (i + 1u < SIDE && kn[q + 1u] == 1u) { s += kv[q + 1u]; c += 1.0; }
+  if (i + 1u < S && kn[q + 1u] == 1u) { s += kv[q + 1u]; c += 1.0; }
   if (j > 0u && kn[q - SIDE] == 1u) { s += kv[q - SIDE]; c += 1.0; }
-  if (j + 1u < SIDE && kn[q + SIDE] == 1u) { s += kv[q + SIDE]; c += 1.0; }
+  if (j + 1u < S && kn[q + SIDE] == 1u) { s += kv[q + SIDE]; c += 1.0; }
   return vec3(s, c);
 }
-// ai: the fill's points (plan/anchors.mjs ANCH_FILL): whether point p of an axis lies within the band of an anchor's
-// ai: centre, in integers of 2 ANCH_FILL times a module (an anchor's centre, the margin, the span and a are whole)
-bool fillBand(uint r, int p, int sp, int mg, int aa) {
+// ai: the fill's points (plan/anchors.mjs ANCH_FILL): whether point p of an axis lies within the band of one of the
+// ai: ring's S anchors' centres, in integers of 2 ANCH_FILL times a module (an anchor's centre, the margin, the span and
+// ai: a are whole)
+bool fillBand(uint r, int p, int sp, int mg, int aa, uint S) {
   bool hit = false;
-  for (uint i = 1u; i <= SIDE; i++) {
+  for (uint i = 1u; i <= S; i++) {
     int d = ${2 * ANCH_FILL} * (f2i(knot(r, i)) - mg) - sp * (2 * p + 1);
     hit = hit || abs(d) <= ${ANCH_BAND2 * ANCH_FILL} * aa;
   }
@@ -239,6 +269,7 @@ void main() {
     return;
   }
   uint rgi = pick.x;
+  uint S = gridOf(rgi);
   if (li < NK) {
     vec4 e = anch[NK * f + li];
     bool ok = e.w > 0.5;
@@ -253,13 +284,13 @@ void main() {
   }
   ${uniformLoad("uint found", "wfound")}
   if (li == 0u) { result[f].r[31] = float(found); }
-  if (found < ${ANCH_MIN}u && li < NK) { kv[li] = vec2(0.0); kn[li] = 1u; }
+  if (found < gridMin(rgi) && li < NK) { kv[li] = vec2(0.0); kn[li] = 1u; }
   for (uint rd = 0u; rd < ${ANCH_ROUNDS}u; rd++) {
     barrier();
     if (li < NK) {
       uint now = kn[li];
       if (now == 0u) {
-        vec3 nb = around(li);
+        vec3 nb = around(li, S);
         if (nb.z > 0.0) { kv[li] = nb.xy / nb.z; now = 1u; }
       }
       kn2[li] = now;
@@ -287,7 +318,7 @@ void main() {
   for (uint p = li; p < ${ANCH_FILL * ANCH_FILL}u; p += 64u) {
     int px = int(p % ${ANCH_FILL}u);
     int py = int(p / ${ANCH_FILL}u);
-    if (fillBand(rgi, px, sp, mg, aa) && fillBand(rgi, py, sp, mg, aa)) { continue; }
+    if (fillBand(rgi, px, sp, mg, aa, S) && fillBand(rgi, py, sp, mg, aa, S)) { continue; }
     float ux = float(2 * px + 1 - ${ANCH_FILL}) / ${lit(ANCH_FILL)};
     float uy = float(2 * py + 1 - ${ANCH_FILL}) / ${lit(ANCH_FILL)};
     vec2 m = vec2(margin + 0.5 * span * (ux + 1.0), margin + 0.5 * span * (uy + 1.0));
@@ -319,7 +350,7 @@ void main() {
     float b3 = A.g[9u * rgi + 4u][2] * red[0] + A.g[9u * rgi + 4u][3] * red[64] + A.g[9u * rgi + 5u][0] * red[128] + A.g[9u * rgi + 5u][1] * red[192] + A.g[9u * rgi + 5u][2] * red[256] + A.g[9u * rgi + 5u][3] * red[320];
     float b4 = A.g[9u * rgi + 6u][0] * red[0] + A.g[9u * rgi + 6u][1] * red[64] + A.g[9u * rgi + 6u][2] * red[128] + A.g[9u * rgi + 6u][3] * red[192] + A.g[9u * rgi + 7u][0] * red[256] + A.g[9u * rgi + 7u][1] * red[320];
     float b5 = A.g[9u * rgi + 7u][2] * red[0] + A.g[9u * rgi + 7u][3] * red[64] + A.g[9u * rgi + 8u][0] * red[128] + A.g[9u * rgi + 8u][1] * red[192] + A.g[9u * rgi + 8u][2] * red[256] + A.g[9u * rgi + 8u][3] * red[320];
-    arec[ab] = vec4(1.0, 0.0, 0.0, float(found));
+    arec[ab] = vec4(1.0, float(S), 0.0, float(found));
     arec[ab + 1u] = A.k[3u * rgi];
     arec[ab + 2u] = A.k[3u * rgi + 1u];
     arec[ab + 3u] = geo;
@@ -348,7 +379,7 @@ layout(set = 0, binding = 5, std430) buffer Resid { vec4 resid[]; };
 layout(set = 0, binding = 6, std140) uniform Fit { uvec4 count; uvec4 base; vec4 modules; } P;
 layout(set = 0, binding = 7, std430) buffer Anch { vec4 anch[]; };
 layout(set = 0, binding = 8, std140) uniform Lattice { uvec4 at[${RING_COUNT}]; vec4 lat[${(RING_COUNT * LATTICE_MAX) / 4}]; } LAT;
-layout(set = 0, binding = 9, std140) uniform Anchors { vec4 k[${3 * RING_COUNT}]; } A;
+layout(set = 0, binding = 9, std140) uniform Anchors { vec4 k[${3 * RING_COUNT}]; vec4 g[${9 * RING_COUNT}]; vec4 s[${RING_COUNT}]; } A;
 float latAt(uint i) { return LAT.lat[i >> 2u][i & 3u]; }
 float knot(uint r, uint i) { return A.k[3u * r + (i >> 2u)][i & 3u]; }
 ` + COONS + /* glsl */ `
@@ -396,7 +427,7 @@ void main() {
   }
   barrier();
   if (li == 0u) { wu = wcnt; }
-  { ${uniformLoad("uint wu0", "wu")} if (wu0 < ${ANCH_MIN}u) { return; } }
+  { ${uniformLoad("uint wu0", "wu")} if (wu0 < f2u(A.s[rgi].y)) { return; } }
   float M[16] = maps[f];
   Lens L0 = lensOf(f);
   uvec4 at = LAT.at[rgi];
@@ -482,8 +513,11 @@ ${predict ? `  for (uint n = li; n < count; n += 64u) { pp[n] = vec4(toImage(M, 
       smax = max(smax, LQ8[s].y);
       nw += f2u(LQ8[s].z);
     }
+    // ai: the radial terms: ANCH_PREDICT's fit over the anchors alone takes no more than anchors where they are fewer than
+    // ai: the model's terms (the 64 ring's 3 x 3 grid: the C's acquire.c lens_cap, which seeds the border's search);
+    // ai: ANCH_REFIT's over the border and the anchors every term
     LF = LensFrame(0.5 * (lo + hi), 2.0 / max(max(hi.x - lo.x, hi.y - lo.y), 1.0), 0.5 * (smin + smax),
-      2.0 / max(smax - smin, 1e-6), 3u, nw, nw > 0u ? 1u : 0u);
+      2.0 / max(smax - smin, 1e-6), ${predict ? `(wu >= ${LENS_P}u ? 3u : (wu > 8u ? wu - 8u : 0u))` : "3u"}, nw, nw > 0u ? 1u : 0u);
     wok = 0u;
 ${predict ? "  }" : `    wnb = wnba;
     uint nq = (count + 4u) / 4u;

@@ -7,7 +7,7 @@
 // ai: its own), the kept frames (run's keep, LIZ_DUMP, LIZ_DUMP_S), the int8 twins (the WebGPU tree is f32, which has
 // ai: none), the LDPC forms' cross-check and the trial (a WebGPU device validates every module before it runs).
 
-export const TREE_VERSION = 8;   // ai: front.cpp TREE_VERSION
+export const TREE_VERSION = 9;   // ai: front.cpp TREE_VERSION
 export const WEBGPU_VARIANT = "f32";   // ai: gen.mjs WEBGPU_VARIANT: the variant gen translates to WGSL
 
 // ai: front.cpp STAGES, the profile's stage groups, a timestamp pair each.

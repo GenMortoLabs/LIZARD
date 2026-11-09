@@ -72,8 +72,8 @@ default, and the 256 ring have the same border with longer sides.
 
 - **The picture** is n x n samples (384 to 1536 a side, depending on how much the frame carries), drawn on the
   screen at whole pixels. Only data is painted inside it, apart from the anchors.
-- **The anchors** are 49 small squares on a 7 x 7 grid painted over the picture (a light middle, a dark ring, a light
-  rim; 1.2% of the picture), whose middles show the receiver how a lens bends the picture between the border's nodes,
+- **The anchors** are small squares on a grid painted over the picture, set by the ring: 3 x 3 in the 64 ring, 5 x 5
+  in the 128 and 7 x 7 in the 256 (a light middle, a dark ring, a light rim; about 1% of the picture), whose middles show the receiver how a lens bends the picture between the border's nodes,
   which the border alone cannot see. A receiver erases them before it reads the data.
 - **The border** is 15 modules deep, a module being the border's unit square, as in QR codes. Going inwards:
   - a **corner mark** at each corner, for finding the code and fixing its perspective;
@@ -328,9 +328,10 @@ grows with its frequency), which is turned back before decoding.
   finder marks and quiet zone, while one code spends its border once.
 - **The border outside, only small anchors inside.** The picture is a sum of waves that each span all of it, so a
   hole cut in it costs more than the hole's area. Finding the code and its perspective use the border alone. The
-  border cannot see how a lens bends the picture between its edges, though, so 49 small anchors (1.2% of the picture)
-  are painted inside it and erased before the data is read: over 69 published lens calibrations, simulated, the GPU
-  decoder keeps about two thirds of its lens-free blocks without them and about 97% with them.
+  border cannot see how a lens bends the picture between its edges, though, so small anchors (9, 25 or 49 by the
+  ring, about 1% of the picture) are painted inside it and erased before the data is read: over 69 published lens
+  calibrations, simulated, the GPU decoder keeps about two thirds of its lens-free blocks without them and about 97%
+  with them.
 - **A fountain and hashes, no back channel.** The camera can miss any frames; the file still arrives, and it is
   verified end to end.
 - **The decoder on the GPU.** Each frame needs finding, registering, a 2D FFT of up to 1536 x 1536 samples and LDPC

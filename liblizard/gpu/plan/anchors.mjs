@@ -5,37 +5,46 @@ import { ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF } from "./back_transform.mjs";
 export { ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF };
 // ai: The C's constants (src/acquire.c): template points across a square (OB_ANCH_TS), the peak an anchor is found at
 // ai: (ANCH_PEAK), the anchors the geometry takes (src/internal.h OB_ANCH_MIN, the lens model's terms: 8 until
-// ai: 2026-10-27), the fill's rounds.
+// ai: 2026-10-27), the fill's rounds. The grid is the ring's (3, 5, 7 a side in the 64, 128, 256 rings since
+// ai: 2026-11-09, ANCH_SIDE the most; an anchor's index j ANCH_SIDE + i in every ring), and the anchors the geometry
+// ai: takes the ring's, anchMin(k) (the C's ob_anchor_min: 8 of the 3 x 3 grid's 9, else ANCH_MIN).
 export const ANCH_TS = 16, ANCH_PEAK = 0.6, ANCH_MIN = 12, ANCH_ROUNDS = 6;
+export const anchMin = (k) => Math.min(ANCH_MIN, k * k - 1);
 // ai: The squares' fill (SPEC 6.13; the C's hole_value): the least-squares surface in 1, u, u^2, w, w^2, u w (the
 // ai: detrend's functions, 6.10, in u = 2 (m - margin) / span - 1 of a module coordinate m, w the same of y) over
 // ai: ANCH_FILL x ANCH_FILL points of the picture, m = margin + span (2 p + 1) / (2 ANCH_FILL), those in no square.
 // ai: A point is in a square where both of its coordinates are within ANCH_BAND a of an anchor's centre: 1.5 a, half
 // ai: the side and as much again, past the 2.5 samples the erase reaches beyond a square in every picture of 160
-// ai: samples up (a = span / 64 modules). Decided in integers, 2 ANCH_FILL times the module coordinate, in the
+// ai: samples up (a = span / 64 modules then; 4, 6, 8 by the ring since 2026-11-09, a margin wider still). Decided in
+// ai: integers, 2 ANCH_FILL times the module coordinate (every side even, so every centre a whole module), in the
 // ai: kernel and here alike. 16 a side, the 256 points the picture's mean was taken over before; 32, 64 and 128 read
 // ai: within 0.02% of it on recorded captures.
 export const ANCH_FILL = 16, ANCH_BAND2 = 3;   // ai: ANCH_BAND2 = 2 ANCH_BAND
 
-// ai: A, the anchors' uniform (ANCH_FIND's and ANCH_FIT's), from gpu/tables.mjs formatTables() rings: three vec4f a
-// ai: ring, (k0, k1, k2, k3), (k4, k5, k6, k7), (k8, a, span, margin): the 9 knots of an axis in modules, the lattice's
-// ai: ends (nodeX[0] and nodeX[nn - 1], where F7's Coons patch holds the map) and the 7 anchors' centres between, the
-// ai: C's m0(i) + a / 2 (src/acquire.c ob_anchor_m0: floor(margin + span (i + 0.5) / 7 - a / 2 + 0.5)); a = span / 64.
-// ai: Then, after every ring's three, nine vec4f a ring: the inverse of the fill's normal matrix (fillPoints), row
-// ai: by row, 36 floats, fixed by the ring as the C's hole_inv is by the format.
+// ai: A, the anchors' uniform (every anchors kernel's), from gpu/tables.mjs formatTables() rings: three vec4f a
+// ai: ring, (k0, k1, k2, k3), (k4, k5, k6, k7), (k8, a, span, margin): the knots of an axis in modules, the lattice's
+// ai: ends (nodeX[0] and nodeX[nn - 1], where F7's Coons patch holds the map) and the ring's k anchors' centres
+// ai: between (k0 to k_(k+1); the rest repeat the last end), the C's m0(i) + a / 2 as its codec gives them
+// ai: (tables.mjs anch, src/lizard_phy.c lizard_anchor_geom; floor(margin + span (i + 0.5) / k - a / 2 + 0.5));
+// ai: a = 4, 6, 8 modules by the ring (span / 64 until 2026-11-09). Then, after every ring's three, nine vec4f a ring: the inverse of the
+// ai: fill's normal matrix (fillPoints), row by row, 36 floats, fixed by the ring as the C's hole_inv is by the format.
+// ai: Then a vec4f a ring: (k, the anchors the geometry takes, 0, 0).
 export function anchUniform(rings) {
   if (rings.length !== RING_COUNT) throw new Error(`${rings.length} rings: the anchors' uniform holds ${RING_COUNT}`);
-  const u = new Float32Array(12 * RING_COUNT + 36 * RING_COUNT);
-  rings.forEach(({ cells, span, margin, nodeX }, r) => {
-    const a = Math.floor(span / 64);
-    const c = Array.from({ length: ANCH_SIDE }, (_, i) => Math.floor(margin + (span * (i + 0.5)) / ANCH_SIDE - a / 2 + 0.5) + a / 2);
+  const u = new Float32Array(12 * RING_COUNT + 36 * RING_COUNT + 4 * RING_COUNT);
+  rings.forEach(({ cells, span, margin, nodeX, anch }, r) => {
+    const a = anch.side, g = anch.k;
+    if (!(g >= 3 && g <= ANCH_SIDE)) throw new Error(`ring ${cells}: a grid of ${g}, the uniform holds 3 to ${ANCH_SIDE} a side`);
+    const c = anch.m0.slice(0, g).map((m0) => m0 + a / 2);
     const k = [nodeX[0], ...c, nodeX[nodeX.length - 1]];
     if (k.some((x, i) => i && !(x > k[i - 1]))) throw new Error(`ring ${cells}: knots ${k.join(", ")} not rising`);
+    while (k.length < ANCH_SIDE + 2) k.push(k.at(-1));
     if (!Number.isInteger(a / 2) || c.some((x) => !Number.isInteger(x)) || !Number.isInteger(span) || !Number.isInteger(margin)) {
       throw new Error(`ring ${cells}: the fill's bands are decided in integers (a ${a}, centres ${c.join(", ")}, span ${span}, margin ${margin})`);
     }
     u.set([...k, a, span, margin], 12 * r);
     u.set(fillInverse(fillPoints({ a, span, margin, c })), 12 * RING_COUNT + 36 * r);
+    u.set([g, anchMin(g), 0, 0], 48 * RING_COUNT + 4 * r);
   });
   return u;
 }

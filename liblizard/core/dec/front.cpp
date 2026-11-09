@@ -47,7 +47,8 @@ static constexpr double MiB = 1 << 20;
 // ai: features its module asks beyond the variant's: "int16", the LDPC's "reg+i16" forms). 7 since 2026-11-02: the
 // ai: front's `trace` (TRACE, each quad's bend, in both rounds' grids) and HYP doubled (SCORE's bend bit).
 // ai: 8 since 2026-11-06: REFIT's and REFIT_POST's layouts seven bindings (the eighth, REFIT's debug words, gone).
-static constexpr int TREE_VERSION = 8;
+// ai: 9 since 2026-11-09: the anchors by ring (gen.mjs TREE_VERSION).
+static constexpr int TREE_VERSION = 9;
 
 Consts Consts::of(const json& c) {
   Consts k;

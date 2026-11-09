@@ -53,7 +53,9 @@ const MAIN = (() => { try { return fileURLToPath(import.meta.url) === realpathSy
 // ai: features its module asks beyond the variant's: "int16", the LDPC's "reg+i16" forms). 7 since 2026-11-02: the
 // ai: front's `trace` (TRACE, each quad's bend, in both rounds' grids) and HYP doubled (SCORE's bend bit).
 // ai: 8 since 2026-11-06: REFIT's and REFIT_POST's layouts seven bindings (the eighth, REFIT's debug words, gone).
-export const TREE_VERSION = 8;
+// ai: 9 since 2026-11-09: the anchors by ring (3 x 3 of 4 modules, 5 x 5 of 6, 7 x 7 of 8; the anchors' uniform a vec4f
+// ai: a ring longer): a tree of the old anchors would read the 64 and 128 rings' squares where the codec no longer paints them.
+export const TREE_VERSION = 9;
 
 const NDK = process.env.ANDROID_NDK_HOME || `${process.env.ANDROID_HOME || `${homedir()}/Android/Sdk`}/ndk/27.1.12297006`;
 // ai: SPIRV-Tools' spirv-val and shaderc's glslc: the Android NDK's shader-tools where there is an NDK, else the

@@ -38,10 +38,10 @@ int main(int argc, char **argv) {
       // ai: exact: outside the resampled modules [m0, m1) (drive pixels), and the anchors' squares
       const int m0 = f.margin - LIZARD_CP, m1 = f.frame.w - m0;
       int ag[8];
-      lizard_anchor_geom(&f, ag);
+      const int ak = lizard_anchor_geom(&f, ag);   // ai: the ring's grid a side
       uint8_t *exact = calloc((size_t)W, 1), *ain = calloc((size_t)W, 1);   // ai: a drive line's exact columns and anchor columns, by symmetry rows too
       for (int x = 0; x < W; x++) { const int d = x - q; exact[x] = d < m0 * C || d >= m1 * C; }
-      for (int i = 0; i < 7; i++) for (int x = ag[1 + i] * C; x < (ag[1 + i] + ag[0]) * C; x++) ain[x + q] = 1;
+      for (int i = 0; i < ak; i++) for (int x = ag[1 + i] * C; x < (ag[1 + i] + ag[0]) * C; x++) ain[x + q] = 1;
       int most = 0, apart = 0;
       for (int y = 0; y < W; y++) for (int x = 0; x < W; x++) {
         const int d = abs((int)mine[(size_t)y * W + x] - (int)ref[(size_t)y * W + x]);

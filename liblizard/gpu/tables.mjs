@@ -60,6 +60,9 @@ export async function formatTables() {
     const word = { cells: wcells, refSteps: wmeta[0], reps: wmeta[2], mids: wmeta[3], words: wmeta[4], pts: f32(pPts, 2 * nw), widx: i32(pW, 3 * wmeta[4]) };
     // ai: The ring's span (modules across the picture) and margin (border modules before it) from the codec's grid
     // ai: at n = N0: g0 = margin + 0.5 step, step = span / N0.
+    // ai: the anchors as the codec paints them in this ring (src/lizard_phy.c lizard_anchor_geom: the side, the ring's
+    // ai: grid k and the first modules along either axis), the one source plan/anchors.mjs anchUniform takes them from
+    const ag = fc.anchorGeom(), anch = { side: ag.side, k: ag.k, m0: ag.m0.slice(0, ag.k) };
     M._lizard_grid_out(scratch);
     const [g0, step] = f32(scratch, 2);
     // ai: both whole modules; the codec's float32 grid holds them to a few 1e-7 at n = 384 (step 1/3)
@@ -67,7 +70,7 @@ export async function formatTables() {
     [scratch, pX, pY, pK, pM, pPts, pMeta, pSig, pW].forEach((p) => M._free(p));
     fc.free();
     if (span !== 2 * cells || w !== span + 2 * margin) throw new Error(`ring ${cells}: the codec's span ${span}, margin ${margin} and side ${w} disagree with sim/lizard_pick.mjs`);
-    return { ring, cells, span, margin, modules: w, nodeX, nodeY, kind, mark: { gappedMid, mergedMid }, track, word };
+    return { ring, cells, span, margin, modules: w, nodeX, nodeY, kind, mark: { gappedMid, mergedMid }, track, word, anch };
   });
   return { rings, pictures: PICTURES };
 }

@@ -172,13 +172,16 @@ export class Lizard {
     } finally { M._free(p); }
   }
   // ai: The anchors' geometry in this configuration's symbol (src/lizard_phy.h lizard_anchor_geom, SPEC 6.13), in modules: a
-  // ai: square's side and the seven first modules along either axis (the drive's: the RGBA adds quiet * cell).
+  // ai: square's side, the ring's grid k (3, 5, 7) and seven first modules along either axis (the drive's: the RGBA adds
+  // ai: quiet * cell), the ring's k first and the last repeated past them, so a painter testing seven runs paints the
+  // ai: same square again.
   anchorGeom() {
     const p = M._malloc(32);
     try {
-      if (M._lizard_anchor_geom_get(p) !== 7) throw new Error("lizard_anchor_geom: no setup");
+      const k = M._lizard_anchor_geom_get(p);
+      if (!(k >= 3 && k <= 7)) throw new Error("lizard_anchor_geom: no setup");
       const g = M.HEAP32.slice(p >> 2, (p >> 2) + 8);
-      return { side: g[0], m0: Array.from(g.slice(1)) };
+      return { side: g[0], k, m0: Array.from(g.slice(1)) };
     } finally { M._free(p); }
   }
   // Every buffer this object took from the wasm heap. One replaced without this leaves them there for the worker's

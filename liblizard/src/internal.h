@@ -174,18 +174,23 @@ void ob_mark_geom(const ob_layout_t *L, float *out);
 void ob_reg_free(ob_reg_t *reg);
 // Module coordinates to image px through the homography and the mesh.
 void ob_map_point(const ob_layout_t *L, const ob_reg_t *reg, float mx, float my, float *u, float *v);
-// ai: The anchors (acquire.c, SPEC 6.13): a 7 x 7 grid's square side in modules (B / 32), and anchor i's first module
-// ai: along either axis; OB_ANCH_TS template points across one. A square needs about 6 drive pixels a side for its light
-// ai: middle (a quarter of the half-side) to land on a pixel: at 4 (a 256 picture in the 64 and 128 rings, before 256
-// ai: left the sizes) it painted as a dark dot; every size of LIZARD_PICTURES gets at least 6 from its samples alone,
-// ai: so pxm has no floor of its own (2026-11-06).
+// ai: The anchors (acquire.c, SPEC 6.13): a grid by the ring (ob_anchor_k), 3 x 3 squares of 4 modules a side in the
+// ai: 64 ring, 5 x 5 of 6 in the 128, 7 x 7 of 8 in the 256 (ob_anchor_side; 7 x 7 of span / 64 in every ring until
+// ai: 2026-11-09), and anchor i's first module along either axis; OB_ANCH_TS template points across one. OB_ANCH_K, the
+// ai: 256 ring's 7, is the most: an anchor's index is j OB_ANCH_K + i in every ring, the grid's other entries never
+// ai: found. A square is 8 drive pixels a side or more at every picture size (the 256 ring's at pxm 1), past the 6 its
+// ai: light middle needs to land on a pixel.
 // ai: OB_ANCH_MIN: the anchors found that the geometry takes, at least the lens model's most terms (acquire.c LENS_P,
 // ai: 11): their 2n readings then leave as many as the model takes, so its robust rule can judge one. Fewer, a false reading (a
 // ai: blurred square's neighbourhood at 0.6) is fitted exactly and bends the map (the bench's 64 ring at 2.7 camera px
-// ai: a module, 8 found, one 2.3 modules off: 0 blocks of 23, 16 without the anchors).
+// ai: a module, 8 found, one 2.3 modules off: 0 blocks of 23, 16 without the anchors). The 3 x 3 grid takes 8 of its 9
+// ai: (ob_anchor_min); a fit over the anchors alone then takes no more terms than anchors, the final fit over the border
+// ai: and the anchors every term (acquire.c lens_cap, beside LENS_P: why each).
 enum { OB_ANCH_K = 7, OB_ANCH_TS = 16, OB_ANCH_MIN = 12 };
 enum { OB_ANCH_MARGIN = 2 };   // ai: the samples erased round an anchor's square
 extern OB_TLS int ob_anch_found;   // ai: the anchors the last acquisition counted, -1 before the thread's first registration (acquire.c)
+int ob_anchor_k(const ob_layout_t *L);
+int ob_anchor_min(const ob_layout_t *L);
 int ob_anchor_side(const ob_layout_t *L);
 int ob_anchor_m0(const ob_layout_t *L, int i);
 // The thin frame's format word as soft values, q[side * cells + i] in -0.5 .. 0.5, positive for

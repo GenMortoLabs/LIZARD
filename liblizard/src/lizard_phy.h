@@ -37,7 +37,7 @@ enum { LIZARD_RATE = 4, LIZARD_TIER_IN = 390, LIZARD_TIER_23 = 150, LIZARD_TIER_
 // ai: the 128, whatever the picture: no ring follows the version, even by default.
 //
 // The ring and the picture are independent grids. The ring is painted at pxm = lizard_pxm_for(n, span) pixels a
-// module (ceil(n / span), or the anchors' floor), a whole number, so no module is ever split; the picture keeps its n samples and is resampled to fill its span
+// module (ceil(n / span)), a whole number, so no module is ever split; the picture keeps its n samples and is resampled to fill its span
 // modules (lizard_encode, Lanczos-3), never shrunk. The decoder reads the picture on its own n-sample grid in module
 // coordinates, a step of 1 / scale modules, and never sees the painter's pixels.
 // ai: A span that divides n has scale == pxm and the resampling is an exact copy (which ones, below).
@@ -171,8 +171,9 @@ int lizard_blocks_for(int subch);
 void lizard_set_axis(float x, float y);
 // ai: The anchors' geometry in f's symbol, in modules, for a painter elsewhere (the senders' GPU painters,
 // ai: core/tx/send_tables.cpp and the wasm's lizard_anchor_geom_get, 2026-10-26): out[0] a square's side, out[1 + i]
-// ai: square i's first module along either axis (i < 7: the grid is the same on both). Returns 7. Nothing kept, any
-// ai: thread.
+// ai: square i's first module along either axis (i < k, the ring's grid: 3, 5, 7; the grid is the same on both; out[1 + k]
+// ai: to out[7] repeat the last, so a painter testing seven runs paints the same square again). Returns k. Nothing kept,
+// ai: any thread.
 int lizard_anchor_geom(const lizard_t *f, int out[8]);
 void lizard_free(lizard_t *f);
 // blocks: blocks * block_bytes. drive: px^2 values in 0..1, the frame at pxm pixels a module and the picture resampled into it.
@@ -214,8 +215,8 @@ enum { LIZARD_NPICTURES = 7 };
 extern const int LIZARD_PICTURES[LIZARD_NPICTURES];
 int lizard_n_for(int subch);
 // The painter's whole pixels a module for picture n in a ring of span modules: ceil(n / span), so no module is split
-// and the picture is never shrunk (every size gives an anchor's square, span / 64 modules, at least 6 pixels a side;
-// SPEC 3.3, 6.13). lizard_init's pxm; the library's geometry takes it from here.
+// and the picture is never shrunk (every size gives an anchor's square, 4, 6 or 8 modules by the ring, at least 8
+// pixels a side; SPEC 3.3, 6.13). lizard_init's pxm; the library's geometry takes it from here.
 int lizard_pxm_for(int n, int span);
 // The margin: modules of white round the frame, part of the symbol (2026-09-23) and painted by the codec, not
 // asked of the page. With the frame's own outermost module, which is light, the ring the decoder reads has three

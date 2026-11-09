@@ -194,7 +194,7 @@ int ob_test_thin_score_out(const uint8_t *img, int w, int h, const float *centre
 void ob_test_finder_out(float *out) { for (int k = 0; k < 8; k++) out[k] = ob_finder_info[k]; }
 // ai: the anchors (SPEC 6.13): how many the last acquisition counted (-1 where it made no mesh), and their geometry in
 // ai: the current symbol for the sender's WebGPU encoder (lizard_phy.h lizard_anchor_geom: out[0] the side, out[1..7] the
-// ai: first modules; 7, or 0 before a setup)
+// ai: first modules, the ring's k and the last repeated past them; k (3, 5 or 7), or 0 before a setup)
 int lizard_anchors_found(void) { return ob_anch_found; }
 int lizard_anchor_geom_get(int *out) { return fready ? lizard_anchor_geom(&F, out) : 0; }
 int ob_test_fmt_cells(void) { return fready ? ob_fmt_side_cells(F.frame.w < F.frame.h ? F.frame.w : F.frame.h, F.frame.reserve) : 0; }
