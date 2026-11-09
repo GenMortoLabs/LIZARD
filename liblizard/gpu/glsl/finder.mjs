@@ -12,7 +12,16 @@ import {
 } from "../plan/finder.mjs";
 
 // ai: The constants the WGSL inlines that are not exported there (its PROFILE, NCC_MIN, PASSES, GROUP).
-const PROFILE = 13, NCC_MIN = 0.6, PASSES = [[0.12, 3.0], [0.4, 1.5], [1.0, 1.5]], GROUP = 256 / K;
+// ai: COMPLETE's PASSES are [extent, reach]: the extent in modules of the corner's own module size from the first
+// ai: station (Infinity the whole run), the reach in modules either way. The first pass lays its stations along a
+// ai: guessed direction (a few degrees off under perspective) at an offset in a module size that runs short across a
+// ai: foreshortened side, so its window holds the ring for a stretch fixed in modules, not a share of the side: past
+// ai: it the window holds only the band 4 modules in (the same profile where a cell is dark) and the side's fit tilts
+// ai: (2026-11-09, STATUS "COMPLETE's misplaced corner found": 12% of the side was 31 modules in the 128 ring and 62 in
+// ai: the 256). Each later pass about the fitted line, three times the last.
+const PROFILE = 13, NCC_MIN = 0.6, PASSES = [[12, 3.0], [36, 1.5], [108, 1.5], [Infinity, 1.5]], GROUP = 256 / K;
+// ai: a pass's extent along the side, from t0: m modules of u0, at most the run
+const ext = (m) => (m === Infinity ? "(t1 - t0)" : `min(${lit(m)} * u0, t1 - t0)`);
 
 const P5 = (binding) => `layout(set = 0, binding = ${binding}, std140) uniform P5 { uint cap; uint gx; uint gy; uint p0; vec4 modules; } P;\n`;
 const CENTRES = `const float CENTRE[2] = float[2](${lit(CENTRE[0])}, ${lit(CENTRE[1])});\n`;
@@ -317,10 +326,10 @@ void main() {
 `;
 
 // ai: F5d: a quad of three corners completed from the ring (the WGSL's COMPLETE). A workgroup a (frame, quad).
-const passAfter = ([frac, reach]) => /* glsl */ `{
+const passAfter = ([mods, reach]) => /* glsl */ `{
     vec3 hit = vec3(0.0);
     if (span) {
-      float t = mix(t0, t1, (float(j) + 0.5) / ${STATIONS}.0 * ${lit(frac)});
+      float t = t0 + ${ext(mods)} * (float(j) + 0.5) / ${STATIONS}.0;
       float uu = mix(u0, um, t / L);
       vec4 ln = line[side];
       vec2 nn = vec2(-ln.w, ln.z);
@@ -330,7 +339,7 @@ const passAfter = ([frac, reach]) => /* glsl */ `{
     }
     st[li] = vec4(hit.xy, hit.z, 0.0);
     barrier();
-    if (j == 0u) { fitSide(side, 0.5 * (u0 + um), (t1 - t0) * ${lit(frac)}, 6u); }
+    if (j == 0u) { fitSide(side, 0.5 * (u0 + um), ${ext(mods)}, 6u); }
     barrier();
   }`;
 if (STATIONS > 32) throw new Error(`COMPLETE keeps a side's stations in one word: ${STATIONS} past 32`);
@@ -520,13 +529,13 @@ void main() {
     if (dot(n, n0) < 0.0) { n = -n; }
     vec3 hit = vec3(0.0);
     if (span) {
-      float t = mix(t0, t1, (float(j) + 0.5) / ${STATIONS}.0 * ${lit(PASSES[0][0])});
+      float t = t0 + ${ext(PASSES[0][0])} * (float(j) + 0.5) / ${STATIONS}.0;
       float uu = mix(u0, um, t / L);
       hit = ringAt(f, P0 + t * dd + (c - 2.0) * uu * n, n, uu, ${lit(PASSES[0][1])});
     }
     st[li] = vec4(hit.xy, hit.z, 0.0);
     barrier();
-    if (j == 0u) { fitSide(side, 0.5 * (u0 + um), (t1 - t0) * ${lit(PASSES[0][0])}, kept[side] + 1u); }
+    if (j == 0u) { fitSide(side, 0.5 * (u0 + um), ${ext(PASSES[0][0])}, kept[side] + 1u); }
     barrier();
   }
   ${uniformLoad("uint k0", "kept[0]")}
