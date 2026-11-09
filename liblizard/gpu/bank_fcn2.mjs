@@ -17,23 +17,22 @@ import { loadNet } from "./cnn/netfile.mjs";
 import { LEVELS } from "./constants.mjs";   // ai: not ./decoder.mjs, which imports this module (constants.mjs)
 
 export { KEEP };
-// ai: The installed proposer since 2026-10-03: the final retrain's arm A seed 1 trained further on blown-out scenes
-// ai: (STATUS "Blown-out codes: the finder measured and its classifiers trained further, round 1" and its round 2):
-// ai: warm-started at LR 1e-3 on sim210000 and the half-blown sim440000, seed 1
-// ai: (research/results/gpu/prop_blown/pb-s1.safetensors; its f64 reference pb-s1.ref there), its floor 0.15 (pb-s1-f15): the
-// ai: highest at which its judges' misses stay in the three-seed band, the raw peaks then 0.78 times the one before at
-// ai: 0.1 (at 0.1 it wrote 1.83 times as many, 0.5% of the iGPU's frame). scripts/train/decide.py: adopt (a tie). The one
-// ai: before it: weights2-before-blown.safetensors (research/results/gpu/final/a-s1.safetensors, reference a-s1.ref there);
-// ai: before that weights2-before-final.safetensors (round 1 of the version 2 loop, research/results/gpu/fcn2_loop/reference-r1.bin).
-// ai: A reference holds the net's values, not its peaks: the checks take the floor from the file.
+// ai: The installed proposer since 2026-11-09: v2's net trained with a pairwise ranking term (every mark centre against
+// ai: the batch's 64 strongest negatives, softplus, weight 1; scripts/gpu/cnn/proposer/train.py RANK=1), warm from
+// ai: research/results/gpu/final/a-s1.safetensors at LR 1e-3 on sim210000 and the half-blown sim440000, seed 1
+// ai: (research/results/gpu/prop_rank/rank-s1.safetensors, its f64 reference rank-s1.ref there), its floor 0.15
+// ai: (rank-s1-f15). Through the decoder its found marks rank higher at SELECT's cap and more frames are found on hard
+// ai: captures (research/STATUS.md "The proposer trained to rank"). The one before it, 2026-10-03 to 11-09: the blown-out
+// ai: round's pb-s1 (research/results/gpu/prop_blown/pb-s1.safetensors, reference pb-s1.ref; kept in
+// ai: research/results/gpu/installed-before-2026-11-09/). A reference holds the net's values, not its peaks: the checks
+// ai: take the floor from the file.
 export const WEIGHTS = "gpu/cnn/proposer/weights2.safetensors";
-export const REFERENCE = "../research/results/gpu/prop_blown/pb-s1.ref";
+export const REFERENCE = "../research/results/gpu/prop_rank/rank-s1.ref";
 // ai: The installed int8 proposer (a q8 file) and its PQ81 reference: the post-training quantisation of WEIGHTS
-// ai: (research/results/gpu/prop_blown/pb-s1-q8-f15.safetensors, the floor 0.15), installed 2026-10-03; the one before it,
-// ai: weights2-q8-before-blown.safetensors (research/results/gpu/final/a-s1-q8.safetensors, reference a-s1-q8.ref there), and
-// ai: before that weights2-q8-before-final.safetensors (research/results/gpu/q8/p2q8p-s2.json, reference research/results/gpu/q8/reference-p2q8p-s2.bin).
+// ai: (research/results/gpu/prop_rank/rank-s1-q8-f15.safetensors, the floor 0.15), installed 2026-11-09; the one before it
+// ai: pb-s1-q8-f15 (research/results/gpu/prop_blown/, reference pb-s1-q8.ref there).
 export const WEIGHTS_INT8 = "gpu/cnn/proposer/weights2-q8.safetensors";
-export const REFERENCE_INT8 = "../research/results/gpu/prop_blown/pb-s1-q8.ref";
+export const REFERENCE_INT8 = "../research/results/gpu/prop_rank/rank-s1-q8.ref";
 
 export class FitError extends Error {}
 
