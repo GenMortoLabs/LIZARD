@@ -182,7 +182,9 @@ ${reduce(`    last0 = a0;\n    last1 = a1;\n`)}  if (t == 0u) {
     if (a1.z >= 8.0 && det > 0.0) {
       vec2 e = vec2((a0.w * a0.z - a1.x * a0.y) / det, (a0.x * a1.x - a0.y * a0.w) / det);
       vec2 dd = d + e;
-      if (!any(isnan(dd))) { outv = dd; }
+      // ai: no NaN: a NaN's exponent bits all set and its mantissa not zero, tested on the bits (naga's WGSL writer has
+      // ai: no isnan, so the WebGPU tree lacked this kernel while it read isnan)
+      if (all(lessThanEqual(floatBitsToUint(dd) & uvec2(0x7fffffffu), uvec2(0x7f800000u)))) { outv = dd; }
     }
     PILOT[P.B * P.blocksMax + 2u * f] = outv.x;
     PILOT[P.B * P.blocksMax + 2u * f + 1u] = outv.y;
