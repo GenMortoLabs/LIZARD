@@ -460,6 +460,7 @@ export class FrontHalf {
       ln.voteGroup = group(this.P("vote"), [ln.framesBuf, ln.readingsBuf, ln.accBuf, ln.p5Uni], false);
       ln.peaksGroup = group(this.P("peaks"), [ln.framesBuf, ln.accBuf, ln.vlistBuf, ln.vcountBuf, ln.p5Uni], false);
       ln.gatherGroup = group(this.P("gather"), [ln.framesBuf, ln.readingsBuf, ln.accBuf, ln.candBuf, ln.quadsBuf, ln.p5Uni, ln.vlistBuf, ln.vcountBuf], false);
+      ln.completeGroup = d.group(this.P("complete").bgl, [...lv, ln.readingsBuf, ln.quadsBuf, ln.p5Uni]);
       ln.scoreGroup2 = d.group(this.P("score").bgl, [...lv2, ln.quadsBuf, this.FBP("planBuf"), ln.scoreBuf, this.FBP("planUni")]);
       ln.voteGroup2 = group(this.P("vote"), [ln.frames2Buf, ln.readingsBuf, ln.accBuf, ln.p5Uni], false);
       ln.peaksGroup2 = group(this.P("peaks"), [ln.frames2Buf, ln.accBuf, ln.vlistBuf, ln.vcountBuf, ln.p5Uni], false);
@@ -728,6 +729,9 @@ export class FrontHalf {
     step(this.P("vote"), ln.voteGroup, ceilDiv(this.cap, C.VOTE_READS), n);
     step(this.P("peaks"), ln.peaksGroup, ceilDiv(ln.gx * ln.gy, 256), n);
     step(this.P("gather"), ln.gatherGroup, n);
+    // ai: COMPLETE in the first round too (front.cpp's step after GATHER): a quad of three corners on a frame with no
+    // ai: quad of four completed here, before the second round
+    step(this.P("complete"), ln.completeGroup, C.K * n);
     step(this.P("trace"), ln.traceGroup, C.K * n);
     e = begin("score");
     step(this.P("score"), ln.scoreGroup, C.HYP * n);

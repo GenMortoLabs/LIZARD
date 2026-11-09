@@ -81,7 +81,7 @@ struct Lane {
   std::vector<Level> level;
   uint32_t slots = 0, gx = 0, gy = 0;
   BufP rawBuf, accBuf;
-  GroupP selGroup, classifyGroup, scoreGroup, voteGroup, peaksGroup, gatherGroup, wordGroup, pyrGroup, traceGroup;
+  GroupP selGroup, classifyGroup, scoreGroup, voteGroup, peaksGroup, gatherGroup, completeGroup, wordGroup, pyrGroup, traceGroup;
   GroupP nodesGroup;
   struct Fcn2Level { uint32_t l, w, h; GroupP group, xgroup, group2, xgroup2; BufP plane, uni; };   // ai: group2, xgroup2: a level below coarseFrom's
   std::vector<Fcn2Level> fcn2Levels;

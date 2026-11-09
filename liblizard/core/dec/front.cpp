@@ -423,10 +423,13 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
       ln.voteGroup2 = group(P("vote"), {ln.frames2Buf, ln.readingsBuf, ln.accBuf, ln.p5Uni}, false);
       ln.peaksGroup2 = group(P("peaks"), {ln.frames2Buf, ln.accBuf, ln.vlistBuf, ln.vcountBuf, ln.p5Uni}, false);
       ln.gatherGroup2 = group(P("gather"), {ln.frames2Buf, ln.readingsBuf, ln.accBuf, ln.candBuf, ln.quadsBuf, ln.p5Uni, ln.vlistBuf, ln.vcountBuf}, false);
-      // ai: F5d over the second round's frame records (glsl/finder.mjs COMPLETE): the levels, readings, quads, P5
+      // ai: F5d over each round's frame records (glsl/finder.mjs COMPLETE): the levels, readings, quads, P5
       auto lvc = ln.lvEntries(true);
       lvc.insert(lvc.end(), {ln.readingsBuf, ln.quadsBuf, ln.p5Uni});
       ln.completeGroup2 = dev.createBindGroup(P("complete").bgl, lvc);
+      auto lvc1 = ln.lvEntries(false);
+      lvc1.insert(lvc1.end(), {ln.readingsBuf, ln.quadsBuf, ln.p5Uni});
+      ln.completeGroup = dev.createBindGroup(P("complete").bgl, lvc1);
       auto lvt = ln.lvEntries(true);
       lvt.insert(lvt.end(), {ln.quadsBuf});
       ln.traceGroup2 = dev.createBindGroup(P("trace").bgl, lvt);
@@ -880,6 +883,11 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   step(P("vote"), ln.voteGroup, ceilDiv((uint32_t)cap, C.VOTE_READS), n);
   step(P("peaks"), ln.peaksGroup, ceilDiv(ln.gx * ln.gy, 256u), n);
   step(P("gather"), ln.gatherGroup, n);
+  // ai: F5d (glsl/finder.mjs COMPLETE) in the first round too (2026-11-09), a workgroup a (frame, quad): a quad of three
+  // ai: corners on a frame with no quad of four gets its fourth from the ring's two sides, so such a frame is found here
+  // ai: and skips the second round's level-1 bank; and its three corners are completed before the second round's one
+  // ai: cap over levels 1 to 4 can crowd them out (research/STATUS.md "The second round measured")
+  step(P("complete"), ln.completeGroup, C.K * n);
   step(P("trace"), ln.traceGroup, C.K * n);   // ai: each quad's bend (glsl/finder.mjs TRACE) before SCORE reads through it
   begin("score");
   step(P("score"), ln.scoreGroup, C.HYP * n);
@@ -898,7 +906,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
     again(P("vote"), ln.voteGroup2);
     again(P("peaks"), ln.peaksGroup2);
     again(P("gather"), ln.gatherGroup2);
-    // ai: F5d (glsl/finder.mjs COMPLETE), a workgroup a (frame, quad): on a frame neither round found four corners of
+    // ai: F5d again on the second round's quads: on a frame neither round found four corners of
     again(P("complete"), ln.completeGroup2);
     again(P("trace"), ln.traceGroup2);
     again(P("score"), ln.scoreGroup2);
