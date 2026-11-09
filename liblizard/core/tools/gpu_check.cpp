@@ -863,6 +863,19 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
         printf("frame %llu found %d ring %d version %d held %d blocks %zu anchors %d word %d fps %d bad %d r %g sd %g r2 %g sd2 %g pblocks %d\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version, fo.held ? 1 : 0,
                fo.records.size(), fo.anchors, fo.hasWord ? fo.word.version : 0, fo.hasWord ? fo.word.fps : 0, jv.bad,
                fo.pilotBlocks ? fo.pilotR : NAN, fo.pilotBlocks ? fo.pilotSd : NAN, fo.pilotBlocks ? fo.pilotR2 : NAN, fo.pilotBlocks ? fo.pilotSd2 : NAN, fo.pilotBlocks);
+        // ai: the back half's counts (BCOUNTS, glsl/back_tiers.mjs): codewords the LDPC ran (blocks not declined), their
+        // ai: iterations, verified by the CRC (2026-11-08)
+        if (fo.backCounts.size() > 7) printf("back %llu ldpc %u its %u verified %u\n", (unsigned long long)fo.tag, fo.backCounts[3], fo.backCounts[7], fo.backCounts[4]);
+        // ai: LIZ_BLOCKS=1 (2026-11-08): each verified block's iterations by its index in the frame, and the blocks of the
+        // ai: frame's version that did not verify (the missing indices up to the most verified index + 1, or the version's count)
+        if (getenv("LIZ_BLOCKS")) {
+          std::vector<int> its(256, -1);
+          int top = 0;
+          for (const auto& r : fo.records) if (r.block >= 0 && r.block < 256) { its[size_t(r.block)] = r.its; top = std::max(top, r.block + 1); }
+          std::string line = "blocks " + std::to_string(fo.tag) + ":";
+          for (int b = 0; b < top; b++) line += " " + (its[size_t(b)] < 0 ? std::string("x") : std::to_string(its[size_t(b)]));
+          printf("%s\n", line.c_str());
+        }
         if (resStride >= 29 * 4) {
           float r[29];
           memcpy(r, res.data() + resStride * i, sizeof r);
