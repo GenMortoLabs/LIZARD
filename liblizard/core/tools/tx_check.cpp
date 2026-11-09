@@ -340,6 +340,31 @@ int main(int argc, char** argv) {
     printf("bench: LIZARD-%d n %d, %d px a side: %.2f ms a frame on one painter (%s)\n", subch, s.n(), s.side(), ms / frames, s.stats().c_str());
     return 0;
   }
-  fprintf(stderr, "usage: tx_check ids <file> <frames> <T> <out> | paint <file|-> <subch> [frames] [threads] [store] | bench <subch> [frames]\n");
+  // ai: pace <subch> [secs] [fps] [codes] (2026-11-08): the GPU painter (painter 1, frames left on the device) taken as a
+  // ai: presenter takes them, a frame each 1/fps by takeSlot on a steady schedule; each second the sender's stats line
+  // ai: (paintMs: GPU ms a frame; paintBatch: frames an encode), then "pace:" with the frames late (not painted when
+  // ai: due). The sender's batching A/B: LIZ_TX_BATCH=0 a frame a submission.
+  if (mode == "pace" && argc >= 3) {
+    const int subch = atoi(argv[2]), secs = argc > 3 ? atoi(argv[3]) : 10, fps = argc > 4 ? atoi(argv[4]) : 60, codes = argc > 5 ? atoi(argv[5]) : 1;
+    Sender s(nullptr, 0, "", "");
+    TxFormat f;
+    f.subch = subch; f.span = 128; f.fps = fps; f.codes = codes; f.painter = 1; f.hostFrames = false; f.assets = assets();
+    if (const std::string e = s.configure(f); !e.empty()) { fprintf(stderr, "pace: %s\n", e.c_str()); return 1; }
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto per = std::chrono::nanoseconds(1000000000LL / fps);
+    long late = 0, taken = 0;
+    for (long k = 0; k < (long)secs * fps; k++) {
+      std::this_thread::sleep_until(t0 + per * (k + 1));
+      uint64_t seq = 0;
+      int slot = 0;
+      if (s.takeSlot(&seq, &slot)) taken++;
+      else late++;
+      if ((k + 1) % fps == 0) printf("%s\n", s.stats().c_str());
+    }
+    printf("pace: LIZARD-%d x %d at %d a second, %d s: %ld taken, %ld late\n", subch, codes, fps, secs, taken, late);
+    return late ? 1 : 0;
+  }
+  fprintf(stderr, "usage: tx_check ids <file> <frames> <T> <out> | paint <file|-> <subch> [frames] [threads] [store] | bench <subch> [frames]\n"
+                  "       | pace <subch> [secs] [fps] [codes]\n");
   return 2;
 }

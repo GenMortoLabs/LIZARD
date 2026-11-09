@@ -130,9 +130,9 @@ class Sender {
   std::string gpuWhy_, gpuDevice_, prepareWhy_;
   std::shared_ptr<const wg::DeviceExtras> extras_;
   // ai: the stats' window: frames taken, data blocks shown, paint ms summed
-  std::atomic<uint64_t> takenWin_{0}, dataWin_{0}, dataAll_{0}, paintedWin_{0};
+  std::atomic<uint64_t> takenWin_{0}, dataWin_{0}, dataAll_{0}, paintedWin_{0}, encodesWin_{0};
   std::atomic<double> paintMsWin_{0};
-  double winStart_ = 0, lastFps_ = 0, lastKBs_ = 0, lastPaintMs_ = 0;
+  double winStart_ = 0, lastFps_ = 0, lastKBs_ = 0, lastPaintMs_ = 0, lastPaintBatch_ = 0;
 };
 
 }  // namespace lizard

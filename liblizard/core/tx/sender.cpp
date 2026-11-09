@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <sstream>
@@ -274,22 +275,40 @@ void Sender::upload() {
 // ai: The GPU's painter: the oldest frames made, up to an encode's worth (consecutive, so the first's count and one more
 // ai: each is every frame's own; never past the ring's end), one submission into their slots; their host copies too
 // ai: where the host takes frames by take().
+// ai: Batched (2026-11-08; the web encoder's pump, lizard-web send.mjs): in steady state a frame is made each time one is
+// ai: shown, so a painter taking what was made painted a frame a submission. It waits for `fit` frames: as many as the
+// ai: newest encode's GPU ms a frame puts in half a frame interval (the asked rate's, 60's at most), so an encode never
+// ai: holds the GPU from the presenter's next picture; at most an encode's worth, never past the ring's end. While fewer
+// ai: than a quarter of the ring is painted ahead (the start, a stall), what is made goes at once, an encode's worth at
+// ai: most, as before. LIZ_TX_BATCH=0 (the lab's A/B): a frame a submission as before.
 void Sender::paintGpu() {
   const int R = gpu_->frames(), D = std::max(1, gpu_->depth());
   bool host = false;
+  double budget = 0;
   {
     std::lock_guard<std::mutex> l(mu_);
     host = fmt_.hostFrames;
+    budget = 500.0 / std::max(60, fmt_.fps);
   }
+  const char* tb = std::getenv("LIZ_TX_BATCH");
+  const bool batched = !(tb && std::string(tb) == "0");
+  double msPer = 0;   // ai: the newest encode's GPU ms a frame
+  const auto fitOf = [&] { return batched && msPer > 0 ? std::clamp(static_cast<int>(budget / msPer), 1, R) : 1; };
   std::vector<std::vector<uint8_t>> outs(R);
   std::vector<uint8_t> blocks;
   std::vector<Job> js;
   std::unique_lock<std::mutex> l(mu_);
   for (;;) {
-    cv_.wait(l, [&] { return stop_ || !jobs_.empty(); });
+    cv_.wait(l, [&] {
+      if (stop_) return true;
+      if (jobs_.empty()) return false;
+      const int room = D - static_cast<int>(jobs_.front().seq % static_cast<uint64_t>(D));
+      return !batched || static_cast<int>(ready_.size()) < D / 4 || static_cast<int>(jobs_.size()) >= std::min(fitOf(), room);
+    });
     if (stop_) break;
     const int room = D - static_cast<int>(jobs_.front().seq % static_cast<uint64_t>(D));
-    const int k = std::min({R, static_cast<int>(jobs_.size()), room});
+    const bool catchUp = !batched || static_cast<int>(ready_.size()) < D / 4;
+    const int k = std::min({catchUp ? R : fitOf(), static_cast<int>(jobs_.size()), room});
     js.clear();
     for (int i = 0; i < k; i++) { js.push_back(std::move(jobs_.front())); jobs_.pop_front(); }
     if (host) for (int i = 0; i < k; i++) if (outs[i].empty() && !spare_.empty()) { outs[i] = std::move(spare_.back()); spare_.pop_back(); }
@@ -305,6 +324,8 @@ void Sender::paintGpu() {
     if (!err.empty()) { error_ = "the GPU painter stopped: " + err; cv_.notify_all(); break; }
     paintMsWin_ = paintMsWin_ + ms;
     paintedWin_ += k;
+    encodesWin_++;
+    if (ms > 0) msPer = ms / k;
     for (int i = 0; i < k; i++) if (js[i].seq >= shown_) {
       ready_[js[i].seq] = static_cast<int>(js[i].seq % static_cast<uint64_t>(D));
       if (host) hostOf_[js[i].seq] = std::move(outs[i]);
@@ -379,7 +400,8 @@ uint32_t Sender::ringRowWords() const { return gpu_ ? gpu_->rowWords() : 0; }
 
 // ai: The stats a second (the app asks): label, n, subch, fps (asked), shownFps (frames on the screen a second over the
 // ai: window), offeredKBs (data blocks shown a second x 472 B, 1000 B a KB, as the page's), paintMs (a frame's encode
-// ai: and paint on one painter; on the GPU its ms a frame, an encode's timestamps over its frames), painters (the
+// ai: and paint on one painter; on the GPU its ms a frame, an encode's timestamps over its frames), paintBatch (the GPU's
+// ai: frames an encode over the window, 0 none), painters (the
 // ai: GPU's: frames an encode), painter ("gpu" or "cpu"), device (the GPU's), gpuWhy (why not the GPU where it was
 // ai: asked for), ahead (painted, not shown), side, test, and for a file chunks, lap (data blocks a lap), pass (laps
 // ai: shown, 1 the first), root, sentBytes (the file's bytes as they go, every chunk's zstd frame or its own;
@@ -389,9 +411,10 @@ std::string Sender::stats() {
   if (secs >= 0.5) {
     lastFps_ = static_cast<double>(takenWin_.exchange(0)) / secs;
     lastKBs_ = static_cast<double>(dataWin_.exchange(0)) * PAYLOAD / 1000 / secs;
-    const uint64_t p = paintedWin_.exchange(0);
+    const uint64_t p = paintedWin_.exchange(0), en = encodesWin_.exchange(0);
     const double ms = paintMsWin_.exchange(0);
     if (p) lastPaintMs_ = ms / static_cast<double>(p);
+    lastPaintBatch_ = en ? static_cast<double>(p) / static_cast<double>(en) : 0;
     winStart_ = now;
   }
   std::lock_guard<std::mutex> l(mu_);
@@ -399,7 +422,7 @@ std::string Sender::stats() {
   o.setf(std::ios::fixed);
   o.precision(1);
   o << "{\"label\":\"" << label_ << "\",\"n\":" << n_ << ",\"subch\":" << fmt_.subch << ",\"fps\":" << fmt_.fps
-    << ",\"shownFps\":" << lastFps_ << ",\"offeredKBs\":" << lastKBs_ << ",\"paintMs\":" << lastPaintMs_
+    << ",\"shownFps\":" << lastFps_ << ",\"offeredKBs\":" << lastKBs_ << ",\"paintMs\":" << lastPaintMs_ << ",\"paintBatch\":" << lastPaintBatch_
     << ",\"painters\":" << fmt_.threads << ",\"painter\":\"" << (onGpu_ ? "gpu" : "cpu") << "\",\"device\":\"" << esc(gpuDevice_)
     << "\",\"gpuWhy\":\"" << esc(gpuWhy_) << "\",\"ahead\":" << ready_.size() << ",\"depth\":" << depth_ << ",\"side\":" << side_ << ",\"width\":" << width_
     << ",\"codes\":" << fmt_.codes << ",\"shown\":" << shown_ << ",\"blocks\":" << blocks_ << ",\"tiers\":\"" << tiers_ << "\""
