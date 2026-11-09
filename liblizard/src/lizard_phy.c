@@ -63,6 +63,13 @@ struct lizard_ws {
   // ai: and [n - dkeep, n) (the most |u| in the block), and its columns, to the last v that holds one rounded up to 4
   int *dkeep, *dcols;
 #endif
+#ifdef OB_F16_ON
+  // ai: arm64 with FEAT_FP16 (simd.h ob_f16(), asked once by ws_init; NULL without it, the strips then in f32): one
+  // ai: strip in half precision for its transform (row_sums4_f16, fft_dec_dif16, unpack_turn16), n rows by LIZARD_STRIP;
+  // ai: and the blocks' spectrum in half precision (tre and tim's layout, t16i inside t16's allocation) for theirs
+  // ai: (fft_dec_dit16), read back into tre and tim where anything reads them (spec16_to_f32)
+  float16_t *z16, *t16, *t16i;
+#endif
   // ai: the acquisition's buffers (internal.h ob_fbufs_t), grown as frames need, freed with the workspace
   ob_fbufs_t fbufs;
 };
@@ -379,6 +386,15 @@ static int ws_init(lizard_t *f) {
     if (c + 1 > w->dcols[b]) w->dcols[b] = c + 1;
   }
   for (int b = 0; b < f->vblocks; b++) w->dcols[b] = (w->dcols[b] + 3) / 4 * 4 < f->bw ? (w->dcols[b] + 3) / 4 * 4 : f->bw;
+#endif
+#ifdef OB_F16_ON
+  if (ob_f16()) {
+    // ai: the imaginary part 4 KB past a multiple of 16 KB from the real, as tre and tim
+    const size_t gap = ((size_t)4096 + 16384 - (tn * sizeof(float16_t)) % 16384) % 16384 / sizeof(float16_t);
+    w->z16 = malloc(sn * sizeof(float16_t)); w->t16 = malloc((2 * tn + gap) * sizeof(float16_t));
+    w->t16i = w->t16 ? w->t16 + tn + gap : 0;
+    if (!w->z16 || !w->t16) { free(w->z16); free(w->t16); w->z16 = w->t16 = w->t16i = 0; }
+  }
 #endif
   w->cx = tab; w->qx = tab + n; w->x1r = tab + 2 * n; w->x1i = tab + 3 * n; w->x2r = tab + 4 * n; w->x2i = tab + 5 * n;
   double m2 = 0;
@@ -723,6 +739,9 @@ void lizard_free(lizard_t *f) {
 #if defined(OB_NEON) || defined(OB_X86)
     free(w->dkeep);
 #endif
+#ifdef OB_F16_ON
+    free(w->z16); free(w->t16);
+#endif
     free(w); }
   for (int t = 0; t < LIZARD_TIERS; t++) ldpc_free(&f->code[t]);
   free(f->pos); free(f->block_tier); ob_layout_free(&f->frame); memset(f, 0, sizeof *f);
@@ -953,6 +972,84 @@ static void unpack_turn(const lizard_t *f, int x0, const float *z0) {
     }
   }
 }
+#ifdef OB_F16_ON
+// ai: The strips' transform in half precision (frame_spectrum, where ob_f16() and the workspace's z16): the detrend's
+// ai: row sums store each sample less the picture's mean (the shading fit's constant), times F16_SCALE, into z16 as
+// ai: they read it (row_sums4_f16); fft_dec_dif16 over it; unpack_turn16 widening each value to f32 as unpack_turn's
+// ai: arm64 form reads it, so the blocks' transforms and all after them run in f32 as before. The mean moves DC alone,
+// ai: which nothing reads, and keeps a row's partial sums near the code's own spread, not n times its mean.
+// ai: F16_SCALE 2^-5: the samples are grey / 255, each within 1 of the mean, so a row's transform sums at most
+// ai: 1536 / 32 = 48 of fp16's 65,504 (and a value that small is still normal down to 2^-14 times 32 of grey);
+// ai: unpack_turn16 takes the 32 back (a power of two, exact). The blocks' fp16 spectrum is the picture's at F16_BLOCK
+// ai: 2^-6: a whole picture's transform sums at most 1536^2 / 64 = 36,864 (times the turn's 1/2: 18,432); spec16_to_f32
+// ai: takes the 64 back.
+#define F16_SCALE 0.03125f
+#define F16_BLOCK 0.015625f
+// ai: store_turned4 storing half precision: the four vectors turned over, each narrowed to four halves
+static inline void store_turned4h(float16_t *base, const int *rows, size_t pitch, float32x4_t r0, float32x4_t r1, float32x4_t r2, float32x4_t r3) {
+  const float64x2_t t0 = vreinterpretq_f64_f32(vtrn1q_f32(r0, r1)), t1 = vreinterpretq_f64_f32(vtrn2q_f32(r0, r1));
+  const float64x2_t t2 = vreinterpretq_f64_f32(vtrn1q_f32(r2, r3)), t3 = vreinterpretq_f64_f32(vtrn2q_f32(r2, r3));
+  vst1_f16(base + rows[0] * pitch, vcvt_f16_f32(vreinterpretq_f32_f64(vtrn1q_f64(t0, t2)))); vst1_f16(base + rows[1] * pitch, vcvt_f16_f32(vreinterpretq_f32_f64(vtrn1q_f64(t1, t3))));
+  vst1_f16(base + rows[2] * pitch, vcvt_f16_f32(vreinterpretq_f32_f64(vtrn2q_f64(t0, t2)))); vst1_f16(base + rows[3] * pitch, vcvt_f16_f32(vreinterpretq_f32_f64(vtrn2q_f64(t1, t3))));
+}
+// ai: the blocks' fp16 spectrum (fft_dec_dit16) back to f32 in tre and tim, times 1 / F16_BLOCK, where anything reads
+// ai: it: each block's rows [0, dkeep] and [n - dkeep, n), its first dcols columns, the detrend's xy term (pxy x1(u)
+// ai: x1(v), sub_scaled's) taken off them in the same pass; all of it where the floats hash is armed (the rows
+// ai: and columns between hold what the last stage before left, as fft_dec_dit leaves them, without the term)
+static void spec16_to_f32(const lizard_t *f, struct lizard_ws *w, int all, double pxy) {
+  const int n = f->n, bw = f->bw;
+  const float32x4_t k = vdupq_n_f32(1.0f / F16_BLOCK);
+  for (int b = 0; b < f->vblocks; b++) {
+    const int keep = w->dkeep[b], lo = keep < n - 1 ? keep : n - 1, hi = n - keep > lo + 1 ? n - keep : lo + 1, dc = w->dcols[b], cols = all ? bw : dc;
+    const float *xr = w->x1r + b * bw, *xi = w->x1i + b * bw;
+    for (int u = 0; u < n; u = (!all && u == lo) ? hi : u + 1) {
+      const size_t at = ((size_t)b * n + u) * bw;
+      int c = 0;
+      if (u <= lo || u >= hi) {
+        const float32x4_t ar = vdupq_n_f32((float)(pxy * w->x1r[u])), ai = vdupq_n_f32((float)(pxy * w->x1i[u]));
+        for (; c < dc; c += 4) {
+          const float32x4_t r = vld1q_f32(xr + c), i = vld1q_f32(xi + c);
+          vst1q_f32(w->tre + at + c, vsubq_f32(vmulq_f32(vcvt_f32_f16(vld1_f16(w->t16 + at + c)), k), vfmsq_f32(vmulq_f32(ar, r), ai, i)));
+          vst1q_f32(w->tim + at + c, vsubq_f32(vmulq_f32(vcvt_f32_f16(vld1_f16(w->t16i + at + c)), k), vfmaq_f32(vmulq_f32(ar, i), ai, r)));
+        }
+      }
+      for (; c < cols; c += 4) {
+        vst1q_f32(w->tre + at + c, vmulq_f32(vcvt_f32_f16(vld1_f16(w->t16 + at + c)), k));
+        vst1q_f32(w->tim + at + c, vmulq_f32(vcvt_f32_f16(vld1_f16(w->t16i + at + c)), k));
+      }
+    }
+  }
+}
+
+// ai: unpack_turn's arm64 form (bw a multiple of 4, place known) from the fp16 strip into the fp16 blocks (t16, t16i):
+// ai: the same rows, sums and turned stores, each four halves widened as they are loaded and narrowed as they are
+// ai: stored, the halves' 0.5 times F16_BLOCK / F16_SCALE
+static void unpack_turn16(const lizard_t *f, int x0, const float16_t *z0) {
+  struct lizard_ws *w = f->ws;
+  const int n = f->n, bw = f->bw, sw = LIZARD_STRIP, hw = STRIP_HALF;
+  const int *P = fft_dec_place(n);
+  const float32x4_t h = vdupq_n_f32(0.5f * F16_BLOCK / F16_SCALE), nh = vdupq_n_f32(-0.5f * F16_BLOCK / F16_SCALE);
+  for (int b = 0; b < f->vblocks; b++) {
+    float16_t *const lh = w->t16 + (size_t)b * n * bw, *const lhi = w->t16i + (size_t)b * n * bw;
+    for (int j = 0; j < hw; j += 4) {
+      const int *pl = P + x0 + j, *ph = pl + hw;
+      for (int c = 0; c < bw; c += 4) {
+        const int v = b * bw + c;
+        const float16_t *zr0 = z0 + (size_t)P[v] * sw + j, *zr1 = z0 + (size_t)P[v + 1] * sw + j, *zr2 = z0 + (size_t)P[v + 2] * sw + j, *zr3 = z0 + (size_t)P[v + 3] * sw + j;
+        const float16_t *mr0 = z0 + (size_t)P[v ? n - v : 0] * sw + j, *mr1 = z0 + (size_t)P[n - v - 1] * sw + j, *mr2 = z0 + (size_t)P[n - v - 2] * sw + j, *mr3 = z0 + (size_t)P[n - v - 3] * sw + j;
+#define UT_ROW(k) \
+        const float32x4_t ar##k = vcvt_f32_f16(vld1_f16(zr##k)), ai##k = vcvt_f32_f16(vld1_f16(zr##k + hw)), br##k = vcvt_f32_f16(vld1_f16(mr##k)), bi##k = vcvt_f32_f16(vld1_f16(mr##k + hw)); \
+        const float32x4_t L##k = vmulq_f32(h, vaddq_f32(ar##k, br##k)), Li##k = vmulq_f32(h, vsubq_f32(ai##k, bi##k)); \
+        const float32x4_t H##k = vmulq_f32(h, vaddq_f32(ai##k, bi##k)), Hi##k = vmulq_f32(nh, vsubq_f32(ar##k, br##k));
+        UT_ROW(0) UT_ROW(1) UT_ROW(2) UT_ROW(3)
+#undef UT_ROW
+        store_turned4h(lh + c, pl, bw, L0, L1, L2, L3); store_turned4h(lhi + c, pl, bw, Li0, Li1, Li2, Li3);
+        store_turned4h(lh + c, ph, bw, H0, H1, H2, H3); store_turned4h(lhi + c, ph, bw, Hi0, Hi1, Hi2, Hi3);
+      }
+    }
+  }
+}
+#endif
 
 // The picture onto the ring's grid (lizard_phy.h LIZARD_RING). The ring is painted at pxm whole pixels a module; the
 // picture's n samples fill its span modules at scale samples a module, so pixel X of the region the picture and its
@@ -1257,6 +1354,26 @@ static void row_sums4(const float *z, size_t pitch, const float *cx, const float
   }
   lane_sums4(a0, a1, a2, a3, rs); lane_sums4(b0, b1, b2, b3, rx); lane_sums4(c0, c1, c2, c3, rq);
 }
+#ifdef OB_F16_ON
+// ai: row_sums4 (the same float operations in the same order, so the same sums) storing each sample less mean, times
+// ai: F16_SCALE, as fp16 into o (o's rows at pitch), eight columns a step (cols a multiple of 8): the strips' fp16 input
+static void row_sums4_f16(const float *z, size_t pitch, const float *cx, const float *qx, int cols, double rs[4], double rx[4], double rq[4], float16_t *o, float mean) {
+  const float *zr[4] = { z, z + pitch, z + 2 * pitch, z + 3 * pitch };
+  const float32x4_t sc = vdupq_n_f32(F16_SCALE), off = vdupq_n_f32(-mean * F16_SCALE);
+  float32x4_t a[4], b[4], c[4];
+  for (int r = 0; r < 4; r++) a[r] = b[r] = c[r] = vdupq_n_f32(0);
+  for (int x = 0; x < cols; x += 8) {
+    const float32x4_t vc = vld1q_f32(cx + x), vq = vld1q_f32(qx + x), wc = vld1q_f32(cx + x + 4), wq = vld1q_f32(qx + x + 4);
+    for (int r = 0; r < 4; r++) {
+      const float32x4_t v = vld1q_f32(zr[r] + x), u = vld1q_f32(zr[r] + x + 4);
+      a[r] = vaddq_f32(a[r], v); b[r] = vfmaq_f32(b[r], v, vc); c[r] = vfmaq_f32(c[r], v, vq);
+      a[r] = vaddq_f32(a[r], u); b[r] = vfmaq_f32(b[r], u, wc); c[r] = vfmaq_f32(c[r], u, wq);
+      vst1q_f16(o + r * pitch + x, vcvt_high_f16_f32(vcvt_f16_f32(vfmaq_f32(off, v, sc)), vfmaq_f32(off, u, sc)));
+    }
+  }
+  lane_sums4(a[0], a[1], a[2], a[3], rs); lane_sums4(b[0], b[1], b[2], b[3], rx); lane_sums4(c[0], c[1], c[2], c[3], rq);
+}
+#endif
 #elif defined(OB_X86)
 // ai: x86-64: arm64's lane_sums4 and row_sums4 in SSE4.1, the products a multiply and an add (no fusing): each row's
 // ai: chains are row_sums' float operations, in its order, and its doubles summed as row_sums sums them
@@ -1566,6 +1683,9 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
   // live in the column v = 0, y and y^2 in the row u = 0, xy is an outer product, and the constant is DC, which
   // carries nothing.
   double px = 0, py = 0, pxy = 0, pxx = 0, pyy = 0;
+#ifdef OB_F16_ON
+  const int f16 = w->z16 && bw % 4 == 0 && fft_dec_place(n);   // ai: the strips' and blocks' transforms in fp16
+#endif
 #ifdef OB_NEON
   // ai: arm64: the projections' sums two rows a lane pair (the strip loop's row sums), added up after the last strip
   float64x2_t vpx = vdupq_n_f64(0), vpy = vpx, vpxy = vpx, vpxx = vpx, vpyy = vpx;
@@ -1627,6 +1747,10 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
     // ai: same soft values and blocks, the spectrum's floats moved on two where a projection's last bit reached them)
     for (int y = 0; y < n; y += 4) {
       double rs[4], rx[4], rq[4];
+#ifdef OB_F16_ON
+      if (f16) row_sums4_f16(z + (size_t)y * sw, sw, w->cx + x0, w->qx + x0, sw, rs, rx, rq, w->z16 + (size_t)y * sw, (float)beta[0]);
+      else
+#endif
       row_sums4(z + (size_t)y * sw, sw, w->cx + x0, w->qx + x0, sw, rs, rx, rq);
       const float64x2_t s0 = vld1q_f64(rs), s1 = vld1q_f64(rs + 2), x0v = vld1q_f64(rx), x1v = vld1q_f64(rx + 2), q0 = vld1q_f64(rq), q1 = vld1q_f64(rq + 2);
       const float64x2_t c0 = vcvt_f64_f32(vld1_f32(w->cx + y)), c1 = vcvt_f64_f32(vld1_f32(w->cx + y + 2)), d0 = vcvt_f64_f32(vld1_f32(w->qx + y)), d1 = vcvt_f64_f32(vld1_f32(w->qx + y + 2));
@@ -1654,9 +1778,17 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
     }
 #endif
     double tc = ob_now_ms(); ob_prof_ms[PROF_F_DETREND] += tc - tb;
-    // The strip's two halves ARE the real and imaginary inputs, in place, at the strip's pitch (unpack_turn).
-    fft_dec_dif(z, z + STRIP_HALF, n, STRIP_HALF, sw);
-    unpack_turn(f, x0, z);
+#ifdef OB_F16_ON
+    if (f16) {
+      fft_dec_dif16(w->z16, w->z16 + STRIP_HALF, n, STRIP_HALF, sw);
+      unpack_turn16(f, x0, w->z16);
+    } else
+#endif
+    {
+      // The strip's two halves ARE the real and imaginary inputs, in place, at the strip's pitch (unpack_turn).
+      fft_dec_dif(z, z + STRIP_HALF, n, STRIP_HALF, sw);
+      unpack_turn(f, x0, z);
+    }
     ob_prof_ms[PROF_F_FFT] += ob_now_ms() - tc;
   }
 #ifdef OB_NEON
@@ -1666,18 +1798,30 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
   px = HSUM(vpx); py = HSUM(vpy); pxy = HSUM(vpxy); pxx = HSUM(vpxx); pyy = HSUM(vpyy);
 #undef HSUM
 #endif
+  px /= n * w->sx2; py /= n * w->sx2; pxy /= w->sx2 * w->sx2; pxx /= n * w->sq2; pyy /= n * w->sq2;
   double ts = ob_now_ms();
   // ai: arm64 and x86-64: each block's transform makes only the rows and columns its coefficients take (ws dkeep, dcols)
 #if defined(OB_NEON) || defined(OB_X86)
+#ifdef OB_F16_ON
+  // ai: the fp16 blocks: their columns to a multiple of 8 (dcols' to 4; the columns between are bw's, transformed and
+  // ai: not read), then back to f32 where they are read
+  if (f16) {
+    for (int b = 0; b < f->vblocks; b++) fft_dec_dit16(w->t16 + (size_t)b * n * bw, w->t16i + (size_t)b * n * bw, n, (w->dcols[b] + 7) / 8 * 8 < bw ? (w->dcols[b] + 7) / 8 * 8 : bw, bw, w->dkeep[b]);
+    spec16_to_f32(f, w, ob_debug_hash != 0, pxy);
+  } else
+#endif
   for (int b = 0; b < f->vblocks; b++) fft_dec_dit(w->tre + (size_t)b * n * bw, w->tim + (size_t)b * n * bw, n, w->dcols[b], bw, w->dkeep[b]);
 #else
   for (int b = 0; b < f->vblocks; b++) fft_dec_dit(w->tre + (size_t)b * n * bw, w->tim + (size_t)b * n * bw, n, bw, bw, n);
 #endif
   double td = ob_now_ms(); ob_prof_ms[PROF_F_FFT] += td - ts;
-  px /= n * w->sx2; py /= n * w->sx2; pxy /= w->sx2 * w->sx2; pxx /= n * w->sq2; pyy /= n * w->sq2;
 #if defined(OB_NEON) || defined(OB_X86)
   // ai: arm64 and x86-64: the xy term off only the rows and columns a block's coefficients take (ws dkeep, dcols), all that is read
-  // ai: after this; the rest keep the transform's values, which the floats hash sees and nothing else reads
+  // ai: after this; the rest keep the transform's values, which the floats hash sees and nothing else reads. The fp16
+  // ai: blocks took it off as they were read back (spec16_to_f32).
+#ifdef OB_F16_ON
+  if (!f16)
+#endif
   for (int b = 0; b < f->vblocks; b++) {
     const int keep = w->dkeep[b], lo = keep < n - 1 ? keep : n - 1, hi = n - keep > lo + 1 ? n - keep : lo + 1;
     for (int u = 0; u < n; u = u == lo ? hi : u + 1)

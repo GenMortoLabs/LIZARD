@@ -72,6 +72,44 @@ int main(int argc, char **argv) {
     bad += fail;
     free(r0); free(i0); free(ra); free(ia); free(rb); free(ib); free(rc); free(ic);
   }
+#ifdef OB_F16_ON
+  // ai: arm64 with FEAT_FP16: the strips' transform in half precision (fft_dec_dif16) at every size and 30, 32 and 64
+  // ai: columns, on the same random input times 4 (a strip's residual times F16_SCALE, about +-2): its error against the
+  // ai: DFT of the input as rounded to fp16 (the transform's own) and of the input before (with the input's rounding),
+  // ai: the worst over the output's rms; timed against fft_dec_dif in f32 on the same shape. Fails past 1e-2 (the
+  // ai: transform's own), the format's f32 bound meaning nothing at 11 bits.
+  if (ob_f16()) for (int ni = 0; ni < 7; ni++) for (int ci = 0; ci < 3; ci++) {
+    const int n = NS[ni], cols = CW[ci], pitch = 64; const size_t m = (size_t)n * pitch;
+    float *r0 = malloc(m * 4), *i0 = malloc(m * 4), *rq = malloc(m * 4), *iq = malloc(m * 4), *ro = malloc(m * 4), *io = malloc(m * 4), *rf = malloc(m * 4), *if_ = malloc(m * 4);
+    float16_t *h0 = malloc(m * 2), *g0 = malloc(m * 2), *h = malloc(m * 2), *g = malloc(m * 2);
+    for (size_t i = 0; i < m; i++) {
+      z = z * 1664525u + 1013904223u; r0[i] = 4 * ((float)(z >> 8) / 16777216.0f - 0.5f); z = z * 1664525u + 1013904223u; i0[i] = 4 * ((float)(z >> 8) / 16777216.0f - 0.5f);
+      h0[i] = (float16_t)r0[i]; g0[i] = (float16_t)i0[i]; rq[i] = h0[i]; iq[i] = g0[i];
+    }
+    double th = 1e30, tf = 1e30, tdh = 1e30, tdf = 1e30;
+    for (int rep = 0; rep < reps; rep++) {
+      memcpy(h, h0, m * 2); memcpy(g, g0, m * 2); double t0 = now_us(); fft_dec_dif16(h, g, n, cols, pitch); double t = now_us() - t0; if (t < th) th = t;
+      memcpy(rf, r0, m * 4); memcpy(if_, i0, m * 4); t0 = now_us(); fft_dec_dif(rf, if_, n, cols, pitch); t = now_us() - t0; if (t < tf) tf = t;
+    }
+    for (size_t i = 0; i < m; i++) { ro[i] = h[i]; io[i] = g[i]; }
+    const int *place = fft_dec_place(n);
+    const double eo = err_of(ro, io, rq, iq, n, cols, pitch, 0, place, n), et = err_of(ro, io, r0, i0, n, cols, pitch, 0, place, n);
+    // ai: fft_dec_dit16: input rows in place order, frequencies out in order, all rows and keep n / 3
+    for (int rep = 0; rep < reps; rep++) {
+      memcpy(h, h0, m * 2); memcpy(g, g0, m * 2); double t0 = now_us(); fft_dec_dit16(h, g, n, cols, pitch, n); double t = now_us() - t0; if (t < tdh) tdh = t;
+      memcpy(rf, r0, m * 4); memcpy(if_, i0, m * 4); t0 = now_us(); fft_dec_dit(rf, if_, n, cols, pitch, n); t = now_us() - t0; if (t < tdf) tdf = t;
+    }
+    for (size_t i = 0; i < m; i++) { ro[i] = h[i]; io[i] = g[i]; }
+    const double ed = err_of(ro, io, rq, iq, n, cols, pitch, fft_dec_place(n), 0, n);
+    memcpy(h, h0, m * 2); memcpy(g, g0, m * 2); fft_dec_dit16(h, g, n, cols, pitch, n / 3);
+    for (size_t i = 0; i < m; i++) { ro[i] = h[i]; io[i] = g[i]; }
+    const double ek = err_of(ro, io, rq, iq, n, cols, pitch, fft_dec_place(n), 0, n / 3);
+    const int fail = !(eo <= 1e-2) || !(ed <= 1e-2) || !(ek <= 1e-2);
+    printf("n %4d cols %2d  fp16 dif %6.1f us, f32 dif %6.1f (%.2fx); fp16 dit %6.1f, f32 dit %6.1f (%.2fx)   worst error / rms: dif %.2e (with the input's rounding %.2e), dit %.2e, dit keep %.2e%s\n", n, cols, th, tf, tf / th, tdh, tdf, tdf / tdh, eo, et, ed, ek, fail ? "  FAIL" : "");
+    bad += fail;
+    free(r0); free(i0); free(rq); free(iq); free(ro); free(io); free(rf); free(if_); free(h0); free(g0); free(h); free(g);
+  }
+#endif
   printf("outputs digest %016llx (%s)\n", (unsigned long long)dig,
 #ifdef OB_V3_ON
          ob_v3() ? "x86-64-v3" : "x86-64-v2"

@@ -27,5 +27,15 @@ void fft_cols(float *re, float *im, int rows, int cols, int pitch, int inverse);
 void fft_dec_dif(float *re, float *im, int rows, int cols, int pitch);
 void fft_dec_dit(float *re, float *im, int rows, int cols, int pitch, int keep);
 const int *fft_dec_place(int rows);
+#include "simd.h"
+#ifdef OB_F16_ON
+// ai: arm64 with FEAT_FP16 (simd.h ob_f16()): fft_dec_dif's plan and stages in half precision, eight lanes a vector,
+// ai: its twiddles rounded to fp16 once a size and thread; frequency k left in row place[k] as fft_dec_dif leaves it.
+// ai: Call it only where ob_f16() holds. The caller keeps every partial sum inside fp16's range (65504): a column's
+// ai: largest is rows times its largest input.
+void fft_dec_dif16(float16_t *re, float16_t *im, int rows, int cols, int pitch);
+// ai: and fft_dec_dit's in half precision likewise (sample t from row place[t], keep as fft_dec_dit's)
+void fft_dec_dit16(float16_t *re, float16_t *im, int rows, int cols, int pitch, int keep);
+#endif
 
 #endif

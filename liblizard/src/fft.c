@@ -665,6 +665,248 @@ static int dec_groups(const plan_t *p, int cols, int *gsz) {
   return ngrp;
 }
 #endif
+#ifdef OB_F16_ON
+// ai: fft_dec_dif16 and fft_dec_dit16 (fft.h): fft_dec_dif's and fft_dec_dit's butterflies in half precision, eight
+// ai: lanes a vector, in time (dif 0: rows 1 .. r - 1 twiddled by W^(j k), then the DFT) or frequency (dif 1: the DFT,
+// ai: then output j twiddled) unless unit; a call's twiddles one vector load, read by lane
+#define TWLH(qr, qi, V, l) { const float16x8_t pr_ = qr, pi_ = qi; qr = vfmsq_laneq_f16(vmulq_laneq_f16(pr_, V, l), pi_, V, (l) + 1); qi = vfmaq_laneq_f16(vmulq_laneq_f16(pr_, V, (l) + 1), pi_, V, l); }
+#define DFT3H(ar, ai, br, bi, cr, ci, K) { \
+  const float16x8_t t1r = vaddq_f16(br, cr), t1i = vaddq_f16(bi, ci), t2r = vsubq_f16(br, cr), t2i = vsubq_f16(bi, ci); \
+  const float16x8_t hr = vfmsq_laneq_f16(ar, t1r, K, 1), hi = vfmsq_laneq_f16(ai, t1i, K, 1); \
+  ar = vaddq_f16(ar, t1r); ai = vaddq_f16(ai, t1i); \
+  br = vfmaq_laneq_f16(hr, t2i, K, 0); bi = vfmsq_laneq_f16(hi, t2r, K, 0); \
+  cr = vfmsq_laneq_f16(hr, t2i, K, 0); ci = vfmaq_laneq_f16(hi, t2r, K, 0); }
+#define DFT4H(ar, ai, br, bi, cr, ci, dr, di) { \
+  const float16x8_t t0r = vaddq_f16(ar, cr), t0i = vaddq_f16(ai, ci), t1r = vsubq_f16(ar, cr), t1i = vsubq_f16(ai, ci); \
+  const float16x8_t t2r = vaddq_f16(br, dr), t2i = vaddq_f16(bi, di), t3r = vsubq_f16(br, dr), t3i = vsubq_f16(bi, di); \
+  ar = vaddq_f16(t0r, t2r); ai = vaddq_f16(t0i, t2i); cr = vsubq_f16(t0r, t2r); ci = vsubq_f16(t0i, t2i); \
+  br = vaddq_f16(t1r, t3i); bi = vsubq_f16(t1i, t3r); dr = vsubq_f16(t1r, t3i); di = vaddq_f16(t1i, t3r); }
+static const float16_t K3H[8] = { 0.86602540378443864676f, 0.5f, 0, 0, 0, 0, 0, 0 };
+static const float16_t K5H[8] = { 0.30901699437494742410f, -0.80901699437494742410f, 0.95105651629515357212f, 0.58778525229247312917f, 0, 0, 0, 0 };
+// ai: the columns past the last whole vector (cols % 8; never the decoder's, 32 a strip and blocks of multiples of 8):
+// ai: tail_dec's, in double
+static __attribute__((noinline)) void tail_dec16(float16_t *re, float16_t *im, size_t st, int x0, int cols, int rad, const float16_t *w, int unit, int dif) {
+  for (int x = x0; x < cols; x++) {
+    double xr[12], xi[12], yr[12], yi[12];
+    for (int j = 0; j < rad; j++) { xr[j] = re[j * st + x]; xi[j] = im[j * st + x]; }
+    if (!unit && !dif) for (int j = 1; j < rad; j++) { const double a = xr[j], b = xi[j], wr = w[2 * j - 2], wi = w[2 * j - 1]; xr[j] = a * wr - b * wi; xi[j] = a * wi + b * wr; }
+    for (int k = 0; k < rad; k++) {
+      yr[k] = yi[k] = 0;
+      for (int j = 0; j < rad; j++) { const double a = -2 * 3.14159265358979323846 * (j * k % rad) / rad, c = cos(a), s = sin(a); yr[k] += xr[j] * c - xi[j] * s; yi[k] += xr[j] * s + xi[j] * c; }
+    }
+    if (!unit && dif) for (int j = 1; j < rad; j++) { const double a = yr[j], b = yi[j], wr = w[2 * j - 2], wi = w[2 * j - 1]; yr[j] = a * wr - b * wi; yi[j] = a * wi + b * wr; }
+    for (int j = 0; j < rad; j++) { re[j * st + x] = (float16_t)yr[j]; im[j * st + x] = (float16_t)yi[j]; }
+  }
+}
+static inline __attribute__((always_inline)) OB_F16 void rows2h(float16_t *re, float16_t *im, size_t st, int cols, const float16_t *w, int unit, int dif) {
+  const float16x8_t W = vld1q_f16(w);
+  int x = 0;
+  for (; x + 8 <= cols; x += 8) {
+    const float16x8_t ar = vld1q_f16(re + x), ai = vld1q_f16(im + x);
+    float16x8_t br = vld1q_f16(re + st + x), bi = vld1q_f16(im + st + x);
+    if (!unit && !dif) TWLH(br, bi, W, 0)
+    float16x8_t yr = vsubq_f16(ar, br), yi = vsubq_f16(ai, bi);
+    if (!unit && dif) TWLH(yr, yi, W, 0)
+    vst1q_f16(re + x, vaddq_f16(ar, br)); vst1q_f16(im + x, vaddq_f16(ai, bi)); vst1q_f16(re + st + x, yr); vst1q_f16(im + st + x, yi);
+  }
+  if (x < cols) tail_dec16(re, im, st, x, cols, 2, w, unit, dif);
+}
+static inline __attribute__((always_inline)) OB_F16 void rows3h(float16_t *re, float16_t *im, size_t st, int cols, const float16_t *w, int unit, int dif) {
+  const float16x8_t K = vld1q_f16(K3H), W = vld1q_f16(w);
+  int x = 0;
+  for (; x + 8 <= cols; x += 8) {
+    float16x8_t ar = vld1q_f16(re + x), ai = vld1q_f16(im + x), br = vld1q_f16(re + st + x), bi = vld1q_f16(im + st + x), cr = vld1q_f16(re + 2 * st + x), ci = vld1q_f16(im + 2 * st + x);
+    if (!unit && !dif) { TWLH(br, bi, W, 0) TWLH(cr, ci, W, 2) }
+    DFT3H(ar, ai, br, bi, cr, ci, K)
+    if (!unit && dif) { TWLH(br, bi, W, 0) TWLH(cr, ci, W, 2) }
+    vst1q_f16(re + x, ar); vst1q_f16(im + x, ai); vst1q_f16(re + st + x, br); vst1q_f16(im + st + x, bi); vst1q_f16(re + 2 * st + x, cr); vst1q_f16(im + 2 * st + x, ci);
+  }
+  if (x < cols) tail_dec16(re, im, st, x, cols, 3, w, unit, dif);
+}
+static inline __attribute__((always_inline)) OB_F16 void rows4h(float16_t *re, float16_t *im, size_t st, int cols, const float16_t *w, int unit, int dif) {
+  const float16x8_t W = vld1q_f16(w);
+  int x = 0;
+  for (; x + 8 <= cols; x += 8) {
+    float16x8_t ar = vld1q_f16(re + x), ai = vld1q_f16(im + x), br = vld1q_f16(re + st + x), bi = vld1q_f16(im + st + x);
+    float16x8_t cr = vld1q_f16(re + 2 * st + x), ci = vld1q_f16(im + 2 * st + x), dr = vld1q_f16(re + 3 * st + x), di = vld1q_f16(im + 3 * st + x);
+    if (!unit && !dif) { TWLH(br, bi, W, 0) TWLH(cr, ci, W, 2) TWLH(dr, di, W, 4) }
+    DFT4H(ar, ai, br, bi, cr, ci, dr, di)
+    if (!unit && dif) { TWLH(br, bi, W, 0) TWLH(cr, ci, W, 2) TWLH(dr, di, W, 4) }
+    vst1q_f16(re + x, ar); vst1q_f16(im + x, ai); vst1q_f16(re + 2 * st + x, cr); vst1q_f16(im + 2 * st + x, ci);
+    vst1q_f16(re + st + x, br); vst1q_f16(im + st + x, bi); vst1q_f16(re + 3 * st + x, dr); vst1q_f16(im + 3 * st + x, di);
+  }
+  if (x < cols) tail_dec16(re, im, st, x, cols, 4, w, unit, dif);
+}
+static inline __attribute__((always_inline)) OB_F16 void rows5h(float16_t *re, float16_t *im, size_t st, int cols, const float16_t *w, int unit, int dif) {
+  const float16x8_t K = vld1q_f16(K5H), W = vld1q_f16(w);
+  int x = 0;
+  for (; x + 8 <= cols; x += 8) {
+    float16x8_t qr[4], qi[4];
+    for (int j = 0; j < 4; j++) { qr[j] = vld1q_f16(re + (j + 1) * st + x); qi[j] = vld1q_f16(im + (j + 1) * st + x); }
+    if (!unit && !dif) { TWLH(qr[0], qi[0], W, 0) TWLH(qr[1], qi[1], W, 2) TWLH(qr[2], qi[2], W, 4) TWLH(qr[3], qi[3], W, 6) }
+    const float16x8_t ar = vld1q_f16(re + x), ai = vld1q_f16(im + x);
+    const float16x8_t t1r = vaddq_f16(qr[0], qr[3]), t1i = vaddq_f16(qi[0], qi[3]), t2r = vaddq_f16(qr[1], qr[2]), t2i = vaddq_f16(qi[1], qi[2]);
+    const float16x8_t t3r = vsubq_f16(qr[0], qr[3]), t3i = vsubq_f16(qi[0], qi[3]), t4r = vsubq_f16(qr[1], qr[2]), t4i = vsubq_f16(qi[1], qi[2]);
+    const float16x8_t m1r = vfmaq_laneq_f16(vfmaq_laneq_f16(ar, t1r, K, 0), t2r, K, 1), m1i = vfmaq_laneq_f16(vfmaq_laneq_f16(ai, t1i, K, 0), t2i, K, 1);
+    const float16x8_t m2r = vfmaq_laneq_f16(vfmaq_laneq_f16(ar, t1r, K, 1), t2r, K, 0), m2i = vfmaq_laneq_f16(vfmaq_laneq_f16(ai, t1i, K, 1), t2i, K, 0);
+    const float16x8_t n1r = vfmaq_laneq_f16(vmulq_laneq_f16(t3r, K, 2), t4r, K, 3), n1i = vfmaq_laneq_f16(vmulq_laneq_f16(t3i, K, 2), t4i, K, 3);
+    const float16x8_t n2r = vfmsq_laneq_f16(vmulq_laneq_f16(t3r, K, 3), t4r, K, 2), n2i = vfmsq_laneq_f16(vmulq_laneq_f16(t3i, K, 3), t4i, K, 2);
+    float16x8_t y1r = vaddq_f16(m1r, n1i), y1i = vsubq_f16(m1i, n1r), y4r = vsubq_f16(m1r, n1i), y4i = vaddq_f16(m1i, n1r);
+    float16x8_t y2r = vaddq_f16(m2r, n2i), y2i = vsubq_f16(m2i, n2r), y3r = vsubq_f16(m2r, n2i), y3i = vaddq_f16(m2i, n2r);
+    if (!unit && dif) { TWLH(y1r, y1i, W, 0) TWLH(y2r, y2i, W, 2) TWLH(y3r, y3i, W, 4) TWLH(y4r, y4i, W, 6) }
+    vst1q_f16(re + x, vaddq_f16(vaddq_f16(ar, t1r), t2r)); vst1q_f16(im + x, vaddq_f16(vaddq_f16(ai, t1i), t2i));
+    vst1q_f16(re + st + x, y1r); vst1q_f16(im + st + x, y1i); vst1q_f16(re + 4 * st + x, y4r); vst1q_f16(im + 4 * st + x, y4i);
+    vst1q_f16(re + 2 * st + x, y2r); vst1q_f16(im + 2 * st + x, y2i); vst1q_f16(re + 3 * st + x, y3r); vst1q_f16(im + 3 * st + x, y3i);
+  }
+  if (x < cols) tail_dec16(re, im, st, x, cols, 5, w, unit, dif);
+}
+static inline __attribute__((always_inline)) OB_F16 void rows6h(float16_t *re, float16_t *im, size_t st, int cols, const float16_t *w, int unit, int dif) {
+  const float16x8_t K = vld1q_f16(K3H), W0 = vld1q_f16(w), W1 = vld1q_f16(w + 8);
+  int x = 0;
+  for (; x + 8 <= cols; x += 8) {
+    float16x8_t x0r = vld1q_f16(re + x), x0i = vld1q_f16(im + x), x1r = vld1q_f16(re + st + x), x1i = vld1q_f16(im + st + x);
+    float16x8_t x2r = vld1q_f16(re + 2 * st + x), x2i = vld1q_f16(im + 2 * st + x), x3r = vld1q_f16(re + 3 * st + x), x3i = vld1q_f16(im + 3 * st + x);
+    float16x8_t x4r = vld1q_f16(re + 4 * st + x), x4i = vld1q_f16(im + 4 * st + x), x5r = vld1q_f16(re + 5 * st + x), x5i = vld1q_f16(im + 5 * st + x);
+    if (!unit && !dif) { TWLH(x1r, x1i, W0, 0) TWLH(x2r, x2i, W0, 2) TWLH(x3r, x3i, W0, 4) TWLH(x4r, x4i, W0, 6) TWLH(x5r, x5i, W1, 0) }
+    float16x8_t u0r = vaddq_f16(x0r, x3r), u0i = vaddq_f16(x0i, x3i), v0r = vsubq_f16(x0r, x3r), v0i = vsubq_f16(x0i, x3i);
+    float16x8_t u1r = vaddq_f16(x2r, x5r), u1i = vaddq_f16(x2i, x5i), v1r = vsubq_f16(x2r, x5r), v1i = vsubq_f16(x2i, x5i);
+    float16x8_t u2r = vaddq_f16(x4r, x1r), u2i = vaddq_f16(x4i, x1i), v2r = vsubq_f16(x4r, x1r), v2i = vsubq_f16(x4i, x1i);
+    DFT3H(u0r, u0i, u1r, u1i, u2r, u2i, K)   // ai: X0, X4, X2
+    DFT3H(v0r, v0i, v1r, v1i, v2r, v2i, K)   // ai: X3, X1, X5
+    if (!unit && dif) { TWLH(v1r, v1i, W0, 0) TWLH(u2r, u2i, W0, 2) TWLH(v0r, v0i, W0, 4) TWLH(u1r, u1i, W0, 6) TWLH(v2r, v2i, W1, 0) }
+    vst1q_f16(re + x, u0r); vst1q_f16(im + x, u0i); vst1q_f16(re + 4 * st + x, u1r); vst1q_f16(im + 4 * st + x, u1i); vst1q_f16(re + 2 * st + x, u2r); vst1q_f16(im + 2 * st + x, u2i);
+    vst1q_f16(re + 3 * st + x, v0r); vst1q_f16(im + 3 * st + x, v0i); vst1q_f16(re + st + x, v1r); vst1q_f16(im + st + x, v1i); vst1q_f16(re + 5 * st + x, v2r); vst1q_f16(im + 5 * st + x, v2i);
+  }
+  if (x < cols) tail_dec16(re, im, st, x, cols, 6, w, unit, dif);
+}
+static inline __attribute__((always_inline)) OB_F16 void rows12h(float16_t *re, float16_t *im, size_t st, int cols) {
+  const float16x8_t K = vld1q_f16(K3H);
+  int x = 0;
+  for (; x + 8 <= cols; x += 8) {
+    float16x8_t a0r = vld1q_f16(re + x), a0i = vld1q_f16(im + x), a1r = vld1q_f16(re + 3 * st + x), a1i = vld1q_f16(im + 3 * st + x);
+    float16x8_t a2r = vld1q_f16(re + 6 * st + x), a2i = vld1q_f16(im + 6 * st + x), a3r = vld1q_f16(re + 9 * st + x), a3i = vld1q_f16(im + 9 * st + x);
+    DFT4H(a0r, a0i, a1r, a1i, a2r, a2i, a3r, a3i)
+    float16x8_t b0r = vld1q_f16(re + 4 * st + x), b0i = vld1q_f16(im + 4 * st + x), b1r = vld1q_f16(re + 7 * st + x), b1i = vld1q_f16(im + 7 * st + x);
+    float16x8_t b2r = vld1q_f16(re + 10 * st + x), b2i = vld1q_f16(im + 10 * st + x), b3r = vld1q_f16(re + st + x), b3i = vld1q_f16(im + st + x);
+    DFT4H(b0r, b0i, b1r, b1i, b2r, b2i, b3r, b3i)
+    float16x8_t c0r = vld1q_f16(re + 8 * st + x), c0i = vld1q_f16(im + 8 * st + x), c1r = vld1q_f16(re + 11 * st + x), c1i = vld1q_f16(im + 11 * st + x);
+    float16x8_t c2r = vld1q_f16(re + 2 * st + x), c2i = vld1q_f16(im + 2 * st + x), c3r = vld1q_f16(re + 5 * st + x), c3i = vld1q_f16(im + 5 * st + x);
+    DFT4H(c0r, c0i, c1r, c1i, c2r, c2i, c3r, c3i)
+    DFT3H(a0r, a0i, b0r, b0i, c0r, c0i, K)   // ai: X0, X4, X8
+    vst1q_f16(re + x, a0r); vst1q_f16(im + x, a0i); vst1q_f16(re + 4 * st + x, b0r); vst1q_f16(im + 4 * st + x, b0i); vst1q_f16(re + 8 * st + x, c0r); vst1q_f16(im + 8 * st + x, c0i);
+    DFT3H(a1r, a1i, b1r, b1i, c1r, c1i, K)   // ai: X9, X1, X5
+    vst1q_f16(re + 9 * st + x, a1r); vst1q_f16(im + 9 * st + x, a1i); vst1q_f16(re + st + x, b1r); vst1q_f16(im + st + x, b1i); vst1q_f16(re + 5 * st + x, c1r); vst1q_f16(im + 5 * st + x, c1i);
+    DFT3H(a2r, a2i, b2r, b2i, c2r, c2i, K)   // ai: X6, X10, X2
+    vst1q_f16(re + 6 * st + x, a2r); vst1q_f16(im + 6 * st + x, a2i); vst1q_f16(re + 10 * st + x, b2r); vst1q_f16(im + 10 * st + x, b2i); vst1q_f16(re + 2 * st + x, c2r); vst1q_f16(im + 2 * st + x, c2i);
+    DFT3H(a3r, a3i, b3r, b3i, c3r, c3i, K)   // ai: X3, X7, X11
+    vst1q_f16(re + 3 * st + x, a3r); vst1q_f16(im + 3 * st + x, a3i); vst1q_f16(re + 7 * st + x, b3r); vst1q_f16(im + 7 * st + x, b3i); vst1q_f16(re + 11 * st + x, c3r); vst1q_f16(im + 11 * st + x, c3i);
+  }
+  if (x < cols) tail_dec16(re, im, st, x, cols, 12, 0, 1, 0);
+}
+// ai: rows4k in half precision: the radix-4 butterfly in time writing only the outputs in need (bit j: output j)
+static inline __attribute__((always_inline)) OB_F16 void rows4kh(float16_t *re, float16_t *im, size_t st, int cols, const float16_t *w, int need) {
+  const float16x8_t W = vld1q_f16(w);
+  int x = 0;
+  for (; x + 8 <= cols; x += 8) {
+    float16x8_t ar = vld1q_f16(re + x), ai = vld1q_f16(im + x), br = vld1q_f16(re + st + x), bi = vld1q_f16(im + st + x);
+    float16x8_t cr = vld1q_f16(re + 2 * st + x), ci = vld1q_f16(im + 2 * st + x), dr = vld1q_f16(re + 3 * st + x), di = vld1q_f16(im + 3 * st + x);
+    TWLH(br, bi, W, 0) TWLH(cr, ci, W, 2) TWLH(dr, di, W, 4)
+    if (need & 5) {
+      const float16x8_t t0r = vaddq_f16(ar, cr), t0i = vaddq_f16(ai, ci), t2r = vaddq_f16(br, dr), t2i = vaddq_f16(bi, di);
+      if (need & 1) { vst1q_f16(re + x, vaddq_f16(t0r, t2r)); vst1q_f16(im + x, vaddq_f16(t0i, t2i)); }
+      if (need & 4) { vst1q_f16(re + 2 * st + x, vsubq_f16(t0r, t2r)); vst1q_f16(im + 2 * st + x, vsubq_f16(t0i, t2i)); }
+    }
+    if (need & 10) {
+      const float16x8_t t1r = vsubq_f16(ar, cr), t1i = vsubq_f16(ai, ci), t3r = vsubq_f16(br, dr), t3i = vsubq_f16(bi, di);
+      if (need & 2) { vst1q_f16(re + st + x, vaddq_f16(t1r, t3i)); vst1q_f16(im + st + x, vsubq_f16(t1i, t3r)); }
+      if (need & 8) { vst1q_f16(re + 3 * st + x, vsubq_f16(t1r, t3i)); vst1q_f16(im + 3 * st + x, vaddq_f16(t1i, t3r)); }
+    }
+  }
+  if (x < cols) tail_dec16(re, im, st, x, cols, 4, w, 0, 0);
+}
+// ai: dec_tw_for's tables rounded to fp16, 8 past each stage's end for the vector loads; a size and thread's own
+typedef struct { int rows; float16_t *tw[24]; } dec_twh_t;
+static _Thread_local dec_twh_t dec_twhs[8];
+static const dec_twh_t *dec_twh_for(const plan_t *p) {
+  int slot = 0;
+  for (; slot < 8 && dec_twhs[slot].rows; slot++) if (dec_twhs[slot].rows == p->rows) return &dec_twhs[slot];
+  if (slot == 8) slot = 7;
+  const dec_tw_t *f = dec_tw_for(p);
+  if (!f) return 0;
+  dec_twh_t *t = &dec_twhs[slot];
+  for (int s = 0; s < 24; s++) { free(t->tw[s]); t->tw[s] = 0; }
+  t->rows = p->rows;
+  for (int s = 0; s < p->nst; s++) {
+    const size_t m = (size_t)(p->len[s] / p->st[s]) * (p->st[s] - 1) * 2;
+    float16_t *w = t->tw[s] = malloc((m + 8) * sizeof(float16_t));
+    if (!w) { t->rows = 0; return 0; }
+    for (size_t i = 0; i < m; i++) w[i] = (float16_t)f->tw[s][i];
+    for (int i = 0; i < 8; i++) w[m + i] = 0;
+  }
+  return t;
+}
+static inline __attribute__((always_inline)) OB_F16 void stage_runh(const plan_t *p, const float16_t *tw, float16_t *re, float16_t *im, int cols, int pitch, int s, int from, int span, int dif) {
+  const int r = p->st[s], len = p->len[s], h = len / r;
+  const size_t st = (size_t)h * pitch;
+  for (int i0 = from; i0 < from + span; i0 += len) {
+    float16_t *br = re + (size_t)i0 * pitch, *bi = im + (size_t)i0 * pitch;
+    const float16_t *w = tw;
+    switch (r) {
+      case 4: for (int k = 0; k < h; k++, w += 6, br += pitch, bi += pitch) { if (k) rows4h(br, bi, st, cols, w, 0, dif); else rows4h(br, bi, st, cols, w, 1, dif); } break;
+      case 6: for (int k = 0; k < h; k++, w += 10, br += pitch, bi += pitch) { if (k) rows6h(br, bi, st, cols, w, 0, dif); else rows6h(br, bi, st, cols, w, 1, dif); } break;
+      case 3: for (int k = 0; k < h; k++, w += 4, br += pitch, bi += pitch) { if (k) rows3h(br, bi, st, cols, w, 0, dif); else rows3h(br, bi, st, cols, w, 1, dif); } break;
+      case 5: for (int k = 0; k < h; k++, w += 8, br += pitch, bi += pitch) { if (k) rows5h(br, bi, st, cols, w, 0, dif); else rows5h(br, bi, st, cols, w, 1, dif); } break;
+      case 2: for (int k = 0; k < h; k++, w += 2, br += pitch, bi += pitch) { if (k) rows2h(br, bi, st, cols, w, 0, dif); else rows2h(br, bi, st, cols, w, 1, dif); } break;
+      default: rows12h(br, bi, st, cols); break;   // ai: 12: a first stage, h = 1
+    }
+  }
+}
+static OB_F16 void stage_difh(const plan_t *p, const float16_t *tw, float16_t *re, float16_t *im, int cols, int pitch, int s, int from, int span) { stage_runh(p, tw, re, im, cols, pitch, s, from, span, 1); }
+static OB_F16 void stage_dith(const plan_t *p, const float16_t *tw, float16_t *re, float16_t *im, int cols, int pitch, int s, int from, int span) { stage_runh(p, tw, re, im, cols, pitch, s, from, span, 0); }
+// ai: stage_dit_keep in half precision: the last stage in time, a 4, writing only rows [0, keep] and [rows - keep, rows)
+static OB_F16 void stage_dit_keeph(const plan_t *p, const float16_t *tw, float16_t *re, float16_t *im, int cols, int pitch, int keep) {
+  const int rows = p->rows, h = rows / 4;
+  const size_t st = (size_t)h * pitch;
+  float16_t *br = re, *bi = im;
+  const float16_t *w = tw;
+  for (int k = 0; k < h; k++, w += 6, br += pitch, bi += pitch) {
+    int need = 0;
+    for (int j = 0; j < 4; j++) { const int i = k + j * h; need |= (i <= keep || i >= rows - keep) << j; }
+    if (need == 15) { if (k) rows4h(br, bi, st, cols, w, 0, 0); else rows4h(br, bi, st, cols, w, 1, 0); }
+    else if (need) rows4kh(br, bi, st, cols, w, need);
+  }
+}
+// ai: dec_groups' rule at two bytes a value: the short stages a group of rows in 32 KB takes
+static int dec_groups16(const plan_t *p, int cols, int *gsz) {
+  int group = 2;
+  while (group * 2 <= p->rows && (size_t)group * 2 * cols * 2 * sizeof(float16_t) <= 32768) group *= 2;
+  int ngrp = 0;
+  while (ngrp < p->nst && p->len[ngrp] <= group) ngrp++;
+  *gsz = ngrp ? p->len[ngrp - 1] : 1;
+  return ngrp;
+}
+OB_F16 void fft_dec_dit16(float16_t *re, float16_t *im, int rows, int cols, int pitch, int keep) {
+  const plan_t *p = plan_kind(rows, 1);
+  const dec_twh_t *t = p ? dec_twh_for(p) : 0;
+  if (!t) return;
+  int gsz;
+  const int ngrp = dec_groups16(p, cols, &gsz);
+  if (ngrp) for (int g0 = 0; g0 < rows; g0 += gsz) for (int s = 0; s < ngrp; s++) stage_dith(p, t->tw[s], re, im, cols, pitch, s, g0, gsz);
+  for (int s = ngrp; s < p->nst; s++) {
+    if (s == p->nst - 1 && p->st[s] == 4 && 2 * keep < rows) stage_dit_keeph(p, t->tw[s], re, im, cols, pitch, keep);
+    else stage_dith(p, t->tw[s], re, im, cols, pitch, s, 0, rows);
+  }
+}
+OB_F16 void fft_dec_dif16(float16_t *re, float16_t *im, int rows, int cols, int pitch) {
+  const plan_t *p = plan_kind(rows, 1);
+  const dec_twh_t *t = p ? dec_twh_for(p) : 0;
+  if (!t) return;
+  int gsz;
+  const int ngrp = dec_groups16(p, cols, &gsz);
+  for (int s = p->nst - 1; s >= ngrp; s--) stage_difh(p, t->tw[s], re, im, cols, pitch, s, 0, rows);
+  if (ngrp) for (int g0 = 0; g0 < rows; g0 += gsz) for (int s = ngrp - 1; s >= 0; s--) stage_difh(p, t->tw[s], re, im, cols, pitch, s, g0, gsz);
+}
+#endif
 #ifdef OB_V3_ON
 // ai: x86-64-v3: fft_x86.h at eight lanes (AVX), the kernels and the stages compiled for the level, taken where ob_v3()
 // ai: finds it; bit for bit the v2 transform (test/fft_dec.c)

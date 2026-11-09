@@ -26,6 +26,27 @@
 // ai: OB_NEON: arm64, where a site may also carry a kernel in NEON's own instructions beside the wrappers' form
 // ai: (ldpc.c's layer, fft.c's decoder transform, internal.h's picture sampler)
 #define OB_NEON 1
+// ai: arm64's half-precision arithmetic (FEAT_FP16, ARMv8.2: every Arm core from the Cortex-A55 and A75, Apple's
+// ai: since the A11; not the ARMv8.0 cores, A53, A57, A72, A73): a site's fp16 form is a function compiled for it
+// ai: (OB_F16) and taken where ob_f16() finds it at run time, from the kernel (HWCAP_ASIMDHP) or, where the compiler
+// ai: already targets it (Apple's arm64), always. OB_ARM_F16 0 (a lab build's define) holds every site at f32, for an
+// ai: A/B. Today the decoder's transforms (fft.c fft_dec_dif16 and fft_dec_dit16, lizard_phy.c frame_spectrum).
+#ifndef OB_ARM_F16
+#define OB_ARM_F16 1
+#endif
+#if OB_ARM_F16 && defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
+#define OB_F16_ON 1
+#define OB_F16
+static inline int ob_f16(void) { return 1; }
+#elif OB_ARM_F16 && defined(__clang__) && defined(__linux__)
+#include <sys/auxv.h>
+#ifndef HWCAP_ASIMDHP
+#define HWCAP_ASIMDHP (1 << 10)
+#endif
+#define OB_F16_ON 1
+#define OB_F16 __attribute__((target("fp16")))
+static inline int ob_f16(void) { return (getauxval(AT_HWCAP) & HWCAP_ASIMDHP) != 0; }
+#endif
 
 // ai: One type for every lane view, as wasm's v128_t is: four int32 lanes carry the bits and each wrapper
 // ai: reinterprets them as the lanes its operation works on.
