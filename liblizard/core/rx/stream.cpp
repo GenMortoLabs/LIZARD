@@ -223,7 +223,7 @@ class Link {
     if ((!f.luma && !f.raw) || !f.width || !f.height || (f.luma && f.stride < f.width)) return;
     const Crops k = cropsOf(f.width, f.height, two_);
     const bool wide = f.width >= f.height;
-    const uint32_t w = wide ? k.n * k.side : k.side, h = wide ? k.side : k.n * k.side;
+    const uint32_t w = wide ? k.n * k.w : k.w, h = wide ? k.h : k.n * k.h;
     Out o;
     bool send = false;
     {

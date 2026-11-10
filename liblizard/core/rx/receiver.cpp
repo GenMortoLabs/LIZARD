@@ -60,7 +60,7 @@ constexpr double FILL_MS = 500;
 // ai: centre is the array's within a few pixels on the S26's calibration). A 2:1 half's is the middle of its inner
 // ai: edge, a 1:1 square's its centre; both decoders fit the lens about it (liblizard/src/acquire.c, register.mjs LENS).
 inline void axisOf(const CameraFrame& f, const Crops& c, int k, float* a) { a[0] = 0.5f * f.width - c.x[k]; a[1] = 0.5f * f.height - c.y[k]; }
-Crops cropsOf(const CameraFrame& f, const std::string& layout) { return lizard::cropsOf(f.width, f.height, layout == "2:1"); }
+Crops cropsOf(const CameraFrame& f, const std::string& layout) { return lizard::cropsOf(f.width, f.height, layout == "2:1", f.whole); }
 
 // ai: the symbol's side in camera pixels, the mean of its quad's four edges
 double sideOf(const float* c) {
@@ -198,11 +198,13 @@ class GpuReceiver : public Receiver {
   // ai: decoder took before it (Replay::finish waits for them)
   std::deque<std::shared_ptr<Replay>> stagingReplay;
   std::deque<double> stagingAt;   // ai: beside each staged frame, when it was staged (the receiver's ms), for FILL_MS
-  // ai: The crop the plan must cover: the largest side the camera has sent (a frame larger than the ring plans the
-  // ai: lanes and the ring again for it; a smaller one goes onto the ring as it is, at its own size). planned: the lanes and ring cover shapeW; false from the first frame, and again when a larger
-  // ai: crop arrives (the camera reopened at a higher resolution), until the decoder thread has planned. failedW: a
-  // ai: side whose plan threw (out of memory): its frames are dropped without asking again, until the side changes.
-  uint32_t shapeW = 0, failedW = 0;
+  // ai: The crop the plan must cover: the largest width and the largest height the camera's crops have had (a crop
+  // ai: wider or taller than the ring plans the lanes and the ring again for it; a smaller one goes onto the ring as it
+  // ai: is, at its own size; a file's 2:1 halves are not square, crops.h). planned: the lanes and ring cover shapeW x
+  // ai: shapeH; false from the first frame, and again when a larger crop arrives (the camera reopened at a higher
+  // ai: resolution), until the decoder thread has planned. failedW x failedH: a crop whose plan threw (out of memory):
+  // ai: its frames are dropped without asking again, until the crop's size changes.
+  uint32_t shapeW = 0, shapeH = 0, failedW = 0, failedH = 0;
   bool planned = false;
   // ai: push holds it shared around an enqueue and its staging; the decoder thread holds it exclusive while a plan
   // ai: clears the lanes and rebuilds the ring, so no enqueue is under way on a ring that goes
@@ -384,7 +386,7 @@ void GpuReceiver::recover(const std::string& what, std::deque<std::unique_ptr<In
 void GpuReceiver::push(const CameraFrame& f) {
   const double now = this->now();
   const Crops cr = cropsOf(f, cfg.layout);
-  const uint32_t side = cr.side;
+  const uint32_t cw = cr.w, ch = cr.h;
   const int crops = cr.n;
   const uint32_t* cx = cr.x;
   const uint32_t* cy = cr.y;
@@ -396,16 +398,19 @@ void GpuReceiver::push(const CameraFrame& f) {
     if (!opened) openWindow(now);
     win.arrived++;
     stamps.put(f.tag, f.timestampNs, stream);
-    if (side > shapeW && side != failedW) { shapeW = side; planned = false; failedW = 0; }
+    const auto refused = [&] { return failedW && cw == failedW && ch == failedH; };
+    if ((cw > shapeW || ch > shapeH) && !refused()) {
+      shapeW = std::max(shapeW, cw); shapeH = std::max(shapeH, ch); planned = false; failedW = failedH = 0;
+    }
     // ai: a file's frame (waitForRoom) waits here for the plan, the staging's room (a batch's worth while batches fill:
     // ai: the ring holds the batches in flight and one more) and the end of a recover, looked at
-    // ai: every 2 ms (the decoder thread takes the staging without a word); a stop or a side the plan refused still drops
+    // ai: every 2 ms (the decoder thread takes the staging without a word); a stop or a crop the plan refused still drops
     if (waits)
-      while (!stop && side != failedW && (!planned || recovering || (int)staging.size() + crops > (fill ? 1 : STAGE_BATCHES) * batchSize)) {
+      while (!stop && !refused() && (!planned || recovering || (int)staging.size() + crops > (fill ? 1 : STAGE_BATCHES) * batchSize)) {
         if (!planned) cv.notify_all();
         cv.wait_for(l, std::chrono::milliseconds(2));
       }
-    if (side == failedW || stop) dropped = true;
+    if (refused() || stop) dropped = true;
     else {
       if (!planned) {
         // ai: no ring covers this crop yet (the first frame, or a larger one than the plan's): the decoder thread
@@ -425,9 +430,9 @@ void GpuReceiver::push(const CameraFrame& f) {
   uint64_t ready = 0;
   for (int k = 0; k < crops; k++) {
     try {
-      if (f.raw) got[k] = fh->enqueueRaw(*f.raw, cx[k], cy[k], side, side, f.tag);
-      else if (f.hb && ci) got[k] = fh->enqueueCamera(*ci, f.hb, cx[k], cy[k], side, side, f.tag);
-      else if (f.luma) got[k] = fh->enqueueLuma(f.luma + (size_t)cy[k] * f.stride + cx[k], side, side, f.stride, f.tag);
+      if (f.raw) got[k] = fh->enqueueRaw(*f.raw, cx[k], cy[k], cw, ch, f.tag);
+      else if (f.hb && ci) got[k] = fh->enqueueCamera(*ci, f.hb, cx[k], cy[k], cw, ch, f.tag);
+      else if (f.luma) got[k] = fh->enqueueLuma(f.luma + (size_t)cy[k] * f.stride + cx[k], cw, ch, f.stride, f.tag);
       if (got[k]) { float a[2]; axisOf(f, cr, k, a); got[k]->axis = axisWord(a[0], a[1]); }
     } catch (const std::exception& e) {
       std::lock_guard<std::mutex> l(mu);
@@ -495,19 +500,19 @@ void GpuReceiver::decoderLoop() {
     deliver(out, k);
   };
   while (!stop) {
-    uint32_t want = 0;
+    uint32_t wantW = 0, wantH = 0;
     if (!fh) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); continue; }   // ai: no variant left (recover)
     try {
       {
         std::lock_guard<std::mutex> l(mu);
-        if (!planned && shapeW) want = shapeW;
+        if (!planned && shapeW) { wantW = shapeW; wantH = shapeH; }
       }
-      if (want) {
-        // ai: A plan clears the lanes and the ring (front.cpp plan: grown to the largest side seen), so first the
+      if (wantW) {
+        // ai: A plan clears the lanes and the ring (front.cpp plan: grown to the largest crop seen), so first the
         // ai: batches in flight finish on their lanes and the frames staged on the old ring are let go (their camera
         // ai: buffers went back once their ingests ran), with no push inside an enqueue meanwhile (planMu). The
         // ai: first plan and a re-plan for a larger crop are one path. A plan that fails leaves the receiver with no
-        // ai: lanes: its side is remembered (failedW) and a smaller crop later plans again.
+        // ai: lanes: its crop is remembered (failedW x failedH) and a crop of another size later plans again.
         std::unique_lock<std::shared_mutex> planHeld(planMu);
         while (!flight.empty()) {
           flight.front()->ticket->wait();
@@ -523,12 +528,12 @@ void GpuReceiver::decoderLoop() {
         for (auto* s : old) fh->release(s);
         for (auto& r : oldReplay) if (r) r->release(1);
         fh->bt.ringBatches = fill ? fh->bt.inflight + 1 : 1;
-        fh->plan(want, want);
+        fh->plan(wantW, wantH);
         std::lock_guard<std::mutex> l(mu);
         planned = true;
         error.clear();
-        if (cfg.log) cfg.log("plan: " + std::to_string(want) + " x " + std::to_string(want) + ", batches of " + std::to_string(fh->size()));
-        want = 0;
+        if (cfg.log) cfg.log("plan: " + std::to_string(wantW) + " x " + std::to_string(wantH) + ", batches of " + std::to_string(fh->size()));
+        wantW = wantH = 0;
       }
       std::vector<Slot*> batch;
       std::vector<std::shared_ptr<Replay>> batchReplay;
@@ -588,9 +593,9 @@ void GpuReceiver::decoderLoop() {
       recover(e.what(), flight, flightKept);
     } catch (const std::exception& e) {
       std::lock_guard<std::mutex> l(mu);
-      error = (want ? "plan " + std::to_string(want) + " x " + std::to_string(want) + ": " : std::string()) + e.what();
-      if (want) { failedW = want; shapeW = 0; planned = false; }
-      if (cfg.log) cfg.log(std::string(want ? "plan: " : "decoder: ") + e.what());
+      error = (wantW ? "plan " + std::to_string(wantW) + " x " + std::to_string(wantH) + ": " : std::string()) + e.what();
+      if (wantW) { failedW = wantW; failedH = wantH; shapeW = shapeH = 0; planned = false; }
+      if (cfg.log) cfg.log(std::string(wantW ? "plan: " : "decoder: ") + e.what());
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
   }
@@ -847,7 +852,7 @@ void CpuReceiver::push(const CameraFrame& in) {
       { std::lock_guard<std::mutex> l(mu); flight.push_back(f.tag); }
       float a[2];
       axisOf(f, c, k, a);
-      bool took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.side, c.side, f.tag, held.load(), t, a[0], a[1]);
+      bool took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.w, c.h, f.tag, held.load(), t, a[0], a[1]);
       if (!took && waits) {
         // ai: a file's frame (waitForRoom) waits for a worker, offered again each millisecond (a worker booting, or busy);
         // ai: the wait counts once as the pressure a lost frame is, so the pool grows to meet a file as a camera's would
@@ -856,12 +861,12 @@ void CpuReceiver::push(const CameraFrame& in) {
         pool->lost(share);
         while (!took && !closing) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.side, c.side, f.tag, held.load(), t, a[0], a[1]);
+          took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.w, c.h, f.tag, held.load(), t, a[0], a[1]);
         }
       }
       if (took) {
         // ai: Save replays: the crop a worker took, as it took it
-        if (r) r->frame(f.luma + (size_t)c.y[k] * f.stride + c.x[k], c.side, c.side, f.stride, f.timestampNs / 1e6, false, a[0], a[1]);
+        if (r) r->frame(f.luma + (size_t)c.y[k] * f.stride + c.x[k], c.w, c.h, f.stride, f.timestampNs / 1e6, false, a[0], a[1]);
         continue;
       }
       lost++;

@@ -91,6 +91,9 @@ struct Frame {
   // ai: Android's the sensor's own timestamp, the clock its capture results carry (Capture::ns), not moved
   int64_t ns = 0;
   uint64_t seq = 0;                // ai: the camera's frame count
+  // ai: a file's frame (the File camera's images and videos, media.cpp, alone): never cropped, only sliced: 1:1 whole,
+  // ai: 2:1 cut in half along its long side, where a camera's frame gives its centre square or 2:1 region (rx/crops.h)
+  bool whole = false;
   uint64_t hold = 0;               // ai: hb's token for release, 0 for a frame nothing holds past the sink's call
 };
 

@@ -167,8 +167,8 @@ LIZ_API int liz_layout_rects(int w, int h, int layout, int rect[2][4]) {
     for (int k = 0; k < c.n; k++) {
       rect[k][0] = (int)c.x[k];
       rect[k][1] = (int)c.y[k];
-      rect[k][2] = (int)c.side;
-      rect[k][3] = (int)c.side;
+      rect[k][2] = (int)c.w;
+      rect[k][3] = (int)c.h;
     }
     return c.n;
   });

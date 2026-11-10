@@ -55,6 +55,7 @@ struct CameraFrame {
   uint32_t width = 0, height = 0, stride = 0;
   int64_t timestampNs = 0;
   uint64_t tag = 0;
+  bool whole = false;   // ai: a file's frame: never cropped, at 2:1 its two halves (crops.h; cam::Frame::whole)
 };
 
 // ai: f with its raw frame developed to luma on the calling thread into `luma` (the caller's, good until its next use),

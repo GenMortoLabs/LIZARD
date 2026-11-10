@@ -114,6 +114,7 @@ class MediaCamera : public Camera {
       f.stride = src_->w;
       f.ns = steadyNs();
       f.seq = k;
+      f.whole = true;
       sink_(f);
       {
         std::lock_guard<std::mutex> l(mu_);

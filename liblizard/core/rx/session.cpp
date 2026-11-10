@@ -676,6 +676,7 @@ struct Session::Impl {
     c.stride = luma ? f.stride : 0;
     c.timestampNs = f.ns;
     c.tag = tag;
+    c.whole = f.whole;
     if (f.hold) {
       std::lock_guard<std::mutex> l(holdMu);
       holds[tag] = Hold{from, f.hold};
@@ -711,9 +712,9 @@ struct Session::Impl {
   // ai: lock; then the newest, the newest before it the spare
   void keepCrop(const cam::Frame& f, bool two, uint64_t seq, int64_t now) {
     // ai: the region the decoder reads (crops.h): the centre square, or the 2:1 halves whole
-    const Crops c = cropsOf(f.width, f.height, two);
-    const uint32_t gx = c.x[0], gy = c.y[0], gw = c.x[c.n - 1] - c.x[0] + c.side, gh = c.y[c.n - 1] - c.y[0] + c.side;
-    if (!c.side) return;
+    const Crops c = cropsOf(f.width, f.height, two, f.whole);
+    const uint32_t gx = c.x[0], gy = c.y[0], gw = c.x[c.n - 1] - c.x[0] + c.w, gh = c.y[c.n - 1] - c.y[0] + c.h;
+    if (!c.w || !c.h) return;
     std::shared_ptr<Crop> k;
     {
       std::lock_guard<std::mutex> l(prevMu);
