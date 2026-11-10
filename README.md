@@ -31,55 +31,7 @@ In signal-processing terms this is OFDM, the modulation used by Wi-Fi and 4G/5G,
 
 ## What a frame looks like
 
-<table>
-<tr>
-<td align="center" valign="bottom"><img src="docs/frame-ring64.png" width="270" alt="A frame in the 64 ring"><br>the 64 ring</td>
-<td align="center" valign="bottom"><img src="docs/frame-ring128.png" width="242" alt="A frame in the 128 ring"><br>the 128 ring (the default)</td>
-<td align="center" valign="bottom"><img src="docs/frame-ring256.png" width="228" alt="A frame in the 256 ring"><br>the 256 ring</td>
-</tr>
-</table>
-
-One frame of LIZARD-480 (a 1024-sample picture, 58 blocks) in each ring, as the sender paints it and at one scale:
-the picture is the same, the border grows outwards with the ring, and the anchors are a 3 x 3, 5 x 5 and 7 x 7 grid.
-
-```
- ▄▄▄▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- ██▀▀▀▀▀▀▀▀ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
- ██  ▄▄▄▄▄▄    ▄▄  ▄▄    ▄▄    ▄▄  ▄▄  ▄▄▄▄    ▄▄    ▄▄  ▄▄  ▄▄▄
- ██  ██████    ▀▀  ▀▀    ▀▀    ▀▀  ▀▀  ▀▀▀▀    ▀▀    ▀▀  ▀▀  ▀▀▀
- ██  ██████
- ▀▀  ▀▀▀▀▀▀
- ██         ┌───────────────────────────────────────────────────
- ██         │
- ██  ▄▄     │
- ██  ██     │
- ██  ▀▀     │   the picture
- ██  ▄▄     │
- ██  ██     │   grey, looks like noise;
- ██  ██     │   its spatial frequencies
- ██  ▀▀     │   carry the data
- ██  ▄▄     │
- ██  ▀▀     │
- ██         │
- ██  ▄▄     │
- ██  ▀▀     │
- ██  ▄▄     │
- ██  ▀▀     │
- ██  ▄▄     │
- ██  ▀▀     │
- ██  ▄▄     │
- ██  ▀▀     │
- ██  ▄▄     │
- ██  ▀▀     │
- ██  ▄▄     │
- ██  ▀▀     │
- ██  ▄▄     │
- ██  ▀▀     │
-```
-
-The top-left corner of a real symbol, module for module: LIZARD-64 in the 64 ring (158 modules a side), each
-character one module wide and two tall (`▀` the top module dark, `▄` the bottom, `█` both). The 128 ring, the
-default, and the 256 ring have the same border with longer sides.
+![One frame in each ring: LIZARD-64, LIZARD-128 and LIZARD-256](docs/frames.png)
 
 - **The picture** is n x n samples (384 to 1536 a side, depending on how much the frame carries), drawn on the
   screen at whole pixels. Only data is painted inside it, apart from the anchors.
