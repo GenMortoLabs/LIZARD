@@ -58,8 +58,12 @@ class ReceiveState(private val a: MainActivity) {
     // ai: a back camera the session lists (its id without the backend's "android:"), labelled as the menu shows it
     data class Lens(val id: String, val label: String)
     // ai: one of the camera's modes (session.h camera(): a resolution in a format, its preview stream's size)
-    class Mode(val index: Int, val w: Int, val h: Int, val fps: Double, val format: String, val previewW: Int, val previewH: Int) {
+    // ai: fpsMin the range's bottom: below fps a variable range (cam/android.cpp ratesOf: the 15 to 60, run with the lock
+    // ai: off alone), else fps
+    class Mode(val index: Int, val w: Int, val h: Int, val fps: Double, val fpsMin: Double, val format: String, val previewW: Int, val previewH: Int) {
         val size get() = "${w}x$h"
+        val varies get() = fpsMin > 0 && fpsMin < fps - 0.01
+        fun sameRate(o: Mode) = kotlin.math.abs(fps - o.fps) < 0.01 && varies == o.varies
     }
     // ai: the camera's pipeline slowing (the heat warning's "Camera at N of 60 frames a second.")
     data class CameraSlow(val now: Int, val max: Int)
@@ -377,7 +381,7 @@ class ReceiveState(private val a: MainActivity) {
     // ai: the format at the size kept (a RAW format at any), or the rate at both; each at the rate kept where the lens
     // ai: offers it, else its fastest (the modes come fastest first): kept by the session as the camera's; the surface
     // ai: sized to its preview first, since a running stream starts again in it at once
-    private fun atRate(ms: List<Mode>) = ms.firstOrNull { kotlin.math.abs(it.fps - (mode?.fps ?: 0.0)) < 0.01 } ?: ms.firstOrNull()
+    private fun atRate(ms: List<Mode>) = mode?.let { m -> ms.firstOrNull { it.sameRate(m) } } ?: ms.firstOrNull()
     fun chooseResolution(res: String) {
         val cur = mode
         val m = atRate(modes.filter { it.size == res && it.format == (cur?.format ?: "auto") }) ?: atRate(modes.filter { it.size == res && it.format == "auto" }) ?: return
@@ -388,9 +392,10 @@ class ReceiveState(private val a: MainActivity) {
         val m = atRate(modes.filter { it.format == fmt && it.size == (cur?.size ?: "1920x1080") }) ?: atRate(modes.filter { it.format == fmt }) ?: return
         pickMode(m)
     }
-    fun chooseFps(f: Double) {
+    // ai: Frame rate: the mode of the size and format running at that rate (r one of them: a fixed rate or a range)
+    fun chooseRate(r: Mode) {
         val cur = mode ?: return
-        val m = modes.firstOrNull { it.size == cur.size && it.format == cur.format && kotlin.math.abs(it.fps - f) < 0.01 } ?: return
+        val m = modes.firstOrNull { it.size == cur.size && it.format == cur.format && it.sameRate(r) } ?: return
         pickMode(m)
     }
     private fun pickMode(m: Mode) {
@@ -534,7 +539,7 @@ class ReceiveState(private val a: MainActivity) {
     private fun modesOf(j: JsonObject): List<Mode> = (j["modes"] as? JsonArray)?.mapIndexedNotNull { i, e ->
         (e as? JsonObject)?.let { o ->
             val p = (o["preview"] as? JsonArray)?.map { ((it as? JsonPrimitive)?.doubleOrNull ?: 0.0).toInt() }
-            Mode(i, o.num("w").toInt(), o.num("h").toInt(), o.num("fps"), o.str("format"), p?.getOrNull(0) ?: 0, p?.getOrNull(1) ?: 0)
+            Mode(i, o.num("w").toInt(), o.num("h").toInt(), o.num("fps"), o.num("fpsMin"), o.str("format"), p?.getOrNull(0) ?: 0, p?.getOrNull(1) ?: 0)
         }
     }.orEmpty()
 

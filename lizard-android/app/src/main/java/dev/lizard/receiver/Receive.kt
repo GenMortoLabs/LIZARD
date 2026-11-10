@@ -251,12 +251,16 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         // ai: supported" (as if it can until the session describes the lens)
         val locks = r.lockBar?.isEmpty() ?: true
         out += phaseLockSetting(s.lock != "off", locks) { on -> a.change(s.copy(lock = if (on) "on" else "off")) }
-        // ai: the rates the lens offers at this size and format (cam/android.cpp ratesOf), at most 60 while it holds the
-        // ai: lock, where there is a choice
-        val rates = lockedRates(r.modes.filter { it.size == res && it.format == fmt }.map { it.fps }.distinct().sortedDescending(), locks && s.lock != "off")
-        val fps = r.mode?.fps ?: rates.firstOrNull() ?: 0.0
-        if (rates.size > 1) out += ChipChoice("Frame rate", fpsText(fps), rates.map { fpsText(it) to fpsText(it) }) { v ->
-            rates.firstOrNull { fpsText(it) == v }?.let { r.chooseFps(it) }
+        // ai: the rates the lens offers at this size and format (cam/android.cpp ratesOf: fixed rates, and the variable
+        // ai: range "15–60" after its top's), in the lens's order; while it holds the lock at most 60 and no range (the
+        // ai: session runs the fixed in its place: session.cpp lockMode); shown where there is a choice
+        val held = locks && s.lock != "off"
+        val all = r.modes.filter { it.size == res && it.format == fmt }
+        val shown = lockedRates(all.map { it.fps }.distinct(), held).toSet()
+        val rates = all.filter { it.fps in shown && !(held && it.varies) }.fold(listOf<ReceiveState.Mode>()) { acc, m -> if (acc.any { it.sameRate(m) }) acc else acc + m }
+        val cur = r.mode?.let { m -> rates.firstOrNull { it.sameRate(m) } } ?: rates.firstOrNull()
+        if (rates.size > 1) out += ChipChoice("Frame rate", cur?.let { rateText(it) } ?: "", rates.map { rateText(it) to rateText(it) }) { v ->
+            rates.firstOrNull { rateText(it) == v }?.let { r.chooseRate(it) }
         }
         out += zoom(r.zoomRange)
     }
@@ -317,5 +321,8 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
 }
 
 // ai: a rate as the Frame rate menu shows it: whole where it is, else two places (the desktop's ReceiveState.fpsText)
+// ai: a Frame rate chip: a fixed rate as its number, a variable range as its bottom and top ("15–60")
+private fun rateText(m: ReceiveState.Mode) = if (m.varies) "${fpsText(m.fpsMin)}–${fpsText(m.fps)}" else fpsText(m.fps)
+
 private fun fpsText(v: Double) =
     if (kotlin.math.abs(v - v.roundToInt()) < 0.01) "${v.roundToInt()}" else String.format(java.util.Locale.ROOT, "%.2f", v)

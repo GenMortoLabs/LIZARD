@@ -9,9 +9,10 @@
 // ai: luma by the receiver: ingest/develop.h). P010 is not offered here: the NDK's image reader takes no YCBCR_P010 and
 // ai: its outputs no dynamic range profile. The rates (since 2026-11-01, a mode each): every fixed range the lens
 // ai: lists for a regular capture session (CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES; the constrained high-speed
-// ai: session's own list is never read: the NDK has no such session), past 60 too since 2026-11-08 (the session runs a
-// ai: rate past 60 only with the phase lock off: session.h phaseLock), the fastest first; the session's pick at 60 is
-// ai: the default; with none fixed, the highest top. Each mode carries its preview size: the largest PRIVATE size of the capture's shape
+// ai: session's own list is never read: the NDK has no such session, and it was declined 2026-11-10), past 60 too
+// ai: since 2026-11-08 (the session runs a rate past 60 only with the phase lock off: session.h phaseLock), the fastest
+// ai: first, and the variable range of the highest top after its fixed one (ratesOf; the lock off alone); the
+// ai: session's pick at 60 is the default; with none fixed, the highest top. Each mode carries its preview size: the largest PRIVATE size of the capture's shape
 // ai: up to 1280 wide (it is only for aiming), else the capture's.
 // ai: The request (TEMPLATE_RECORD), each enhancement off where the lens lists its off mode (the camera is a machine
 // ai: vision camera: STATUS "The ISP's enhancements off"): noise reduction, edge enhancement, hot pixel correction,
@@ -208,18 +209,27 @@ Size largest(const std::vector<Size>& v) {
 // ai: the most a second a camera runs at before a mode is asked (the phase lock's rate, session.cpp LOCK_FPS)
 constexpr int32_t OPEN_FPS = 60;
 // ai: the rates a mode can take: each fixed range (a fixed range holds the exposure time to the frame), the fastest
-// ai: first; with none, the highest top; {{0, 0}} where none is listed. Past 60 since 2026-11-08 (with the lock off)
+// ai: first; with none, the highest top; {{0, 0}} where none is listed. Past 60 since 2026-11-08 (with the lock off).
+// ai: Since 2026-11-10 also the variable range of the highest top, the widest there (the S26's 15 to 60: auto-exposure
+// ai: may lengthen a frame past the top's period), right after the fixed range of its top: run with the lock off alone
+// ai: (session.cpp lockMode takes the fixed in its place), the fixed listed first so a pick at that rate takes it
 std::vector<std::pair<int32_t, int32_t>> ratesOf(const Chars& c) {
   const std::vector<int32_t> v = c.i32s(ACAMERA_CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
   std::vector<std::pair<int32_t, int32_t>> fixed;
-  std::pair<int32_t, int32_t> top{0, 0};
+  std::pair<int32_t, int32_t> top{0, 0}, span{0, 0};
   for (size_t i = 0; i + 1 < v.size(); i += 2) {
     if (v[i] == v[i + 1] && std::find(fixed.begin(), fixed.end(), std::make_pair(v[i], v[i + 1])) == fixed.end())
       fixed.push_back({v[i], v[i + 1]});
     if (v[i + 1] > top.second) top = {v[i], v[i + 1]};
+    if (v[i] < v[i + 1] && (v[i + 1] > span.second || (v[i + 1] == span.second && v[i] < span.first))) span = {v[i], v[i + 1]};
   }
+  if (fixed.empty()) return {top};
   std::sort(fixed.begin(), fixed.end(), [](auto& a, auto& b) { return a.second > b.second; });
-  return fixed.empty() ? std::vector<std::pair<int32_t, int32_t>>{top} : fixed;
+  if (span.second > 0) {
+    const auto at = std::find_if(fixed.begin(), fixed.end(), [&](auto& x) { return x.second < span.second; });
+    fixed.insert(at, span);
+  }
+  return fixed;
 }
 
 // ai: the preview: the largest PRIVATE size of the capture's shape up to 1280 wide, else the capture's own
@@ -613,6 +623,7 @@ bool AndroidCamera::start(const Mode& mode, Sink sink, Ended ended, std::string&
   corrupt_ = 0;
   images_ = 0;
   n_ = 0;
+  lineAt_ = 0;   // ai: the first `camera:` line a stream's own (its images counted from this stream's 0)
   if (!open(why) || !configure(why)) {
     stop();
     return false;

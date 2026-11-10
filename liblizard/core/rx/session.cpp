@@ -796,13 +796,22 @@ struct Session::Impl {
     if (numOrNull(m, "w").is_number() && numOrNull(m, "h").is_number() && numOrNull(m, "fps").is_number()) {
       const double w = m["w"].get<double>(), h = m["h"].get<double>(), f = m["fps"].get<double>();
       const std::string fmt = text(m, "format");
-      int best = -1;
+      // ai: the range's bottom where it was kept (since 2026-11-10: Android's fixed 60 and its 15 to 60 share a top), a
+      // ai: mode of another bottom taken only where none has it (one kept before, or a camera listing it otherwise)
+      const bool hasMin = numOrNull(m, "fpsMin").is_number();
+      const double fm = hasMin ? m["fpsMin"].get<double>() : 0;
+      int best = -1, other = -1;
       for (size_t i = 0; i < modes.size(); i++) {
         const cam::Mode& x = modes[i];
         if (x.width != w || x.height != h || std::fabs(x.fps - f) >= 0.01) continue;
+        if (hasMin && std::fabs(x.fpsMin - fm) >= 0.01) {
+          if (other < 0 && x.format == fmt) other = int(i);
+          continue;
+        }
         if (x.format == fmt) return int(i);
         if (best < 0 || (modes[size_t(best)].compressed && !x.compressed)) best = int(i);
       }
+      if (other >= 0) return other;
       if (best >= 0) return best;
     }
     const int p = cam::pick(modes, 1920, 1080, 60);
@@ -827,7 +836,8 @@ struct Session::Impl {
     } else if (id == "mode") {
       const int i = int(value);
       if (i < 0 || size_t(i) >= modes.size()) return;
-      k["mode"] = {{"w", modes[size_t(i)].width}, {"h", modes[size_t(i)].height}, {"fps", modes[size_t(i)].fps}, {"format", modes[size_t(i)].format}};
+      k["mode"] = {{"w", modes[size_t(i)].width}, {"h", modes[size_t(i)].height}, {"fps", modes[size_t(i)].fps}, {"fpsMin", modes[size_t(i)].fpsMin},
+                   {"format", modes[size_t(i)].format}};
     } else {
       return;
     }
@@ -1037,11 +1047,14 @@ struct Session::Impl {
     if (m < 0 || size_t(m) >= modes.size() || !lockOn || !camera || !camera->delayBar().empty()) return m;
     const cam::Mode& a = modes[size_t(m)];
     const double top = LOCK_FPS * 1.005;
-    if (a.fps <= top) return m;
+    // ai: a variable range (Android's 15 to 60, 2026-11-10) lets a frame run past the top's period, which the lock's
+    // ai: delay cannot steer: with the lock on the fixed range at its rate (or the fastest at most 60) in its place
+    const auto varies = [](const cam::Mode& x) { return x.fpsMin > 0 && x.fpsMin < x.fps - 0.01; };
+    if (a.fps <= top && !varies(a)) return m;
     int best = -1, near = -1;
     for (size_t i = 0; i < modes.size(); i++) {
       const cam::Mode& x = modes[i];
-      if (x.width != a.width || x.height != a.height || x.fps > top) continue;
+      if (x.width != a.width || x.height != a.height || x.fps > top || varies(x)) continue;
       if (x.format == a.format && (best < 0 || x.fps > modes[size_t(best)].fps)) best = int(i);
       if (near < 0 || x.fps > modes[size_t(near)].fps || (x.fps == modes[size_t(near)].fps && modes[size_t(near)].compressed && !x.compressed)) near = int(i);
     }
@@ -1076,7 +1089,9 @@ struct Session::Impl {
       const int r = lockMode(mode);
       if (streaming && r != mode) {
         std::string w;
-        say("phase lock on: the camera from " + gnum(modes[size_t(mode)].fps) + " to " + gnum(modes[size_t(r)].fps) + " a second");
+        // ai: a range named by its bottom and top (Android's 15 to 60), a fixed rate by its number
+        const auto rate = [](const cam::Mode& x) { return x.fpsMin > 0 && x.fpsMin < x.fps - 0.01 ? gnum(x.fpsMin) + "-" + gnum(x.fps) : gnum(x.fps); };
+        say("phase lock on: the camera from " + rate(modes[size_t(mode)]) + " to " + rate(modes[size_t(r)]) + " a second");
         stopLocked();
         if (!startLocked(r, w)) {
           const uint64_t g = genNow();
