@@ -22,6 +22,8 @@ import dev.lizard.ui.FoldKey
 import dev.lizard.ui.Folds
 import dev.lizard.ui.Icons
 import dev.lizard.ui.Press
+import dev.lizard.ui.ReceiveUpload
+import dev.lizard.ui.UploadItem
 import dev.lizard.ui.ReceiveHost
 import dev.lizard.ui.RunState
 import dev.lizard.ui.RxPhase
@@ -96,6 +98,13 @@ class DesktopReceive(private val app: App) : ReceiveHost {
     override fun clearNote() { if (r.driverNote.isNotEmpty()) r.driverNote = "" else r.fileNote = "" }
     override val running get() = r.running
     override val starting get() = r.phase == RxPhase.Starting
+    override val startable get() = r.startable
+    // ai: the file camera's choice in the camera's place while it is idle (Send's File and Folder; a folder's line its
+    // ai: files' count, as Send's)
+    override val upload get() = if (!r.fileCamera || r.running) null else ReceiveUpload(
+        listOf(Act("File", icon = Icons.file) { r.chooseFiles() }, Act("Folder", icon = Icons.folder) { r.chooseFolders() }),
+        r.picks.map { UploadItem(it.key, it.file.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
+        if (r.picks.isEmpty()) "" else Readout.bytes(r.picks.sumOf { it.size }), true, { r.removeFile(it) }, { r.clearFiles() })
     override fun toggleCamera() = r.toggle()
     // ai: a phone with no USB driver chosen (Windows, UsbDriver): its one action in Start's place
     override val access get() = r.driverFor?.let { Access(Act(if (r.driverBusy) "Installing the USB driver" else "Install USB driver") { r.installDriver() }) }
@@ -128,7 +137,8 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         val out = mutableListOf<Setting>()
         // ai: GPU and CPU; with neither chosen the decoder is auto's and the one it runs on is shown
         out += Choice("Decoder", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "GPU", "cpu" to "CPU")) { r.chooseDecoder(it) }
-        out += Choice("Camera", r.driverFor?.id ?: r.camera.ifEmpty { r.cameras.firstOrNull()?.id ?: "" }, r.cameraOptions, blank = "Camera", onOpen = { r.refreshCameras() }) { r.chooseCameraOption(it) }
+        // ai: the file camera's field says File (its files are the camera area's, ReceiveState.picks)
+        out += Choice("Camera", r.driverFor?.id ?: if (r.fileCamera) "file:" else r.camera.ifEmpty { r.cameras.firstOrNull()?.id ?: "" }, r.cameraOptions, blank = "Camera", onOpen = { r.refreshCameras() }) { r.chooseCameraOption(it) }
         if (r.usb?.installed == true) out += Press(Act("Remove USB driver") { r.removeDriver() }, enabled = !r.driverBusy)
         // ai: a phone by its address (ReceiveState.askAddress): asked for, or the camera already one
         if (r.askAddress || r.typedPhone != null)

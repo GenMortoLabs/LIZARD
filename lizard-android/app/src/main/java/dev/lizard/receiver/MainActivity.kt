@@ -165,12 +165,16 @@ class MainActivity : ComponentActivity() {
     // ai: photos and videos through the system's photo picker (2026-10-23): no permission, each one a file item
     private val chooseMedia = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { us -> if (us.isNotEmpty()) send.pick(us) }
     internal fun pickMedia() { try { chooseMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) } catch (_: ActivityNotFoundException) {} }
-    // ai: Receive's File (Settings' Camera menu, 2026-11-07): an image, a video or a .lizard to play as the camera
-    // ai: (ReceiveState.chooseFile); a .lizard comes as a ZIP or untyped
-    private val chooseReceived = registerForActivityResult(ActivityResultContracts.OpenDocument()) { u -> if (u != null) receive.chooseFile(u) }
-    internal fun pickReceiveFile() {
+    // ai: Receive's File camera (2026-11-07; its camera area's File, Folder and Media since 2026-11-09): images, videos and
+    // ai: .lizard replays to play as the camera (ReceiveState.addUris, addTree); a .lizard comes as a ZIP or untyped
+    private val chooseReceived = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { us -> if (us.isNotEmpty()) receive.addUris(us) }
+    internal fun pickReceiveFiles() {
         try { chooseReceived.launch(arrayOf("image/*", "video/*", "application/octet-stream", "application/zip")) } catch (_: ActivityNotFoundException) {}
     }
+    private val chooseReceivedTree = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { u -> if (u != null) receive.addTree(u) }
+    internal fun pickReceiveFolder() { try { chooseReceivedTree.launch(null) } catch (_: ActivityNotFoundException) {} }
+    private val chooseReceivedMedia = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { us -> if (us.isNotEmpty()) receive.addUris(us) }
+    internal fun pickReceiveMedia() { try { chooseReceivedMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) } catch (_: ActivityNotFoundException) {} }
     private val save = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val e = saving
         saving = null
@@ -327,7 +331,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbListener, usbFilter, Context.RECEIVER_EXPORTED) else registerReceiver(usbListener, usbFilter)
         PcLink.openAccessory(this)
         if (wantsCamera()) startCamera()
-        else if (screen == Screen.Receive && !granted && !asked && receive.file == null && !receive.loadingFile) askCamera()
+        else if (screen == Screen.Receive && !granted && !asked && !receive.fileMode) askCamera()
     }
     override fun onPause() {
         super.onPause(); Log.i(TAG, "pause"); receive.stop(); send.stop()
@@ -340,7 +344,7 @@ class MainActivity : ComponentActivity() {
     private fun resumed() = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
     // ai: the lens started of itself (entering Receive, a resume): not while a file is the camera or is being copied in
     // ai: (the picker's return resumes the activity), whose Start plays it
-    private fun wantsCamera() = screen == Screen.Receive && !stopped && granted && receive.file == null && !receive.loadingFile
+    private fun wantsCamera() = screen == Screen.Receive && !stopped && granted && !receive.fileMode
     internal fun startCamera() = receive.start()
     internal val running get() = phase == RxPhase.On || phase == RxPhase.Starting || phase == RxPhase.Loading
 
@@ -366,7 +370,7 @@ class MainActivity : ComponentActivity() {
         if (s == Screen.Home) { refreshFiles(); refreshPartials() }
         if (s == Screen.Receive) {
             stopped = false
-            if (resumed() && receive.file == null) { if (granted) startCamera() else askCamera() }
+            if (resumed() && !receive.fileMode) { if (granted) startCamera() else askCamera() }
         }
     }
     internal fun toggleCamera() {

@@ -209,19 +209,38 @@ class ReceiveState(private val app: App) {
     private fun phoneLayout(cams: List<Cam>, id: String) =
         cams.firstOrNull { it.id == id && it.backend == "phone" }?.detail?.substringBefore(",")?.trim()?.takeIf { it == "1:1" || it == "2:1" }
     val phone get() = info?.backend == "phone" || camera.startsWith("phone:")
-    // ai: A file played as a camera (2026-11-07; the Upload camera's .lizard alone, upload:<path>, from 2026-10-28): an
-    // ai: image, a video or a .lizard, file:<path>, asked for by the Camera menu's File (Chooser); never listed, never kept
-    // ai: as the camera chosen, its end the stream's (cam/media.cpp, upload.cpp). A .lizard among them plays as the Upload
-    // ai: camera, its crop the file's (its detail, as a phone's): `upload`; an image's or a video's crop is the setting's.
+    // ai: Files played as a camera (2026-11-07; the Upload camera's .lizard alone, upload:<path>, from 2026-10-28): images,
+    // ai: videos and .lizard replays, the Camera menu's File (2026-11-09: Send's upload in the camera's place, `picks`,
+    // ai: File and Folder as Send's; the session plays them in order, a folder's files in their names' order, as
+    // ai: file: and the paths one a line, session.h open); never listed, never kept as the camera chosen, the last file's
+    // ai: end the stream's (cam/media.cpp, upload.cpp). A .lizard plays as the Upload camera, its crop the file's (its
+    // ai: detail, as a phone's): `upload`; an image's or a video's crop is the setting's, as a camera's frame.
     val upload get() = info?.backend == "upload" || camera.startsWith("upload:")
     val played get() = upload || info?.backend == "file" || camera.startsWith("file:")
     // ai: frames that are another device's crop at its own rate (a phone, an upload): no modes, crop or controls here
     val fixed get() = phone || upload
-    val fileChosen: String? get() = camera.takeIf { it.startsWith("upload:") || it.startsWith("file:") }
-    fun chooseFile() {
-        val owner = app.frame ?: return
-        Chooser.choose(owner, "Choose a file", false, false) { f -> f.firstOrNull()?.let { chooseCamera("file:" + it.path) } }
+    val fileCamera get() = camera.startsWith("file:")
+    // ai: the files chosen: a file its size, a folder its files' count and size (every file under it, the hidden ones
+    // ai: left out, as the session plays it)
+    class FileItem(val key: String, val file: File, val dir: Boolean, val files: Int, val size: Long)
+    val picks = mutableStateListOf<FileItem>()
+    private fun fileId() = "file:" + picks.joinToString("\n") { it.file.path }
+    // ai: Start can run: the file camera with something chosen, any other camera always
+    val startable get() = !fileCamera || picks.isNotEmpty()
+    fun chooseFiles() { app.frame?.let { Chooser.choose(it, "Choose files", false, true) { f -> addFiles(f) } } }
+    fun chooseFolders() { app.frame?.let { Chooser.choose(it, "Choose folders", true, true) { f -> addFiles(f) } } }
+    fun addFiles(fs: List<File>) {
+        for (f in fs) {
+            if (picks.any { it.file == f }) continue
+            if (f.isDirectory) {
+                val all = f.walkTopDown().onEnter { it == f || !it.name.startsWith(".") }.filter { it.isFile && !it.name.startsWith(".") }.toList()
+                picks += FileItem(f.path, f, true, all.size, all.sumOf { it.length() })
+            } else if (f.isFile) picks += FileItem(f.path, f, false, 1, f.length())
+        }
+        if (fileCamera) camera = fileId()
     }
+    fun removeFile(key: String) { picks.removeAll { it.key == key }; if (fileCamera) camera = fileId() }
+    fun clearFiles() { picks.clear(); if (fileCamera) camera = fileId() }
     // ai: A phone by its address (2026-10-27, beside the beacon and the gateways, which a firewall or a route may defeat): the
     // ai: Camera menu's last entry asks for it (askAddress); the address typed is the camera's id, phone:<ip>:<port>
     // ai: (the stream's port where none is typed), listed by it while no listing has it
@@ -230,13 +249,13 @@ class ReceiveState(private val app: App) {
     // ai: the cameras listed, and the one open while it is not (none is listed until the Camera menu first opens: the field
     // ai: names the camera open, not its blank "Camera", 2026-11-02)
     val cameraOptions: List<Pair<String, String>> get() =
-        cameras.map { it.id to it.label } + listOfNotNull(info?.takeIf { i -> cameras.none { it.id == i.id } }?.let { it.id to it.name }) + usb?.devices.orEmpty().map { it.id to "${it.name} (no USB driver)" } + listOfNotNull(typedPhone?.let { it to "Phone at ${it.removePrefix("phone:").removeSuffix(":$PHONE_PORT")}" }) +
-            listOfNotNull(fileChosen?.let { it to File(it.substringAfter(':')).name }) + ("phone:" to "Phone by address") + ("file:" to "File")
+        cameras.map { it.id to it.label } + listOfNotNull(info?.takeIf { i -> cameras.none { it.id == i.id } && i.backend != "file" && i.backend != "upload" }?.let { it.id to it.name }) + usb?.devices.orEmpty().map { it.id to "${it.name} (no USB driver)" } + listOfNotNull(typedPhone?.let { it to "Phone at ${it.removePrefix("phone:").removeSuffix(":$PHONE_PORT")}" }) +
+            ("phone:" to "Phone by address") + ("file:" to "File")
     fun chooseCameraOption(id: String) {
         askAddress = id == "phone:"
         driverFor = usb?.devices?.firstOrNull { it.id == id }
         if (driverFor != null) return
-        if (id == "file:") chooseFile() else if (id != "phone:") chooseCamera(id)
+        if (id == "file:") chooseCamera(fileId()) else if (id != "phone:") chooseCamera(id)
     }
     fun choosePhoneAddress(typed: String) {
         val a = typed.trim()
@@ -270,7 +289,7 @@ class ReceiveState(private val app: App) {
     // ai: the session's from the poll right after.
     fun start() {
         if (app.loadError.isNotEmpty()) { phase = RxPhase.Error(app.loadError); return }
-        if (running) return
+        if (running || (testCamera == null && !startable)) return
         // ai: a Start tries again what did not go: the files Downloads did not take
         retryKept()
         val s = session() ?: return
@@ -293,7 +312,8 @@ class ReceiveState(private val app: App) {
     }
     fun toggle() = if (running) stop() else start()
     // ai: Receive entered (App.go): the lists read again, the camera started
-    fun enter() { refreshLists(); start(); stamp = null; watchTimer.start() }
+    // ai: (the file camera plays at Start alone: its files chosen in the camera's area first)
+    fun enter() { refreshLists(); if (!fileCamera || testCamera != null) start(); stamp = null; watchTimer.start() }
     // ai: Receive left: the camera stopped and closed; the session and its transfer kept
     fun leave() { watchTimer.stop(); stop(); session?.closeCamera() }
 
@@ -322,7 +342,9 @@ class ReceiveState(private val app: App) {
         layout = phoneLayout(cameras, id) ?: Prefs.Rx.layout   // ai: a phone's crop its own; another camera's the one kept
         zoom = null; exposure = null; gain = null
         chosenMode = null
-        if (running) { stop(); start() }
+        // ai: the file camera: the camera before closed, and nothing played until Start (its choice is the camera area's)
+        if (id.startsWith("file:")) { if (running) stop(); session?.closeCamera() }
+        else if (running) { stop(); start() }
         else session?.open(id)   // ai: what it offers comes with the poll; a refusal is the phase's
     }
     // ai: Resolution, Format and Frame rate (Settings' menus): each keeps what it can of the other two, the format first

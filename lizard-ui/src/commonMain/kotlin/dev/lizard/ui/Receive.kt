@@ -54,6 +54,12 @@ interface Folds {
 // ai: The camera's permission while the app has none: the one button that gets it (the phone's; why is the state line)
 class Access(val act: Act)
 
+// ai: The file camera's choice (2026-11-09): Send's upload (Send.kt Upload) in the camera's place while the camera is
+// ai: File and idle: the tiles (File, Folder, and where the platform has one Media), the items played in order at Start (a
+// ai: folder's files in their names' order), their size after the count; `enabled` false while a pick is read in.
+class ReceiveUpload(val tiles: List<Act>, val items: List<UploadItem>, val total: String, val enabled: Boolean,
+                    val onRemove: (String) -> Unit, val onClear: () -> Unit)
+
 // ai: What Receive shows and does, the app's: the receive session's state as the app reads it, the camera's settings as
 // ai: the camera offers them, the platform's picture of the camera
 interface ReceiveHost {
@@ -71,6 +77,8 @@ interface ReceiveHost {
     fun clearNote() {}                 // ai: its popup's OK
     val running: Boolean
     val starting: Boolean              // ai: Start inert while the camera opens
+    val startable: Boolean get() = true   // ai: Start can run: false while the file camera holds nothing
+    val upload: ReceiveUpload? get() = null   // ai: the file camera's choice, drawn in the camera's place; null otherwise
     fun toggleCamera()
     val access: Access?
     val kept: List<Act>?               // ai: the received file's actions, the first the solid Open (each with its icon: a tile's
@@ -113,15 +121,22 @@ fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
     if (portrait) {
         // ai: the camera the column's width, up to 55% of the screen's height
         val tall = maxHeight * 0.55f
+        val up = h.upload
         ToolPortrait("Receive", { h.goHome() }, { swap() }) {
-            if (got) ReceivedPanel(h, Modifier.fillMaxWidth(), column = null) else preview(Modifier.fillMaxWidth().heightIn(max = tall), true)
+            if (got) ReceivedPanel(h, Modifier.fillMaxWidth(), column = null)
+            // ai: the file camera's choice as Send's phone draws it: a row's room, the items one row scrolling sideways
+            else if (up != null) Box(Modifier.fillMaxWidth().height(UPLOAD_ONE_ROW)) { Upload(up.tiles, up.items, up.enabled, row = true, onRemove = up.onRemove, onClear = up.onClear, total = up.total) }
+            else preview(Modifier.fillMaxWidth().heightIn(max = tall), true)
             Side(h)
         }
     } else {
         // ai: the column's floor, Send's too (columnFloor), so the column is the same on both screens
         ToolLandscape("Receive", h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
             if (h.swapInColumn) swap else null, h.width, columnFloor(h.width), rail = { RailSquares(h) }, side = { Side(h, home = true) }) {
+            val up = h.upload
             if (got) ReceivedPanel(h, Modifier.fillMaxSize(), column = 576.dp)
+            // ai: the file camera's choice as Send's desktop draws it: a 576 dp column centred in the area
+            else if (up != null) Upload(up.tiles, up.items, up.enabled, row = false, onRemove = up.onRemove, onClear = up.onClear, column = 576.dp, total = up.total)
             else {
                 val w = minOf(maxHeight * ratio, maxWidth)
                 preview(Modifier.width(w).height(w / ratio), false)
@@ -171,7 +186,7 @@ private fun RailSquares(h: ReceiveHost) {
     if (hot != null && kept == null) AlertSquare(hot.text)
     Square {
         IconBtn(if (h.running) Icons.pause else Icons.play, if (h.running) "Stop" else "Start",
-            enabled = h.access == null && !h.starting) { h.toggleCamera() }
+            enabled = h.access == null && !h.starting && (h.running || h.startable)) { h.toggleCamera() }
     }
     if (kept == null) {
         RateSquare(h.railRate)
@@ -208,7 +223,7 @@ private fun TransferPanel(h: ReceiveHost) {
         else {
             // ai: one solid button at a time: Start while nothing waits, else Open (the camera's area's, ReceivedPanel)
             Btn(if (h.running) "Stop" else "Start", if (!h.running && kept == null) Kind.Primary else Kind.Tonal,
-                enabled = !h.starting, modifier = wide) { h.toggleCamera() }
+                enabled = !h.starting && (h.running || h.startable), modifier = wide) { h.toggleCamera() }
         }
     }
     val ln = h.line

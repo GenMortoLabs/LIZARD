@@ -66,8 +66,10 @@ class Session {
   // ai: The camera by id (the one open before stopped and closed; the same id open already: nothing). "" is the first
   // ai: listed; an id that does not open and is not listed (a camera unplugged since it was chosen) the first listed in
   // ai: its place (said in the log), but a phone typed by its address (phone:<ipv4>:<port>), an upload (upload:<path>) or a
-  // ai: file (file:<path>: an image, a video or a .lizard, backends.h fileOpen),
-  // ai: which no list holds. The cameras are listed only then (a listing probes devices and listens for phones). Its
+  // ai: file (file:<path>: an image, a video or a .lizard, backends.h fileOpen; since 2026-11-09 a list, file: and its
+  // ai: entries one a line, files or folders, played in order as one stream: a folder its files in their paths' order,
+  // ai: hidden ones left out, an entry that will not open passed over; each file cropped as a camera's frame, a .lizard
+  // ai: as recorded), which no list holds. The cameras are listed only then (a listing probes devices and listens for phones). Its
   // ai: kept settings are taken up (zoom for the crop, exposure, gain: set after each start). A refusal is the phase's
   // ai: Error ("No camera was found." where none is listed).
   Done open(const std::string& id);

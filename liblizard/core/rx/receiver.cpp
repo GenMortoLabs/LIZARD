@@ -135,6 +135,19 @@ class GpuReceiver : public Receiver {
     cv.notify_all();
   }
   void record(std::shared_ptr<Replay> r) override { std::lock_guard<std::mutex> l(mu); rec = std::move(r); }
+  bool drain(int ms) override {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    for (;;) {
+      {
+        std::lock_guard<std::mutex> l(mu);
+        if (idle && staging.empty()) return true;
+        flushNow = true;   // ai: what is staged goes at once, full or not
+      }
+      cv.notify_all();
+      if (stop || std::chrono::steady_clock::now() >= end) return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
   void cameraClosed() override {
     flushNow = true;   // ai: what is staged goes at once, full or not
     cv.notify_all();
@@ -173,6 +186,7 @@ class GpuReceiver : public Receiver {
   std::atomic<bool> waits{false};          // ai: waitForRoom: a file's frames held for room, not dropped
   std::atomic<bool> fill{false};           // ai: fillBatches: a launch waits for a full batch (FILL_MS at most)
   std::atomic<bool> flushNow{false};       // ai: the camera closed: the staged frames go without waiting, until none is
+  bool idle = true;                        // ai: mu: the decoder thread's last look found nothing staged, launched or in flight (drain)
   bool build(std::string& why);
   std::atomic<bool> stop{false};
   std::thread decoderThread, releaserThread;
@@ -547,6 +561,7 @@ void GpuReceiver::decoderLoop() {
         }
         heldNow = held;
         recNow = rec;
+        idle = batch.empty() && flight.empty() && staging.empty();
         if (batch.empty() && flight.empty()) cv.wait_for(l, std::chrono::milliseconds(5));
       }
       if (!batch.empty()) {
@@ -735,6 +750,18 @@ class CpuReceiver : public Receiver {
   bool wantsLuma() const override { return true; }
   void record(std::shared_ptr<Replay> r) override { std::lock_guard<std::mutex> l(mu); rec = std::move(r); }
   void cameraClosed() override { std::lock_guard<std::mutex> l(mu); endWindow(); }
+  // ai: every crop offered answered: `flight` holds the ones not yet in the series
+  bool drain(int ms) override {
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    for (;;) {
+      {
+        std::lock_guard<std::mutex> l(mu);
+        if (flight.empty()) return true;
+      }
+      if (closing || std::chrono::steady_clock::now() >= end) return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
 
  private:
   std::shared_ptr<XferRx> transfer() const override { return xfer; }

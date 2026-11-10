@@ -126,6 +126,11 @@ class Receiver {
   // ai: blocks go to the transfer and its row to the series as ever). The transfer, the held word, the totals and the
   // ai: series stay.
   virtual void cameraClosed() {}
+  // ai: Every frame already pushed decoded and delivered (2026-11-09, a file list's next file of another size or crop,
+  // ai: session.cpp playNext: a swap lets the receiver go and a larger plan lets the staged frames go): what is staged goes
+  // ai: at once, full or not, and the call returns once nothing is staged or in flight, or after ms with false. Call it
+  // ai: with no push running (the camera stopped).
+  virtual bool drain(int ms) { (void)ms; return true; }
   // ai: Save replays (replay.h, 2026-10-03): from now on each frame the decoder is handed goes to r as well, in the
   // ai: order the decoder takes them, while r->live(); null stops. The GPU decoder's are read off its ring with their
   // ai: batch (FrontHalf::run's keep), the C's copied as a worker takes them; 2:1's halves are a frame each. The caller

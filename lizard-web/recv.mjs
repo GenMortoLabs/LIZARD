@@ -27,7 +27,7 @@ import { PoolPolicy } from "./pool.mjs";
 import { logPost } from "./devlog.mjs";
 import { R_RING, SPAN, MODULES, N_FOR, NAME, PICTURE_SIZES, subchOf } from "../liblizard/sim/lizard_pick.mjs";
 import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
-import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings } from "./ui.mjs";
+import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings, icon } from "./ui.mjs";
 import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
 // ai: Settings and Developer Tools (the Developer panel until 2026-10-01) open as they were left, a phone session
@@ -114,11 +114,14 @@ function showDecoder() { $("dec").querySelector('option[value="auto"]').textCont
 const decodersUp = () => (gpu?.up ? [gpu] : pool);
 // ai: config: what the decoders are told, always set (lizardConfig): nothing but the picture sizes to build.
 let config = null, track = null, file = "", next = 0, busySkips = 0;
-// ai: A file played as the camera (2026-11-07, the apps' File: the Camera menu's last entry; recv.mjs startFile): picked,
-// ai: the File the menu names (its option "picked"), kept until another is picked or the page goes; media, the one playing
-// ai: (null while none plays). sourceOn(): a camera or a file running.
-let picked = null, media = null;
-const sourceOn = () => !!(track || media), fileChosen = () => !!picked && $("cam").value === "picked";
+// ai: Files played as the camera (2026-11-07, the apps' File; a list since 2026-11-09, the apps' ReceiveUpload): the
+// ai: Camera menu's File stays chosen (no file named in the menu), and while it is idle Send's upload holds the camera's
+// ai: place (#pick: File, and Folder where the browser picks folders). picks: the items, each a file or a folder's
+// ai: files under its name in their paths' order (the hidden ones left out), kept until the page goes; Start plays
+// ai: their files in order (queue: the files and the next to open), one that will not open passed over. media: the
+// ai: one playing (null while none plays). sourceOn(): a camera or a file running.
+let picks = [], queue = null, media = null;
+const sourceOn = () => !!(track || media), fileChosen = () => $("cam").value === "file";
 let photoCaps = {}, levels = null;   // what the camera says it can be told, and the grey range it actually delivers
 // The last format word read out of a symbol (src/fmt.h): the version, and the rate the sender means to paint at.
 // ai: LIZARD's decoders read everything from the light; this is what the light last said of the format, as shown
@@ -229,6 +232,10 @@ function showState() {
   const got = !!ui.received && !on && !ui.starting;
   document.body.classList.toggle("got", got);
   $("done").hidden = !got;
+  // ai: the File camera's choice in the camera's place while File is idle (the received file's card before it)
+  const picking = fileChosen() && !on && !ui.starting && !got;
+  document.body.classList.toggle("picking", picking);
+  $("pick").hidden = !picking;
   if (got && $("doneName").dataset.name !== ui.received.name) {
     const [a, b] = nameParts(ui.received.name), t = $("doneName");
     t.dataset.name = t.title = ui.received.name; t.firstElementChild.textContent = a; t.lastElementChild.textContent = b;
@@ -240,21 +247,21 @@ function showState() {
   // ai: ReceiveScreen; over the box with the rail's red triangle before): said once, OK closing it until another comes
   const idle = !on && !ui.starting;
   $("idle").hidden = !idle;
-  $("idleText").textContent = fileChosen() ? picked.name : "Camera off";   // ai: the apps' too: a file chosen is named
+  $("idleText").textContent = "Camera off";
   $("loading").hidden = idle || !(ui.starting || loading);
   if (!ui.err) ui.said = "";
   else if (ui.err !== ui.said) { ui.said = ui.err; sayErr(ui.err); }
   // ai: one solid button on the page at a time: Start while nothing waits, else Open
   go.textContent = on ? "Stop" : "Start";
   go.classList.toggle("primary", !on && !ui.received);
-  go.disabled = ui.starting;
+  go.disabled = ui.starting || (!on && fileChosen() && !picks.length);   // ai: File with nothing picked: nothing to play
   // ai: the collapsed rail (recv.html #rail): the camera's pause or play, the last second's rate while a file or the
   // ai: test stream is read (its figure over its unit), under it the share of a file in while one comes (its percent over
   // ai: "%", 2026-10-09), and once the file is in a green check in the rate's square (a
   // ai: mark, no action) alone: Open and Save are the card's tiles in the camera's place, not the rail's (2026-11-07;
   // ai: the rail had them too from 2026-10-05, the green tick opening the file before)
   const cam = $("railCam");
-  cam.classList.toggle("off", !on); cam.title = on ? "Stop" : "Start"; cam.disabled = ui.starting;
+  cam.classList.toggle("off", !on); cam.title = on ? "Stop" : "Start"; cam.disabled = go.disabled;
   const now = (on && h && !offered) || testing ? recentKBs() : null, [v, u] = now != null ? rate(now).split(/\s/) : ["", ""];   // ai: \s takes rate()'s no-break space
   $("railRate").innerHTML = v ? `${v}<small>${u}</small>` : "";
   $("railRate").hidden = !!ui.received && !testing;   // ai: the check takes its square, except while the test stream is read
@@ -1054,6 +1061,7 @@ function stopCamera() {
   tap?.stop(); tap = null;
   track?.stop(); track = null; video.srcObject = null;
   if (media) { mediaW?.postMessage({ type: "close" }); media = null; }
+  queue = null;
   if (looping) { (video.cancelVideoFrameCallback ? video.cancelVideoFrameCallback(frameHandle) : cancelAnimationFrame(frameHandle)); looping = false; }
   wake?.release().catch(() => {}); wake = null;
   while (pool.length > 1 && !FIXED) kill(pool.pop());
@@ -1164,19 +1172,36 @@ function mediaWorker() {
   return mediaW;
 }
 async function startFile() {
-  const f = picked, run = media = { id: ++mediaId, name: f.name, rect: null, opened: null, asked: false, ready: null, grew: null, ended: false, drawn: 0 };
-  const o = await new Promise((ok) => { run.opened = ok; mediaWorker().postMessage({ type: "open", id: run.id, file: f }); });
-  if (o.type !== "opened") { console.error(`file not read: ${o.why}`); throw Object.assign(new Error(o.why), { said: `File not read: ${f.name}` }); }
-  if (media !== run) return;   // ai: stopped while it opened
-  run.rect = rectOf(o.w, o.h);
-  shot.width = run.rect.w; shot.height = run.rect.h; sImg = null;
-  preview("shot"); showCrop();
-  cur = fresh(); buckets = []; lastPresented = 0; prevArrive = 0; lastStamp = undefined;
-  poolVfOff = ""; vfFormat = ""; tapNone = 0;
-  best = freshBest();
-  resize();
-  camAt = performance.now(); firstDecodeMs = null; answered = false;
-  fileRoom();
+  const q = queue = { files: picks.flatMap((p) => p.files), next: 0, played: 0, why: "" };
+  if (await playNext(q)) return;
+  if (queue !== q) return;   // ai: stopped while it opened
+  queue = null;
+  const f = q.files[0];
+  throw Object.assign(new Error(q.why), { said: `File not read: ${q.files.length === 1 ? f.name : "none of the files played"}` });
+}
+// ai: The queue's next file that opens, played (the first one's start sets the run's figures up; the next ones go on in
+// ai: them, each cut by the camera's rule at its own size): false where none is left that opens. A file that will not
+// ai: open is said on the console and passed over.
+async function playNext(q) {
+  while (queue === q && q.next < q.files.length) {
+    const f = q.files[q.next++], run = media = { id: ++mediaId, name: f.name, rect: null, opened: null, asked: false, ready: null, grew: null, ended: false, drawn: 0 };
+    const o = await new Promise((ok) => { run.opened = ok; mediaWorker().postMessage({ type: "open", id: run.id, file: f }); });
+    if (media !== run) return true;   // ai: stopped while it opened
+    if (o.type !== "opened") { console.warn(`file not read: ${f.name}: ${o.why}`); q.why ||= o.why; media = null; continue; }
+    run.rect = rectOf(o.w, o.h);
+    shot.width = run.rect.w; shot.height = run.rect.h; sImg = null;
+    if (!q.played++) {
+      preview("shot"); showCrop();
+      cur = fresh(); buckets = []; lastPresented = 0; prevArrive = 0; lastStamp = undefined;
+      poolVfOff = ""; vfFormat = ""; tapNone = 0;
+      best = freshBest();
+      resize();
+      camAt = performance.now(); firstDecodeMs = null; answered = false;
+    } else showCrop();
+    fileRoom();
+    return true;
+  }
+  return false;
 }
 // ai: The reader's answers: the open's, then each read's (a frame, or the end); an answer to a run stopped or replaced is let go
 function onMedia(m) {
@@ -1203,7 +1228,13 @@ function fileRoom() {
     send(slot, { type: "frame", luma: m.luma, w: m.w, h: m.h, tag, delay: DELAY, prof: PROF }, [m.luma]);
   } else if (run.ready && run.grew !== run.ready) { run.grew = run.ready; grow(); }
   if (!run.asked && !run.ready && !run.ended) { run.asked = true; mediaW.postMessage({ type: "next", id: run.id, ...run.rect }); }
-  if (run.ended && !run.ready && (gpu?.up ? gpu.out === 0 : !pool.some((c) => c.busy))) { run.ended = false; second(); stopCamera(); showState(); }
+  if (run.ended && !run.ready && (gpu?.up ? gpu.out === 0 : !pool.some((c) => c.busy))) {
+    run.ended = false;
+    // ai: the queue's next file, else the run's end (its last file's)
+    const q = queue;
+    if (q && q.next < q.files.length) { playNext(q).then((on) => { if (!on && queue === q) { second(); stopCamera(); showState(); } }); return; }
+    second(); stopCamera(); showState();
+  }
 }
 // ai: a frame's luma onto #shot, the preview
 function drawLuma(buf, w, h) {
@@ -1350,41 +1381,83 @@ $("dec").onchange = () => {
 };
 const restart = () => { showRates(); if (sourceOn() && !ui.starting) { stopCamera(); start(); } };
 $("res").onchange = $("fps").onchange = restart;
-// ai: Camera: a camera, the file picked (its name), or File, which opens the chooser and leaves the menu as it was until
-// ai: a file is picked; the camera kept as recv:cam (a file never: it is not there at the next load)
+// ai: Camera: a camera, or File (2026-11-09: it stays chosen, a camera running stopped, and its files are picked in the
+// ai: camera's place, #pick); the camera kept as recv:cam (File never: its files are not there at the next load)
 let camWas = "auto";
 $("cam").onchange = () => {
   const sel = $("cam");
-  if (sel.value === "file") { sel.value = camWas; $("media").click(); return; }
+  if (sel.value === "file") { if (sourceOn() && !ui.starting) stopCamera(); showCamera(); showState(); return; }
   camWas = sel.value;
-  if (sel.value !== "picked") try { localStorage.setItem("recv:cam", sel.value); } catch {}
+  try { localStorage.setItem("recv:cam", sel.value); } catch {}
   showCamera(); restart();
 };
-// ai: A file picked: named in the menu and played at once (the apps')
-$("media").onchange = async () => {
-  const f = $("media").files[0];
+// ai: The picks (the apps' and send.mjs's): an item a file picked, or a folder's files (webkitRelativePath) under its first
+// ai: part, hidden ones left out, in their paths' order; an item already listed (a file by its name, size and time, a
+// ai: folder by its name, files and bytes) not added again; the inputs emptied, so the same pick again is a new one
+function addPicks(fresh) {
+  const have = new Set(picks.map((i) => i.key));
+  picks = [...picks, ...fresh.filter((i) => i.files.length && !have.has(i.key) && have.add(i.key))];
+  renderPick(); showState();
+}
+$("media").onchange = () => {
+  const fs = [...$("media").files];
   $("media").value = "";
-  if (!f) return;
-  picked = f;
-  await listCameras("picked");
-  if (sourceOn()) stopCamera();
-  if (!ui.starting) start();
+  addPicks(fs.map((f) => ({ key: `f|${f.name}|${f.size}|${f.lastModified}`, name: f.name, dir: false, files: [f], size: f.size })));
 };
+$("mediaDir").onchange = () => {
+  const by = new Map();
+  for (const f of $("mediaDir").files) {
+    const parts = (f.webkitRelativePath || f.name).split("/");
+    if (parts.some((x) => x.startsWith("."))) continue;
+    if (!by.has(parts[0])) by.set(parts[0], []);
+    by.get(parts[0]).push(f);
+  }
+  $("mediaDir").value = "";
+  addPicks([...by].map(([name, fs]) => {
+    fs.sort((a, b) => (a.webkitRelativePath < b.webkitRelativePath ? -1 : a.webkitRelativePath > b.webkitRelativePath ? 1 : 0));
+    const size = fs.reduce((n, f) => n + f.size, 0);
+    return { key: `d|${name}|${fs.length}|${size}`, name, dir: true, files: fs, size };
+  }));
+};
+$("addFiles").onclick = () => $("media").click();
+$("addFolder").onclick = () => $("mediaDir").click();
+$("addFolder").hidden = !("webkitdirectory" in $("mediaDir"));
+$("clearPick").onclick = () => { picks = []; renderPick(); showState(); };
+// ai: the card (send.mjs renderPick's): the count and the size after it, Clear, then a tile an item (its icon, its name
+// ai: with the stem cut and the ending kept, "N files" for a folder or its size, an x that removes it)
+function renderPick() {
+  $("selSum").textContent = `${picks.length} ${picks.length === 1 ? "item" : "items"}`;
+  if (picks.length) { const t = document.createElement("span"); t.className = "tot"; t.textContent = ` · ${bytes(picks.reduce((n, p) => n + p.size, 0))}`; $("selSum").append(t); }
+  $("clearPick").disabled = !picks.length;
+  $("pickList").replaceChildren(...picks.map((it) => {
+    const li = document.createElement("li"), t = document.createElement("span"), stem = document.createElement("span");
+    const end = document.createElement("span"), sub = document.createElement("span"), rm = document.createElement("button");
+    const [a, b] = nameParts(it.name);
+    li.className = "itile";
+    t.className = "t fname"; t.title = it.name; stem.className = "stem"; stem.textContent = a; end.textContent = b; t.append(stem, end);
+    sub.className = "s"; sub.textContent = it.dir ? `${it.files.length} ${it.files.length === 1 ? "file" : "files"}` : bytes(it.size);
+    rm.type = "button"; rm.className = "icon x"; rm.title = `Remove ${it.name}`; rm.append(icon("x"));
+    rm.onclick = (e) => { e.stopPropagation(); picks = picks.filter((p) => p.key !== it.key); renderPick(); showState(); };
+    li.append(icon(it.dir ? "folder" : "file"), t, sub, rm);
+    return li;
+  }));
+}
+renderPick();
 // Which cameras this device has. A phone reports its rear lenses separately (wide, ultrawide, tele) and
 // facingMode picks one of them for you, which is often not the one that focuses closest; this menu says which.
 // Before permission the browser hands back one unnamed entry with an empty id, so there is nothing to list yet.
 async function listCameras(choose) {
-  const sel = $("cam"), want = choose ?? sel.value;
+  const sel = $("cam"), want = typeof choose === "string" ? choose : sel.value;   // ai: devicechange hands its event
   const devs = (await navigator.mediaDevices?.enumerateDevices?.().catch(() => []) ?? []).filter((d) => d.kind === "videoinput" && d.deviceId);
   const auto = new Option(camLabel || "Camera", "auto");
   auto.hidden = auto.disabled = true;
-  sel.replaceChildren(auto, ...devs.map((d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId)), ...(picked ? [new Option(picked.name, "picked")] : []), new Option("File", "file"));
-  sel.value = [...sel.options].some((o) => o.value === want) && want !== "file" ? want : "auto";
+  sel.replaceChildren(auto, ...devs.map((d, i) => new Option(d.label || `Camera ${i + 1}`, d.deviceId)), new Option("File", "file"));
+  sel.value = [...sel.options].some((o) => o.value === want) ? want : "auto";
   // ai: the camera last chosen here, once the list has it (a list read at load, before any start, where the browser gives
   // ai: ids; never under a running camera, which would then not be the one the menu names)
   if (!track && sel.value === "auto" && !new URLSearchParams(location.search).has("cam")) restoreSaved(sel, "recv:cam");
-  if (sel.value === "file") sel.value = "auto";
-  camWas = sel.value;
+  if (sel.value === "file" && want !== "file") sel.value = "auto";   // ai: File only as chosen on this page
+  if (sel.value !== "file") camWas = sel.value;
   showCamera();
 }
 navigator.mediaDevices?.addEventListener?.("devicechange", listCameras);

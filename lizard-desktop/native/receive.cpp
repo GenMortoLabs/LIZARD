@@ -16,7 +16,8 @@
 // ai: GPU decoder fills its batches where it would launch at once (2026-11-08).
 // ai: --camera upload:<a .lizard> plays a replay (cam/upload.cpp), --layout its crop; --camera file:<path> an image, a
 // ai: video or a .lizard (cam/media.cpp: every frame decoded, as fast as the decoder goes; LIZ_FFMPEG the folder of the
-// ai: FFmpeg libraries, else this program's own); either's end ends the run as --secs does.
+// ai: FFmpeg libraries, else this program's own), or file: and a list, paths one a line, files or folders, played in
+// ai: order (session.h open; 2026-11-09); either's end, the list's last file's, ends the run as --secs does.
 // ai: The camera: the one named, else the simulated one (sim:0) where LIZ_CAMERA_SIM is set (nothing listed), else the
 // ai: first listed (list and this probe every /dev/video* unless LIZ_V4L2_NODES names the nodes: set and empty, none).
 // ai: Its mode: by index, or the first of that size and rate (a rate within half a frame a second; none given, any),
@@ -405,8 +406,10 @@ static int run(int argc, char** argv) {
       }
       if (!lizard::done(s->open(id), why)) fail(why);
       const json cam = parsed(s->camera());
-      // ai: the session opens the first listed in place of an id it does not list: here the one named or none
-      if (text(cam.value("info", json::object()), "id") != id) fail(id + " is not listed");
+      // ai: the session opens the first listed in place of an id it does not list: here the one named or none (a file
+      // ai: list's camera its first file that opens)
+      const std::string opened = text(cam.value("info", json::object()), "id");
+      if (id.rfind("file:", 0) == 0 ? opened.rfind("file:", 0) != 0 : opened != id) fail(id + " is not listed");
       const int mode = modeOf(cam.value("modes", json::array()), a.mode, int(num(cam, "pick")), why);
       if (mode < 0) fail(why);
       if (!lizard::done(s->start(std::to_string(mode)), why)) fail(why);
@@ -477,8 +480,11 @@ static int run(int argc, char** argv) {
         }
         // ai: an upload's or a file's end is its file's (cam/upload.cpp, cam/media.cpp), the run as --secs ends it; any
         // ai: other stop a failure
-        const bool played = upload && !s->streaming();
-        idle = s->streaming() || played ? 0 : idle + 1;
+        // ai: a file list's end is its last file's: the session's phase idle (between its files the stream may pause
+        // ai: while the receiver is made for another crop, the phase still on)
+        const bool played = upload && !s->streaming() && text(j, "phase") == "idle";
+        idle = s->streaming() || played || (upload && text(j, "phase") != "idle") ? 0 : idle + 1;
+        if (!played) settled = 0;
         if (idle > 10) fail("the camera stopped" + (text(j, "why").empty() ? std::string() : ": " + text(j, "why")));
         // ai: a played file's frames still in the decoders go on into the totals (the session keeps the receiver past
         // ai: the stream's end): the run ends once the totals have held still for a second

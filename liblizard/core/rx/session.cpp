@@ -1162,6 +1162,111 @@ struct Session::Impl {
 
   // ai: the commands (the worker's)
 
+  // ai: An opened camera taken up (doOpen's, and a file list's next file, playNext): its modes, its description, its kept
+  // ai: settings (zoom for the crop, exposure, gain: kept for the start, the camera untouched)
+  void adopt(std::shared_ptr<cam::Camera> sp) {
+    std::vector<cam::Mode> ms = sp->modes();
+    {
+      std::lock_guard<std::mutex> k(ptrMu);
+      camera = sp;
+      info = infoJson(sp->info());
+      modeNow = nullptr;
+    }
+    modes = std::move(ms);
+    mode = -1;
+    starts = 0;
+    backend = sp->info().backend;
+    detail = sp->info().detail;
+    camId = sp->info().id;
+    asksSeen = -1;
+    {
+      std::lock_guard<std::mutex> k(endMu);
+      ended.clear();
+    }
+    readStats();
+    ctls = sp->controls();
+    // ai: the kept settings taken up (the app's openCam before 2026-10-31)
+    const json k = settings->of(camId);
+    if (movable("zoom")) {
+      const json z = numOrNull(objectAt(k, "zoom"), layoutNow().c_str());
+      if (z.is_number()) keep("zoom", z.get<double>(), false);
+    }
+    for (const char* x : {"exposure", "gain"})
+      if (movable(x) && numOrNull(k, x).is_number()) keep(x, k[x].get<double>(), false);
+    if (previewWin) sp->previewTo(previewWin);
+    describeNow();
+    openFailed.clear();
+    say("camera: opened " + sp->info().name + " (" + sp->info().id + "), " + std::to_string(modes.size()) + " modes");
+  }
+
+  // ai: A file camera's list (2026-11-09, the receivers' File: Send's upload in the camera's place): file:<entry> with
+  // ai: entries one a line, each a file or a folder; a folder its files in their paths' order, its subfolders' too, the
+  // ai: hidden ones (a name from '.') left out. Played in order as one stream into one receiver (playNext): an entry
+  // ai: that will not open (not an image, a video or a .lizard) is said in the log and passed over. Each file cropped as
+  // ai: a camera's frame (crops.h, the Crop setting), a .lizard as it was recorded (its own crop).
+  std::vector<std::string> playlist;   // ai: the worker's: file:<path> a file, [] for any other camera
+  static constexpr int DRAIN_MS = 30000;   // ai: the most playNext waits for the decoders to finish a file's frames
+  size_t playIx = 0;                   // ai: the worker's: the one open
+  static std::vector<std::string> filesOf(const std::string& id) {
+    std::vector<std::string> out;
+    const std::string all = id.substr(std::strlen("file:"));
+    size_t a = 0;
+    while (a <= all.size()) {
+      const size_t b = std::min(all.find('\n', a), all.size());
+      const std::string e = all.substr(a, b - a);
+      a = b + 1;
+      if (e.empty()) continue;
+      std::error_code ec;
+      const fs::path p = fs::u8path(e);
+      if (!fs::is_directory(p, ec)) { out.push_back("file:" + e); continue; }
+      std::vector<std::string> in;
+      for (auto it = fs::recursive_directory_iterator(p, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        const std::string name = it->path().filename().u8string();
+        if (!name.empty() && name[0] == '.') {
+          if (it->is_directory(ec)) it.disable_recursion_pending();
+          continue;
+        }
+        if (it->is_regular_file(ec)) in.push_back(it->path().u8string());
+      }
+      std::sort(in.begin(), in.end());
+      for (auto& f : in) out.push_back("file:" + f);
+    }
+    return out;
+  }
+  // ai: A file list's next file, the one before (its frames w x h, cropped `crop`) ended and closed: opened, taken up,
+  // ai: cropped (a .lizard as recorded, another as a camera's frame by the setting) and started in its one mode, the
+  // ai: phase left as it is (the stream goes on); false where none is left that plays. Where its frames' size or crop
+  // ai: differs, the receiver first decodes what it holds (Receiver::drain: a swap lets the receiver go, a larger plan
+  // ai: the staged frames); frames alike go on behind the last file's, batched with them.
+  bool playNext(uint32_t w0, uint32_t h0, const std::string& crop) {
+    while (playIx + 1 < playlist.size()) {
+      const std::string id = playlist[++playIx];
+      std::string w;
+      std::unique_ptr<cam::Camera> c;
+      try {
+        c = cam::open(id, w);
+      } catch (const std::exception& e) {
+        w = e.what();
+      }
+      if (!c) {
+        say("camera: " + id + " not played: " + w);
+        continue;
+      }
+      adopt(std::shared_ptr<cam::Camera>(std::move(c)));
+      const std::string own = ownLayout(), want = own.empty() ? wantLayout : own;
+      const int m = keptMode();
+      if (m >= 0 && (modes[size_t(m)].width != w0 || modes[size_t(m)].height != h0 || (!want.empty() && want != crop)))
+        if (const auto r = current(); r && !r->r->drain(DRAIN_MS)) say("receiver: frames still in the decoders after " + std::to_string(DRAIN_MS) + " ms");
+      if ((!want.empty() && want != layoutNow() && current() && !swap(wantDecoder, want, w)) || m < 0 || !startLocked(m, w)) {
+        say("camera: " + id + " not played: " + (w.empty() ? "it offers no mode" : w));
+        closeLocked();
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
   // ai: The camera by id (session.h open). A phone typed by its address or an upload opens unlisted; another is looked
   // ai: for in the list, the first listed in its place where it is not there (a camera unplugged since it was chosen).
   std::string openFailed;   // ai: the worker's: the last open's refusal as the phase says it ("" it opened)
@@ -1180,7 +1285,28 @@ struct Session::Impl {
     // ai: the cameras listed only where needed (a listing probes devices, and listens for phones a second): for "", and
     // ai: for an id that would not open, which a camera listed in its place stands for where it is not listed itself
     std::unique_ptr<cam::Camera> first;
-    if (!id.empty()) {
+    playlist.clear();
+    playIx = 0;
+    if (id.rfind("file:", 0) == 0) {
+      playlist = filesOf(id);
+      if (playlist.empty()) return refuse("Camera not started: no file chosen", "no file was chosen");
+      std::string w0;
+      for (; playIx < playlist.size() && !first; playIx++) {
+        try {
+          first = cam::open(playlist[playIx], w);
+        } catch (const std::exception& e) {
+          w = e.what();
+        }
+        if (!first) {
+          if (w0.empty()) w0 = w;
+          if (playlist.size() > 1) say("camera: " + playlist[playIx] + " not played: " + w);
+        }
+      }
+      if (first) {
+        id = playlist[--playIx];
+        w.clear();
+      } else w = w0;
+    } else if (!id.empty()) {
       try {
         first = cam::open(id, w);
       } catch (const std::exception& e) {
@@ -1222,39 +1348,7 @@ struct Session::Impl {
         w = w.empty() ? "the camera " + id + " could not be opened" : w;
         return refuse("Camera not started: " + w, w);
       }
-      std::shared_ptr<cam::Camera> sp(std::move(c));
-      std::vector<cam::Mode> ms = sp->modes();
-      {
-        std::lock_guard<std::mutex> k(ptrMu);
-        camera = sp;
-        info = infoJson(sp->info());
-        modeNow = nullptr;
-      }
-      modes = std::move(ms);
-      mode = -1;
-      starts = 0;
-      backend = sp->info().backend;
-      detail = sp->info().detail;
-      camId = sp->info().id;
-      asksSeen = -1;
-      {
-        std::lock_guard<std::mutex> k(endMu);
-        ended.clear();
-      }
-      readStats();
-      ctls = sp->controls();
-      // ai: the kept settings taken up (the app's openCam before 2026-10-31): kept for the start, the camera untouched
-      const json k = settings->of(camId);
-      if (movable("zoom")) {
-        const json z = numOrNull(objectAt(k, "zoom"), layoutNow().c_str());
-        if (z.is_number()) keep("zoom", z.get<double>(), false);
-      }
-      for (const char* x : {"exposure", "gain"})
-        if (movable(x) && numOrNull(k, x).is_number()) keep(x, k[x].get<double>(), false);
-      if (previewWin) sp->previewTo(previewWin);
-      describeNow();
-      openFailed.clear();
-      say("camera: opened " + sp->info().name + " (" + sp->info().id + "), " + std::to_string(modes.size()) + " modes");
+      adopt(std::shared_ptr<cam::Camera>(std::move(c)));
       // ai: a camera chosen and open: an error before it said is no longer the line's
       {
         std::lock_guard<std::mutex> l(phMu);
@@ -1374,6 +1468,15 @@ struct Session::Impl {
       if (rec) fresh->r->record(rec);
       old = std::move(rx);
       rx = fresh;
+    }
+    // ai: what the one let go read (its totals end with it; a file list's frames, drained first, are all in them)
+    if (old) {
+      try {
+        const json t = objectAt(parsed(old->r->stats()), "totals");
+        say("receiver: the " + old->layout + " one before read " + gnum(numOrNull(t, "frames").is_number() ? t["frames"].get<double>() : 0) + " frames, " +
+            gnum(numOrNull(t, "blocks").is_number() ? t["blocks"].get<double>() : 0) + " blocks");
+      } catch (const std::exception&) {
+      }
     }
     // ai: the old receiver's threads end here (a frame its decoder delivers meanwhile goes into the transfer both hold)
     letGo(old);
@@ -1613,8 +1716,11 @@ struct Session::Impl {
       const bool upload = backend == "upload" || backend == "file";
       const uint64_t g = genNow();
       const bool was = running();
+      const cam::Mode last = mode >= 0 && size_t(mode) < modes.size() ? modes[size_t(mode)] : cam::Mode{};
+      const std::string crop = layoutNow();
       closeLocked();
-      if (was) told(g, upload ? Phase::Idle : Phase::Error, upload ? "" : "Camera stopped: " + end);
+      // ai: a file list goes on to its next file (playNext), the stream's phase kept; its last one's end is the run's
+      if (was && !(upload && playNext(last.width, last.height, crop))) told(g, upload ? Phase::Idle : Phase::Error, upload ? "" : "Camera stopped: " + end);
     }
     {
       std::string pf;

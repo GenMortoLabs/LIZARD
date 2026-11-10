@@ -44,8 +44,8 @@ internal fun MainActivity.devReadout(): String {
     }
     val c = cam
     val now = j?.obj("camera")?.obj("report")?.takeIf { it.num("exposureMs") > 0 }
-    // ai: a file chosen (2026-11-07) is the camera: its name, not the last lens's report
-    put("camera", receive.file?.let { "${it.name}: a file, ${settings.layout} crop" }
+    // ai: the File camera (2026-11-07) is the camera: its picks, not the last lens's report
+    put("camera", receive.picks.takeIf { receive.fileMode }?.let { "File: ${it.size} picked, ${settings.layout} crop" }
         ?: c?.let { "${it.id}: ${it.size.width}x${it.size.height} ${it.format} at ${it.fps} fps, ${settings.layout} crop${if (it.note.isEmpty()) "" else ", ${it.note}"}" } ?: "not open",
         j?.let { "${f(it.num("capturedFps"), 0)} captured, ${f(it.num("processedFps"), 0)} decoded, ${it.int("dropped")} dropped a second" +
             if ("heldMs" in it) ", held ${f(it.num("heldMs"), 0)} ms (${f(it.num("heldMaxMs"), 0)} max)" else "" },

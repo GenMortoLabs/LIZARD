@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import android.util.Size
@@ -14,6 +15,7 @@ import android.view.TextureView
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.lizard.Session
@@ -109,44 +111,86 @@ class ReceiveState(private val a: MainActivity) {
     var lockBar by mutableStateOf<String?>(null)      // ai: why the camera open cannot lock ("" it can; null none described)
         private set
 
-    // ai: A file played as the camera (2026-11-07, liblizard/core/cam/media.cpp): an image, a video or a .lizard picked by
-    // ai: Settings' Camera menu's File (the system's picker), copied into the cache (receive/, the one before deleted)
-    // ai: and opened as file:<path> until a lens is chosen again; no permission or preview surface wanted, its frames
-    // ai: shown from the session's preview (pull). Not kept across the app's starts.
-    class Picked(val path: String, val name: String)
-    var file by mutableStateOf<Picked?>(null)
+    // ai: Files played as the camera (2026-11-07, liblizard/core/cam/media.cpp; a list since 2026-11-09, Send's
+    // ai: upload in the camera's place): images, videos and .lizard replays picked in the camera area (File, Folder,
+    // ai: Media: the system's pickers), each pick copied into the cache as it is picked (receive/<n>/, a folder its files
+    // ai: under its name, the hidden ones left out) and played in order at Start as file: and the paths one a line
+    // ai: (session.h open: a folder's files in their names' order, a file that will not play passed over). The File
+    // ai: camera holds until a lens is chosen again, the copies deleted then; no permission or preview surface wanted, its
+    // ai: frames shown from the session's preview (pull). Not kept across the app's starts.
+    class Picked(val key: String, val path: String, val name: String, val dir: Boolean, val files: Int, val size: Long)
+    var fileMode by mutableStateOf(false)             // ai: the camera is File (Settings' Camera menu)
         private set
-    var loadingFile by mutableStateOf(false)          // ai: a picked file being copied in
+    val picks = mutableStateListOf<Picked>()
+    var loadingFile by mutableStateOf(false)          // ai: a pick being copied in
         private set
-    fun chooseFile(uri: Uri) {
-        stop()   // ai: the camera running stopped while the file is copied in
+    private var pickN = 0
+    private val picksDir get() = File(a.cacheDir, "receive")
+    // ai: Start can run: a lens, or the File camera with something picked
+    val startable get() = !fileMode || picks.isNotEmpty()
+    fun enterFiles() {
+        stop()
+        if (picks.isEmpty()) picksDir.deleteRecursively()   // ai: a copy left by a run before
+        fileMode = true
+        preview = null
+    }
+    fun addUris(us: List<Uri>) = copying { us.map { copyIn(it) } }
+    fun addTree(tree: Uri) = copying { listOfNotNull(copyTree(tree)) }
+    private fun copying(work: () -> List<Picked>) {
         loadingFile = true
-        opening = true
-        phaseTo(RxPhase.Starting)
         Thread({
-            val got = runCatching { copyIn(uri) }
+            val got = runCatching(work)
             main.post {
                 loadingFile = false
-                opening = false
-                got.onSuccess { p -> file = p; preview = null; start() }
-                    .onFailure { e -> phaseTo(RxPhase.Error("File not read: ${e.message ?: "no data"}")) }
+                got.onSuccess { picks.addAll(it) }.onFailure { e -> phaseTo(RxPhase.Error("File not read: ${e.message ?: "no data"}")) }
             }
         }, "lizard-file").start()
     }
+    private fun nameOf(uri: Uri) = a.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) c.getString(0) else null
+    }?.takeIf { it.isNotBlank() } ?: "file"
     private fun copyIn(uri: Uri): Picked {
-        val name = a.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
-        }?.takeIf { it.isNotBlank() } ?: "file"
-        val dir = File(a.cacheDir, "receive").apply { mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
+        val name = nameOf(uri)
+        val dir = File(picksDir, "${++pickN}").apply { mkdirs() }
         val f = File(dir, name.replace('/', '_'))
-        a.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } } ?: error("no data")
-        return Picked(f.path, name)
+        a.contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } } ?: error("$name: no data")
+        return Picked(dir.name, f.path, name, false, 1, f.length())
     }
-    // ai: a lens chosen again (Settings' Camera): the file let go, its copy deleted
+    // ai: a folder picked (OpenDocumentTree), its files copied under its name (Send.kt treeEntries' walk); null where it holds none
+    private fun copyTree(tree: Uri): Picked? {
+        val cr = a.contentResolver
+        val cols = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE)
+        val dir = File(picksDir, "${++pickN}")
+        var n = 0
+        var size = 0L
+        fun plain(x: String) = x.replace('/', '_').ifEmpty { "file" }
+        fun walk(id: String, to: File, depth: Int) {
+            if (depth > 64) error("${to.name}: too deeply nested")
+            to.mkdirs()
+            cr.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, id), cols, null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val kid = c.getString(0); val nm = plain(c.getString(1) ?: kid)
+                    if (nm.startsWith(".")) continue
+                    if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) { walk(kid, File(to, nm), depth + 1); continue }
+                    val f = File(to, nm)
+                    cr.openInputStream(DocumentsContract.buildDocumentUriUsingTree(tree, kid))?.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } } ?: continue
+                    n++; size += f.length()
+                }
+            }
+        }
+        val rootId = DocumentsContract.getTreeDocumentId(tree)
+        val name = cr.query(DocumentsContract.buildDocumentUriUsingTree(tree, rootId), cols, null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(1) else null } ?: "folder"
+        val root = File(dir, plain(name))
+        walk(rootId, root, 0)
+        if (n == 0) { dir.deleteRecursively(); return null }
+        return Picked(dir.name, root.path, name, true, n, size)
+    }
+    fun removePick(key: String) { picks.removeAll { it.key == key }; File(picksDir, key).deleteRecursively() }
+    fun clearPicks() { picks.clear(); picksDir.deleteRecursively() }
+    // ai: a lens chosen again (Settings' Camera): the File camera left, its copies deleted
     fun leaveFile() {
-        file?.let { File(it.path).delete() }
-        file = null
+        fileMode = false
+        clearPicks()
         preview = null
     }
 
@@ -161,7 +205,7 @@ class ReceiveState(private val a: MainActivity) {
     private val bitmaps = arrayOfNulls<Bitmap>(2)
     private var flip = 0
     fun pull() {
-        if (phase != RxPhase.On || file == null) return
+        if (phase != RxPhase.On || !fileMode) return
         val got = use { runCatching { it.preview(pseq, PREVIEW, pbuf) }.getOrNull() } ?: return
         if (got.size < 3) return
         val w = got[1].toInt()
@@ -255,12 +299,12 @@ class ReceiveState(private val a: MainActivity) {
     // ai: handed over (once the TextureView has made one, 2 s at most), and the stream started in the mode kept (or one
     // ai: Settings named).
     fun start() {
-        if (closed) return
+        if (closed || !startable) return   // ai: the File camera with nothing picked: nothing to play
         val g = ++gen
         opening = true
         phaseTo(RxPhase.Starting)
         val st = a.settings
-        val want = file?.let { "file:" + it.path } ?: if (st.camera.isEmpty()) "" else "android:${st.camera}"
+        val want = if (fileMode) "file:" + picks.joinToString("\n") { it.path } else if (st.camera.isEmpty()) "" else "android:${st.camera}"
         val named = chosen
         chosen = null
         later {
@@ -544,7 +588,7 @@ class ReceiveState(private val a: MainActivity) {
 
     // ai: One hint, the first that holds, while the camera reads a word (dev.lizard.ui hintOf; the desktop's rules): a
     // ai: camera the phase lock holds takes no rate hint, nor a file (no rate of its own: as fast as it is decoded)
-    fun hint(j: JsonObject?): Warn? = hintOf(j, phase == RxPhase.On, upload = file != null, locked = lock?.let { "off" !in it } == true)
+    fun hint(j: JsonObject?): Warn? = hintOf(j, phase == RxPhase.On, upload = fileMode, locked = lock?.let { "off" !in it } == true)
 
 
     // ai: A second's line for the log while a symbol is in view (Engine.rx before; tools/phone read it): what the receiver

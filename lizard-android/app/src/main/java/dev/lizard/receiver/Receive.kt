@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.lizard.readout.Readout
+import dev.lizard.ui.UploadItem
+import dev.lizard.ui.ReceiveUpload
 import dev.lizard.ui.Access
 import dev.lizard.ui.Act
 import dev.lizard.ui.Choice
@@ -85,7 +87,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override fun goSend() = a.go(Screen.Send)
     private val on get() = a.phase == RxPhase.On
     override val line: Readout.Line get() =
-        if (!a.granted && r.file == null) Readout.Line(if (a.denied) "No camera access" else "", Readout.Tone.Bad)
+        if (!a.granted && !r.fileMode) Readout.Line(if (a.denied) "No camera access" else "", Readout.Tone.Bad)
         else Readout.line(on, a.phase == RxPhase.Starting, a.phase == RxPhase.Loading, (a.phase as? RxPhase.Error)?.why, a.rx,
             a.files.firstOrNull { it.root == a.root && it.bundle }?.files ?: 0)
     override val showStats get() = s.stats == "on"
@@ -95,8 +97,16 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override fun clearNote() { a.note = "" }
     override val running get() = on || a.phase == RxPhase.Starting || a.phase == RxPhase.Loading
     override val starting get() = a.phase == RxPhase.Starting
+    override val startable get() = r.startable
+    // ai: the File camera's choice in the camera's place while it is idle (2026-11-09): Send's File, Folder and Media (the
+    // ai: photo picker); a folder's line its files' count, as Send's
+    override val upload get() = if (!r.fileMode || running) null else ReceiveUpload(
+        listOf(Act("File", icon = Icons.file) { a.pickReceiveFiles() }, Act("Folder", icon = Icons.folder) { a.pickReceiveFolder() },
+            Act("Media", icon = Icons.image) { a.pickReceiveMedia() }),
+        r.picks.map { UploadItem(it.key, it.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
+        if (r.picks.isEmpty()) "" else Readout.bytes(r.picks.sumOf { it.size }), !r.loadingFile, { r.removePick(it) }, { r.clearPicks() })
     override fun toggleCamera() = a.toggleCamera()
-    override val access get() = if (a.granted || r.file != null) null else Access(Act(if (a.denied) "Open settings" else "Allow camera") { if (a.denied) a.openAppSettings() else a.askCamera() })
+    override val access get() = if (a.granted || r.fileMode) null else Access(Act(if (a.denied) "Open settings" else "Allow camera") { if (a.denied) a.openAppSettings() else a.askCamera() })
     // ai: the received file, the test stream's figures in its place while the camera reads that (2026-10-05)
     private val testing get() = on && a.rx.state == "test"
     private val keptEntry get() = if (a.rx.verified && !testing) a.files.firstOrNull { it.root == a.root } else null
@@ -110,12 +120,12 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override fun cropRatio(portrait: Boolean) = cropOf(portrait).ratio
     override val twoToOne get() = s.layout == "2:1"
     override val off get() = when {
-        r.file != null -> if (a.phase == RxPhase.Idle || a.phase is RxPhase.Error) r.file?.name.orEmpty() else ""
+        r.fileMode -> ""
         !a.granted -> "No camera yet"
         a.phase == RxPhase.Idle || a.phase is RxPhase.Error -> "Camera off"
         else -> ""
     }
-    override val waiting get() = (a.granted || r.file != null) && Readout.gettingReady(on, a.phase == RxPhase.Starting, a.phase == RxPhase.Loading, a.rx)
+    override val waiting get() = (a.granted || r.fileMode) && Readout.gettingReady(on, a.phase == RxPhase.Starting, a.phase == RxPhase.Loading, a.rx)
 
     // ai: the crop the decoder reads, as the screen shows it: 1:1 the frame's centre square, 2:1 its centre region twice
     // ai: as long as high along the long side (rx/receiver.cpp push). The sensor is landscape and the camera turns the
@@ -139,7 +149,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     // ai: the size that puts the crop over the box, and clipped.
     @Composable
     override fun Picture(modifier: Modifier, portrait: Boolean) {
-        if (r.file != null) FilePicture(modifier) else CameraPicture(modifier, portrait)
+        if (r.fileMode) FilePicture(modifier) else CameraPicture(modifier, portrait)
     }
 
     // ai: a file's frames (2026-11-07): the decoder's crop of each, the session's preview, pulled at each frame drawn
@@ -208,23 +218,21 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         if (s.decoder != "cpu" && s.decoder != "pc") out += Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
             val n = v.roundToInt().coerceIn(1, 32); if (n != s.frames) a.change(s.copy(batch = n.toString()))
         }
-        // ai: the back cameras by lens (the closest-focusing where none is chosen: the session's first listed), then a file
-        // ai: picked (its name) and File (2026-11-07: an image, a video or a .lizard played as the camera)
-        val picked = r.file?.let { "file:" + it.path }
-        out += Choice("Camera", picked ?: s.camera.ifEmpty { r.camId }, r.lenses.map { it.id to it.label } + listOfNotNull(picked?.let { it to r.file!!.name }) +
-            ("file:" to "File"), blank = "Camera") { id ->
+        // ai: the back cameras by lens (the closest-focusing where none is chosen: the session's first listed), then File
+        // ai: (2026-11-07: images, videos and .lizard replays played as the camera; since 2026-11-09 picked in the camera's
+        // ai: area, ReceiveState.picks, the field saying File and no file named here)
+        out += Choice("Camera", if (r.fileMode) "file:" else s.camera.ifEmpty { r.camId }, r.lenses.map { it.id to it.label } + ("file:" to "File"), blank = "Camera") { id ->
             when {
-                id == "file:" -> a.pickReceiveFile()
-                id == picked -> {}
+                id == "file:" -> r.enterFiles()
                 else -> {
-                    val same = picked != null && id == s.camera
-                    r.leaveFile()
+                    val same = r.fileMode && id == s.camera
+                    if (r.fileMode) r.leaveFile()
                     if (same) r.cameraChosen(a.running) else a.change(s.copy(camera = id))
                 }
             }
         }
         // ai: a file's one mode is its own and it has no lens: none of the camera's settings but the crop
-        if (picked == null) cameraSettings(out, res, fmt, sizes)
+        if (!r.fileMode) cameraSettings(out, res, fmt, sizes)
         out += Choice("Crop", s.layout, Settings.LAYOUTS.map { it to it }) { a.change(s.copy(layout = it)) }
         return out
     }
@@ -288,7 +296,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override val tools: List<Setting> get() {
         val out = mutableListOf<Setting>()
         out += Choice("Show statistics", s.stats, listOf("off" to "Off", "on" to "On")) { a.change(s.copy(stats = it)) }
-        if (s.decoder != "pc" && r.file == null) {
+        if (s.decoder != "pc" && !r.fileMode) {
             out += Choice("Save replays", s.replays, listOf("off" to "Off", "on" to "On")) { a.change(s.copy(replays = it)) }
             if (s.replays == "on") out += replaySizeSetting(s.replayMb) { a.change(s.copy(replaySize = it.toString())) }
         }
