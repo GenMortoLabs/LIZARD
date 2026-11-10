@@ -594,7 +594,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     // ai: Show statistics, Receive's setting (Settings.stats), one switch for both screens (2026-11-07)
     private val stats get() = a.settings.stats == "on"
     override val tools: List<Setting> get() = listOf(
-        Choice("Show statistics", a.settings.stats, listOf("off" to "Off", "on" to "On")) { a.change(a.settings.copy(stats = it)) },
+        ChipChoice("Show statistics", a.settings.stats, listOf("on" to "On", "off" to "Off")) { a.change(a.settings.copy(stats = it)) },
         ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = s.phase != SendState.Phase.On && s.phase != SendState.Phase.Preparing) { s.test = it })
     override val readout get() = sendLab(s).takeIf { it.isNotEmpty() }?.let { Code(it) }
     // ai: While a send runs the code is the whole screen (2026-10-26): the code alone, the bars hidden (SendState.screenFor);

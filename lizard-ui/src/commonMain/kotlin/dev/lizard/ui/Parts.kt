@@ -413,7 +413,8 @@ fun CodeBlock(text: String, size: Int = 13) =
     Text(text, fontFamily = Mono, fontSize = size.sp, lineHeight = (size + 5).sp, color = if (size < 13) Fg else Muted,
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(8.dp)).background(Card).padding(horizontal = 12.dp, vertical = 8.dp))
 
-// ai: A choice among a few (Send's FPS, Ring, Codes, Encoder, VSync, Payload): 36 dp, 8 dp corners, on the soft fill, the
+// ai: A choice among a few (Send's FPS, Ring, Codes, Encoder, VSync, Payload; Receive's Decoder, Codes and the camera's
+// ai: few; Show statistics, Exclusive fullscreen): 36 dp, 8 dp corners, on the soft fill, the
 // ai: chosen one solid with its label semibold; Chips lays them in a row that wraps, 8 dp apart.
 @Composable
 fun Chip(text: String, on: Boolean, enabled: Boolean = true, onClick: () -> Unit) {

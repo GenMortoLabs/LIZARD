@@ -15,12 +15,18 @@ import kotlin.math.roundToInt
 // ai: drawing them in the fields' rhythm (Fields).
 sealed interface Setting
 
+// ai: How a setting is drawn (2026-11-09): a few fixed choices as chips, a spectrum of many as a slider, a menu only
+// ai: where neither fits (a list as long as the device makes it: a camera, a webcam's resolutions)
+
 // ai: a menu (Select)
 class Choice<T>(val title: String, val value: T, val options: List<Pair<T, String>>, val blank: String = "", val enabled: Boolean = true,
                 val enabledFor: (T) -> Boolean = { true }, val onOpen: () -> Unit = {}, val choose: (T) -> Unit) : Setting
 
-// ai: a choice among a few as chips under its title (Chips: Send's FPS, Ring, Codes, Encoder, VSync, Payload)
-class ChipChoice<T>(val title: String, val value: T, val options: List<Pair<T, String>>, val enabled: Boolean = true, val choose: (T) -> Unit) : Setting
+// ai: a choice among a few as chips under its title (Chips: Send's FPS, Ring, Codes, Encoder, VSync, Payload; Receive's
+// ai: Decoder, Codes (the crop: 1 the 1:1, 2 the 2:1, Send's Codes), Format, Phase lock, Frame rate, Save replays; Show statistics on both; the desktop's Exclusive
+// ai: fullscreen; the phone's Resolution and Compression); `enabledFor` greys a choice the device does not offer
+class ChipChoice<T>(val title: String, val value: T, val options: List<Pair<T, String>>, val enabled: Boolean = true,
+                    val enabledFor: (T) -> Boolean = { true }, val choose: (T) -> Unit) : Setting
 
 // ai: a slider (Bar) under its title and the value as it reads: each value while dragged, `done` at the release
 class Slide(val title: String, val label: String, val value: Float, val range: ClosedFloatingPointRange<Float>, val steps: Int,
@@ -37,14 +43,14 @@ class Code(val text: String, val size: Int = 13) : Setting
 class Press(val act: Act, val enabled: Boolean = true) : Setting
 
 // ai: The receivers' Phase lock (2026-11-08, both apps; the web's #lockRow the same row): On or Off where the camera
-// ai: can delay a capture (the session's camera "lockBar" ""), else greyed "Not supported"; above Frame rate. With it
+// ai: can delay a capture (the session's camera "lockBar" ""), else one greyed chip "Not supported"; above Frame rate. With it
 // ai: on such a camera runs at most LOCK_FPS captures a second (session.h phaseLock), so Frame rate offers no more
 // ai: (lockedRates); off, every rate the camera lists.
 const val LOCK_FPS = 60.0
 
 fun phaseLockSetting(on: Boolean, supported: Boolean, choose: (Boolean) -> Unit): Setting =
-    if (supported) Choice("Phase lock", on, listOf(true to "On", false to "Off")) { choose(it) }
-    else Choice("Phase lock", 0, listOf(0 to "Not supported"), enabled = false) {}
+    if (supported) ChipChoice("Phase lock", on, listOf(true to "On", false to "Off")) { choose(it) }
+    else ChipChoice("Phase lock", 1, listOf(0 to "Not supported"), enabled = false) {}  // ai: none chosen: the chip greyed
 
 // ai: Save replays' Replay size (2026-11-09, both apps; the session's replayBytes): a run's cap, the raw bytes of the
 // ai: frames it keeps (the newest that fit, the earliest dropped as new ones come), a slider from REPLAY_MB_MIN to
@@ -95,7 +101,7 @@ private fun <T> ChoiceView(c: Choice<T>) =
 
 @Composable
 private fun <T> ChipsView(c: ChipChoice<T>) = Field(c.title) {
-    Chips { for ((k, label) in c.options) Chip(label, k == c.value, c.enabled) { if (k != c.value) c.choose(k) } }
+    Chips { for ((k, label) in c.options) Chip(label, k == c.value, c.enabled && c.enabledFor(k)) { if (k != c.value) c.choose(k) } }
 }
 
 // ai: A count's slider whose leftmost step is auto (send.html #blocks and #subchAuto, 2026-10-05): the setting `value` (0

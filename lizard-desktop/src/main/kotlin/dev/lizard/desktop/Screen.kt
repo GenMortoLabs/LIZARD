@@ -119,11 +119,11 @@ class DesktopSend(private val app: App) : SendHost {
     // ai: lab arms a user may try: Exclusive fullscreen (2026-10-31), the monitor taken for the code while sending, shown
     // ai: on Linux alone (X11's lease)
     override val experimental: List<Setting> get() = listOfNotNull(
-        if (!Native.mac && !Native.windows) Choice("Exclusive fullscreen", s.exclusiveFull, listOf(false to "Off", true to "On")) { s.chooseExclusiveFull(it) } else null)
+        if (!Native.mac && !Native.windows) ChipChoice("Exclusive fullscreen", s.exclusiveFull, listOf(true to "On", false to "Off")) { s.chooseExclusiveFull(it) } else null)
     // ai: Show statistics, Receive's setting (ReceiveState.showStats, Prefs.Rx.stats), one switch for both screens (2026-11-07)
     private val stats get() = app.recv.showStats
     override val tools: List<Setting> get() = listOf(
-        Choice("Show statistics", app.recv.showStats, listOf(false to "Off", true to "On")) { app.recv.chooseStats(it) },
+        ChipChoice("Show statistics", app.recv.showStats, listOf(true to "On", false to "Off")) { app.recv.chooseStats(it) },
         ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = !s.sending) { s.chooseTest(it) })
     override val readout get() = s.readout.takeIf { it.isNotEmpty() }?.let { Code(it, 12) }
     // ai: full screen: the code alone (2026-10-23, as the web's and the app's); while a monitor is taken for the code the

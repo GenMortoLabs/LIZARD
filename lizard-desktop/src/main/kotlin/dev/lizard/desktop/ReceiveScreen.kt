@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import dev.lizard.readout.Readout
 import dev.lizard.ui.Access
 import dev.lizard.ui.Act
+import dev.lizard.ui.ChipChoice
 import dev.lizard.ui.Choice
 import dev.lizard.ui.Code
 import dev.lizard.ui.ColumnWidth
@@ -130,13 +131,14 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         r.preview?.let { Image(it, contentDescription = null, modifier, contentScale = ContentScale.Fit, filterQuality = FilterQuality.Low) }
     }
 
-    // ai: Settings (the web's #dev): a menu or a slider each, the camera's controls where it has them
+    // ai: Settings (the web's #dev): chips, a slider or a menu each (lizard-ui Settings.kt: the menus Camera and
+    // ai: Resolution, a webcam's sizes a long list), the camera's controls where it has them
     override val settings: List<Setting> get() {
         val ci = r.info
         val m = r.mode
         val out = mutableListOf<Setting>()
         // ai: GPU and CPU; with neither chosen the decoder is auto's and the one it runs on is shown
-        out += Choice("Decoder", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "GPU", "cpu" to "CPU")) { r.chooseDecoder(it) }
+        out += ChipChoice("Decoder", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "GPU", "cpu" to "CPU")) { r.chooseDecoder(it) }
         // ai: the file camera's field says File (its files are the camera area's, ReceiveState.picks)
         out += Choice("Camera", r.driverFor?.id ?: if (r.fileCamera) "file:" else r.camera.ifEmpty { r.cameras.firstOrNull()?.id ?: "" }, r.cameraOptions, blank = "Camera", onOpen = { r.refreshCameras() }) { r.chooseCameraOption(it) }
         if (r.usb?.installed == true) out += Press(Act("Remove USB driver") { r.removeDriver() }, enabled = !r.driverBusy)
@@ -151,20 +153,21 @@ class DesktopReceive(private val app: App) : ReceiveHost {
             out += Choice("Resolution", m.size, sizes.map { it.size to "${it.w} x ${it.h}" }) { r.chooseRes(it) }
             // ai: the pixel formats at this size, where there is a choice (a webcam's uncompressed one against its Motion-JPEG)
             val formats = ci.modes.filter { it.size == m.size }.map { it.format }.distinct()
-            if (formats.size > 1) out += Choice("Format", m.format, formats.map { it to it }) { r.chooseFormat(it) }
+            if (formats.size > 1) out += ChipChoice("Format", m.format, formats.map { it to it }) { r.chooseFormat(it) }
             // ai: Phase lock (2026-11-08), above the rates: On or Off on a camera that can delay a capture (Aravis on its
             // ai: software trigger), greyed "Not supported" on one that cannot (UVC); with it on, the rates at most 60
             val locks = ci.lockBar.isEmpty()
             out += phaseLockSetting(r.lockOn, locks) { r.chooseLock(it) }
             val rates = lockedRates(ci.modes.filter { it.size == m.size && it.format == m.format }.map { it.fps }.distinctBy { ReceiveState.fpsText(it) }.sorted(),
                 locks && r.lockOn)
-            out += Choice("Frame rate", ReceiveState.fpsText(m.fps), rates.map { ReceiveState.fpsText(it) to ReceiveState.fpsText(it) }) { v ->
+            out += ChipChoice("Frame rate", ReceiveState.fpsText(m.fps), rates.map { ReceiveState.fpsText(it) to ReceiveState.fpsText(it) }) { v ->
                 rates.firstOrNull { ReceiveState.fpsText(it) == v }?.let { r.chooseFps(it) }
             }
         }
-        // ai: a phone crops on its side, an upload was cropped when recorded (the receiver takes their crop): no Crop here
+        // ai: a phone crops on its side, an upload was cropped when recorded (the receiver takes their crop): no Codes
+        // ai: here (the crop: 1 the 1:1, 2 the 2:1, Send's Codes)
         if (!r.fixed) {
-            out += Choice("Crop", r.layout, listOf("1:1" to "1:1", "2:1" to "2:1")) { r.chooseLayout(it) }
+            out += ChipChoice("Codes", r.layout, listOf("1:1" to "1", "2:1" to "2")) { r.chooseLayout(it) }
             ci?.control("zoom")?.let { out += zoom(it) }
             ci?.control("exposure")?.let { out += exposure(it) }
             ci?.control("gain")?.let { out += gain(it) }
@@ -224,10 +227,10 @@ class DesktopReceive(private val app: App) : ReceiveHost {
     // ai: readout
     override val tools: List<Setting> get() {
         val out = mutableListOf<Setting>()
-        out += Choice("Show statistics", r.showStats, listOf(false to "Off", true to "On")) { r.chooseStats(it) }
+        out += ChipChoice("Show statistics", r.showStats, listOf(true to "On", false to "Off")) { r.chooseStats(it) }
         // ai: none for a file: no light is captured
         if (!r.played) {
-            out += Choice("Save replays", r.replays, listOf(false to "Off", true to "On")) { r.chooseReplays(it) }
+            out += ChipChoice("Save replays", r.replays, listOf(true to "On", false to "Off")) { r.chooseReplays(it) }
             if (r.replays) out += replaySizeSetting(r.replayMb) { r.chooseReplayMb(it) }
         }
         if (r.showStats) {

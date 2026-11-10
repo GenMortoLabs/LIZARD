@@ -26,6 +26,7 @@ import dev.lizard.ui.UploadItem
 import dev.lizard.ui.ReceiveUpload
 import dev.lizard.ui.Access
 import dev.lizard.ui.Act
+import dev.lizard.ui.ChipChoice
 import dev.lizard.ui.Choice
 import dev.lizard.ui.Code
 import dev.lizard.ui.ColumnWidth
@@ -203,17 +204,17 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
 
     // ai: Settings (2026-10-02, the web's): the decoder (auto shows what it runs on; PC only while a PC receiver is heard
     // ai: on the link), the PC link while a cable is in, the PC decoder's Compression, the GPU's Batch size, the camera
-    // ai: (the back lenses), its mode (Resolution, Format, Phase lock and Frame rate, the session's), Zoom, Crop
+    // ai: (the back lenses), its mode (Resolution, Format, Phase lock and Frame rate, the session's), Zoom, Codes (the crop)
     override val settings: List<Setting> get() {
         val out = mutableListOf<Setting>()
         val sizes = r.modes.map { it.size }.toSet()
         val res = r.mode?.size ?: "1920x1080"
         val fmt = r.mode?.format ?: "auto"
         val decoders = listOf("gpu" to "GPU", "cpu" to "CPU") + listOfNotNull(("pc" to "PC").takeIf { a.pcPresent || s.decoder == "pc" })
-        out += Choice("Decoder", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder, decoders) { a.change(s.copy(decoder = it)) }
+        out += ChipChoice("Decoder", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder, decoders) { a.change(s.copy(decoder = it)) }
         if (a.usb.connected) out += pcLink()
         // ai: the PC decoder's frames packed as .lizard frames or raw (Settings.pcPack): raw for a phone too weak or too warm
-        if (s.decoder == "pc") out += Choice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) }
+        if (s.decoder == "pc") out += ChipChoice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) }
         // ai: the most frames a GPU launch takes (Settings.batch); the C decodes a frame at a time: not shown with it
         if (s.decoder != "cpu" && s.decoder != "pc") out += Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
             val n = v.roundToInt().coerceIn(1, 32); if (n != s.frames) a.change(s.copy(batch = n.toString()))
@@ -233,19 +234,19 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         }
         // ai: a file's one mode is its own and it has no lens: none of the camera's settings but the crop
         if (!r.fileMode) cameraSettings(out, res, fmt, sizes)
-        out += Choice("Crop", s.layout, Settings.LAYOUTS.map { it to it }) { a.change(s.copy(layout = it)) }
+        out += ChipChoice("Codes", s.layout, Settings.LAYOUTS.map { it to it.substringBefore(":") }) { a.change(s.copy(layout = it)) }
         return out
     }
 
     // ai: the camera's mode (Resolution, Format, Frame rate, the session's) and its zoom
     private fun cameraSettings(out: MutableList<Setting>, res: String, fmt: String, sizes: Set<String>) {
-        out += Choice("Resolution", res, Settings.RESOLUTIONS.map { it to it }, enabledFor = { sizes.isEmpty() || it in sizes }) { r.chooseResolution(it) }
+        out += ChipChoice("Resolution", res, Settings.RESOLUTIONS.map { it to it }, enabledFor = { sizes.isEmpty() || it in sizes }) { r.chooseResolution(it) }
         // ai: the camera's format: Auto, or each the lens offers at this resolution (RAW at any) that the decoder reads
         // ai: (Private with the GPU decoder alone); shown where there is a choice
         val fmts = Settings.FORMATS.filter { (k, _) ->
             r.modes.any { it.format == k && (k.startsWith("raw") || it.size == res) } && !(k == "private" && (s.decoder == "cpu" || s.decoder == "pc"))
         }
-        if (fmts.size > 1 || fmt != "auto") out += Choice("Format", fmt, listOf("auto" to "Auto") + fmts) { r.chooseFormat(it) }
+        if (fmts.size > 1 || fmt != "auto") out += ChipChoice("Format", fmt, listOf("auto" to "Auto") + fmts) { r.chooseFormat(it) }
         // ai: Phase lock (2026-11-08), above the rates: On or Off where the lens can delay a capture, else greyed "Not
         // ai: supported" (as if it can until the session describes the lens)
         val locks = r.lockBar?.isEmpty() ?: true
@@ -254,7 +255,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         // ai: lock, where there is a choice
         val rates = lockedRates(r.modes.filter { it.size == res && it.format == fmt }.map { it.fps }.distinct().sortedDescending(), locks && s.lock != "off")
         val fps = r.mode?.fps ?: rates.firstOrNull() ?: 0.0
-        if (rates.size > 1) out += Choice("Frame rate", fpsText(fps), rates.map { fpsText(it) to fpsText(it) }) { v ->
+        if (rates.size > 1) out += ChipChoice("Frame rate", fpsText(fps), rates.map { fpsText(it) to fpsText(it) }) { v ->
             rates.firstOrNull { fpsText(it) == v }?.let { r.chooseFps(it) }
         }
         out += zoom(r.zoomRange)
@@ -295,9 +296,9 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     // ai: Download, the lab line, the readout)
     override val tools: List<Setting> get() {
         val out = mutableListOf<Setting>()
-        out += Choice("Show statistics", s.stats, listOf("off" to "Off", "on" to "On")) { a.change(s.copy(stats = it)) }
+        out += ChipChoice("Show statistics", s.stats, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(stats = it)) }
         if (s.decoder != "pc" && !r.fileMode) {
-            out += Choice("Save replays", s.replays, listOf("off" to "Off", "on" to "On")) { a.change(s.copy(replays = it)) }
+            out += ChipChoice("Save replays", s.replays, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(replays = it)) }
             if (s.replays == "on") out += replaySizeSetting(s.replayMb) { a.change(s.copy(replaySize = it.toString())) }
         }
         for (rp in r.runs) {
