@@ -58,6 +58,17 @@ input[type=range]::-moz-range-thumb{width:20px;height:20px;border:0;border-radiu
 input[type=range]:disabled{opacity:.38}
 select:disabled,input:disabled{color:rgba(17,17,17,.38)}
 @media (pointer:fine),(pointer:none){select,input:not([type=range]){min-height:40px}}
+/* ai: A choice among a few as the apps' chips (lizard-ui Parts.kt Chip and Chips, 2026-11-10; the rule: a few fixed
+   choices chips, a spectrum a slider, a menu the last resort): a row that wraps, 8 px apart; each 36 px tall, 8 px
+   corners, 14 px in from its ends, 15 px text on the soft fill; the chosen one solid, its label semibold; one not
+   available at 38% ink. Its <select data-chips> stays the value and is not drawn (ui.mjs chips). */
+select[data-chips]{display:none}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:inherit;font-size:15px;line-height:20px;font-weight:400;color:var(--fg);background:var(--soft);border:0;border-radius:8px;
+  min-height:36px;padding:0 14px;margin:0;cursor:pointer}
+.chip.on{background:var(--fg);color:var(--bg);font-weight:600}
+.chip:disabled{color:rgba(17,17,17,.38);cursor:default}.chip.on:disabled{color:var(--bg)}
+@media (hover:hover){.chip:not(.on):not(:disabled):hover{background:var(--pressed)}}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 
 /* ai: Status: .status is the state line, .nums the user's figures under it (progress, size, speed, time left: their

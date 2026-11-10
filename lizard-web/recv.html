@@ -123,12 +123,12 @@
            until one has opened and the browser names them (2026-11-06, as the apps'). -->
       <!-- ai: the apps' Decoder (2026-11-06): GPU or CPU; with neither chosen auto runs, named after what it runs
            (recv.mjs showDecoder): the GPU where WebGPU makes the decoder, else the C -->
-      <label>Decoder <select id="dec"><option value="auto" selected hidden disabled>GPU</option><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
+      <label>Decoder <select id="dec" data-chips><option value="auto" selected hidden disabled>GPU</option><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
       <label id="camRow">Camera <select id="cam"><option value="auto" selected hidden disabled>Camera</option></select></label>
-      <label id="resRow">Resolution <select id="res"><option value="1280x720">1280 x 720</option><option value="1920x1080" selected>1920 x 1080</option><option value="2560x1440">2560 x 1440</option><option value="3840x2160">3840 x 2160</option></select></label>
+      <label id="resRow">Resolution <select id="res" data-chips><option value="1280x720">1280 x 720</option><option value="1920x1080" selected>1920 x 1080</option><option value="2560x1440">2560 x 1440</option><option value="3840x2160">3840 x 2160</option></select></label>
       <!-- ai: the apps' Phase lock (2026-11-08): a browser cannot delay a capture, so greyed, never kept -->
-      <label id="lockRow">Phase lock <select id="lock" disabled><option selected>Not supported</option></select></label>
-      <label id="fpsRow">Frame rate <select id="fps"><option value="auto" selected hidden disabled>60</option><option value="30">30</option><option value="60">60</option></select></label>
+      <label id="lockRow">Phase lock <select id="lock" disabled data-chips><option selected data-none>Not supported</option></select></label>
+      <label id="fpsRow">Frame rate <select id="fps" data-chips><option value="auto" selected hidden disabled>60</option><option value="60">60</option><option value="30">30</option></select></label>
       <!-- ai: the camera's own zoom, where the browser exposes it (2026-11-06; the apps' Zoom: the value a ratio of its least) -->
       <div id="zoomRow" class="blocks" hidden><span class="row"><span>Zoom</span><span id="zoomOut"></span></span><input id="zoom" type="range" aria-label="Zoom"></div>
     </div>
@@ -136,7 +136,7 @@
   <!-- ai: Developer Tools ("Advanced" until 2026-10-03): the lab line and the readouts (no replay recording since
        2026-10-09: the Android app's Save replays records) -->
   <details class="dev" id="logs"><summary>Developer Tools</summary>
-    <div class="grid"><label>Show statistics <select id="stats"><option value="0" selected>Off</option><option value="1">On</option></select></label></div>
+    <div class="grid"><label>Show statistics <select id="stats" data-chips><option value="1">On</option><option value="0" selected>Off</option></select></label></div>
     <p id="lab" class="lab"></p>
     <pre id="cfg" class="readout">light: no format word read yet</pre><pre id="out" class="readout"></pre><pre id="file" class="readout"></pre>
   </details>
@@ -151,6 +151,18 @@
     if (ls.getItem("recv:collapsed") === "1") document.body.classList.add("collapsed"); { const w = +ls.getItem("recv:side"); if (w > 0) document.documentElement.style.setProperty("--side", Math.max(180, Math.min(w, innerWidth * 0.6)) + "px"); }
     for (const el of document.querySelectorAll("#dev select, #logs select")) { const v = ls.getItem("recv:" + el.id); if (v !== null && [...el.options].some((o) => o.value === v)) el.value = v; }
     document.body.classList.toggle("stats", $("stats").value === "1");
+    // ai: the chips drawn before the first paint, as ui.mjs chips draws them (it takes these rows over at the module's start)
+    for (const sel of document.querySelectorAll("select[data-chips]")) {
+      const box = document.createElement("div"), cur = sel.selectedOptions[0];
+      box.className = "chips";
+      for (const o of sel.options) {
+        if (o.hidden) continue;
+        const b = document.createElement("button"), on = !!cur && (cur.hidden ? cur.text === o.text : cur === o) && !("none" in o.dataset);
+        b.type = "button"; b.className = on ? "chip on" : "chip"; b.textContent = o.text; b.disabled = sel.disabled || o.disabled;
+        box.append(b);
+      }
+      sel.after(box);
+    }
   } catch {} })();
   </script>
 </div>

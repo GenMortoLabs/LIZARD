@@ -264,6 +264,52 @@ export function slider(el) {
   fill();
 }
 
+// ai: chips(sel): a choice among a few as the apps' chips (lizard-ui Parts.kt Chip, 2026-11-10; the rule: a few fixed
+// ai: choices chips, a spectrum a slider, a menu the last resort). The <select data-chips> stays the value (its
+// ai: handlers, persist and restoreSaved, the checks), not drawn (ui.css); the row after it, a page's inline script's
+// ai: (drawn before the first paint) or made here, holds a button an option the select shows: a hidden option (an "auto"
+// ai: named after what it runs) lights the shown one of its text, an option data-none is never lit (Phase lock's lone
+// ai: "Not supported"), a disabled option or select greys its chip. An unlit chip clicked sets the select and fires its
+// ai: input and change, as a pick from its menu. Drawn again at every change of the value (an own-property setter over
+// ai: value and selectedIndex, as slider's), of the options, their text or the disabled state.
+export function chips(sel) {
+  let box = sel.nextElementSibling;
+  if (!box || !box.classList.contains("chips")) { box = document.createElement("div"); box.className = "chips"; sel.after(box); }
+  box.setAttribute("role", "radiogroup");
+  const title = sel.closest("label")?.firstChild?.textContent.trim();
+  if (title) box.setAttribute("aria-label", title);
+  const draw = () => {
+    const cur = sel.selectedOptions[0], shown = [...sel.options].filter((o) => !o.hidden);
+    const lit = cur && cur.hidden ? shown.find((o) => o.text === cur.text) : cur;
+    while (box.children.length > shown.length) box.lastElementChild.remove();
+    while (box.children.length < shown.length) box.append(document.createElement("button"));
+    shown.forEach((o, i) => {
+      const b = box.children[i], on = o === lit && !("none" in o.dataset);
+      b.type = "button";
+      b.className = on ? "chip on" : "chip";
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(on));
+      if (b.textContent !== o.text) b.textContent = o.text;
+      b.disabled = sel.disabled || o.disabled;
+      b.dataset.value = o.value;
+    });
+  };
+  box.addEventListener("click", (e) => {
+    const b = e.target.closest(".chip");
+    if (!b || !box.contains(b) || b.disabled || b.classList.contains("on")) return;
+    sel.value = b.dataset.value;
+    sel.dispatchEvent(new Event("input", { bubbles: true }));
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  for (const k of ["value", "selectedIndex"]) {
+    const d = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, k);
+    Object.defineProperty(sel, k, { configurable: true, get() { return d.get.call(this); }, set(v) { d.set.call(this, v); draw(); } });
+  }
+  new MutationObserver(draw).observe(sel, { childList: true, subtree: true, attributes: true, characterData: true });
+  sel.addEventListener("change", draw);
+  draw();
+}
+
 // ai: registerApp(onFail): the installable app's worker (lizard-web/pwa/service-worker.js, a ported scheme), only on a built
 // ai: page. Like that scheme's page script it only induces and observes: an update check whenever the page comes back into view
 // ai: (an installed app that never navigates hears of a new build no other way), and onFail when an update's install

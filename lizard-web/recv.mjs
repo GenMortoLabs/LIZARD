@@ -27,12 +27,14 @@ import { PoolPolicy } from "./pool.mjs";
 import { logPost } from "./devlog.mjs";
 import { R_RING, SPAN, MODULES, N_FOR, NAME, PICTURE_SIZES, subchOf } from "../liblizard/sim/lizard_pick.mjs";
 import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
-import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings, icon } from "./ui.mjs";
+import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings, icon, chips } from "./ui.mjs";
 import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
 // ai: Settings and Developer Tools (the Developer panel until 2026-10-01) open as they were left, a phone session
 // ai: being a series of reloads; restored here, at the top of the module, so nothing is seen to move. Errors a user must
 // ai: see go over the camera's box (#idle) instead.
+// ai: the few-choice settings as chips (ui.mjs chips; the inline script drew them before the first paint)
+for (const sel of document.querySelectorAll("select[data-chips]")) chips(sel);
 remember($("dev"), "recv:dev");
 remember($("logs"), "recv:logs");
 collapser($("collapse"), "recv:collapsed");   // ai: the sidebar collapser (ui.mjs); the camera box takes the width
@@ -1351,8 +1353,7 @@ let rateNote = "";
 function showRates() {
   for (const o of $("fps").options) {
     if (o.value === "auto") continue;
-    o.disabled = refused.has(`${$("cam").value}|${$("res").value}|${o.value}`);
-    o.text = `${o.value}${o.disabled ? " (unavailable)" : ""}`;
+    o.disabled = refused.has(`${$("cam").value}|${$("res").value}|${o.value}`);   // ai: its chip greyed (ui.mjs chips)
   }
 }
 // ai: The browser's limit (#first, 2026-10-09), before the first camera start on this browser: shown until a start goes
