@@ -1,0 +1,5 @@
+- Codes in the 64 and 128 rings carry anchors sized to the ring, so a small code reads from farther away. Send and receive these rings with 0.9.3 on both ends; the 256 ring is unchanged.
+- The GPU decoder finds codes at steeper angles and with a corner cut off.
+- Phase lock is a setting, on by default.
+- File plays several files or a folder in order, each frame read whole.
+- Settings with a few choices are chips.
