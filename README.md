@@ -313,8 +313,8 @@ grows with its frequency), which is turned back before decoding.
 | block | 476 bytes (a 4-byte id and 472 of payload) plus a CRC-32, sent as one LDPC codeword over 2,248 to 3,840 consecutive frequencies by its code rate | codeword, packet |
 | code rate | the share of the sent bits that is data | code rate |
 | rate profile | which code rate each block gets, by its frequencies | unequal error protection |
-| version, LIZARD-k | how much a frame holds: LIZARD-k has k sub-channels and is version k / 16. LIZARD-592 holds 71 blocks, about 33.5 KB | QR version (capacity) |
-| ring | the border's size: 64, 128 or 256 band cells a side, 128 by default. It does not depend on the version: any ring can carry any picture. A larger ring gives the picture more of the screen but asks for a steadier camera | none (a QR code's size follows its version) |
+| version | how much a frame holds: a code with k sub-channels (64 to 1024, in steps of 16) is version k / 16; 592 sub-channels hold 71 blocks, about 33.5 KB | QR version (capacity) |
+| ring, LIZARD-64, -128, -256 | the border's size, and the code's name: 64, 128 or 256 band cells a side, LIZARD-128 by default. It does not depend on the version: any ring can carry any picture. A larger ring gives the picture more of the screen but asks for a steadier camera | none (a QR code's size follows its version) |
 | format word | the short Reed-Solomon-coded header in the border, naming the version and the frame rate | format information |
 | timing track | the known pattern in the border's band | timing pattern |
 | corner mark | the square at each corner of the border | finder pattern |
@@ -352,7 +352,7 @@ format's arithmetic. Its sections:
 | section | covers |
 |---|---|
 | 1 to 2 | what LIZARD is, its terms, its fixed constraints (luminance only, generic screens and cameras, a border that grows outwards only, a self-describing symbol), and what conformance means |
-| 3. The formats | the 61 versions (LIZARD-64 to LIZARD-1024: sub-channels in steps of 16), the rate profile that sets each block's code rate, the picture size each version takes, the three rings, capacity, and how a sender picks a version for a screen |
+| 3. The formats | the 61 versions (64 to 1024 sub-channels, in steps of 16), the rate profile that sets each block's code rate, the picture size each version takes, the three rings, capacity, and how a sender picks a version for a screen |
 | 4. The border | module by module: rim, ring, gap, band, guard, the corner marks, the timing track and the margin |
 | 5. The format word | its fields (magic, version, display rate), its Reed-Solomon code and where its cells sit in each ring |
 | 6. The picture | the coefficient order, QPSK, the transform, clipping to grey, resampling onto the painted grid, the anchors, and where a receiver samples |
@@ -432,7 +432,7 @@ and the author's 1080p office monitors, by hand:
 
 | receiver | rate |
 |---|---|
-| Android app, two codes side by side (2:1 crop) | 4.1 MB/s median and 4.5 max over 27 s (logged 2026-10-27): two LIZARD-664 codes of 81 blocks each in the 256 ring at 60 pictures a second (the test stream), about 4.6 MB/s offered |
+| Android app, two codes side by side (2:1 crop) | 4.1 MB/s median and 4.5 max over 27 s (logged 2026-10-27): two codes of 664 sub-channels, 81 blocks each, in LIZARD-256 at 60 pictures a second (the test stream), about 4.6 MB/s offered |
 
 No current figure exists for one code alone (1:1), nor for the web receiver, which decodes with the C, on a phone.
 
