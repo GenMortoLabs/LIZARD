@@ -215,7 +215,7 @@ compose.desktop {
             linux {
                 packageName = "lizard-sender"
                 // ai: the project's public address (GitHub's private one for its account), never a person's email
-                debMaintainer = "262231965+FNWTalon@users.noreply.github.com"
+                debMaintainer = "354678721+GenMortoLabs@users.noreply.github.com"
                 iconFile.set(project.file("packaging/lizard.png"))
                 shortcut = true
                 menuGroup = "Utility"

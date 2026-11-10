@@ -41,7 +41,7 @@ val LocalCredits = staticCompositionLocalOf { emptyList<Credit>() }
 
 // ai: The repository, opened in the platform's browser (LizardTheme's `browse`: Android's ACTION_VIEW, the desktop's
 // ai: browser)
-const val SOURCE_URL = "https://github.com/FNWTalon/LIZARD"
+const val SOURCE_URL = "https://github.com/GenMortoLabs/LIZARD"
 val LocalBrowse = staticCompositionLocalOf<(String) -> Unit> { {} }
 
 // ai: Source code (2026-11-03; the web's #source): a row after About on Home, Send and Receive, drawn as a fold's row (a

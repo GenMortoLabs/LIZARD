@@ -15,4 +15,4 @@
 
 <p>Requirements: Android 10 or later, a 64-bit ARM phone and a back camera.</p>
 
-<p>The format, its specification and all the code are open: https://github.com/FNWTalon/LIZARD</p>
+<p>The format, its specification and all the code are open: https://github.com/GenMortoLabs/LIZARD</p>

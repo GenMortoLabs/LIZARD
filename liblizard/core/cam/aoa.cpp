@@ -81,7 +81,7 @@ constexpr uint8_t GET_PROTOCOL = 51, SEND_STRING = 52, START = 53;
 constexpr uint8_t VENDOR_IN = 0xC0, VENDOR_OUT = 0x40;
 // ai: the strings the app's filter matches (res/xml/accessory_filter.xml, PcLink.kt): manufacturer, model,
 // ai: description, version, URI (Android offers it where no app matches), serial
-const char* const STRINGS[6] = {"LIZARD", "PC receiver", "LIZARD's PC receiver", "1", "https://github.com/FNWTalon/LIZARD", ""};
+const char* const STRINGS[6] = {"LIZARD", "PC receiver", "LIZARD's PC receiver", "1", "https://github.com/GenMortoLabs/LIZARD", ""};
 // ai: the phone's way back onto the bus as an accessory; Windows installs the accessory's driver on its first arrival
 #if defined(_WIN32)
 constexpr int SWITCH_MS = 15000;

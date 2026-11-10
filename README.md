@@ -6,7 +6,7 @@ carries about 4 MB/s (see [Status](#status)).
 
 - **Demo:** [fosslabs.dev](https://fosslabs.dev)
 - **How it works:** [an example on video](https://www.youtube.com/shorts/pjcAtQ7GcVQ)
-- **Apps:** [0.9.2 (beta)](https://github.com/FNWTalon/LIZARD/releases/tag/v0.9.2): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
+- **Apps:** [0.9.2 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.9.2): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
 
 ## The idea
 
@@ -30,6 +30,17 @@ In signal-processing terms this is OFDM, the modulation used by Wi-Fi and 4G/5G,
 [Prior work](#prior-work)).
 
 ## What a frame looks like
+
+<table>
+<tr>
+<td align="center" valign="bottom"><img src="docs/frame-ring64.png" width="270" alt="A frame in the 64 ring"><br>the 64 ring</td>
+<td align="center" valign="bottom"><img src="docs/frame-ring128.png" width="242" alt="A frame in the 128 ring"><br>the 128 ring (the default)</td>
+<td align="center" valign="bottom"><img src="docs/frame-ring256.png" width="228" alt="A frame in the 256 ring"><br>the 256 ring</td>
+</tr>
+</table>
+
+One frame of LIZARD-480 (a 1024-sample picture, 58 blocks) in each ring, as the sender paints it and at one scale:
+the picture is the same, the border grows outwards with the ring, and the anchors are a 3 x 3, 5 x 5 and 7 x 7 grid.
 
 ```
  ▄▄▄▄▄▄▄▄▄▄ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
