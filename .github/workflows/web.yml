@@ -1,4 +1,5 @@
-# The web app (lizard-web/app) built from a clean checkout and published on GitHub Pages.
+# The web app (lizard-web/app) built from a clean checkout, as a check. The site is Cloudflare Pages' (its own build of
+# main); nothing here publishes it.
 name: Web app
 
 on:
@@ -8,12 +9,10 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   EMSDK_VERSION: 6.0.9
@@ -49,17 +48,3 @@ jobs:
 
       - name: The web app
         run: liblizard/build.sh app
-
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: lizard-web/app
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-24.04
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
