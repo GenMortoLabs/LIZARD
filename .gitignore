@@ -5,6 +5,7 @@
 /research/*
 !/research/SPEC.md
 /replays
+/dataset
 /.vscode/
 CLAUDE.md
 

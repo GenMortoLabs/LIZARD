@@ -1,7 +1,7 @@
 // ai: The CPU decoder's check: recorded frames through the native C (cpu/codec.h), on one thread or several.
 //   lizard_cpu_check info
 //   lizard_cpu_check replay <run> [frames] [threads] [seq|none|time]
-// ai: replay: the frames of the recording research/replays/<run>.lizard (tools/recording.h; a path with a '/'
+// ai: replay: the frames of the recording research/replays/real/<run>.lizard (tools/recording.h; a path with a '/'
 // ai: too), each decoded once. seq (one thread, the default there): the held word is the last word read in frame order, as the
 // ai: web's blind replay carries it (sim/phy.mjs makeBlind), so the block total is comparable with
 // ai: `node scripts/exp/capture_check.mjs` (its default arm, blind) on the same run. none (the default on several
@@ -14,6 +14,7 @@
 // ai: receivers run.
 // ai: info runs on its own; replay reads a recording, the lab's research/ (LIZ_BARCODE), which is not published.
 // ai: Env: LIZ_BARCODE (../research), LIZ_PASSES (1: timing passes over the frames), LIZ_NMAX (1536: every picture of the ladder, as the receiver's pool).
+// ai: LIZ_PERFRAME=1 (replay): a line a frame after the run (below).
 #include "codec.h"
 #include "json.hpp"
 #include "axes.h"
@@ -123,6 +124,14 @@ static int replay(const std::string& run, int want, int threads, std::string mod
     fnv(deep, &r.deep, sizeof r.deep);
     ms.push_back(r.ms);
   }
+  // ai: LIZ_PERFRAME=1: a line a frame, in frame order after the run, in lizard_gpu_check's form for the fields the C has
+  // ai: ("frame <index> found <0|1> ring <r> version <v> held <0|1> blocks <n> word <v>", word 0 where none read), so one
+  // ai: run of many cells splits by frame (scripts/gpu/native/peaks.mjs readFrames)
+  if (envOr("LIZ_PERFRAME", "") == "1")
+    for (int i = 0; i < frames; i++) {
+      const auto& r = res[(size_t)i];
+      printf("frame %d found %d ring %d version %d held %d blocks %d word %d\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.fr.held != 0, r.got, r.fr.word ? r.fr.version : 0);
+    }
   std::sort(ms.begin(), ms.end());
   std::sort(passMs.begin(), passMs.end());
   double sum = 0;
@@ -152,6 +161,6 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (cmd == "replay" && argc > 2) return replay(argv[2], argc > 3 ? atoi(argv[3]) : 0, argc > 4 ? std::max(1, atoi(argv[4])) : 1, argc > 5 ? argv[5] : "");
-  fprintf(stderr, "lizard_cpu_check info | replay <run> [frames] [threads] [seq|none|time]  (the recording $LIZ_BARCODE/replays/<run>.lizard, ../research by default)\n");
+  fprintf(stderr, "lizard_cpu_check info | replay <run> [frames] [threads] [seq|none|time]  (the recording $LIZ_BARCODE/replays/real/<run>.lizard, ../research by default)\n");
   return 2;
 }
