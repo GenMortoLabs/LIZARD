@@ -5,7 +5,8 @@
 //     baseId is the first block id in the frame, defaulting to seq * blocksPerFrame. A live
 //     sender passes its own monotonic counter instead: blocksPerFrame moves when the layout is
 //     re-picked mid-stream, and an id derived from it would walk backwards onto ids already sent.
-//   phy.decode(img, iw, ih, truth, rgba) -> one result per phy.variants entry (rgba: img is RGBA, not luma):
+//   phy.decode(img, iw, ih, truth, rgba, axis) -> one result per phy.variants entry (rgba: img is RGBA, not luma;
+//        axis: [x, y], where the camera's optical axis falls in the image, null for its centre):
 //        { fresh, seen, bad, found, ber, mi, ms: { detect, sample, fec, total } }
 //
 // A variant is a decoder setting applied to the same capture, which is how ablations stay
@@ -113,8 +114,8 @@ async function makeBlind(spec) {
   let held = 0, builds = 0;
   return {
     label: `lizard blind to ${nmax}`, family: "lizard", variants: ["blind"], usefulBytes: fa.blockBytes - 4, nmax,
-    decode(img, iw, ih, truth, rgba = false) {
-      const t = performance.now(), r = fa.decode(img, iw, ih, { held, rgba }), total = performance.now() - t;
+    decode(img, iw, ih, truth, rgba = false, axis = null) {
+      const t = performance.now(), r = fa.decode(img, iw, ih, { held, rgba, axis }), total = performance.now() - t;
       if (r.fmt) held = r.fmt.version;
       // ai: built: this frame built a picture's codec (its first sight of that ring and picture; src/wasm.c pic_for).
       const built = r.builds > builds;
@@ -182,9 +183,9 @@ async function makeLizard(spec) {
       }
       return { got, fresh, seen: n2, bad, found: r.found, fmt: r.fmt, quad: r.quad, mark: r.mark, ber: NaN, mi: NaN, ms: { detect: r.msDetect, sample: r.msSample, fec: r.msDecode, total } };
     },
-    decode(img, iw, ih, truth, rgba = false) {
+    decode(img, iw, ih, truth, rgba = false, axis = null) {
       return variants.map((v, vi) => {
-        const t = performance.now(), r = fc.decode(img, iw, ih, { ...v, rgba }), total = performance.now() - t;
+        const t = performance.now(), r = fc.decode(img, iw, ih, { ...v, rgba, axis }), total = performance.now() - t;
         return this.tally(r, vi, total);
       });
     },

@@ -1465,32 +1465,24 @@ static void refine_node(const ob_layout_t *L, const image_t *im, const homo_t *H
   nd->dy = pdy + box * jxy + boy * jyy;
 }
 
-// The mesh: the interior of a code that carries marks on its border only, computed from the border. Averaging
-// neighbours inward is wrong for the two errors that matter: a lens's radial distortion, once the corners are pinned,
-// is largest along the edges and zero in the middle, which no average of edge values reproduces, and rolling-shutter
-// jello is a sideways shift that depends on the image row alone. So the border's residuals are fitted with a model of
-// the lens and of what the homography missed (below), per frame, nothing calibrated, and what the fit leaves is carried
-// inward by a Coons patch, the blend of the four border curves, which is exact for any field that is a function of the
-// row plus one of the column.
-// ai: The lens about its axis (2026-10-17; STATUS "The lens about its axis"). What the border nodes say H
-// ai: missed, fitted as the radial terms k1 to kK about the camera's optical axis, k |q|^(2k) q (the radial part of
+// The mesh: the interior of a code, computed from its border and its anchors. Averaging neighbours inward is wrong for
+// the two errors that matter: a lens's radial distortion, once the corners are pinned, is largest along the edges and
+// zero in the middle, which no average of edge values reproduces, and rolling-shutter jello is a sideways shift that
+// depends on the image row alone. So the border's residuals and the anchors' are fitted with a model of the lens and of
+// what the homography missed (below), per frame, nothing calibrated, and what the fit leaves at the anchors is carried
+// between them by a cubic mesh (border_fill_anchors). Under the anchors' minimum the border alone carries it: the
+// homography's change and a Coons patch, the blend of the four border curves, which is exact for any field that is a
+// function of the row plus one of the column (border_fill).
+// ai: The lens about its axis (2026-10-17; STATUS "The lens about its axis"). What the border nodes and the anchors say
+// ai: H missed, fitted as the radial terms k1 to kK about the camera's optical axis, k |q|^(2k) q (the radial part of
 // ai: Android's lens form, linearised about H), beside the first-order change of the homography itself (an affine map,
-// ai: a shift and the two perspective terms -(g . q) q, which H's four corners, distorted points, leave), q a node's
-// ai: place about the axis over the farthest image corner's distance from it. The Coons patch below carries inward
-// ai: exactly every term but the higher radial ones' (any cubic in the lattice's coordinates is affine in one of them
-// ai: for each value of the other, so k1's |q|^2 q and the homography's terms are its own), so those are what the fit
-// ai: is for: a lens about an axis off the code's middle (a 2:1 half's is the middle of its inner edge) bent the main
-// ai: camera's picture 2.3 samples off in the middle of the code, where one term about the image's centre left it.
-// ai: Two rules decide K (0 to 3), each frame on its own evidence:
-// ai: - The border vouches only for the radii it spans. With the axis outside the code's quad (a 2:1 half's), every
-// ai:   interior point's distance from it lies between the border's least and greatest (a distance's extremes over a
-// ai:   convex region not holding the point are on its boundary), so the radial terms interpolate. With the axis inside
-// ai:   (a 1:1 crop's), the interior's radii run down to 0, below the band from a side's middle to a corner that the
-// ai:   border sees, and higher terms fitted there extrapolate: on the three 1:1 recordings of 2026-09, K chosen by the
-// ai:   fit alone cost 20 to 43% of the blocks. So K is at most 1 there, a term the patch carries anyway.
-// ai: - Within that, the K the evidence pays for, by AICc (below).
-// ai: The axis is the image's centre unless the caller says where the camera's axis falls in this crop
-// ai: (lizard_set_axis). What the fit leaves is carried inward by the same Coons patch.
+// ai: a shift and the two perspective terms -(g . q) q, which H's four corners, distorted points, leave), q a point's
+// ai: place about the axis over the farthest image corner's distance from it: a lens about an axis off the code's middle
+// ai: (a 2:1 half's is the middle of its inner edge) bent the main camera's picture 2.3 samples off in the middle of the
+// ai: code, where one term about the image's centre left it. K (0 to 3) is the one the evidence pays for, by AICc
+// ai: (lensm_fit), each frame on its own; the anchors sample the interior's radii, so no cap inside a 1:1 crop. The
+// ai: centre: the axis the caller gives (lizard_set_axis), else the image's centre, for the anchors' first fits; the final
+// ai: fit (border_fill_anchors) fits the centre itself (lens_centre).
 enum { LENS_TERMS = 3, LENS_P = 8 + LENS_TERMS };
 // ai: In the 128 and 256 rings. The 64 ring's 3 x 3 grid takes 8 of its 9 (ob_anchor_min), so a fit over the anchors alone
 // ai: (and the corners H passes through: anchor_register's, anchor_model, which seed the border's search) takes no more
@@ -2189,20 +2181,172 @@ static void anch_herm4(const double *t, int n, double x, int *b, double w[4]) {
   if (i + 2 < n) { const double d = t[i + 2] - t[i]; w[1] -= Bc / d; w[3] += Bc / d; } else { w[1] -= Bc / hc; w[2] += Bc / hc; }
   *b = i - 1;
 }
+// ai: The lens model's centre, fitted per frame (2026-11-10, STATUS "The optical centre fitted in the C's lens model"):
+// ai: a parameter of border_fill_anchors' fit as its terms are, each frame on its own, so the decoder needs nothing from
+// ai: the camera; the axis a receiver gives (lizard_set_axis) is only where the search starts. The model is linear in its
+// ai: terms and the centre enters alone. Where no axis is given, a coarse stage first: the image's centre and a 9 x 9 grid
+// ai: over the image and half an image round it, each scored by one solve of the full model (lens_score); then
+// ai: Gauss-Newton from the best (lens_step), each step taken where the points' residuals truncated at half a module fall
+// ai: (whole, a half, a quarter), the first steps exact for the first radial term, then the full model's, to half a px.
+// ai: The centre leaves its start only where its two parameters pay by AIC. On the S26's real replays (blocks in the 64,
+// ai: 128 and 256 rings) the axis given reads 254,881, 86,380, 150,428 (held at the axis 255,837, 86,394, 150,443),
+// ai: withheld 254,595, 86,357, 150,446 (held at the image's centre 235,060, 85,594, 113,659); the lens set's 2:1 halves
+// ai: withheld 99.6, 98.0, 96.5% of the axis given; the S26's prime core 0 to 1% a frame with the axis, without it +4% on
+// ai: a 64-ring half and -19% on a 4K half (a misregistered picture costs the LDPC more).
+// ai: the robust lens fit (lensm_fit) about the centre (cx, cy), R its farthest image corner, the points' places about it
+// ai: in qx, qy and its drops in dr; returns the points' residuals truncated at tau, summed (INFINITY where unsolved)
+static double lens_fit_at(int np, const double *pu, const double *pv, const double *dx, const double *dy, const unsigned char *isb, double tau, int iw, int ih, double cx, double cy, double *qx, double *qy, unsigned char *dr, lensm_t *m) {
+  if (np <= 0) return INFINITY;
+  memset(m, 0, sizeof *m);
+  m->ax = cx; m->ay = cy;
+  for (int c = 0; c < 4; c++) { const double d = hypot((c & 1 ? iw : 0) - cx, (c & 2 ? ih : 0) - cy); if (d > m->R) m->R = d; }
+  for (int i = 0; i < np; i++) { qx[i] = (pu[i] - cx) / m->R; qy[i] = (pv[i] - cy) / m->R; }
+  memset(dr, 0, (size_t)np);
+  if (!lensm_fit(np, qx, qy, dx, dy, isb, dr, tau, LENS_TERMS, m)) return INFINITY;
+  double cost = 0;
+  for (int i = 0; i < np; i++) {
+    float fx, fy;
+    lensm_at(m, pu[i], pv[i], &fx, &fy);
+    const double r2 = (dx[i] - fx) * (dx[i] - fx) + (dy[i] - fy) * (dy[i] - fy);
+    cost += r2 < tau * tau ? r2 : tau * tau;
+  }
+  return cost;
+}
+// ai: the coarse stage's score at a centre: the model at its full K solved once (no AICc, no drop rounds) over every
+// ai: other border point and every anchor, the start's drops d0 left out; those points' residuals truncated at tau
+static double lens_score(int np, const double *pu, const double *pv, const double *dx, const double *dy, const unsigned char *isb, const unsigned char *d0, double tau, int iw, int ih, double cx, double cy) {
+  double R = 0;
+  for (int c = 0; c < 4; c++) { const double d = hypot((c & 1 ? iw : 0) - cx, (c & 2 ? ih : 0) - cy); if (d > R) R = d; }
+  double A[LENS_P][LENS_P + 1], rx[LENS_P], ry[LENS_P], t[LENS_P];
+  memset(A, 0, sizeof A);
+  int n = 0;
+  for (int i = 0; i < np; i++) {
+    if (d0[i] || (isb[i] && (i & 1))) continue;
+    n++;
+    lens_rows((pu[i] - cx) / R, (pv[i] - cy) / R, LENS_TERMS, rx, ry);
+    for (int a = 0; a < LENS_P; a++) { for (int b = a; b < LENS_P; b++) A[a][b] += rx[a] * rx[b] + ry[a] * ry[b]; A[a][LENS_P] += rx[a] * dx[i] + ry[a] * dy[i]; }
+  }
+  for (int a = 1; a < LENS_P; a++) for (int b = 0; b < a; b++) A[a][b] = A[b][a];
+  for (int a = 0; a < LENS_P; a++) A[a][a] += 1e-12;
+  if (2 * n - LENS_P - 1 <= 0 || !solve_lens(A, LENS_P)) return INFINITY;
+  for (int a = 0; a < LENS_P; a++) t[a] = A[a][LENS_P] / A[a][a];
+  double cost = 0;
+  for (int i = 0; i < np; i++) {
+    if (isb[i] && (i & 1)) continue;
+    lens_rows((pu[i] - cx) / R, (pv[i] - cy) / R, LENS_TERMS, rx, ry);
+    double fx = 0, fy = 0;
+    for (int a = 0; a < LENS_P; a++) { fx += t[a] * rx[a]; fy += t[a] * ry[a]; }
+    const double r2 = (dx[i] - fx) * (dx[i] - fx) + (dy[i] - fy) * (dy[i] - fy);
+    cost += r2 < tau * tau ? r2 : tau * tau;
+  }
+  return cost;
+}
+// ai: One Gauss-Newton step on the centre. A radial term t s^n q about the centre moved by delta R (q, delta over R,
+// ai: s = |q|^2) is, to first order, t (s^n q - s^n delta - 2n s^(n-1) q (q . delta)): the model's 8 + K terms and these
+// ai: two columns at m's coefficients, solved together by least squares over m's kept points (dr); the step in px. k1 set
+// ai: (one radial term, its coefficient from the solve): a centre moved by delta is exactly the first radial term about the
+// ai: old centre, the perspective terms (-2 k1 q (q . delta)), an affine map and a shift, plus -k1 delta s, so two columns
+// ai: (s, 0) and (0, s) whose coefficients e give delta = -e / k1 from any distance (global for the first term)
+static int lens_step(int np, const double *qx, const double *qy, const double *dx, const double *dy, const unsigned char *dr, const lensm_t *m, int k1, double *sx, double *sy) {
+  enum { P = LENS_P + 2 };
+  const int K = k1 ? 1 : m->K, p = 8 + K + 2;
+  if (K < 1) return 0;
+  double A[P][P + 1], rx[P], ry[P];
+  memset(A, 0, sizeof A);
+  int n = 0;
+  for (int i = 0; i < np; i++) {
+    if (dr[i]) continue;
+    n++;
+    lens_rows(qx[i], qy[i], K, rx, ry);
+    const double x = qx[i], y = qy[i], s = x * x + y * y;
+    double jxx = 0, jxy = 0, jyy = 0, sn1 = 1;
+    for (int k = 1; k <= K; k++, sn1 *= s) {
+      const double t = m->t[8 + k - 1];
+      jxx -= t * (s * sn1 + 2 * k * sn1 * x * x);
+      jyy -= t * (s * sn1 + 2 * k * sn1 * y * y);
+      jxy -= t * 2 * k * sn1 * x * y;
+    }
+    if (k1) { jxx = s; jxy = 0; jyy = s; }
+    rx[8 + K] = jxx; ry[8 + K] = jxy; rx[9 + K] = jxy; ry[9 + K] = jyy;
+    for (int a = 0; a < p; a++) { for (int b = 0; b < p; b++) A[a][b] += rx[a] * rx[b] + ry[a] * ry[b]; A[a][P] += rx[a] * dx[i] + ry[a] * dy[i]; }
+  }
+  if (2 * n <= p + 1) return 0;
+  for (int a = 0; a < p; a++) A[a][a] += 1e-12;
+  for (int c = 0; c < p; c++) {
+    int pv = c;
+    for (int r = c + 1; r < p; r++) if (fabs(A[r][c]) > fabs(A[pv][c])) pv = r;
+    if (fabs(A[pv][c]) < 1e-14) return 0;
+    for (int k = 0; k <= P; k++) { const double t = A[c][k]; A[c][k] = A[pv][k]; A[pv][k] = t; }
+    for (int r = 0; r < p; r++) {
+      if (r == c) continue;
+      const double f = A[r][c] / A[c][c];
+      for (int k = c; k <= P; k++) A[r][k] -= f * A[c][k];
+    }
+  }
+  *sx = A[8 + K][P] / A[8 + K][8 + K] * m->R; *sy = A[9 + K][P] / A[9 + K][9 + K] * m->R;
+  if (k1) { const double t1 = A[8][P] / A[8][8]; if (!(fabs(t1) > 1e-9)) return 0; *sx /= -t1; *sy /= -t1; }
+  return isfinite(*sx) && isfinite(*sy);
+}
+// ai: the search: from (*ax, *ay), the coarse stage where the axis was not given, then Gauss-Newton; the centre found
+// ai: written back where it pays by AIC over the 2 np residuals
+static void lens_centre(int np, const double *pu, const double *pv, const double *dx, const double *dy, const unsigned char *isb, double tau, int iw, int ih, int given, double *ax, double *ay) {
+  if (np <= 0) return;
+  double *w = malloc((size_t)4 * np * sizeof(double)), *qx = w, *qy = w + np, *tx = w + 2 * np, *ty = w + 3 * np;
+  unsigned char *dc = malloc((size_t)2 * np), *dr = dc + np;
+  lensm_t cur, tr;
+  const double ax0 = *ax, ay0 = *ay;
+  double cost = lens_fit_at(np, pu, pv, dx, dy, isb, tau, iw, ih, ax0, ay0, qx, qy, dc, &cur);
+  const double cost0 = cost;
+  if (!given) {
+    double cb = lens_score(np, pu, pv, dx, dy, isb, dc, tau, iw, ih, ax0, ay0), bx = ax0, by = ay0;
+    for (int j = -4; j <= 4; j++) for (int i = -4; i <= 4; i++) {
+      const double cx = iw * 0.5 + i * iw * 0.25, cy = ih * 0.5 + j * ih * 0.25;
+      const double c = lens_score(np, pu, pv, dx, dy, isb, dc, tau, iw, ih, cx, cy);
+      if (c < cb * 0.999) { cb = c; bx = cx; by = cy; }
+    }
+    if (bx != ax0 || by != ay0) {
+      const double c = lens_fit_at(np, pu, pv, dx, dy, isb, tau, iw, ih, bx, by, tx, ty, dr, &tr);
+      if (c < cost) { cost = c; cur = tr; memcpy(qx, tx, (size_t)np * sizeof(double)); memcpy(qy, ty, (size_t)np * sizeof(double)); memcpy(dc, dr, (size_t)np); }
+    }
+  }
+  for (int it = 0, k1 = 1; it < 10 && cost < INFINITY; it++) {
+    double sx, sy;
+    if (!lens_step(np, qx, qy, dx, dy, dc, &cur, k1, &sx, &sy)) { if (k1) { k1 = 0; continue; } break; }
+    const double lim = 0.5 * (iw > ih ? iw : ih), sl = hypot(sx, sy);
+    if (sl > lim) { sx *= lim / sl; sy *= lim / sl; }
+    double took = 0;
+    for (double f = 1; f > 0.2; f *= 0.5) {
+      const double c = lens_fit_at(np, pu, pv, dx, dy, isb, tau, iw, ih, cur.ax + f * sx, cur.ay + f * sy, tx, ty, dr, &tr);
+      if (c < cost) {
+        cost = c; cur = tr; took = f * hypot(sx, sy);
+        memcpy(qx, tx, (size_t)np * sizeof(double)); memcpy(qy, ty, (size_t)np * sizeof(double)); memcpy(dc, dr, (size_t)np);
+        break;
+      }
+    }
+    // ai: the first term's steps until one is refused or moves under 2 px, then the full model's to half a px
+    if (k1) { if (took < 2) k1 = 0; } else if (took < 0.5) break;
+  }
+  if (cost < cost0 * exp(-4.0 / (2.0 * np))) { *ax = cur.ax; *ay = cur.ay; }
+  free(w); free(dc);
+}
 // ai: The interior from the border and the anchors: the lens model refitted over the border's trusted nodes and the
 // ai: anchors found (robust: border nodes the anchors outvote, further than half a module or three robust spreads, are
-// ai: dropped and take the model's displacement), the model at every node and the Coons patch of what it leaves on the
-// ai: border, then a cubic mesh of what the anchors still see (0 at the lattice's ends, the anchors' shrunk readings at
-// ai: their centres). It runs only where anchor_register found OB_ANCH_MIN anchors (none is cleared after), and the
-// ai: fit's first round sums the normal equations anchor_model solved (the corners and the anchors about the same H)
-// ai: plus the border's trusted nodes, so it solves where that one did; lm starts as the zero model (H alone) for a
-// ai: solve rounding alone could fail.
+// ai: dropped and take the model's displacement), the model at every interior node, then a cubic mesh of what the
+// ai: anchors still see (0 at the lattice's ends, the anchors' readings at their centres). The border's nodes reach the
+// ai: interior through the fit alone: a Coons patch of what the model left on the border carried each node's reading
+// ai: error across the picture as a stripe, which the anchors see only where they cross it (2026-11-10, STATUS "The C's
+// ai: geometry without the Coons patch": the real replays' leftover misregistration 0.13 to 0.39 samples rms with the
+// ai: patch and the shrink below, 0.09 to 0.20 without; 2 to 54% more blocks in every ring). It runs only where
+// ai: anchor_register found OB_ANCH_MIN anchors (none is cleared after), and the fit's first round sums the normal
+// ai: equations anchor_model solved (the corners and the anchors about the same H) plus the border's trusted nodes, so it
+// ai: solves where that one did; lm starts as the zero model (H alone) for a solve rounding alone could fail.
 static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, int ih, node_t *nodes, const anchor_t *A, float mpx) {
   enum { NA = OB_ANCH_K * OB_ANCH_K };
   const int nx = L->nx, ny = L->ny, nn = nx * ny, cap = 2 * (nx + ny) + NA;
-  double *qx = malloc((size_t)cap * sizeof(double)), *qy = malloc((size_t)cap * sizeof(double)), *dx = malloc((size_t)cap * sizeof(double)), *dy = malloc((size_t)cap * sizeof(double));
+  double *qx = calloc((size_t)cap, sizeof(double)), *qy = calloc((size_t)cap, sizeof(double)), *dx = malloc((size_t)cap * sizeof(double)), *dy = malloc((size_t)cap * sizeof(double));
   unsigned char *isb = calloc((size_t)cap, 1), *drop = calloc((size_t)cap, 1);
   int *at = malloc((size_t)cap * sizeof(int)), np = 0;
+  double *pu = malloc((size_t)cap * sizeof(double)), *pv = malloc((size_t)cap * sizeof(double));   // ai: the points in px
   const int K = ob_anchor_k(L);   // ai: the ring's grid (anchor j OB_ANCH_K + i)
   lensm_t lm = { 0 };
   lensm_axis(iw, ih, &lm);
@@ -2212,14 +2356,20 @@ static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, i
     if (!(nodes[k].done && (corner || (L->node_mark[k] && nodes[k].score >= 0.35f)))) continue;
     float u, v;
     project(H, L->node_x[i], L->node_y[j], &u, &v);
-    qx[np] = (u - lm.ax) / lm.R; qy[np] = (v - lm.ay) / lm.R; dx[np] = nodes[k].dx; dy[np] = nodes[k].dy; isb[np] = 1; at[np] = k; np++;
+    pu[np] = u; pv[np] = v; dx[np] = nodes[k].dx; dy[np] = nodes[k].dy; isb[np] = 1; at[np] = k; np++;
   }
   for (int k = 0; k < NA; k++) {
     if (!A[k].ok) continue;
     float u, v;
     project(H, A[k].X, A[k].Y, &u, &v);
-    qx[np] = (u - lm.ax) / lm.R; qy[np] = (v - lm.ay) / lm.R; dx[np] = A[k].dx; dy[np] = A[k].dy; at[np] = -1 - k; np++;
+    pu[np] = u; pv[np] = v; dx[np] = A[k].dx; dy[np] = A[k].dy; at[np] = -1 - k; np++;
   }
+  // ai: the centre fitted (lens_centre), from the axis given, else the image's centre
+  double cx = lm.ax, cy = lm.ay;
+  lens_centre(np, pu, pv, dx, dy, isb, 0.5 * mpx, iw, ih, ob_axis[0] == ob_axis[0] && ob_axis[1] == ob_axis[1], &cx, &cy);
+  lm.ax = cx; lm.ay = cy; lm.R = 0;
+  for (int c = 0; c < 4; c++) { const double d = hypot((c & 1 ? iw : 0) - cx, (c & 2 ? ih : 0) - cy); if (d > lm.R) lm.R = d; }
+  for (int i = 0; i < np; i++) { qx[i] = (pu[i] - cx) / lm.R; qy[i] = (pv[i] - cy) / lm.R; }
   lensm_fit(np, qx, qy, dx, dy, isb, drop, 0.5 * mpx, LENS_TERMS, &lm);
   float *mx = malloc((size_t)nn * sizeof(float)), *my = malloc((size_t)nn * sizeof(float));
   for (int j = 0; j < ny; j++) for (int i = 0; i < nx; i++) {
@@ -2227,22 +2377,13 @@ static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, i
     project(H, L->node_x[i], L->node_y[j], &u, &v);
     lensm_at(&lm, u, v, &mx[j * nx + i], &my[j * nx + i]);
   }
-  // ai: a border node the anchors outvote reads the model's displacement (so the patch leaves nothing there)
+  // ai: a border node the anchors outvote reads the model's displacement
   for (int p = 0; p < np; p++) if (isb[p] && drop[p]) { nodes[at[p]].dx = mx[at[p]]; nodes[at[p]].dy = my[at[p]]; }
-  #define EX(i, j) (nodes[(j) * nx + (i)].dx - mx[(j) * nx + (i)])
-  #define EY(i, j) (nodes[(j) * nx + (i)].dy - my[(j) * nx + (i)])
   for (int j = 1; j < ny - 1; j++) for (int i = 1; i < nx - 1; i++) {
     node_t *nd = &nodes[j * nx + i];
     if (L->node_mark[j * nx + i]) continue;
-    float u = (L->node_x[i] - L->node_x[0]) / (L->node_x[nx - 1] - L->node_x[0]), v = (L->node_y[j] - L->node_y[0]) / (L->node_y[ny - 1] - L->node_y[0]);
-    float fx = (1 - u) * EX(0, j) + u * EX(nx - 1, j) + (1 - v) * EX(i, 0) + v * EX(i, ny - 1)
-             - ((1 - u) * (1 - v) * EX(0, 0) + u * (1 - v) * EX(nx - 1, 0) + (1 - u) * v * EX(0, ny - 1) + u * v * EX(nx - 1, ny - 1));
-    float fy = (1 - u) * EY(0, j) + u * EY(nx - 1, j) + (1 - v) * EY(i, 0) + v * EY(i, ny - 1)
-             - ((1 - u) * (1 - v) * EY(0, 0) + u * (1 - v) * EY(nx - 1, 0) + (1 - u) * v * EY(0, ny - 1) + u * v * EY(nx - 1, ny - 1));
-    nd->dx = mx[j * nx + i] + fx; nd->dy = my[j * nx + i] + fy; nd->done = 1; nd->score = 1;
+    nd->dx = mx[j * nx + i]; nd->dy = my[j * nx + i]; nd->done = 1; nd->score = 1;
   }
-  #undef EX
-  #undef EY
   // ai: what the anchors still see through that mesh, as the sampler blends it, carried inward by the knots
   const double X0 = L->node_x[0], Y0 = L->node_y[0], SX = L->node_x[nx - 1] - X0, SY = L->node_y[ny - 1] - Y0;
   double (*tv)[2] = malloc((size_t)cap * sizeof *tv);
@@ -2256,38 +2397,14 @@ static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, i
     project(H, an->X, an->Y, &hu, &hv);
     tv[m][0] = an->dx - (u - hu); tv[m][1] = an->dy - (v - hv); gi[m] = -1 - at[p]; m++;
   }
-  // ai: An anchor's reading is noisy (0.15 of a sample rms, measured against the truth on the published lenses, with no
-  // ai: common offset), and where the mesh already holds the field the knots would carry that noise in. So what the
-  // ai: anchors see is shrunk by the share of it that is signal (empirical Bayes): the noise's variance from each
-  // ai: reading against the mean of its grid neighbours' (var(d) = s2 (1 + 1 / neighbours) for a field smooth at the
-  // ai: grid's spacing; robust, 1.4826 MAD over both components), the readings' power P per component, every residual
-  // ai: scaled by max(0, 1 - s2 / P). A strong lens leaves a residual far over the noise and passes whole.
-  {
-    double g[NA][2], dd[2 * NA], pw = 0;
-    unsigned char has[NA] = { 0 };
-    int na2 = 0, nd = 0;
-    for (int q = 0; q < m; q++) if (gi[q] >= 0) { has[gi[q]] = 1; g[gi[q]][0] = tv[q][0]; g[gi[q]][1] = tv[q][1]; pw += tv[q][0] * tv[q][0] + tv[q][1] * tv[q][1]; na2++; }
-    for (int k = 0; k < NA; k++) {
-      if (!has[k]) continue;
-      const int i = k % OB_ANCH_K, j = k / OB_ANCH_K, nb[4] = { i > 0 ? k - 1 : -1, i < K - 1 ? k + 1 : -1, j > 0 ? k - OB_ANCH_K : -1, j < K - 1 ? k + OB_ANCH_K : -1 };
-      double sx = 0, sy = 0;
-      int c = 0;
-      for (int e = 0; e < 4; e++) if (nb[e] >= 0 && has[nb[e]]) { sx += g[nb[e]][0]; sy += g[nb[e]][1]; c++; }
-      if (c < 2) continue;
-      const double f = 1 / sqrt(1 + 1.0 / c);
-      dd[nd++] = fabs(g[k][0] - sx / c) * f; dd[nd++] = fabs(g[k][1] - sy / c) * f;
-    }
-    // ai: at least 16 readings (8 anchors with two neighbours found), 10 in the 3 x 3 grid, whose 8 found give 12 to 16
-    if (nd >= (2 * (K * K - 4) < 16 ? 2 * (K * K - 4) : 16) && na2 > 0) {
-      qsort(dd, (size_t)nd, sizeof(double), cmp_double);
-      const double sg = 1.4826 * dd[nd / 2], s2 = sg * sg, P = pw / (2.0 * na2), kf = P > 0 ? fmax(0, 1 - s2 / P) : 0;
-      for (int q = 0; q < m; q++) if (gi[q] >= 0) { tv[q][0] *= kf; tv[q][1] *= kf; }
-    }
-  }
+  // ai: Each reading is taken whole. A shrink of the readings towards 0 by the share of them that is signal (empirical
+  // ai: Bayes, the noise from each reading against its grid neighbours') went with the Coons patch: on the 3 x 3 grid its
+  // ai: neighbours do not measure noise (the shrink 0.14 to 0.24 on distorted captures), and with the patch gone it cost
+  // ai: the 64 ring's replays 4.4% and the lens set 1.8 and 0.9% in the 64 and 128 rings, the 256 ring level.
   {
     // ai: The mesh (2026-10-26; a thin-plate spline before it, the same blocks over the published lenses for 2.6 to 8.2%
     // ai: less of a frame): knots on both axes at the lattice's ends, where the border holds the map (0), and the ring's
-    // ai: k anchors' centres between; an inner knot is its anchor's shrunk reading, a missing one the mean of its found
+    // ai: k anchors' centres between; an inner knot is its anchor's reading, a missing one the mean of its found
     // ai: 4-neighbours (rounds until none is left, at most 6; none near: 0). The arrays hold the 7 x 7 grid's 9 knots.
     enum { KM = OB_ANCH_K + 2 };
     const int KN = K + 2;
@@ -2338,7 +2455,7 @@ static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, i
     }
   }
   free(tv); free(gi);
-  free(mx); free(my); free(qx); free(qy); free(dx); free(dy); free(isb); free(drop); free(at);
+  free(mx); free(my); free(qx); free(qy); free(dx); free(dy); free(isb); free(drop); free(at); free(pu); free(pv);
 }
 
 // ---------------------------------------------------------------- thin frame: four lines

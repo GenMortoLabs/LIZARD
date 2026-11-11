@@ -55,7 +55,7 @@ async function frame(m) {
     }
   } else px = new Uint8Array(m.luma ?? m.rgba);
   const t = performance.now();
-  const r = phy.decode(px, w, h, null, isRgba)[0];
+  const r = phy.decode(px, w, h, null, isRgba, m.axis ?? null)[0];
   // heap: the page watches this for a step, which is a heap growth and a stall the ms above already paid for.
   // quad: the lattice corners the finder settled on, in camera pixels. The page turns it into the symbol's size
   // and the pixels a cycle of the finest ring got, which is what decides how much of the frame comes back.

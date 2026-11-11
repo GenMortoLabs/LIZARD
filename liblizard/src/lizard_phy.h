@@ -164,10 +164,11 @@ int lizard_init_tiers(lizard_t *f, int n, const lizard_tier_t *tier, int tiers, 
 int lizard_tiers_for(int subch, lizard_tier_t tier[LIZARD_TIERS]);
 // The blocks a frame of subch sub-channels carries under that profile (0 for no format).
 int lizard_blocks_for(int subch);
-// ai: Where the camera's optical axis falls in the image the calling thread decodes next, image px (2026-10-17): the
-// ai: anchors' lens model fits its radial field about it (acquire.c lensm_axis). NaN, the default, is the image's
-// ai: centre, right for a crop centred on the camera's frame; a 2:1 half's axis is the middle of its inner edge. Kept
-// ai: for the thread's later decodes until set again.
+// ai: Where the camera's optical axis falls in the image the calling thread decodes next, image px (2026-10-17): where
+// ai: the lens model's centre is first taken (acquire.c lensm_axis) and where the final fit's search for it starts
+// ai: (lens_centre, 2026-11-10: the centre is fitted in every frame, so a wrong or missing axis costs little). NaN, the
+// ai: default, is the image's centre with a coarse search over the image first; a crop centred on the camera's frame has
+// ai: its axis there, a 2:1 half's is the middle of its inner edge. Kept for the thread's later decodes until set again.
 void lizard_set_axis(float x, float y);
 // ai: The anchors' geometry in f's symbol, in modules, for a painter elsewhere (the senders' GPU painters,
 // ai: core/tx/send_tables.cpp and the wasm's lizard_anchor_geom_get, 2026-10-26): out[0] a square's side, out[1 + i]

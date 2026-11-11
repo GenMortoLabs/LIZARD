@@ -1832,9 +1832,14 @@ frame (`lizard_phy.c:lizard_decode`, `lizard_acquire` then `lizard_finish`):
    same way.
 4. **Register** (`acquire.c:acquire_core`): a homography from the quad with its corner nodes refined; the anchors (6.13)
    found by the pattern's normalised correlation, accepted at 0.6, held to a robust rule, and used where 12 or more
-   remain (8 of the 64 ring's 9; where fewer than 11 are fitted alone, the lens model takes no more terms than anchors); the border nodes refined against the painted border (4.10); the interior from the border (and the anchors) as
-   a homography's first-order change plus radial terms about the camera's axis, their count chosen by AICc, then a Coons
-   patch and, with the anchors, a cubic mesh.
+   remain (8 of the 64 ring's 9; where fewer than 11 are fitted alone, the lens model takes no more terms than anchors); the border nodes refined against the painted border (4.10). With the anchors, the interior is a lens model fitted
+   over the border's nodes and the anchors (a homography's first-order change plus radial terms about the optical centre,
+   their count chosen by AICc; border nodes the anchors outvote dropped), then a cubic mesh through what the model leaves
+   at the anchors; the border's nodes reach the interior through the fit alone. The centre is fitted with the terms:
+   from the axis the receiver gives (the crop's share of the camera's frame centre), or, where it gives none, from the
+   best of a coarse grid over the image and half an image round it; then Gauss-Newton on the centre, the model being
+   linear in its terms; the centre leaves its start only where its two parameters pay by AIC. Without them, the homography's
+   first-order change fitted over the border, then a Coons patch of what it leaves there.
 5. **Format word** (5.4) in the ring that registered; the blind receiver hands the registration over to the picture
    the word names, or the held one (5.5).
 6. **Sample** the n x n picture at 6.9's points through the registration (`acquire.c:ob_sample_grid`).
@@ -1894,6 +1899,9 @@ about 10% (25 levels), where the reference finder's fixed grey-level thresholds 
 | Pilots in every format; no more of them | the tails are free; more pilots would come out of the code and not remove a mix |
 | Anchors in every symbol, unsignalled | the border cannot see a lens's bend inside the picture |
 | The anchors' grid by the ring: 3 x 3 squares of 4 modules in the 64 ring, 5 x 5 of 6 in the 128, 7 x 7 of 8 in the 256 | at range a far code is close to a homography, which the border holds, so found anchors add no block there and their area is the cost: the fewest and smallest squares read most, and 4 modules is the smallest side still found at range (9 of 9 at a quarter of a 1080 crop, lens-free and through fisheyes); through a fisheye the anchors are what read; close up the 5 x 5 holds the 128 ring's full size where a 3 x 3 does not; the counts 9, 25 and 49 tell the three rings apart. 7 x 7 squares of span / 64 modules in every ring before (2 modules in the 64 ring, lost from about 0.45 of the crop through a fisheye) |
+| The anchors painted over the picture and erased by the receiver; no frequencies reserved to draw them | the picture under a square is almost all data frequencies, so a sender's correction confined to the empty and reserved frequencies needs about the squares' share over the reserved share of the picture's power: 6 to 12% of the coefficients reserved for squares on 1 to 2% of the picture, the clipped samples from 4.6% to 6.7 to 8.9%, and 93.6 to 98.9% of the blocks across the three rings on 70 simulated lenses and the lens-free case. The erase's cost is a floor fixed by the squares' share, the same for every capture |
+| The radial terms in the lens model, not a denser anchor grid | the mesh holds the bend only at the anchors and the radial terms between them: with none, no grid reads what the 5 x 5 and 7 x 7 grids with them read in the 128 and 256 rings (96.5% at 7 x 7, 95.7% at 13 x 13 on 70 simulated lenses and the lens-free case), past which the squares' area costs more than the mesh gains |
+| The camera calibrated per frame from the symbol alone: the lens's radial terms and its centre fitted in every frame, nothing taken from the camera's own calibration; a receiver's axis only a starting point | zoom, focus, stabilisation and the crop move a phone's lens and its centre between frames, factory figures need not match the stream, and every frame decodes on its own, so the border and the anchors are the calibration target. With the centre fitted, a receiver that does not know its crop (a cropped file) reads 254,595, 86,357 and 150,446 blocks in the 64, 128 and 256 rings of one phone's replays where one told its axis reads 254,881, 86,380 and 150,428 (235,060, 85,594 and 113,659 with the centre held at the image's middle); the search costs 0 to 1% of a frame's decode where the axis is given |
 | The display rate in the word | the one property of an animated symbol no single frame shows |
 | The transfer in the light: chunk ids, header and manifest blocks, BLAKE3 per chunk | a camera alone recovers and verifies a file, chunk by chunk |
 | zstd a chunk at a time | a ratio near the best at a speed a phone keeps ahead of the channel with |

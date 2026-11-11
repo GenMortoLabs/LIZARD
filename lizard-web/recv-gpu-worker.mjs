@@ -10,6 +10,7 @@
 // ai:     once, the ring's slots); a { type: "result", ... } a frame, recv-worker.mjs's fields; { type: "error", tag,
 // ai:     message, fatal } (fatal: no GPU decoder here or the device lost; the page goes back to the C pool).
 import { FrontHalf, deviceDescriptor, treeReader } from "../liblizard/gpu/host.mjs";
+import { axisWord } from "../liblizard/gpu/plan/common.mjs";
 import { blockJudge } from "../liblizard/sim/phy.mjs";
 import { init as initZstd, decompress } from "../liblizard/sim/zstd.mjs";
 import { heapTop, init as initOb } from "../liblizard/sim/ob.mjs";
@@ -73,7 +74,7 @@ async function frame(m) {
     for (let i = 0, j = 0; i < px.length; i++, j += 4) px[i] = (77 * rgba[j] + 150 * rgba[j + 1] + 29 * rgba[j + 2] + 128) >> 8;   // ai: the rig's formula (src/acquire.c), as lumaOf's
   }
   const levels = (levelTick++ & 31) === 0 ? greyLevels(px, w, h, 1) : null;
-  const one = { tag, w, h, px, vf, levels };
+  const one = { tag, w, h, px, vf, levels, axis: m.axis ?? null };
   if (!fh.ring || w > fh.ring.W || h > fh.ring.H || planning || waiting.length) { waiting.push(one); launch(); return replan(); }
   stage(one);
   launch();
@@ -82,6 +83,7 @@ async function frame(m) {
 function stage(one) {
   const slot = fh.enqueueLuma(one.px, one.w, one.h, one.w, one.tag);
   if (!slot) return postMessage(undecoded(one.tag));   // ai: the ring full (the page has more out than it was told to)
+  slot.axis = axisWord(one.axis);
   one.px = null;
   staged.push({ ...one, slot });
 }

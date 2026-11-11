@@ -473,7 +473,7 @@ function sendPoolFrame(slot, sub, tag) {
   if (!vf) return false;
   trackTags.set(tag, sub);
   cur.vfSent++;
-  send(slot, { type: "frame", tag, frame: vf, x: sub.x, y: sub.y, w: sub.w, h: sub.h, delay: DELAY, prof: PROF, verify: VERIFY }, [vf]);
+  send(slot, { type: "frame", tag, frame: vf, x: sub.x, y: sub.y, w: sub.w, h: sub.h, axis: axisIn(sub), delay: DELAY, prof: PROF, verify: VERIFY }, [vf]);
   return true;
 }
 
@@ -874,6 +874,11 @@ function decodeRect(base) {
   return { x, y, w, h };
 }
 
+// ai: Where the camera's optical axis falls in a crop of the video, in the crop's pixels: the video's centre less the
+// ai: crop's origin (core/rx/receiver.cpp axisOf). Both decoders fit the lens about it; a tracked crop is off the
+// ai: video's centre, so its own centre is not the axis.
+const axisIn = (r) => [video.videoWidth / 2 - r.x, video.videoHeight / 2 - r.y];
+
 // The quad the decoder settled on, turned into the next frame's crop. Sizes are quantised so a hand that moves
 // a pixel does not resize the canvas and the preview every frame.
 function trackFrom(quad, box) {
@@ -1017,7 +1022,7 @@ function onFrame(now, meta) {
   cur.read += performance.now() - tDraw;
   cur.grab += performance.now() - tGrab;
   trackTags.set(before, sub);
-  send(slot, { type: "frame", rgba, w, h, tag: before, delay: DELAY, prof: PROF }, [rgba]);
+  send(slot, { type: "frame", rgba, w, h, axis: axisIn(sub), tag: before, delay: DELAY, prof: PROF }, [rgba]);
 }
 
 // ai: room(): a frame would go now (freeSlot's test, without taking the slot)
