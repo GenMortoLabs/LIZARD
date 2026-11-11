@@ -1470,9 +1470,8 @@ static void refine_node(const ob_layout_t *L, const image_t *im, const homo_t *H
 // zero in the middle, which no average of edge values reproduces, and rolling-shutter jello is a sideways shift that
 // depends on the image row alone. So the border's residuals and the anchors' are fitted with a model of the lens and of
 // what the homography missed (below), per frame, nothing calibrated, and what the fit leaves at the anchors is carried
-// between them by a cubic mesh (border_fill_anchors). Under the anchors' minimum the border alone carries it: the
-// homography's change and a Coons patch, the blend of the four border curves, which is exact for any field that is a
-// function of the row plus one of the column (border_fill).
+// between them by a cubic mesh (border_fill_anchors). Under the anchors' minimum none of them is used and the same fit
+// over the border alone is the interior.
 // ai: The lens about its axis (2026-10-17; STATUS "The lens about its axis"). What the border nodes and the anchors say
 // ai: H missed, fitted as the radial terms k1 to kK about the camera's optical axis, k |q|^(2k) q (the radial part of
 // ai: Android's lens form, linearised about H), beside the first-order change of the homography itself (an affine map,
@@ -1515,68 +1514,6 @@ static void lens_rows(double x, double y, int K, double *rx, double *ry) {
   double sk = s;
   for (int k = 0; k < K; k++, sk *= s) { rx[8 + k] = sk * x; ry[8 + k] = sk * y; }
 }
-// ai: the model with K radial terms fitted by least squares on the used nodes; its coefficients in t
-static int lens_fit(int K, int nn, const int *use, const float *qx, const float *qy, const node_t *nodes, double *t) {
-  const int p = 8 + K;
-  double A[LENS_P][LENS_P + 1], rx[LENS_P], ry[LENS_P];
-  memset(A, 0, sizeof A);
-  int n = 0;
-  for (int m = 0; m < nn; m++) {
-    if (!use[m]) continue;
-    n++;
-    lens_rows(qx[m], qy[m], K, rx, ry);
-    for (int a = 0; a < p; a++) { for (int b = 0; b < p; b++) A[a][b] += rx[a] * rx[b] + ry[a] * ry[b]; A[a][LENS_P] += rx[a] * nodes[m].dx + ry[a] * nodes[m].dy; }
-  }
-  for (int a = 0; a < p; a++) A[a][a] += 1e-12;
-  // ai: the right-hand side sits in column LENS_P whatever p is; the solve reads only the first p rows and columns
-  if (2 * n <= p || !solve_lens(A, p)) return 0;
-  for (int a = 0; a < p; a++) t[a] = A[a][LENS_P] / A[a][a];
-  return 1;
-}
-// ai: Under OB_ANCH_MIN anchors the border alone carries the mesh: H's first-order change (lens_rows' eight terms, no
-// ai: radial one) fitted over the used nodes, H kept as it is where it does not fit, then a Coons patch over what the
-// ai: border's nodes leave of it. Radial terms about the camera's axis here (K = 0 to 3 by AICc, at most 1 with the axis
-// ai: inside the quad) were measured without effect (2026-11-07: 2 blocks more of 145,511 on the lens set without them,
-// ai: the six replays alike): the anchors carry the lens wherever it bends the code enough to cost.
-static void border_fill(const ob_layout_t *L, const homo_t *H, int iw, int ih, node_t *nodes) {
-  const int nx = L->nx, ny = L->ny, nn = nx * ny;
-  const double ax = iw * 0.5, ay = ih * 0.5, R = hypot(ax, ay) > 0 ? hypot(ax, ay) : 1;
-  float *qx = malloc((size_t)nn * sizeof(float)), *qy = malloc((size_t)nn * sizeof(float));
-  int *use = malloc((size_t)nn * sizeof(int));
-  for (int j = 0; j < ny; j++) for (int i = 0; i < nx; i++) {
-    float u, v;
-    project(H, L->node_x[i], L->node_y[j], &u, &v);
-    const int k = j * nx + i;
-    qx[k] = (float)((u - ax) / R); qy[k] = (float)((v - ay) / R);
-    const node_t *nd = &nodes[k];
-    const int corner = (i == 0 || i == nx - 1) && (j == 0 || j == ny - 1);
-    use[k] = nd->done && (corner || (L->node_mark[k] && nd->score >= 0.35f));
-  }
-  double rx[LENS_P], ry[LENS_P], th[LENS_P] = { 0 };
-  const int fit = lens_fit(0, nn, use, qx, qy, nodes, th);
-  float *mx = malloc((size_t)nn * sizeof(float)), *my = malloc((size_t)nn * sizeof(float));
-  for (int k = 0; k < nn; k++) {
-    double X = 0, Y = 0;
-    if (fit) { lens_rows(qx[k], qy[k], 0, rx, ry); for (int a = 0; a < 8; a++) { X += th[a] * rx[a]; Y += th[a] * ry[a]; } }
-    mx[k] = (float)X; my[k] = (float)Y;
-  }
-  #define EX(i, j) (nodes[(j) * nx + (i)].dx - mx[(j) * nx + (i)])
-  #define EY(i, j) (nodes[(j) * nx + (i)].dy - my[(j) * nx + (i)])
-  for (int j = 1; j < ny - 1; j++) for (int i = 1; i < nx - 1; i++) {
-    node_t *nd = &nodes[j * nx + i];
-    if (L->node_mark[j * nx + i]) continue;
-    float u = (L->node_x[i] - L->node_x[0]) / (L->node_x[nx - 1] - L->node_x[0]), v = (L->node_y[j] - L->node_y[0]) / (L->node_y[ny - 1] - L->node_y[0]);
-    float fx = (1 - u) * EX(0, j) + u * EX(nx - 1, j) + (1 - v) * EX(i, 0) + v * EX(i, ny - 1)
-             - ((1 - u) * (1 - v) * EX(0, 0) + u * (1 - v) * EX(nx - 1, 0) + (1 - u) * v * EX(0, ny - 1) + u * v * EX(nx - 1, ny - 1));
-    float fy = (1 - u) * EY(0, j) + u * EY(nx - 1, j) + (1 - v) * EY(i, 0) + v * EY(i, ny - 1)
-             - ((1 - u) * (1 - v) * EY(0, 0) + u * (1 - v) * EY(nx - 1, 0) + (1 - u) * v * EY(0, ny - 1) + u * v * EY(nx - 1, ny - 1));
-    nd->dx = mx[j * nx + i] + fx; nd->dy = my[j * nx + i] + fy; nd->done = 1; nd->score = 1;
-  }
-  #undef EX
-  #undef EY
-  free(qx); free(qy); free(use); free(mx); free(my);
-}
-
 // ---------------------------------------------------------------- the anchors
 
 // ai: The lens model over points: q a point's place about the axis over R, d its displacement from H in px; K = 0 to
@@ -2336,10 +2273,13 @@ static void lens_centre(int np, const double *pu, const double *pv, const double
 // ai: interior through the fit alone: a Coons patch of what the model left on the border carried each node's reading
 // ai: error across the picture as a stripe, which the anchors see only where they cross it (2026-11-10, STATUS "The C's
 // ai: geometry without the Coons patch": the real replays' leftover misregistration 0.13 to 0.39 samples rms with the
-// ai: patch and the shrink below, 0.09 to 0.20 without; 2 to 54% more blocks in every ring). It runs only where
-// ai: anchor_register found OB_ANCH_MIN anchors (none is cleared after), and the fit's first round sums the normal
-// ai: equations anchor_model solved (the corners and the anchors about the same H) plus the border's trusted nodes, so it
-// ai: solves where that one did; lm starts as the zero model (H alone) for a solve rounding alone could fail.
+// ai: patch and the shrink below, 0.09 to 0.20 without; 2 to 54% more blocks in every ring). It runs on every frame:
+// ai: with the anchors where anchor_register found OB_ANCH_MIN of them, else with none (the caller clears them), the
+// ai: border's trusted nodes alone carrying the fit and no mesh. Under the minimum the border's own fit replaced a second
+// ai: geometry (2026-11-11, STATUS "The C's border-only fallback and the GPU's interior, measured and left": H's
+// ai: first-order change and a Coons patch of the border's residuals), the same frames found and more read (long range
+// ai: in the 128 ring +1.2 to +17.9%, the rigor test's 256 ring +1.6%, the real replays equal). lm starts as the zero
+// ai: model (H alone) for a solve rounding alone could fail.
 static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, int ih, node_t *nodes, const anchor_t *A, float mpx) {
   enum { NA = OB_ANCH_K * OB_ANCH_K };
   const int nx = L->nx, ny = L->ny, nn = nx * ny, cap = 2 * (nx + ny) + NA;
@@ -5152,9 +5092,9 @@ static int acquire_core(const ob_layout_t *const *Ls, int nL, const image_t *pim
   // ai: a blur made in bin is bin's, given back with it; one made fresh (no spare) freed here
   if (blurred != bin) free(blurred);
   frame_buf_done(fb, bin);
-  // the border is all there is to hang the mesh on
-  if (have_alm) border_fill_anchors(L, &H, iw, ih, nodes, anchors, mpx);
-  else border_fill(L, &H, iw, ih, nodes);
+  // the border is all there is to hang the mesh on; under the anchors' minimum (have_alm 0) none of them is used
+  if (!have_alm) for (int k = 0; k < OB_ANCH_K * OB_ANCH_K; k++) anchors[k].ok = 0;
+  border_fill_anchors(L, &H, iw, ih, nodes, anchors, mpx);
   float msum = 0;
   int mcount = 0;
   for (int k = 0; k < nn; k++) if (nodes[k].done) { msum += nodes[k].score; mcount++; }
