@@ -212,7 +212,14 @@ compose.desktop {
             copyright = "Copyright 2026 The LIZARD authors"
             if (onMac) appResourcesRootDir.set(layout.buildDirectory.dir("appres")) else licenseFile.set(licenseText.flatMap { it.out })
             modules("java.instrument", "java.prefs", "jdk.unsupported")
+            // ai: a replay (research/SPEC.md 15, the .lizard) LIZARD's own type, as an image editor's are its own: a
+            // ai: double click in a file manager opens it in Receive's File camera (App.handIn); on Linux a MIME type
+            // ai: of that glob with the mark as its icon and the desktop entry's MimeType, on Windows the extension's
+            // ai: ProgID and Open verb, on macOS the bundle's document type (the open reaching the app as an event, Main.kt)
+            val replayMime = "application/x-lizard-replay"
+            val replayType = "LIZARD replay"
             linux {
+                fileAssociation(replayMime, "lizard", replayType, project.file("packaging/lizard.png"))
                 packageName = "lizard-sender"
                 // ai: the project's public address (GitHub's private one for its account), never a person's email
                 debMaintainer = "354678721+GenMortoLabs@users.noreply.github.com"
@@ -225,6 +232,7 @@ compose.desktop {
             // ai: Start menu entry and a desktop shortcut; one upgrade code for every release, so a newer one replaces it
             windows {
                 iconFile.set(project.file("packaging/lizard.ico"))
+                fileAssociation(replayMime, "lizard", replayType, project.file("packaging/lizard.ico"))
                 menuGroup = "LIZARD"
                 shortcut = true
                 dirChooser = true
@@ -239,6 +247,7 @@ compose.desktop {
             macOS {
                 bundleID = "dev.lizard.sender"
                 iconFile.set(project.file("packaging/lizard.icns"))
+                fileAssociation(replayMime, "lizard", replayType, project.file("packaging/lizard.icns"))
                 dockName = "LIZARD"
                 appCategory = "public.app-category.utilities"
                 minimumSystemVersion = "12.0"

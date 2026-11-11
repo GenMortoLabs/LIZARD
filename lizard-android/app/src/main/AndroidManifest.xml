@@ -36,6 +36,18 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
+            <!-- ai: a replay opened from another app (2026-11-11, MainActivity.handle): LIZARD in Android's Open with for
+                 the types a .lizard arrives as (Android knows no type of its own for it: a file of no known type, or a
+                 ZIP where a provider looks inside; its own where one names it), played in Receive's File camera.
+                 Sending a file is Share's (above), not Open with's. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-lizard-replay" />
+            </intent-filter>
             <!-- ai: the PC's USB accessory (2026-10-27, PcLink; liblizard/core/cam/aoa.cpp): Android starts
                  Receive for it with the accessory's permission given -->
             <intent-filter>

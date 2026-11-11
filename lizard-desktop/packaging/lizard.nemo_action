@@ -1,0 +1,12 @@
+# ai: Broadcast with LIZARD on every file's and folder's menu in Nemo (Cinnamon's file manager): the paths handed to
+# ai: the app to send (`--send`, Main.kt, App.handIn), a .lizard too, which opening (its type's Open With LIZARD, a
+# ai: double click) plays in Receive instead. Installed by the .deb (deb-deps.sh) into /usr/share/nemo/actions; the
+# ai: icon the replay type's, which the .deb installs (the mark).
+[Nemo Action]
+Active=true
+Name=Broadcast with LIZARD
+Exec=/opt/lizard-sender/bin/LIZARD --send %F
+Icon-Name=application-x-lizard-replay
+Selection=notnone
+Extensions=any;
+Quote=double

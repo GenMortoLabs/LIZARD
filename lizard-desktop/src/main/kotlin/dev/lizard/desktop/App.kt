@@ -44,7 +44,7 @@ val RESIZE = PointerIcon(java.awt.Cursor(java.awt.Cursor.E_RESIZE_CURSOR))
 // ai: The app (one window): the screen shown, the sender's state and the receiver's, and what is the window's. Between
 // ai: screens (go): leaving Send stops the send (SendState.leave), leaving Receive stops the camera and closes it (the
 // ai: session and a transfer partly in kept, ReceiveState.leave); entering Receive starts the camera, as the Android
-// ai: app's go(). Files handed in by a later launch (Instance) go to Send.
+// ai: app's go(). Files handed in (handIn) go to Send, replays to Receive.
 class App {
     var screen by mutableStateOf(Screen.Home)
     val send = SendState()
@@ -74,11 +74,21 @@ class App {
         }
     }
 
-    // ai: paths handed in (a later launch's, Instance.kt): to Send, added to its selection, the window raised
-    fun handIn(files: List<File>) {
-        go(Screen.Send)
-        if (send.test) send.chooseTest(false)
-        send.pick(files)
+    // ai: paths handed in (this launch's arguments, a later launch's through Instance.kt, macOS's open-file events), the
+    // ai: window raised. Opened, a .lizard (a double click in a file manager, LIZARD the type's application as an image
+    // ai: editor is its own files'; the system starts the app with the path) goes to Receive: its File camera with the
+    // ai: replays added (ReceiveState.openReplays, before Receive is entered, so no other camera starts; nothing plays
+    // ai: until Start); anything else (a file manager's Open with on other files, a terminal's arguments) to Send, added
+    // ai: to its selection. Broadcast (the file manager's Broadcast with LIZARD, `--send`): all of it to Send, a .lizard too.
+    fun handIn(files: List<File>, broadcast: Boolean) {
+        if (!broadcast && files.isNotEmpty() && files.all { ReceiveState.isReplay(it) }) {
+            recv.openReplays(files)
+            go(Screen.Receive)
+        } else {
+            go(Screen.Send)
+            if (send.test) send.chooseTest(false)
+            send.pick(files)
+        }
         send.raise?.invoke()
     }
 

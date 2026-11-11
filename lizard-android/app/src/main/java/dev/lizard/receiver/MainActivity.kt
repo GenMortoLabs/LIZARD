@@ -254,6 +254,16 @@ class MainActivity : ComponentActivity() {
             go(Screen.Receive)
             return
         }
+        // ai: a file opened from another app (2026-11-11; Android's Open with, a file manager's tap: the manifest's VIEW
+        // ai: for the types a .lizard arrives as): a .lizard to Receive's File camera, added (ReceiveState.openReplays,
+        // ai: before Receive is entered, so no lens opens); another file of those types to Send, as on the desktop. The
+        // ai: shortcuts' VIEW carries no data.
+        val u = i?.data
+        if (i?.action == Intent.ACTION_VIEW && u != null) {
+            if (receive.isReplay(u)) { receive.openReplays(listOf(u)); go(Screen.Receive) }
+            else { send.pick(listOf(u)); go(Screen.Send) }
+            return
+        }
         if (i?.action == Intent.ACTION_SEND || i?.action == Intent.ACTION_SEND_MULTIPLE) {
             @Suppress("DEPRECATION") val us = if (i.action == Intent.ACTION_SEND) listOfNotNull(i.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
                 else i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM).orEmpty()

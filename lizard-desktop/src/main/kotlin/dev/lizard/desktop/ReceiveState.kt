@@ -239,6 +239,13 @@ class ReceiveState(private val app: App) {
         }
         if (fileCamera) camera = fileId()
     }
+    // ai: replays opened from the system (App.handIn: a file manager's Open with or a double click, a terminal's
+    // ai: arguments): added to the choice where not there already, the camera made File where it is not (a camera
+    // ai: running stopped, as the Camera menu's File does); nothing played until Start
+    fun openReplays(fs: List<File>) {
+        addFiles(fs.map { it.absoluteFile.normalize() })
+        if (!fileCamera) chooseCameraOption("file:")
+    }
     fun removeFile(key: String) { picks.removeAll { it.key == key }; if (fileCamera) camera = fileId() }
     fun clearFiles() { picks.clear(); if (fileCamera) camera = fileId() }
     // ai: A phone by its address (2026-10-27, beside the beacon and the gateways, which a firewall or a route may defeat): the
@@ -740,6 +747,9 @@ class ReceiveState(private val app: App) {
     }
 
     companion object {
+        // ai: a replay (research/SPEC.md 15) by its name, the extension the packages register as its type
+        // ai: (build.gradle.kts fileAssociation, application/x-lizard-replay)
+        fun isReplay(f: File) = f.isFile && f.extension.equals("lizard", ignoreCase = true)
         const val PHONE_PORT = 47230   // ai: the phone's stream (liblizard/core/rx/stream.h TCP_PORT)
         const val PREVIEW = 720            // ai: the preview's long side at most, px
         // ai: the most the close waits for the files' thread (a large tar's unpack); what is left is done at the next launch

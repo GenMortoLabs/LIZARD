@@ -139,6 +139,16 @@ class ReceiveState(private val a: MainActivity) {
         preview = null
     }
     fun addUris(us: List<Uri>) = copying { us.map { copyIn(it) } }
+    // ai: a file opened from another app (MainActivity.handle: Android's Open with, a file manager's tap) is a replay by
+    // ai: its name, as on the desktop: the extension the format's files carry (research/SPEC.md 15)
+    fun isReplay(uri: Uri) = nameOf(uri).endsWith(".lizard", ignoreCase = true)
+    // ai: replays opened from another app: the File camera (a lens running stopped, as the Camera menu's File does), each
+    // ai: copied in where no pick of its name and size is there already; nothing played until Start
+    fun openReplays(us: List<Uri>) {
+        if (!fileMode) enterFiles()
+        val have = picks.filter { !it.dir }.map { it.name to it.size }.toSet()
+        copying { us.filter { u -> sizeOf(u)?.let { (nameOf(u) to it) !in have } ?: true }.map { copyIn(it) } }
+    }
     fun addTree(tree: Uri) = copying { listOfNotNull(copyTree(tree)) }
     private fun copying(work: () -> List<Picked>) {
         loadingFile = true
@@ -153,6 +163,9 @@ class ReceiveState(private val a: MainActivity) {
     private fun nameOf(uri: Uri) = a.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
         if (c.moveToFirst()) c.getString(0) else null
     }?.takeIf { it.isNotBlank() } ?: "file"
+    private fun sizeOf(uri: Uri) = a.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+        if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+    }
     private fun copyIn(uri: Uri): Picked {
         val name = nameOf(uri)
         val dir = File(picksDir, "${++pickN}").apply { mkdirs() }

@@ -6,9 +6,10 @@
 # ai: opens libturbojpeg.so.0 at run time): libturbojpeg, Ubuntu's name for it, or libturbojpeg0, Debian's; added here
 # ai: where missing. Each .deb in the folder given, once (2026-10-04). Since 2026-10-23 its desktop entry also takes
 # ai: files and folders (Exec ... %F, the sender adding them: Main.kt) and lists the sender for folders
-# ai: (MimeType=inode/directory;), so a file manager's Open with hands them over; files go through its Other
+# ai: (inode/directory added to its MimeType), so a file manager's Open with hands them over; files go through its Other
 # ai: Application, which the manager then keeps (listing application/octet-stream would make the sender the opener of
-# ai: every unknown file where nothing else claims it).
+# ai: every unknown file where nothing else claims it). The MimeType jpackage writes is kept: application/x-lizard-replay,
+# ai: the .lizard's (build.gradle.kts fileAssociation, 2026-11-11), LIZARD the only application for it, so its default.
 set -e
 for deb in "$1"/*.deb; do
   [ -f "$deb" ] || continue
@@ -51,10 +52,22 @@ for deb in "$1"/*.deb; do
     done
     changed=1
   fi
+  # ai: since 2026-11-11: LIZARD on every file's and folder's menu in Nemo (packaging/lizard.nemo_action), which Nemo
+  # ai: reads from there as it changes; nothing to run at the install
+  if [ ! -f "$t/x/usr/share/nemo/actions/lizard-sender.nemo_action" ]; then
+    install -D -m 644 "$(dirname "$0")/lizard.nemo_action" "$t/x/usr/share/nemo/actions/lizard-sender.nemo_action"
+    changed=1
+  fi
   for entry in "$t"/x/opt/*/lib/*.desktop; do
     [ -f "$entry" ] || continue
     if ! grep -q '^Exec=.*%F' "$entry"; then
-      sed -i -e 's|^Exec=\(.*\)$|Exec=\1 %F|' -e 's|^MimeType=.*$|MimeType=inode/directory;|' "$entry"
+      sed -i 's|^Exec=\(.*\)$|Exec=\1 %F|' "$entry"
+      changed=1
+    fi
+    if ! grep -q '^MimeType=.*inode/directory;' "$entry"; then
+      if grep -q '^MimeType=' "$entry"; then
+        sed -i -e 's|^MimeType=\(.*[^;]\)$|MimeType=\1;|' -e 's|^MimeType=\(.*\)$|MimeType=\1inode/directory;|' "$entry"
+      else printf 'MimeType=inode/directory;\n' >> "$entry"; fi
       changed=1
     fi
   done

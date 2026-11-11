@@ -9,9 +9,13 @@ import dev.lizard.ui.Screen
 // ai: Send and Receive). The sender's column on the left and the code area on the right, the code drawn there by the
 // ai: native presenter; the receiver's column and its camera's crop beside it. LIZ_SENDER_TEST (SenderTest.kt) and
 // ai: LIZ_RECEIVER_TEST (ReceiverTest.kt) run an integration check instead of waiting for a hand, at most one of them.
-// ai: args: files and folders to send, added to the selection (a terminal, a file manager's Open with through the
-// ai: package's desktop entry, Exec %F); an app already running takes them instead (Instance.kt), and this launch ends.
-// ai: The first screen: Home; Send with files given or under LIZ_SENDER_TEST; Receive under LIZ_RECEIVER_TEST.
+// ai: args: paths handed in (App.handIn), opened: a .lizard (a double click: the packages register the type,
+// ai: build.gradle.kts fileAssociation) to Receive's File camera, anything else (a terminal, a file manager's Open with
+// ai: through the package's desktop entry, Exec %F) to Send; `--send` first, broadcast: all of them to Send, a .lizard
+// ai: too (the file manager's Broadcast with LIZARD, packaging/lizard.nemo_action). An app already running takes them
+// ai: instead (Instance.kt), and this launch ends. macOS hands a document opened to the running app as an event, not
+// ai: as arguments (openFiles).
+// ai: The first screen: Home, unless paths were given; Send under LIZ_SENDER_TEST; Receive under LIZ_RECEIVER_TEST.
 fun main(args: Array<String>) {
     // ai: AWT erases nothing under the presenter's pictures (the code area's canvas is the swapchain's)
     System.setProperty("sun.awt.noerasebackground", "true")
@@ -25,9 +29,10 @@ fun main(args: Array<String>) {
             if (recvTest != null) ReceiverTest.fail(why) else SenderTest.fail(why)
         }
     }
-    val given = args.map { java.io.File(it).absoluteFile }.filter { it.exists() }
+    val broadcast = args.firstOrNull() == "--send"
+    val given = args.drop(if (broadcast) 1 else 0).map { java.io.File(it).absoluteFile }.filter { it.exists() }
     val testing = sendTest != null || recvTest != null
-    if (!testing && given.isNotEmpty() && Instance.handOff(given)) return
+    if (!testing && Instance.claim(given, broadcast)) return
     val app = App()
     val s = app.send
     try { Native.load() } catch (e: Throwable) { app.loadError = "Native library missing: ${e.message}" }
@@ -39,12 +44,23 @@ fun main(args: Array<String>) {
     recvTest?.apply(app)
     app.screen = when {
         recvTest != null -> Screen.Receive
-        sendTest != null || given.isNotEmpty() -> Screen.Send
+        sendTest != null -> Screen.Send
         else -> Screen.Home
     }
     if (!testing) {
-        Instance.listen { files -> EventQueue.invokeLater { app.handIn(files) } }
-        if (given.isNotEmpty()) { if (s.test) s.chooseTest(false); s.pick(given) }
+        if (given.isNotEmpty()) app.handIn(given, broadcast)
+        Instance.serve { files, b -> EventQueue.invokeLater { app.handIn(files, b) } }
+        openFiles { files -> EventQueue.invokeLater { app.handIn(files, false) } }
     }
     application { LizardWindow(app, sendTest, recvTest) }
+}
+
+// ai: macOS: a document opened in Finder (a double click on a .lizard, the bundle's document type) reaches the app as an
+// ai: open-file event, at its launch and while it runs; where the platform has no such event (Linux, Windows: the
+// ai: path comes as an argument) nothing is set
+private fun openFiles(take: (List<java.io.File>) -> Unit) {
+    if (!java.awt.Desktop.isDesktopSupported()) return
+    val d = java.awt.Desktop.getDesktop()
+    if (!d.isSupported(java.awt.Desktop.Action.APP_OPEN_FILE)) return
+    d.setOpenFileHandler { e -> e.files.map { it.absoluteFile }.filter { it.exists() }.takeIf { it.isNotEmpty() }?.let(take) }
 }
