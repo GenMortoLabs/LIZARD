@@ -341,12 +341,6 @@ static void hole_basis(const struct lizard_ws *w, int x, int y, double b[6]) {
   const double cx = w->cx[x], cy = w->cx[y];
   b[0] = 1; b[1] = cx; b[2] = w->qx[x]; b[3] = cy; b[4] = w->qx[y]; b[5] = cx * cy;
 }
-static float hole_value(const struct lizard_ws *w, const double beta[6], int x, int y) {
-  double b[6], v = 0;
-  hole_basis(w, x, y, b);
-  for (int r = 0; r < 6; r++) v += beta[r] * b[r];
-  return (float)v;
-}
 
 static int ws_init(lizard_t *f) {
   struct lizard_ws *w = calloc(1, sizeof *w);
@@ -1698,15 +1692,22 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
   __m128d vpx = _mm_setzero_pd(), vpy = vpx, vpxy = vpx, vpxx = vpx, vpyy = vpx;
 #endif
   const float g0 = f->margin + 0.5f / f->scale, step = 1.0f / f->scale;
-  // ai: the anchors (SPEC 6.13): every sample an anchor's square touches and OB_ANCH_MARGIN round it set to the
-  // ai: picture's shading there, on every frame, however many anchors its acquisition found, before the detrend and the
-  // ai: transform (the margin measured: on the S26's lenses an erased sample more costs about 0.2 dB in a 1:1 crop, one
-  // ai: fewer 0.15; research/build/anchors/PLAN.md). The shading is the least-squares surface in 1, c(x), q(x), c(y),
-  // ai: q(y), c(x) c(y) over the samples on every eighth row and column outside the squares (its normal matrix inverted
-  // ai: once, ws_init), so a square reads 0 once the detrend has taken the surface off. At the picture's mean it held
-  // ai: the shading there instead: k^2 patches on the squares' lattice, whose spectrum is the shading's low frequencies
-  // ai: copied round every point of the lattice's reciprocal, onto block 0 (2026-11-05, STATUS "The SNR inside a
-  // ai: block, the four tools, and the anchors' holes": block 0 read on 0 of 300 captures in four replays).
+  // ai: The picture's shading (SPEC 6.10): the least-squares surface in 1, c(x), q(x), c(y), q(y), c(x) c(y) over the
+  // ai: samples on every eighth row and column outside the anchors' squares (its normal matrix inverted once, ws_init).
+  // ai: Taken off as a gain since 2026-11-10 (STATUS "The shading taken off as a gain"): a screen's and a lens's falloff
+  // ai: multiplies the picture, so every sample is divided by the surface there and multiplied by its mean (the constant
+  // ai: term) before the detrend and the transform; subtracted alone, it left the signal's strength uneven across the
+  // ai: picture, which the soft values take as even. On one phone's 14 real replays +18.5%, +1.0% and +2.3% blocks in the
+  // ai: 64, 128 and 256 rings; the simulated sets level (they hold little such shading). A quartic surface (15 terms) read
+  // ai: more on the replays (block 0 read again) but took the data's lowest frequencies with the shading and lost a
+  // ai: block of ideal pictures in some formats (`ring_pairs` 7 pairs, `ring_held` 2), so the quadratic stays.
+  // ai: The anchors (SPEC 6.13): every sample an anchor's square touches and OB_ANCH_MARGIN round it set to the surface's
+  // ai: mean after the division, on every frame, however many anchors its acquisition found, so a square reads 0 once the
+  // ai: detrend has taken the mean off (the margin measured: on the S26's lenses an erased sample more costs about 0.2 dB
+  // ai: in a 1:1 crop, one fewer 0.15; research/build/anchors/PLAN.md). At the picture's mean with no shading taken off,
+  // ai: the squares held the shading there instead: k^2 patches on the squares' lattice, whose spectrum is the shading's
+  // ai: low frequencies copied round every point of the lattice's reciprocal, onto block 0 (2026-11-05, STATUS "The SNR
+  // ai: inside a block, the four tools, and the anchors' holes": block 0 read on 0 of 300 captures in four replays).
   const int *elo = w->elo, *ehi = w->ehi, ek = w->ek;
   double beta[6] = {0};
   {
@@ -1727,20 +1728,34 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
       }
     }
     for (int r = 0; r < 6; r++) for (int k = 0; k < 6; k++) beta[r] += w->hole_inv[r][k] * rhs[k];
-    if (grid) for (int j = 0; j < ek; j++) for (int i = 0; i < ek; i++)
-      for (int y = elo[j]; y <= ehi[j]; y++) for (int x = elo[i]; x <= ehi[i]; x++) grid[(size_t)(x / sw) * n * sw + (size_t)y * sw + x % sw] = hole_value(w, beta, x, y);
   }
   for (int x0 = 0; x0 < n; x0 += sw) {
     double ta = ob_now_ms();
     // The strip either comes from the caller or is taken here. Everything downstream works on `z`, so the two
     // paths differ in this one pointer and nothing else.
     float *z = grid ? grid + (size_t)(x0 / sw) * n * sw : w->wre;
-    if (!grid) {
-      ob_sample_grid_pic(&f->frame, im, reg, g0, g0, step, x0, sw, 0, n, w->wre, sw);
+    if (!grid) ob_sample_grid_pic(&f->frame, im, reg, g0, g0, step, x0, sw, 0, n, w->wre, sw);
+    {
+      // ai: the shading divided out, its surface S = A(x) + c(y) B(x) + beta4 q(y) with A = beta0 + beta1 c(x) + beta2 q(x)
+      // ai: and B = beta3 + beta5 c(x) a column, held above 5% of the mean; then the squares set to the mean
+      float A[LIZARD_STRIP], B[LIZARD_STRIP];
+      for (int x = x0; x < x0 + sw; x++) {
+        A[x - x0] = (float)(beta[0] + beta[1] * w->cx[x] + beta[2] * w->qx[x]);
+        B[x - x0] = (float)(beta[3] + beta[5] * w->cx[x]);
+      }
+      const float m = (float)beta[0], fl = 0.05f * fabsf(m);
+      for (int y = 0; y < n; y++) {
+        const float cy = w->cx[y], qy = (float)(beta[4] * w->qx[y]);
+        float *zr = z + (size_t)y * sw;
+        for (int x = 0; x < sw; x++) {
+          const float S = A[x] + cy * B[x] + qy;
+          zr[x] *= m / (S > fl ? S : fl);
+        }
+      }
       for (int i = 0; i < ek; i++) {
         const int xl = elo[i] > x0 ? elo[i] : x0, xh = ehi[i] < x0 + sw - 1 ? ehi[i] : x0 + sw - 1;
         if (xl > xh) continue;
-        for (int j = 0; j < ek; j++) for (int y = elo[j]; y <= ehi[j]; y++) for (int x = xl; x <= xh; x++) z[(size_t)y * sw + x - x0] = hole_value(w, beta, x, y);
+        for (int j = 0; j < ek; j++) for (int y = elo[j]; y <= ehi[j]; y++) for (int x = xl; x <= xh; x++) z[(size_t)y * sw + x - x0] = m;
       }
     }
     double tb = ob_now_ms(); ob_prof_ms[PROF_F_SAMPLE] += tb - ta;
