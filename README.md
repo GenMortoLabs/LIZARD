@@ -154,8 +154,7 @@ carry all of them.
 A replay is a run of captures as a receiver's decoder was handed them, kept for playing again into a decoder. It is
 one `.lizard` file: a ZIP archive of stored entries, each frame's luma as JPEG-LS's median prediction residuals
 compressed with zstd (about three quarters of the raw bytes, lossless), with the run's `meta.json` (sizes, capture
-times, camera axes, the crop) and its statistics. The format is specified in
-[research/SPEC.md](research/SPEC.md) section 15; any ZIP tool lists and tests one.
+times, camera axes, the crop) and its statistics. Any ZIP tool lists and tests one.
 
 - **Recording.** Receive › Developer Tools › Save replays, in the Android app and the desktop app, keeps the newest
   frames while the camera runs, as many as fit in Replay size (256 MB to 8 GB of raw frames, 1 GB unless set; the
@@ -344,23 +343,9 @@ lock, the transfer in the light, and the GPU decoder.
 
 ## The format
 
-[research/SPEC.md](research/SPEC.md) is the specification. The C codec in `liblizard/src/` is the reference: the
-spec describes what it paints, and where the two disagree the code wins. The spec's test vectors are that code's own
-regression check. Another encoder conforms by painting a symbol that decodes: the border exactly, the picture by the
-format's arithmetic. Its sections:
-
-| section | covers |
-|---|---|
-| 1 to 2 | what LIZARD is, its terms, its fixed constraints (luminance only, generic screens and cameras, a border that grows outwards only, a self-describing symbol), and what conformance means |
-| 3. The formats | the 61 versions (64 to 1024 sub-channels, in steps of 16), the rate profile that sets each block's code rate, the picture size each version takes, the three rings, capacity, and how a sender picks a version for a screen |
-| 4. The border | module by module: rim, ring, gap, band, guard, the corner marks, the timing track and the margin |
-| 5. The format word | its fields (magic, version, display rate), its Reed-Solomon code and where its cells sit in each ring |
-| 6. The picture | the coefficient order, QPSK, the transform, clipping to grey, resampling onto the painted grid, the anchors, and where a receiver samples |
-| 7. Blocks and the transfer | the block, its bit map and whitening, the pilots, the block id, chunks and their fountains, the header and manifest blocks, and when a file is accepted |
-| 8. The LDPC code | the four quasi-cyclic codes (7/8, 3/4, 2/3, 1/2) as printed base matrices, their encoding, and soft-decision decoding |
-| 9 to 10 | frames over time (the display rate, the test stream, the fountain) and the two reference receivers |
-| 11 to 14 | the measurement behind the clip ratio, the main design choices and why, the open questions, and how the format changes |
-| 15. Replays | the `.lizard` file: its entries, the frame codec, and how a reader opens one |
+The C codec in `liblizard/src/` is the reference: what it paints is the format, and its test vectors
+(`liblizard/test/vectors.mjs`) are its own regression check. Another encoder conforms by painting a symbol that
+decodes: the border exactly, the picture by the format's arithmetic.
 
 The format is not frozen: a sender and a receiver need the same release.
 
@@ -463,7 +448,7 @@ Install USB driver binds.
 
 ## Roadmap
 
-LIZARD leaves beta when the transfer's header version 4 is in (SPEC 13, item 29), the last format change planned before
+LIZARD leaves beta when the transfer's header version 4 is in, the last format change planned before
 1.0:
 
 - **zstd out of the transfer.** A file compressed before it enters LIZARD leaves the code and the transfer untouched,
@@ -483,10 +468,9 @@ with zstd for convenience, and an application that carries files over it may add
 | `lizard-android/` | the Android app: receiver and sender, native Vulkan decoding |
 | `lizard-ui/` | the Android and desktop apps' screens, in Compose Multiplatform, written once: Home, Send and Receive, their theme, icons and parts, each screen over an interface the app implements with its own platform views; built by each app's own Gradle build as its `:lizard-ui` |
 | `lizard-desktop/` | the desktop app: sender and receiver, a Compose Desktop app drawing the code through a native Vulkan presenter and reading a camera (V4L2, Media Foundation or AVFoundation), a phone's stream or a `.lizard` replay into the native decoders |
-| `research/SPEC.md` | the format specification |
 
-Comments and docs also cite the project's lab files (`scripts/`, `archive/`, `research/` other than `SPEC.md`,
-`STATUS.md`, the per-folder notes, and its phone and rig tools), which are not published; the checks that need its recordings
+Comments and docs also cite the project's lab files (`scripts/`, `archive/`, `research/` with the written
+specification `SPEC.md` and `STATUS.md`, the per-folder notes, and its phone and rig tools), which are not published; the checks that need its recordings
 or reference files say so.
 
 ## Building

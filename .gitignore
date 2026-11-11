@@ -1,9 +1,8 @@
-# What is published: liblizard/, lizard-web/, lizard-android/, lizard-desktop/, lizard-ui/, docs/ (the README's pictures) and research/SPEC.md. The lab's own
-# folders (measurements, training, recordings, the running log, retired arms) and the per-folder notes stay local.
+# What is published: liblizard/, lizard-web/, lizard-android/, lizard-desktop/, lizard-ui/ and docs/ (the README's pictures). The lab's own
+# folders (the written specification, measurements, training, recordings, the running log, retired arms) and the per-folder notes stay local.
 /archive/
 /scripts/
-/research/*
-!/research/SPEC.md
+/research/
 /replays
 /dataset
 /.vscode/
