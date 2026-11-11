@@ -14,6 +14,7 @@ __attribute__((constructor(101), target("arch=x86-64"))) static void ob_need_v2(
 #endif
 
 // Everything a call writes, allocated once: a frame costs no malloc. Behind a pointer so a const lizard_t can use it.
+enum { SW_TILES = 24 * 24 };   // ai: the swing's tiles, 64 samples a side, at most (the largest picture 1536)
 struct lizard_ws {
   float *tre, *tim;                 // the spectrum's upper half-plane: vblocks blocks of n rows (u) by bw columns (v). pos indexes it.
                                     // ai: tim inside tre's allocation (ws_init), freed with it
@@ -27,6 +28,10 @@ struct lizard_ws {
   // ai: the format, made once (ws_init)
   int elo[OB_ANCH_K], ehi[OB_ANCH_K], ek;
   double hole_inv[6][6];
+  // ai: the swing's tiles (frame_spectrum, the gain): up to (1536 / 64)^2, each its basis at its centre, its swing, its
+  // ai: residual and whether the robust fit dropped it
+  double sw_b[SW_TILES][6], sw_a[SW_TILES], sw_r[SW_TILES], sw_s[SW_TILES];
+  unsigned char sw_d[SW_TILES];
   uint8_t *bits, *data;
   // ai: The last decode's soft values for every slot of the frame (subch x 640, pos order), each sub-channel's
   // ai: information estimate, and its rms axis value sqrt(m2 / 2) (0 where it read nothing): a block reads its
@@ -337,6 +342,7 @@ static int in_square(const struct lizard_ws *w, int t) {
   return 0;
 }
 // ai: the shading's basis at picture sample (x, y), x the column: 1 and the detrend's five functions (6.10)
+static int cmp_dbl(const void *a, const void *b) { const double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
 static void hole_basis(const struct lizard_ws *w, int x, int y, double b[6]) {
   const double cx = w->cx[x], cy = w->cx[y];
   b[0] = 1; b[1] = cx; b[2] = w->qx[x]; b[3] = cy; b[4] = w->qx[y]; b[5] = cx * cy;
@@ -1692,15 +1698,22 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
   __m128d vpx = _mm_setzero_pd(), vpy = vpx, vpxy = vpx, vpxx = vpx, vpyy = vpx;
 #endif
   const float g0 = f->margin + 0.5f / f->scale, step = 1.0f / f->scale;
-  // ai: The picture's shading (SPEC 6.10): the least-squares surface in 1, c(x), q(x), c(y), q(y), c(x) c(y) over the
-  // ai: samples on every eighth row and column outside the anchors' squares (its normal matrix inverted once, ws_init).
-  // ai: Taken off as a gain since 2026-11-10 (STATUS "The shading taken off as a gain"): a screen's and a lens's falloff
-  // ai: multiplies the picture, so every sample is divided by the surface there and multiplied by its mean (the constant
-  // ai: term) before the detrend and the transform; subtracted alone, it left the signal's strength uneven across the
-  // ai: picture, which the soft values take as even. On one phone's 14 real replays +18.5%, +1.0% and +2.3% blocks in the
-  // ai: 64, 128 and 256 rings; the simulated sets level (they hold little such shading). A quartic surface (15 terms) read
-  // ai: more on the replays (block 0 read again) but took the data's lowest frequencies with the shading and lost a
-  // ai: block of ideal pictures in some formats (`ring_pairs` 7 pairs, `ring_held` 2), so the quadratic stays.
+  // ai: The picture's shading and its gain (SPEC 6.10). The shading is the least-squares surface in 1, c(x), q(x), c(y),
+  // ai: q(y), c(x) c(y) over the samples on every eighth row and column outside the anchors' squares (its normal matrix
+  // ai: inverted once, ws_init), the squares' fill. The gain, since 2026-11-10 (STATUS "The shading taken off as a gain"):
+  // ai: a screen's and a lens's falloff multiplies the picture, and the signal's strength follows it across the picture
+  // ai: where the soft values take it as even. It is measured in the signal's swing, which a falloff scales and an added
+  // ai: light (a reflection, a glare) leaves alone: in tiles of 64 samples, the root of half the mean squared difference
+  // ai: of neighbours eight samples apart along a row outside the squares; the same quadratic fitted to the tiles' swings
+  // ai: by least squares, robust as lensm_fit's (a tile further from the surface than three robust spreads, 1.4826 MAD of
+  // ai: the residuals, dropped and the surface refitted, three rounds); every sample times the surface's constant over its
+  // ai: value there (held above a tenth of the constant). On one phone's 14 real replays +18.8%, +0.9% and +2.5% blocks in
+  // ai: the 64, 128 and 256 rings; level on the simulated sets, +1.0% under a simulated falloff, -3.7% under strong
+  // ai: simulated glare (the glow's swing compressed by the tone curve near saturation). The brightness surface divided
+  // ai: out (3e6fd75) lost 14.5% under that glare; a quartic took the data's lowest frequencies with the shading and
+  // ai: lost blocks of ideal pictures; a local field (each tile's swing interpolated) boosted the glow and lost more; the
+  // ai: noise floor, measured in the frequencies past the format's (about 20 dB under the signal under glare as clean),
+  // ai: makes the MMSE weight the same as this one.
   // ai: The anchors (SPEC 6.13): every sample an anchor's square touches and OB_ANCH_MARGIN round it set to the surface's
   // ai: mean after the division, on every frame, however many anchors its acquisition found, so a square reads 0 once the
   // ai: detrend has taken the mean off (the margin measured: on the S26's lenses an erased sample more costs about 0.2 dB
@@ -1729,6 +1742,68 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
     }
     for (int r = 0; r < 6; r++) for (int k = 0; k < 6; k++) beta[r] += w->hole_inv[r][k] * rhs[k];
   }
+  double alpha[6] = { 1, 0, 0, 0, 0, 0 };   // ai: the swing's surface in hole_basis; its constant the scale
+  {
+    const int c = n / 8, nt = c / 8;
+    int nti = 0;
+    for (int ty = 0; ty < nt; ty++) for (int tx = 0; tx < nt; tx++) {
+      double D = 0;
+      int cnt = 0;
+      for (int ky = 8 * ty; ky < 8 * ty + 8; ky++) {
+        const int y = 8 * ky, iy = in_square(w, y);
+        for (int kx = 8 * tx; kx < 8 * tx + 7; kx++) {
+          const int x = 8 * kx;
+          if (iy && (in_square(w, x) || in_square(w, x + 8))) continue;
+          const double v0 = grid ? grid[(size_t)(x / sw) * n * sw + (size_t)y * sw + x % sw] : w->wre[(size_t)ky * c + kx];
+          const double v1 = grid ? grid[(size_t)((x + 8) / sw) * n * sw + (size_t)y * sw + (x + 8) % sw] : w->wre[(size_t)ky * c + kx + 1];
+          D += (v1 - v0) * (v1 - v0);
+          cnt++;
+        }
+      }
+      if (cnt < 16 || nti >= SW_TILES) continue;
+      w->sw_a[nti] = sqrt(D / (2.0 * cnt));
+      hole_basis(w, 8 * (8 * tx + 4), 8 * (8 * ty + 4), w->sw_b[nti]);
+      w->sw_d[nti] = 0;
+      nti++;
+    }
+    for (int round = 0; round < 4 && nti >= 12; round++) {
+      double Ab[6][7];
+      memset(Ab, 0, sizeof Ab);
+      int kept = 0;
+      for (int t = 0; t < nti; t++) {
+        if (w->sw_d[t]) continue;
+        kept++;
+        for (int r = 0; r < 6; r++) { for (int k = 0; k < 6; k++) Ab[r][k] += w->sw_b[t][r] * w->sw_b[t][k]; Ab[r][6] += w->sw_b[t][r] * w->sw_a[t]; }
+      }
+      if (kept < 12) break;
+      int ok = 1;
+      for (int col = 0; col < 6 && ok; col++) {
+        int pv = col;
+        for (int r = col + 1; r < 6; r++) if (fabs(Ab[r][col]) > fabs(Ab[pv][col])) pv = r;
+        if (fabs(Ab[pv][col]) < 1e-12) { ok = 0; break; }
+        for (int k = 0; k < 7; k++) { const double t = Ab[col][k]; Ab[col][k] = Ab[pv][k]; Ab[pv][k] = t; }
+        for (int r = 0; r < 6; r++) { if (r == col) continue; const double fct = Ab[r][col] / Ab[col][col]; for (int k = col; k < 7; k++) Ab[r][k] -= fct * Ab[col][k]; }
+      }
+      if (!ok) break;
+      double al[6];
+      for (int r = 0; r < 6; r++) al[r] = Ab[r][6] / Ab[r][r];
+      if (!(al[0] > 0)) break;
+      memcpy(alpha, al, sizeof alpha);
+      if (round == 3) break;
+      int nr = 0;
+      for (int t = 0; t < nti; t++) {
+        double fv = 0;
+        for (int r = 0; r < 6; r++) fv += al[r] * w->sw_b[t][r];
+        w->sw_r[t] = fabs(w->sw_a[t] - fv);
+        if (!w->sw_d[t]) w->sw_s[nr++] = w->sw_r[t];
+      }
+      qsort(w->sw_s, (size_t)nr, sizeof(double), cmp_dbl);
+      const double tau = 3 * 1.4826 * w->sw_s[nr / 2];
+      int changed = 0;
+      for (int t = 0; t < nti; t++) { const unsigned char bad = w->sw_r[t] > tau; if (bad != w->sw_d[t]) { w->sw_d[t] = bad; changed++; } }
+      if (!changed) break;
+    }
+  }
   for (int x0 = 0; x0 < n; x0 += sw) {
     double ta = ob_now_ms();
     // The strip either comes from the caller or is taken here. Everything downstream works on `z`, so the two
@@ -1736,26 +1811,35 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
     float *z = grid ? grid + (size_t)(x0 / sw) * n * sw : w->wre;
     if (!grid) ob_sample_grid_pic(&f->frame, im, reg, g0, g0, step, x0, sw, 0, n, w->wre, sw);
     {
-      // ai: the shading divided out, its surface S = A(x) + c(y) B(x) + beta4 q(y) with A = beta0 + beta1 c(x) + beta2 q(x)
-      // ai: and B = beta3 + beta5 c(x) a column, held above 5% of the mean; then the squares set to the mean
-      float A[LIZARD_STRIP], B[LIZARD_STRIP];
+      // ai: the gain: G(x, y) = alpha0 / A(x, y), the swing's surface A = GA(x) + c(y) GB(x) + alpha4 q(y), a column's GA =
+      // ai: alpha0 + alpha1 c(x) + alpha2 q(x) and GB = alpha3 + alpha5 c(x), held above a tenth of alpha0; the squares then
+      // ai: the brightness surface S = SA(x) + c(y) SB(x) + beta4 q(y) times G, as the picture round them
+      float GA[LIZARD_STRIP], GB[LIZARD_STRIP], SA[LIZARD_STRIP], SB[LIZARD_STRIP];
       for (int x = x0; x < x0 + sw; x++) {
-        A[x - x0] = (float)(beta[0] + beta[1] * w->cx[x] + beta[2] * w->qx[x]);
-        B[x - x0] = (float)(beta[3] + beta[5] * w->cx[x]);
+        GA[x - x0] = (float)(alpha[0] + alpha[1] * w->cx[x] + alpha[2] * w->qx[x]);
+        GB[x - x0] = (float)(alpha[3] + alpha[5] * w->cx[x]);
+        SA[x - x0] = (float)(beta[0] + beta[1] * w->cx[x] + beta[2] * w->qx[x]);
+        SB[x - x0] = (float)(beta[3] + beta[5] * w->cx[x]);
       }
-      const float m = (float)beta[0], fl = 0.05f * fabsf(m);
+      const float am = (float)alpha[0], fl = 0.1f * am;
       for (int y = 0; y < n; y++) {
-        const float cy = w->cx[y], qy = (float)(beta[4] * w->qx[y]);
+        const float cy = w->cx[y], qy = (float)(alpha[4] * w->qx[y]);
         float *zr = z + (size_t)y * sw;
         for (int x = 0; x < sw; x++) {
-          const float S = A[x] + cy * B[x] + qy;
-          zr[x] *= m / (S > fl ? S : fl);
+          const float Av = GA[x] + cy * GB[x] + qy;
+          zr[x] *= am / (Av > fl ? Av : fl);
         }
       }
       for (int i = 0; i < ek; i++) {
         const int xl = elo[i] > x0 ? elo[i] : x0, xh = ehi[i] < x0 + sw - 1 ? ehi[i] : x0 + sw - 1;
         if (xl > xh) continue;
-        for (int j = 0; j < ek; j++) for (int y = elo[j]; y <= ehi[j]; y++) for (int x = xl; x <= xh; x++) z[(size_t)y * sw + x - x0] = m;
+        for (int j = 0; j < ek; j++) for (int y = elo[j]; y <= ehi[j]; y++) {
+          const float cy = w->cx[y], qa = (float)(alpha[4] * w->qx[y]), qb = (float)(beta[4] * w->qx[y]);
+          for (int x = xl; x <= xh; x++) {
+            const float Av = GA[x - x0] + cy * GB[x - x0] + qa;
+            z[(size_t)y * sw + x - x0] = (SA[x - x0] + cy * SB[x - x0] + qb) * am / (Av > fl ? Av : fl);
+          }
+        }
       }
     }
     double tb = ob_now_ms(); ob_prof_ms[PROF_F_SAMPLE] += tb - ta;

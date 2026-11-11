@@ -949,13 +949,16 @@ signalled: a receiver estimates each sub-channel's amplitude and noise itself (8
 ### 6.10 What the receiver removes before reading (non-normative)
 
 A screen's and a lens's falloff multiplies the picture: the signal's strength follows the shading across it, where the
-soft values take it as even. The reference receiver first divides every sample by the picture's shading there and
-multiplies it by the shading's mean: the least-squares surface in 1, c(x), q(x), c(y), q(y) and c(x) c(y) (the basis
-below) over the samples (x, y) with x and y multiples of 8 that lie outside the anchors' squares (6.13; its normal
-matrix depends on the format alone, `ws_init`), its mean the constant term, a divisor held above 5% of the mean. On
-one phone's real captures this read 18.5%, 1.0% and 2.3% more blocks in the 64, 128 and 256 rings than the surface
-subtracted alone; a quartic surface read more there but took the data's lowest frequencies with the shading and lost
-blocks of ideal pictures.
+soft values take it as even. The reference receiver first evens it out by a gain measured in the signal's own swing,
+which a falloff scales and an added light (a reflection, a glare) leaves alone: in tiles of 64 x 64 samples, the root
+of half the mean squared difference of samples eight apart along a row, among the samples on every eighth row and
+column outside the anchors' squares (6.13); the least-squares surface in 1, c(x), q(x), c(y), q(y) and c(x) c(y) (the
+basis below) fitted to the tiles' swings at their centres, robustly (a tile further from the surface than three times
+1.4826 times the median of the residuals dropped and the surface refitted, three rounds); every sample multiplied by
+the surface's constant term over its value there, held above a tenth of the constant term. On one phone's real
+captures this read 18.8%, 0.9% and 2.5% more blocks in the 64, 128 and 256 rings. Dividing by the brightness surface
+read as much there but lost blocks under glare, where added light raises the brightness and not the signal; a quartic
+took the data's lowest frequencies with the shading.
 
 A brightness ramp across the picture lands on the coefficients nearest zero frequency, which carry block 0. The
 reference receiver then removes the least-squares surface in 1, x, y, xy, x^2, y^2 (`lizard_finish_ext`, basis in `ws_init`).
@@ -1073,11 +1076,12 @@ geometry inside the border. The ring the border names sets the grid; nothing els
   that carries none of the picture's signal: on either axis the samples from floor((m0(i) - 15) scale) - 2 to
   ceil((m0(i) + a - 15) scale) - 1 + 2, clamped to [0, n - 1], for each i, the k^2 products of the k ranges on the two
   axes (`lizard_phy.c:lizard_finish_ext`).
-- **The reference's fill** is the shading's mean, after the picture has been divided by its shading (6.10: the
-  least-squares surface in 1, c(x), q(x), c(y), q(y) and c(x) c(y) over the samples (x, y) with x and y multiples of 8
-  that lie outside the k^2 products). A square then reads 0 once the detrend has taken the mean off. A constant fill
-  with the shading left in the picture leaves the shading at the k^2 places instead: a lattice whose spectrum is the
-  shading's lowest frequencies around every point of the squares' reciprocal lattice, where the innermost blocks sit.
+- **The reference's fill** is the picture's shading at the sample, times 6.10's gain there: the least-squares surface
+  in 1, c(x), q(x), c(y), q(y) and c(x) c(y) (6.10's basis) over the samples (x, y) with x and y multiples of 8 that lie
+  outside the k^2 products (its normal matrix depends on the format alone, `ws_init`). A square then reads 0 once the
+  detrend has taken the surface off. A constant fill, the picture's mean, leaves the shading at the k^2 places instead:
+  a lattice whose spectrum is the shading's lowest frequencies around every point of the squares' reciprocal lattice,
+  where the innermost blocks sit.
 - **Reading them** is the receiver's (10.1, 10.2).
 
 ## 7. Blocks, the bit mapping and the transfer
