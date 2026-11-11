@@ -87,8 +87,9 @@ fun partialsOf(listing: String): List<Partial> = runCatching {
 // ai: One hint, the first that holds, while the camera reads a word (2026-10-25, both apps' since 2026-10-31). A phone
 // ai: as the camera (cam/phone.cpp) or an upload, none: their timing is not this camera's. A camera the phase lock does not hold reads a sender at most half its rate without its captures spanning two
 // ai: pictures (the web's rule), so its rate (the one it agreed to at start, else `modeFps`) under twice the word's
-// ai: names the most the sender should paint: "Sender too fast", "max N fps" (2026-11-07; the sentence "Set the sender to
-// ai: at most N fps for this camera." before). null where none holds.
+// ai: names the most the sender should paint, as a hint: "Sender at 24 fps", "recommended 15" (2026-11-11; "Sender too
+// ai: fast", "max N fps" as a warning from 2026-11-07, the sentence "Set the sender to at most N fps for this camera."
+// ai: before). Advice only: decoding never depends on it. null where none holds.
 fun hintOf(j: JsonObject?, on: Boolean, phone: Boolean = false, upload: Boolean = false, locked: Boolean = false, modeFps: Double = 0.0): Warn? {
     if (!on || j == null || upload || phone) return null
     val cam = j.obj("camera")
@@ -97,7 +98,8 @@ fun hintOf(j: JsonObject?, on: Boolean, phone: Boolean = false, upload: Boolean 
     val camFps = cam.num("agreedFps").takeIf { it > 0 } ?: modeFps
     if (!locked && camFps > 0 && camFps < 2 * wf) {
         val n = floor(camFps / 2).toInt()
-        if (n >= 1) return Warn("Sender too fast", "max $n fps")
+        val at = if (wf == floor(wf)) wf.toInt().toString() else "%.1f".format(wf)
+        if (n >= 1) return Warn("Sender at $at fps", "recommended $n", hint = true)
     }
     return null
 }

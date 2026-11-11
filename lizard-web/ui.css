@@ -269,8 +269,9 @@ details.dev legend{font-size:14px;font-weight:600;color:var(--fg);padding:0;marg
 .dt .meter{margin:8px 0}
 /* ai: warnings as status labels (ui.mjs warnings, 2026-11-07; the apps' lizard-ui WarnRow): the red triangle, the label,
    a value at the right */
-.wr{display:flex;align-items:center;gap:8px;font-size:14px;min-height:26px}
+.wr{display:flex;align-items:center;gap:8px;font-size:14px;min-height:26px;font-weight:400}
 .wr>svg.i{width:16px;height:16px;flex:none;color:var(--bad)}
+.wr.h>svg.i{color:var(--muted)}
 .wr>.l{flex:1;min-width:0;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wr>.v{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .ghost.wr,.ghost>.wr{visibility:hidden}

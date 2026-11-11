@@ -171,7 +171,6 @@ function recentKBs() {
   const last = buckets[buckets.length - 1];
   return last && last.dt >= 0.5 ? Math.round(last.freshBytes / last.dt / 1000) : null;
 }
-const WEB_FPS = 24;   // ai: the display rate a browser's receiver is for (24 was chosen to avoid phasing against a 60 fps camera)
 // ai: verdict.mjs's wording, the lab's (#out, the stats row), put plainly for the page's hints (#why).
 // ai: the verdict as a status label (2026-11-07; a sentence of advice before, "Hold the phone so the code fills the
 // ai: square, steady and in focus.")
@@ -817,13 +816,15 @@ function second() {
   // ai: and the stats row. With no code seen, "not registered" only repeats "Looking for a code", so the verdict waits for
   // ai: one, unless no frame reaches a decoder.
   const lead = why && (live || w.found || (stats.processedFps ?? 0) < 0.5) ? plainVerdict(why.text) : "";
-  // ai: A sender painting faster than WEB_FPS is one for the native app (2026-10-01): a browser cannot delay a camera
-  // ai: frame, so its captures fall anywhere in the display's refresh and above 24 a second too many hold two pictures;
-  // ai: the Android app holds the camera's phase by the pilots (lizard-android/, PhaseLock.kt) and reads 60 painted. Said
-  // ai: while the word is live; the sender's own control for it is Settings' FPS slider ("Receiving with" went
-  // ai: 2026-10-02).
-  // ai: as status labels (2026-11-07): "Too fast for a browser", its most a value; "Washed out" (sentences before)
-  ui.why = [lead && [lead, ""], clipping && ["Washed out", ""], live && !media && band.fps > WEB_FPS && ["Too fast for a browser", `max ${WEB_FPS}\u00a0fps`]].filter(Boolean);   // ai: a file's every frame is read: no rate is too fast
+  // ai: A browser's camera is one no phase lock holds, as the apps' cameras without it (lizard-ui State.kt hintOf, the
+  // ai: same rule): its captures fall anywhere in the display's refresh, so it reads a sender at most half its rate, each
+  // ai: picture then held for two captures, one of them whole. Its rate (the one agreed at the camera's open, else the
+  // ai: one measured) under twice the word's names the most the sender should paint, said while the word is live:
+  // ai: as a hint, advice and not a fault (the grey info icon, ui.mjs warnings' "hint"): "Sender at 24 fps",
+  // ai: "recommended 15" (2026-11-11; a fixed 24, "Too fast for a browser", a warning, before). Decoding never depends on
+  // ai: it. "Washed out" a warning's label (2026-11-07; sentences before).
+  const camFps = camRate || stats.capturedFps || 0;
+  ui.why = [lead && [lead, ""], clipping && ["Washed out", ""], live && !media && camFps > 0 && camFps < 2 * band.fps && Math.floor(camFps / 2) >= 1 && [`Sender at ${band.fps}\u00a0fps`, `recommended ${Math.floor(camFps / 2)}`, "hint"]].filter(Boolean);   // ai: a file's every frame is read: no rate is too fast
   showState();
   // ai: The frame path's diagnostics go to the console (read over adb DevTools) and the stats row, not the page, which
   // ai: keeps what a user aims and judges by (2026-09-25).

@@ -537,28 +537,33 @@ const SIZES = [
   // ai: the test stream's block: its name and Speed, no meter (2026-11-07; "Reading the test stream" before); the lab
   // ai: line the rate, the registered share and the format (Developer Tools)
   check(ts.dt?.name === "Test stream" && ts.dt.frac === null && Object.keys(ts.dt.rows).join() === "Speed" && /^\d+\sKB\/s, \d+% registered, LIZARD-96 at 24\sfps$/.test(ts.lab), `test stream: ${JSON.stringify(ts.dt)} / "${ts.lab}" / "${ts.why}"`);
-  // ai: The native app is recommended only to a sender painting faster than 24 (2026-10-01): not here, and
-  // ai: on a clip of the same stream whose word says 30 (a picture a camera frame).
-  check(!/Too fast for a browser/.test(ts.why), `at 24 fps no word of a browser's limit: "${ts.why}"`);
-  {
-    const fastPhy = await makePhy({ phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FC, variants: [{ name: "rx" }] }), fastPath = join(scratch, "fast.y4m");
-    const fd = openSync(fastPath, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
+  // ai: The camera's rate under twice the word's (2026-11-11, the apps' rule for a camera no phase lock holds; a fixed 24
+  // ai: before), a hint (its row's class h, the info icon): the fake camera runs at 30, so the test stream at 24 is told
+  // ai: "recommended 15", as a clip whose word says 30; a clip whose word says 15, half the camera's rate, nothing.
+  const rows = `[...document.querySelectorAll("#why .wr")].map((r) => (r.classList.contains("h") ? "hint:" : "") + r.dataset.k + "|" + r.querySelector(".v").textContent).join(" / ")`;
+  const tw = await evaluate(t, rows);
+  check(/(^| \/ )hint:Sender at 24\sfps\|recommended 15( \/ |$)/.test(tw), `the test stream at 24 fps on a 30 fps camera: the hint row "${tw}"`);
+  for (const wf of [FC, FC / 2]) {
+    const clipPhy = await makePhy({ phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: wf, variants: [{ name: "rx" }] }), clipPath = join(scratch, `word${wf}.y4m`);
+    const fd = openSync(clipPath, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
     writeSync(fd, `YUV4MPEG2 W${CW} H${CH} F${FC}:1 Ip A1:1 C420jpeg\n`);
     for (let i = 0; i < 60; i++) {
-      const fr = await fastPhy.frame(i), ox = (CW - fr.w) >> 1, oy = (CH - fr.h) >> 1;
+      const fr = await clipPhy.frame(i), ox = (CW - fr.w) >> 1, oy = (CH - fr.h) >> 1;
       y.fill(235);
       for (let r = 0; r < fr.h; r++) for (let c = 0; c < fr.w; c++) y[(oy + r) * CW + ox + c] = Math.round(20 + 215 * fr.drive[r * fr.w + c]);
       writeSync(fd, "FRAME\n"); writeSync(fd, y); writeSync(fd, chroma);
     }
     closeSync(fd);
-    const f = await chrome("fast", [`--use-file-for-fake-video-capture=${fastPath}`]);
+    const f = await chrome(`word${wf}`, [`--use-file-for-fake-video-capture=${clipPath}`]);
     await size(f, SIZES[0]);
     await navigate(f, `${BASE}?auto&seen`);
-    await until(f, `/at 30\\sfps/.test(document.getElementById("lab").textContent)`, 30000, "the 30 fps test stream read");
+    await until(f, `/at ${wf}\\sfps/.test(document.getElementById("lab").textContent)`, 30000, `the ${wf} fps test stream read`);
     await sleep(1200);
-    // ai: the warning as a row (2026-11-07; a sentence naming the LIZARD app before): its label and the most a browser reads
-    const fw = await evaluate(f, `[...document.querySelectorAll("#why .wr")].map((r) => r.dataset.k + "|" + r.querySelector(".v").textContent).join(" / ")`);
-    check(/(^| \/ )Too fast for a browser\|max 24\sfps( \/ |$)/.test(fw), `a sender at 30 fps: the warning row "${fw}"`);
+    // ai: the hint as a row (2026-11-11; a warning from 2026-11-07, a sentence naming the LIZARD app before): the sender's
+    // ai: rate and the most the camera reads
+    const fw = await evaluate(f, rows);
+    if (wf > FC / 2) check(new RegExp(`(^| / )hint:Sender at ${wf}\\sfps\\|recommended 15( / |$)`).test(fw), `a sender at ${wf} fps on a 30 fps camera: the hint row "${fw}"`);
+    else check(!/Sender at/.test(fw), `a sender at ${wf} fps on a 30 fps camera: no hint, "${fw}"`);
   }
   // ai: The light gone (the video paused, as a camera turned to a wall): the state falls back to looking, which says
   // ai: nothing (2026-11-06, as the apps'; its words drawn clear while the run holds the line's room), the code's name

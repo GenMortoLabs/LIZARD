@@ -248,7 +248,7 @@ private fun TransferPanel(h: ReceiveHost) {
     // ai: hint, held still while the camera runs (steady), its room kept as the block's is, gone with it
     h.heat?.let { WarnRow(it, Modifier.padding(top = 4.dp)) }
     val hintKey = steady(h.hint?.let { "${it.label}\t${it.value}" }.orEmpty(), on = 0).takeIf { run }.orEmpty()
-    val hint = hintKey.takeIf { it.isNotEmpty() }?.split('\t')?.let { Warn(it[0], it.getOrElse(1) { "" }) }
+    val hint = hintKey.takeIf { it.isNotEmpty() }?.split('\t')?.let { Warn(it[0], it.getOrElse(1) { "" }, hint = true) }
     if (run && hint != null) lastHint[0] = hint
     (hint ?: lastHint[0].takeIf { run })?.let { WarnRow(it, Modifier.padding(top = if (h.heat == null) 4.dp else 0.dp), clear = hint == null) }
     Spacer(Modifier.height(16.dp))

@@ -57,10 +57,11 @@ fun DetailsBlock(d: Details, modifier: Modifier = Modifier, clear: Boolean = fal
 }
 
 // ai: A warning as a status label (2026-11-07; a sentence before, "Set the sender to at most 30 fps for this camera.";
-// ai: sentences are for popups and covers): its label ("Sender too fast", "Throttling") and where a figure helps a value
-// ai: ("max 30 fps", "camera 42 of 60 fps"). Drawn as a row under the block, the red triangle before its label (WarnRow;
-// ai: rows, not chips); in a rail the triangle alone, its words the description (text).
-class Warn(val label: String, val value: String = "") {
+// ai: sentences are for popups and covers): its label ("Throttling") and where a figure helps a value ("camera 42 of 60
+// ai: fps"). Drawn as a row under the block, the red triangle before its label (WarnRow; rows, not chips); in a rail the
+// ai: triangle alone, its words the description (text). A hint (`hint`, 2026-11-11: the camera's rate advice, "Sender at
+// ai: 24 fps", "recommended 15") is advice, not a fault: the grey info icon in the triangle's place.
+class Warn(val label: String, val value: String = "", val hint: Boolean = false) {
     val text get() = if (value.isEmpty()) label else "$label, $value"
 }
 
@@ -68,7 +69,8 @@ class Warn(val label: String, val value: String = "") {
 fun WarnRow(w: Warn, modifier: Modifier = Modifier, clear: Boolean = false) {
     Row(modifier.fillMaxWidth().heightIn(min = 26.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.alert, contentDescription = "Warning", Modifier.size(16.dp), tint = if (clear) Color.Transparent else Bad)
+        Icon(if (w.hint) Icons.info else Icons.alert, contentDescription = if (w.hint) "Hint" else "Warning", Modifier.size(16.dp),
+            tint = if (clear) Color.Transparent else if (w.hint) Muted else Bad)
         Text(w.label, style = MaterialTheme.typography.bodyMedium, color = if (clear) Color.Transparent else Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (w.value.isNotEmpty()) Text(w.value, style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = if (clear) Color.Transparent else Muted, maxLines = 1)
     }

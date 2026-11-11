@@ -128,6 +128,7 @@ const ICONS = {
   more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
 };
 // ai: A line that names a file (2026-10-23; the PC's rule since 2026-11-06, lizard-ui Parts.kt NameLine): on one line
@@ -174,17 +175,18 @@ export function details(el, d, clear = false) {
 }
 // ai: Warnings as status labels under the block (2026-11-07, the apps' lizard-ui Warn and WarnRow; sentences before,
 // ai: "30 pictures a second is too fast for a browser: use the LIZARD app, or send at 24."): a row each, the red
-// ai: triangle, the label, and at the right a value where a figure helps. list: [[label, value]]; clear: drawn clear,
-// ai: its room kept. Rebuilt only when it changes.
+// ai: triangle, the label, and at the right a value where a figure helps; a hint ("hint", 2026-11-11: the camera's rate
+// ai: advice) the grey info icon in the triangle's place. list: [[label, value, kind]]; clear: drawn clear, its room kept.
+// ai: Rebuilt only when it changes.
 export function warnings(el, list, clear = false) {
   el.classList.toggle("ghost", clear);
   const key = JSON.stringify(list);
   if (el.dataset.key === key) return;
   el.dataset.key = key;
-  el.replaceChildren(...list.map(([l, v]) => {
+  el.replaceChildren(...list.map(([l, v, kind]) => {
     const r = document.createElement("div"), a = document.createElement("span"), b = document.createElement("span");
-    r.className = "wr"; r.dataset.k = l; a.className = "l"; a.textContent = l; b.className = "v"; b.textContent = v ?? "";
-    r.append(icon("alert"), a, b);
+    r.className = kind === "hint" ? "wr h" : "wr"; r.dataset.k = l; a.className = "l"; a.textContent = l; b.className = "v"; b.textContent = v ?? "";
+    r.append(icon(kind === "hint" ? "info" : "alert"), a, b);
     return r;
   }));
 }

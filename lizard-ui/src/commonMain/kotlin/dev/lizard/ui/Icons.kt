@@ -37,6 +37,7 @@ object Icons {
     val inbox = stroked("inbox", "M22 12h-6l-2 3h-4l-2-3H2", "M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z")
     val more = stroked("more", circle(12f, 5f, 1f), circle(12f, 12f, 1f), circle(12f, 19f, 1f))
     val alert = stroked("alert", "M10.29,3.86L1.82,18a2,2 0,0 0,1.71 3h16.94a2,2 0,0 0,1.71 -3L13.71,3.86a2,2 0,0 0,-3.42 0z", "M12,9L12,13", "M12,17L12.01,17")
+    val info = stroked("info", circle(12f, 12f, 10f), "M12 16v-4", "M12 8h.01")
     val back = stroked("back", "M19 12H5M12 19l-7-7 7-7")
     val x = stroked("x", "M18,6 L6,18 M6,6 L18,18")
     val mark = ImageVector.Builder("mark", 64.dp, 64.dp, 64f, 64f).apply {
