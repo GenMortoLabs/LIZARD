@@ -217,7 +217,7 @@ export const NODES = nodesSource();
 
 // ai: Gauss-Jordan with partial pivoting as straight-line GLSL (the WGSL register.mjs (archived) gaussJordan): the pivot chosen and
 // ai: swapped in by selects, every index a literal.
-function gaussJordan(N, rows, cols, eps, ok) {
+export function gaussJordan(N, rows, cols, eps, ok) {
   const s = [];
   for (let col = 0; col < rows; col++) {
     s.push(`{ int piv = ${col}; float pv = abs(${N}[${col}][${col}]);`);

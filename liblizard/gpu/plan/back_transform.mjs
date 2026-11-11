@@ -45,9 +45,10 @@ export const LATTICE_MAX = 36;   // node coordinates a side PIC holds (register.
 // ai: inner knots' residuals in image px,
 // ai: knot q = 7 j + i in .xy of [4 + q / 2] for an even q, .zw for an odd; at ANCH_SURF the shading the squares are
 // ai: filled with, (b0, b1, b2, b3), (b4, b5, 0, 0): b0 + b1 u + b2 u^2 + b3 w + b4 w^2 + b5 u w, u and w a sample's
-// ai: module x and y as 2 (m - margin) / span - 1 (glsl/anchors.mjs ANCH_FIT). Here, not in anchors.mjs, because
-// ai: pass 1 reads it and anchors.mjs imports this module.
-export const ANCH_SIDE = 7, ANCH_K = ANCH_SIDE * ANCH_SIDE, ANCH_SURF = 4 + Math.ceil(ANCH_K / 2), ANCH_REC = ANCH_SURF + 2;
+// ai: module x and y as 2 (m - margin) / span - 1 (glsl/anchors.mjs ANCH_FIT); at ANCH_GAIN the gain's surface, the
+// ai: signal's swing fitted in the same basis, (a0, a1, a2, a3), (a4, a5, 0, 0) (SPEC 6.10; pass 1 multiplies each sample by
+// ai: its mean over its value). Here, not in anchors.mjs, because pass 1 reads it and anchors.mjs imports this module.
+export const ANCH_SIDE = 7, ANCH_K = ANCH_SIDE * ANCH_SIDE, ANCH_SURF = 4 + Math.ceil(ANCH_K / 2), ANCH_GAIN = ANCH_SURF + 2, ANCH_REC = ANCH_SURF + 4;
 // ai: The samples the erase takes round a square on the picture's grid (src/internal.h OB_ANCH_MARGIN).
 export const ANCH_ERASE = 2;
 

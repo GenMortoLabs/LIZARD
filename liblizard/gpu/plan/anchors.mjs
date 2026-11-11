@@ -20,6 +20,13 @@ export const anchMin = (k) => Math.min(ANCH_MIN, k * k - 1);
 // ai: kernel and here alike. 16 a side, the 256 points the picture's mean was taken over before; 32, 64 and 128 read
 // ai: within 0.02% of it on recorded captures.
 export const ANCH_FILL = 16, ANCH_BAND2 = 3;   // ai: ANCH_BAND2 = 2 ANCH_BAND
+// ai: The gain's swing (SPEC 6.10, the C's lizard_finish_ext): SW_T x SW_T tiles of the picture in modules (the picture's
+// ai: size is the word's, after this stage), SW_R rows a tile, on each a run of SW_LAG / SW_T points span / SW_LAG modules
+// ai: apart (eight samples at n 1024) and the pairs of neighbours along it, as the C's runs on its lattice of every eighth
+// ai: sample; a run's points through the map at its ends and middle, quadratic between; pairs outside the squares' bands
+// ai: as the fill's points; a tile kept from SW_MIN pairs; the fit robust as the C's (three rounds, three robust
+// ai: spreads), the median from two histograms of SW_BINS bins (the bin, then within it: to the largest residual / SW_BINS^2)
+export const SW_T = 16, SW_R = 4, SW_LAG = 128, SW_MIN = 8, SW_BINS = 64;
 
 // ai: A, the anchors' uniform (every anchors kernel's), from gpu/tables.mjs formatTables() rings: three vec4f a
 // ai: ring, (k0, k1, k2, k3), (k4, k5, k6, k7), (k8, a, span, margin): the knots of an axis in modules, the lattice's
