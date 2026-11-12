@@ -33,20 +33,7 @@ In signal-processing terms this is OFDM, the modulation used by Wi-Fi and 4G/5G,
 
 ![One frame in each ring: LIZARD-64, LIZARD-128 and LIZARD-256](docs/frames.png)
 
-- **The picture** is n x n samples (384 to 1536 a side, depending on how much the frame carries), drawn on the
-  screen at whole pixels. Only data is painted inside it, apart from the anchors.
-- **The anchors** are small squares on a grid painted over the picture, set by the ring: 3 x 3 in the 64 ring, 5 x 5
-  in the 128 and 7 x 7 in the 256 (a light middle, a dark ring, a light rim; about 1% of the picture), whose middles show the receiver how a lens bends the picture between the border's nodes,
-  which the border alone cannot see. A receiver erases them before it reads the data.
-- **The border** is 15 modules deep, a module being the border's unit square, as in QR codes. Going inwards:
-  - a **corner mark** at each corner, for finding the code and fixing its perspective;
-  - a **dark ring** all the way round, the line the receiver aligns to;
-  - a **band of cells** holding a **timing track** (a known pattern, different on each side, which tells the
-    receiver which way up the code is and which border size it is looking at) and the **format word** (a 3-byte
-    header under Reed-Solomon protection naming the version, meaning how much data the picture holds, and the
-    sender's frame rate);
-  - a **guard**: the picture's own edges wrapped round it, so that blur affects every part of the picture the same
-    way. In OFDM this is called a cyclic prefix.
+![Anatomy of a LIZARD code: the whole code, its corner enlarged, the border in cross-section and the picture's frequencies](docs/anatomy.png)
 
 ## Sending, step by step
 
