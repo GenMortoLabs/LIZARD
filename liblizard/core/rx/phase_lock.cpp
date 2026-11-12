@@ -20,6 +20,8 @@
 // ai:     next, so the line goes later by `gain` ms a unit of a - b wherever that is Z of its errors from 0; the
 // ai:     gain is measured by the moves (what the captures' places moved over what it changed a - b by);
 // ai:   deep in a mix (no capture mostly one picture, so no count): a quarter of a refresh later, and look again;
+// ai:   a jump in the display's changes: the newest frames alone, read at once, where they are deep in a mix or
+// ai:     show other neighbours than the last decision saw (by more than its step);
 // ai:   the pace: from pairs of readings (`learn`) and from a flat top's edge reached again.
 // ai: Nothing it learns is ever certain. The pace and the gain are one estimate with its covariance (`observe`): every
 // ai: pair of readings and every edge reached again is one look at them, with the variance its readings, the gain's
@@ -290,6 +292,7 @@ void PhaseLock::hold() {
   prevT = 0;
   balanced = false;
   lastLeak.reset();
+  decSide = -1;
   edgeDir = 0;
   flatHalf = 0;
   stood = false;
@@ -576,6 +579,7 @@ void PhaseLock::here() {
   stood = false;
   lastLeak.reset();
   placed.clear();
+  decSide = -1;
   if (aimFrom == 0) aimFrom = now;
   line_ = now + jround((double)skew * row);
   move = false;
@@ -794,6 +798,9 @@ void PhaseLock::check() {
 // ai:     longer (a window that shortened widens it): the next step is CROSS again and measures it afresh.
 // ai: Every reading that shows a neighbour, with the one before, also tells the gain and the pace (`learn`), and the
 // ai: move allows for what the hold has slid since its frames were captured.
+// ai: A display's changes can jump (a picture held a little longer, none skipped): the newest L_NEED + 2 frames deep
+// ai: in a mix take the quarter step at once, and showing other neighbours than the last decision, by more than its
+// ai: step, they are read at once, without a RECENT wait over frames half from before the jump.
 void PhaseLock::held() {
   std::vector<Frame> fs;
   for (const Frame& f : window)
@@ -806,6 +813,46 @@ void PhaseLock::held() {
   // ai: else all since the last move
   std::optional<Leak> est = leaks(std::max(settle, fs.back().ts - RECENT_NS));
   if (!est) est = leaks(settle);
+  // ai: the newest frames show other neighbours than the last decision saw, and moved further than the edge's step
+  // ai: (CROSS at the gain) accounts for: what the hold holds changed (the display's changes jumped), and those frames
+  // ai: alone say what it holds now, read at once
+  bool fresh = false;
+  const size_t from = fs.size() > (size_t)L_NEED + 2 ? fs.size() - L_NEED - 2 : 0;
+  if (decSide >= 0) {
+    const std::optional<Leak> near = leaks(fs[from].ts - 1);   // ai: (the newest frame has no frame after it yet: L_NEED read)
+    if (near) {
+      const int nSide = (near->a > jmax(LEAK, Z * near->sa) ? 1 : 0) | (near->b > jmax(LEAK, Z * near->sb) ? 2 : 0);
+      if (nSide != decSide && jmax(std::fabs(near->a - decA), std::fabs(near->b - decB)) * gain * 1e6 >= CROSS_NS) {
+        est = near;
+        fresh = true;
+        if (debug) say(fmt("phase: DEBUG the newest %d frames show other neighbours (%.3f, %.3f): read at once", near->n, near->a, near->b));
+      }
+    }
+  }
+  // ai: the newest frames deep in a mix (half under DEEP, half with no sure sign) are what the hold holds now,
+  // ai: whatever older, surer frames said (they would leave the hold in the mix): the deep step, a quarter of a
+  // ai: refresh later, and look again
+  {
+    std::vector<double> rs;
+    rs.reserve(fs.size() - from);
+    size_t sig = 0;
+    for (size_t i = from; i < fs.size(); i++) {
+      rs.push_back(std::fabs(fs[i].r));
+      if (std::fabs(fs[i].r) >= R_FLASH && std::fabs(fs[i].r2) >= R_FLASH) sig++;
+    }
+    std::sort(rs.begin(), rs.end(), jless);
+    const double mid = rs[rs.size() / 2];
+    if (mid < DEEP && 2 * sig < rs.size()) {
+      line_ += jround(refresh() / 4);
+      move = true;
+      prevT = 0;
+      edgeDir = 0;
+      flatHalf = 0;
+      stood = false;
+      if (debug) say(fmt("phase: DEBUG the newest frames deep in a mix (|r| %.2f): a quarter later", mid));
+      return;
+    }
+  }
   if (est) lastLeak = est;
   if (!est) {
     // ai: no frame tells its neighbours apart. Deep in a mix (half the frames' r under DEEP: no capture is mostly one
@@ -839,7 +886,7 @@ void PhaseLock::held() {
   const bool sigB = est->b > jmax(LEAK, Z * est->sb);
   // ai: readings of frames that overlap say one thing twice: a reading counts once its frames are a RECENT on from
   // ai: the last one's (or a move has been made since, which starts the frames afresh)
-  if (prevT != 0 && prevHop == 0.0 && est->t - prevT < RECENT_NS) return;
+  if (!fresh && prevT != 0 && prevHop == 0.0 && est->t - prevT < RECENT_NS) return;
   const double was = pace;
   // ai: a pair tells the gain and the pace where a - b went straight with the hold's place between them: both
   // ai: readings showing the same neighbours (across a flat top it stands still whatever the hold does)
@@ -928,6 +975,9 @@ void PhaseLock::held() {
   } else {
     prevT = 0;
   }
+  decSide = side;
+  decA = est->a;
+  decB = est->b;
   if (hop != 0 || pace != was) hop += jround((pace - was) * (double)(now - est->t));
   if (hop != 0) {
     line_ += hop;

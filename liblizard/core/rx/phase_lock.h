@@ -235,6 +235,9 @@ class PhaseLock {
   double prevPace = 0.0;
   double prevX = 0.0;
   int prevSide = 0;   // ai: which neighbours it showed: 1 the one before, 2 the one after, 3 both
+  int decSide = -1;   // ai: the neighbours the last decision saw (as prevSide; -1 none yet) and their shares
+  double decA = 0.0;
+  double decB = 0.0;
   // ai: the session's newest N_EVID looks at the gain and the pace (z ms, its gain's and pace's coefficients, its
   // ai: variance ms², its readings' variance, the gain and its variance before it, its camera time)
   std::deque<std::array<double, 8>> evid;

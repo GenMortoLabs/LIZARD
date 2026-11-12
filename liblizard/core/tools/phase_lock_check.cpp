@@ -104,6 +104,9 @@ struct PhaseLockProbe {
     D("prevPace", p.prevPace);
     D("prevX", p.prevX);
     L("prevSide", p.prevSide);
+    L("decSide", p.decSide);
+    D("decA", p.decA);
+    D("decB", p.decB);
     L("evid", (int64_t)p.evid.size());
     D("evidLast", p.evid.empty() ? 0.0 : p.evid.back()[3]);
     L("aimFrom", p.aimFrom);

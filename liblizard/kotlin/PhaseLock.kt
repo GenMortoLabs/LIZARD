@@ -31,6 +31,8 @@ import kotlin.math.abs
 // ai:     next, so the line goes later by `gain` ms a unit of a - b wherever that is Z of its errors from 0; the
 // ai:     gain is measured by the moves (what the captures' places moved over what it changed a - b by);
 // ai:   deep in a mix (no capture mostly one picture, so no count): a quarter of a refresh later, and look again;
+// ai:   a jump in the display's changes: the newest frames alone, read at once, where they are deep in a mix or
+// ai:     show other neighbours than the last decision saw (by more than its step);
 // ai:   the pace: from pairs of readings (`learn`) and from a flat top's edge reached again.
 // ai: Nothing it learns is ever certain (2026-10-26). The pace and the gain are one estimate with its covariance
 // ai: (`observe`): every pair of readings and every edge reached again is one look at them, with the variance its
@@ -145,6 +147,8 @@ class PhaseLock(private val say: (String) -> Unit) {
     private var gainVar = GAIN_VAR0   // ai: (ms a unit)²
     private var gpCov = 0.0           // ai: the gain's and the pace's covariance (ms a unit, ns a ns)
     private var prevE = 0.0
+    private var decSide = -1        // ai: the neighbours the last decision saw (as prevSide; -1 none yet) and their shares
+    private var decA = 0.0; private var decB = 0.0
     private var prevSe = 0.0
     private var prevT = 0L
     private var prevHop = 0.0
@@ -190,7 +194,7 @@ class PhaseLock(private val say: (String) -> Unit) {
     private fun hold() {
         row = ROW; settle = 0; line = -1; move = false; moving = false; window.clear(); since = 0; level = 0.0; placed.clear()
         gain = GAIN_MS; gainVar = GAIN_VAR0; gpCov = 0.0; evid.clear(); aimFrom = 0
-        prevT = 0; balanced = false; lastLeak = null
+        prevT = 0; balanced = false; lastLeak = null; decSide = -1
         edgeDir = 0; flatHalf = 0; stood = false; state = null
     }
 
@@ -345,7 +349,7 @@ class PhaseLock(private val say: (String) -> Unit) {
     private fun here() {
         if (frame == 0L) return
         if (base == 0L) { base = frame; pace = 0.0; paceVar = PACE_VAR0; gpCov = 0.0; multiple = 1 }
-        prevT = 0; edgeDir = 0; flatHalf = 0; balanced = false; stood = false; lastLeak = null; placed.clear()
+        prevT = 0; edgeDir = 0; flatHalf = 0; balanced = false; stood = false; lastLeak = null; placed.clear(); decSide = -1
         if (aimFrom == 0L) aimFrom = now
         line = now + Math.round(skew * row); move = false; moving = false; window.clear(); since = now; settle = now; level = 0.0
         say("phase: the hold begins: the refresh %.4f ms on the camera's clock, %d a frame of %.4f ms, the code at row %.2f".format(refresh / 1e6, multiple, frame / 1e6, row))
@@ -512,13 +516,42 @@ class PhaseLock(private val say: (String) -> Unit) {
     // ai:     no longer (a window that shortened widens it): the next step is CROSS again and measures it afresh.
     // ai: Every reading that shows a neighbour, with the one before, also tells the gain and the pace (`learn`),
     // ai: and the move allows for what the hold has slid since its frames were captured.
+    // ai: A display's changes can jump (a picture held a little longer, none skipped): the newest L_NEED + 2 frames
+    // ai: deep in a mix take the quarter step at once, and showing other neighbours than the last decision, by more
+    // ai: than its step, they are read at once, without a RECENT wait over frames half from before the jump.
     private fun held() {
         val fs = window.filter { it.ts > settle }
         if (fs.size < L_NEED) return
         level = maxOf(level * 0.98, fs.sumOf { it.blocks }.toDouble() / fs.size)
         // ai: the newest second's frames where they are enough (what the hold holds now, not a mean over a long
         // ai: stand), else all since the last move
-        val est = leaks(maxOf(settle, fs.last().ts - RECENT_NS)) ?: leaks(settle)
+        var est = leaks(maxOf(settle, fs.last().ts - RECENT_NS)) ?: leaks(settle)
+        // ai: the newest frames show other neighbours than the last decision saw, and moved further than the edge's
+        // ai: step (CROSS at the gain) accounts for: what the hold holds changed (the display's changes jumped), and
+        // ai: those frames alone say what it holds now, read at once
+        var fresh = false
+        if (decSide >= 0) {
+            val near = leaks(fs[maxOf(0, fs.size - L_NEED - 2)].ts - 1)   // ai: (the newest frame has no frame after it yet: L_NEED read)
+            if (near != null) {
+                val nSide = (if (near.a > maxOf(LEAK, Z * near.sa)) 1 else 0) or (if (near.b > maxOf(LEAK, Z * near.sb)) 2 else 0)
+                if (nSide != decSide && maxOf(abs(near.a - decA), abs(near.b - decB)) * gain * 1e6 >= CROSS_NS) {
+                    est = near; fresh = true
+                    if (DEBUG) say("phase: DEBUG the newest %d frames show other neighbours (%.3f, %.3f): read at once".format(near.n, near.a, near.b))
+                }
+            }
+        }
+        // ai: the newest frames deep in a mix (half under DEEP, half with no sure sign) are what the hold holds now,
+        // ai: whatever older, surer frames said (they would leave the hold in the mix): the deep step, a quarter of a
+        // ai: refresh later, and look again
+        run {
+            val nf = fs.subList(maxOf(0, fs.size - L_NEED - 2), fs.size)
+            val mid = nf.map { abs(it.r) }.sorted()[nf.size / 2]
+            if (mid < DEEP && 2 * nf.count { abs(it.r) >= R_FLASH && abs(it.r2) >= R_FLASH } < nf.size) {
+                line += Math.round(refresh / 4); move = true; prevT = 0; edgeDir = 0; flatHalf = 0; stood = false
+                if (DEBUG) say("phase: DEBUG the newest frames deep in a mix (|r| %.2f): a quarter later".format(mid))
+                return
+            }
+        }
         if (est != null) lastLeak = est
         if (est == null) {
             // ai: no frame tells its neighbours apart. Deep in a mix (half the frames' r under DEEP: no capture is
@@ -539,7 +572,7 @@ class PhaseLock(private val say: (String) -> Unit) {
         val sigA = est.a > maxOf(LEAK, Z * est.sa); val sigB = est.b > maxOf(LEAK, Z * est.sb)
         // ai: readings of frames that overlap say one thing twice: a reading counts once its frames are a
         // ai: RECENT on from the last one's (or a move has been made since, which starts the frames afresh)
-        if (prevT != 0L && prevHop == 0.0 && est.t - prevT < RECENT_NS) return
+        if (!fresh && prevT != 0L && prevHop == 0.0 && est.t - prevT < RECENT_NS) return
         val was = pace
         // ai: a pair tells the gain and the pace where a - b went straight with the hold's place between them: both
         // ai: readings showing the same neighbours (across a flat top it stands still whatever the hold does)
@@ -595,6 +628,7 @@ class PhaseLock(private val say: (String) -> Unit) {
         // ai: (the next pair's move is this one without that allowance: its line reckons the slide at the new pace
         // ai: from the frames' own time)
         if (side != 0) { prevE = e; prevSe = se; prevT = est.t; prevHop = hop / 1e6; prevPace = pace; prevSide = side; prevX = est.x } else prevT = 0
+        decSide = side; decA = est.a; decB = est.b
         if (hop != 0L || pace != was) hop += Math.round((pace - was) * (now - est.t))
         if (hop != 0L) { line += hop; move = true }
     }
