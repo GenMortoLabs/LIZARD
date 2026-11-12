@@ -183,6 +183,31 @@ tasks.matching { it.name == "createDistributable" || it.name == "createReleaseDi
     }
 }
 
+// ai: Windows: Broadcast with LIZARD on every file and folder takes jpackage's installer template with one component
+// ai: more (packaging/windows/main.wxs) in its --resource-dir. Compose's MSI task gives that as a folder of its own,
+// ai: emptied as the task runs and given last (jpackage takes the last), with nothing to hook between; so the MSI is made
+// ai: again after the task by jpackage with the task's own arguments (compose/tmp/<task>.args.txt), every --resource-dir
+// ai: packaging/windows. The task's working folder (the jars it gave as --input) is kept for that by
+// ai: compose.preserve.working.dir (gradle.properties).
+val windowsResources = project.file("packaging/windows")
+tasks.withType<org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask>().matching { it.name.endsWith("Msi") }.configureEach {
+    inputs.dir(windowsResources)
+    val argsFile = layout.buildDirectory.file("compose/tmp/$name.args.txt")
+    doLast {
+        val given = argsFile.get().asFile
+        val lines = given.readLines()
+        val ours = "\"" + windowsResources.absolutePath.replace("\\", "\\\\") + "\""
+        val again = given.resolveSibling(given.name.replace(".args.txt", ".windows.args.txt"))
+        again.writeText(lines.mapIndexed { i, l -> if (i > 0 && lines[i - 1] == "--resource-dir") ours else l }.joinToString("\n"))
+        destinationDir.get().asFile.listFiles { f -> f.extension == "msi" }?.forEach { it.delete() }
+        // ai: WiX as the task gives it (its wixToolsetDir ahead of PATH, Compose's jvmToolEnvironment)
+        val pb = ProcessBuilder(File(javaHome.get(), "bin/jpackage.exe").path, "@" + again.absolutePath).inheritIO()
+        wixToolsetDir.orNull?.let { pb.environment()["PATH"] = it.asFile.absolutePath + File.pathSeparator + (System.getenv("PATH") ?: "") }
+        val code = pb.start().waitFor()
+        if (code != 0) throw GradleException("jpackage, the MSI with packaging/windows, exited $code")
+    }
+}
+
 // ai: macOS: the license text in the app's resources (Contents/app/resources/LICENSES.txt)
 val appLicense by tasks.registering(Copy::class) {
     from(licenseText.flatMap { it.out }) { rename { "LICENSES.txt" } }
