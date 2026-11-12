@@ -17,22 +17,22 @@ import { loadNet } from "./cnn/netfile.mjs";
 import { LEVELS } from "./constants.mjs";   // ai: not ./decoder.mjs, which imports this module (constants.mjs)
 
 export { KEEP };
-// ai: The installed proposer since 2026-11-09: v2's net trained with a pairwise ranking term (every mark centre against
-// ai: the batch's 64 strongest negatives, softplus, weight 1; scripts/gpu/cnn/proposer/train.py RANK=1), warm from
-// ai: research/results/gpu/final/a-s1.safetensors at LR 1e-3 on sim210000 and the half-blown sim440000, seed 1
-// ai: (research/results/gpu/prop_rank/rank-s1.safetensors, its f64 reference rank-s1.ref there), its floor 0.15
-// ai: (rank-s1-f15). Through the decoder its found marks rank higher at SELECT's cap and more frames are found on hard
-// ai: captures (research/STATUS.md "The proposer trained to rank"). The one before it, 2026-10-03 to 11-09: the blown-out
-// ai: round's pb-s1 (research/results/gpu/prop_blown/pb-s1.safetensors, reference pb-s1.ref; kept in
-// ai: research/results/gpu/installed-before-2026-11-09/). A reference holds the net's values, not its peaks: the checks
-// ai: take the floor from the file.
+// ai: The installed proposer since 2026-11-12: v2's net (8 channels, 3 layers, the pairwise ranking term RANK=1) trained
+// ai: on today's format by a curriculum on the GPU renderer's and PySETCAM's scenes: easy scenes, then half-blown
+// ai: exposures and cluttered rooms, then PySETCAM's drawn cameras distilled from the second stage's net (seed 2;
+// ai: research/build/curriculum-2026-11-12, w8d3-D2), its floor 0.15 (research/results/gpu/prop_d2/d2-f15.safetensors,
+// ai: its f64 reference d2.ref there). Through the decoder in int8 on 24 real replays: blocks +0.26%, level and +0.09%
+// ai: in the 64, 128 and 256 rings against the one before (research/STATUS.md "The proposer retrained on today's format
+// ai: installed"). The one before it, 2026-11-09 to 11-12: rank-s1 (research/results/gpu/prop_rank/, kept in
+// ai: research/results/gpu/installed-before-2026-11-12/); before it pb-s1 (installed-before-2026-11-09/). A reference
+// ai: holds the net's values, not its peaks: the checks take the floor from the file.
 export const WEIGHTS = "gpu/cnn/proposer/weights2.safetensors";
-export const REFERENCE = "../research/results/gpu/prop_rank/rank-s1.ref";
-// ai: The installed int8 proposer (a q8 file) and its PQ81 reference: the post-training quantisation of WEIGHTS
-// ai: (research/results/gpu/prop_rank/rank-s1-q8-f15.safetensors, the floor 0.15), installed 2026-11-09; the one before it
-// ai: pb-s1-q8-f15 (research/results/gpu/prop_blown/, reference pb-s1-q8.ref there).
+export const REFERENCE = "../research/results/gpu/prop_d2/d2.ref";
+// ai: The installed int8 proposer (a q8 file) and its PQ81 reference: the post-training quantisation of WEIGHTS on its
+// ai: last stage's sets (research/results/gpu/prop_d2/d2-q8-f15.safetensors, the floor 0.15), installed 2026-11-12; the
+// ai: one before it rank-s1-q8-f15 (research/results/gpu/prop_rank/, reference rank-s1-q8.ref there).
 export const WEIGHTS_INT8 = "gpu/cnn/proposer/weights2-q8.safetensors";
-export const REFERENCE_INT8 = "../research/results/gpu/prop_rank/rank-s1-q8.ref";
+export const REFERENCE_INT8 = "../research/results/gpu/prop_d2/d2-q8.ref";
 
 export class FitError extends Error {}
 
