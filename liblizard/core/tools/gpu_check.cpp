@@ -16,6 +16,13 @@
 //                                                 of the same name past its last ':', else form 0): a line a form,
 //                                                 codewords apart (verdict or iterations), verdicts apart, frames
 //                                                 whose iterations run (a stop's give-ups too) differ; exit 1 on any
+//   lizard_gpu_check peaks [variant] [W H]        frames from stdin through the decoder, each frame's kept peaks to
+//                                                 stdout (the log to stderr), nothing held from frame to frame: the
+//                                                 classifier's export (scripts/gpu/cnn/export.mjs) without a recording.
+//                                                 In: groups, a u32 count (0 ends) then a frame each: u32 w, h, tag and
+//                                                 w h bytes of luma (W x H at most, 2160 x 2160 by default). Out: a
+//                                                 group's records as LIZ_PEAKS writes them (u32 tag, raw count, kept
+//                                                 count, n, n peaks of 4 f32), then u32 0xFFFFFFFF and the records' count
 //   lizard_gpu_check probe <variant> <job.json> <dir>   frames through the decoder a batch at a time, every lane
 //                                                 buffer a stage left written out after each (the self-test's
 //                                                 reference remake: scripts/gpu/native/selftest_ref.mjs)
@@ -68,9 +75,11 @@ extern "C" {
 #include "lizard_phy.h"
 }
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <deque>
 #include <thread>
+#include <unistd.h>
 
 #include <chrono>
 #include <cstring>
@@ -965,6 +974,75 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   return rc;
 }
 
+// ai: peaks: frames from stdin in groups through the decoder as replay runs them (batches of the batcher's size, the
+// ai: lanes in flight, nothing held), each frame's kept peaks (SELECT's list at the batch's end, as LIZ_PEAKS reads it)
+// ai: written to `out` a group at a time and flushed with the group's trailer, so a caller feeds frames from memory and
+// ai: reads peaks back without a recording or a host started a chunk
+static int peaksFromStdin(Ctx& c, const std::string& v, uint32_t W, uint32_t H, int outFd) {
+  auto fh = open(c, v);
+  fh->plan(W, H);
+  FILE* out = fdopen(outFd, "wb");
+  if (!out) throw wg::Error("peaks: the output cannot be opened");
+  auto readAll = [](void* p, size_t n) { return fread(p, 1, n, stdin) == n; };
+  std::deque<std::unique_ptr<InFlight>> flight;
+  std::vector<std::vector<uint8_t>> px;
+  std::vector<std::array<uint32_t, 3>> hd;
+  long frames = 0;
+  const double t0 = fh->now();
+  for (;;) {
+    uint32_t n = 0;
+    if (!readAll(&n, 4) || n == 0) break;
+    px.assign(n, {});
+    hd.resize(n);
+    for (uint32_t i = 0; i < n; i++) {
+      if (!readAll(hd[i].data(), 12)) throw wg::Error("peaks: a frame's header cut short");
+      if (hd[i][0] > W || hd[i][1] > H || !hd[i][0] || !hd[i][1]) throw wg::Error("peaks: a frame of " + std::to_string(hd[i][0]) + " x " + std::to_string(hd[i][1]) + " (" + std::to_string(W) + " x " + std::to_string(H) + " at most)");
+      px[i].resize((size_t)hd[i][0] * hd[i][1]);
+      if (!readAll(px[i].data(), px[i].size())) throw wg::Error("peaks: a frame cut short");
+    }
+    uint32_t records = 0;
+    auto drain = [&]() {
+      Lane* lane = flight.front()->lane;
+      auto o = fh->finish(std::move(flight.front()));
+      flight.pop_front();
+      const auto pk = readBack(*c.dev, *lane->peaksBuf);
+      const uint64_t stride = pk.size() / lane->B;
+      for (size_t i = 0; i < o.frames.size(); i++) {
+        const auto& fo = o.frames[i];
+        if (fo.empty) continue;
+        const uint32_t kept = fo.counts.size() > 2 ? fo.counts[2] : 0, k = std::min<uint32_t>(kept, (uint32_t)fh->cap);
+        const uint32_t head[4] = {(uint32_t)fo.tag, fo.counts.size() > 1 ? fo.counts[1] : 0, kept, k};
+        fwrite(head, sizeof head, 1, out);
+        fwrite(pk.data() + stride * i, 16, k, out);
+        records++;
+      }
+    };
+    int next = 0;
+    while (next < (int)n || !flight.empty()) {
+      if (next < (int)n && (int)flight.size() < fh->inflightMax() && fh->freeLane()) {
+        const int nb = std::min(fh->size(), (int)n - next);
+        std::vector<Slot*> slots;
+        for (int i = 0; i < nb; i++, next++) {
+          const uint32_t w = hd[(size_t)next][0], h = hd[(size_t)next][1];
+          Slot* s = fh->enqueueLuma(px[(size_t)next].data(), w, h, w, hd[(size_t)next][2]);
+          for (int t = 0; !s && t < 20000; t++) { std::this_thread::sleep_for(std::chrono::microseconds(250)); s = fh->enqueueLuma(px[(size_t)next].data(), w, h, w, hd[(size_t)next][2]); }
+          if (!s) throw wg::Error("the ring is full");
+          slots.push_back(s);
+        }
+        flight.push_back(fh->run(slots, 0, false, 0));
+      } else drain();
+    }
+    const uint32_t tail[2] = {0xFFFFFFFFu, records};
+    fwrite(tail, sizeof tail, 1, out);
+    fflush(out);
+    frames += n;
+  }
+  const double ms = fh->now() - t0;
+  fprintf(stderr, "peaks: %ld frames, %.0f a second (%s, batches of %d)\n", frames, frames / std::max(1e-3, ms / 1000), v.c_str(), fh->B);
+  fclose(out);
+  return 0;
+}
+
 // ai: trial: buildTrialled on the device's variants (a receiver's start), the device made again as main made it
 static int trial(Ctx& c, const std::string& dir, const std::string& which) {
   const double budget = std::stod(env("LIZ_BUDGET", "2048")) * (1 << 20);
@@ -1023,6 +1101,9 @@ static int noise(Ctx& c, const std::string& v, const std::vector<double>& sigmas
 
 int main(int argc, char** argv) {
   std::string cmd = argc > 1 ? argv[1] : "info";
+  // ai: peaks writes its records to stdout: everything else the tool prints goes to stderr meanwhile
+  const int peaksFd = cmd == "peaks" ? dup(1) : -1;
+  if (cmd == "peaks") dup2(2, 1);
   try {
     Ctx c;
     auto log = [](const std::string& m) { std::cout << m << std::endl; };
@@ -1081,6 +1162,7 @@ int main(int argc, char** argv) {
       for (int i = 3; i < argc; i++) s.push_back(atof(argv[i]));
       rc = noise(c, argv[2], s);
     }
+    else if (cmd == "peaks") rc = peaksFromStdin(c, pick(2), argc > 4 ? (uint32_t)atoi(argv[3]) : 2160, argc > 4 ? (uint32_t)atoi(argv[4]) : 2160, peaksFd);
     else if (cmd == "replay" || cmd == "xcheck") {
       if (argc < 3) throw wg::Error(cmd + " <run> [frames] [variant]");
       rc = replay(c, argv[2], argc > 3 ? atoi(argv[3]) : 0, pick(4), cmd == "xcheck");
