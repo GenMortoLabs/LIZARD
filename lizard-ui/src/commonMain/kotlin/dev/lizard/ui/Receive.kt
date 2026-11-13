@@ -43,11 +43,11 @@ import dev.lizard.readout.Readout
 
 // ai: The folds of the tool screens and Home's lists (HomeUnfinished, HomeFiles: the phone's Home, 2026-11-07), kept by
 // ai: each app under its own keys, closed until opened. The settings by topic (2026-11-12; one Settings fold a screen
-// ai: before, RecvSettings and SendSettings): Receive's Camera, Code, Decoder; Send's Code, Refresh, Performance (Layout
-// ai: merged into Code 2026-11-13) (RECV_FOLDS, SEND_FOLDS). Collapsed: the tool screens' column at its rail, one for Receive and Send (2026-11-07;
+// ai: before, RecvSettings and SendSettings): Receive's Camera, Performance (titled Decoder, RecvDecoder, and a Code fold with the crop until 2026-11-13); Send's
+// ai: Code, Refresh, Performance (Layout merged into Code 2026-11-13) (RECV_FOLDS, SEND_FOLDS). Collapsed: the tool screens' column at its rail, one for Receive and Send (2026-11-07;
 // ai: each its own before)
 enum class FoldKey {
-    RecvCamera, RecvCode, RecvDecoder, RecvExperimental, RecvTools,
+    RecvCamera, RecvPerformance, RecvExperimental, RecvTools,
     SendCode, SendRefresh, SendPerformance, SendExperimental, SendTools,
     Collapsed, HomeUnfinished, HomeFiles
 }

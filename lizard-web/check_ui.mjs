@@ -47,7 +47,7 @@ const BASE = `http://localhost:${PORT}/${DIR}/recv.html`, SEND = `http://localho
 const DT = `(() => { const el = document.getElementById("dt"); if (!el || el.hidden) return null; const rows = {}; for (const r of el.querySelectorAll(".dt-row")) rows[r.dataset.k] = r.lastElementChild.textContent; const m = el.querySelector(".meter>span"); return { name: el.querySelector(".nm")?.textContent ?? "", end: el.querySelector(".pc")?.textContent ?? "", spin: !!el.querySelector(".spin"), frac: m ? parseFloat(m.style.width) / 100 : null, ghost: el.classList.contains("ghost"), rows }; })()`;
 // ai: the settings' folds by topic (2026-11-12; one Settings fold, #dev, before), each kept as <page>:<id>; FOLDS_AT
 // ai: each fold of the column as "<id> <title>: <its controls' ids>", and any group heading left inside one
-const SEND_FOLDS = ["foldCode", "foldRefresh", "foldPerf"], RECV_FOLDS = ["foldCamera", "foldDecoder"];
+const SEND_FOLDS = ["foldCode", "foldRefresh", "foldPerf"], RECV_FOLDS = ["foldCamera", "foldPerf"];
 // ai: (open: one state for every fold, or a state a fold)
 const statesOf = (ids, open) => ids.map((_, i) => (Array.isArray(open) ? open[i] : open));
 const foldsOpen = (ids) => `${JSON.stringify(ids)}.map((id) => document.getElementById(id).open)`;
@@ -437,7 +437,7 @@ const SIZES = [
     if (k === 0) {
       const shut = await evaluate(s, foldsOpen(RECV_FOLDS)), at = await evaluate(s, FOLDS_AT);
       check(shut.every((o) => !o), `${z.name}: every settings fold closed on a fresh profile (${shut.join()})`);
-      check(at === "foldCamera Camera: cam res lock fps zoom | foldDecoder Decoder: dec | logs Developer Tools: stats", `${z.name}: the folds and their controls in order, no group heading (${at})`);
+      check(at === "foldCamera Camera: cam res lock fps zoom | foldPerf Performance: dec | logs Developer Tools: stats", `${z.name}: the folds and their controls in order, no group heading (${at})`);
     }
     for (const openPanel of [false, true]) {
       await evaluate(s, setFolds(RECV_FOLDS, openPanel));

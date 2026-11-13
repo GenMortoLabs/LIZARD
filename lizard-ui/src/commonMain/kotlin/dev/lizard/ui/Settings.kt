@@ -23,7 +23,7 @@ class Choice<T>(val title: String, val value: T, val options: List<Pair<T, Strin
                 val enabledFor: (T) -> Boolean = { true }, val onOpen: () -> Unit = {}, val choose: (T) -> Unit) : Setting
 
 // ai: a choice among a few as chips under its title (Chips: Send's FPS, Ring, Codes, Encoder, VSync, Payload; Receive's
-// ai: Decoder, Codes (the crop: 1 the 1:1, 2 the 2:1, Send's Codes), Format, Phase lock, Frame rate, Save replays; Show statistics on both; the desktop's Exclusive
+// ai: Decoder, Crop (1:1, 2:1; named Codes, 1 and 2, from 2026-11-09 to 11-13), Format, Phase lock, Frame rate, Save replays; Show statistics on both; the desktop's Exclusive
 // ai: fullscreen; the phone's Resolution and Compression); `enabledFor` greys a choice the device does not offer
 class ChipChoice<T>(val title: String, val value: T, val options: List<Pair<T, String>>, val enabled: Boolean = true,
                     val enabledFor: (T) -> Boolean = { true }, val choose: (T) -> Unit) : Setting
@@ -43,12 +43,13 @@ class Code(val text: String, val size: Int = 13) : Setting
 class Press(val act: Act, val enabled: Boolean = true) : Setting
 
 // ai: The settings folds by topic (2026-11-12; one Settings fold a screen before): each a fold's key and title in the
-// ai: column's order, before Experimental and Developer Tools. Receive's: the camera (its choice, its mode, Phase lock, its
-// ai: controls), the code (Codes, the crop), the decoder (Decoder, Batch size, the phone's PC link and Compression).
+// ai: column's order, before Experimental and Developer Tools. Receive's: the camera (its choice, its mode, Phase lock, Crop
+// ai: after Frame rate, its controls; Crop in a Code fold of its own, named Codes, until 2026-11-13), the decoder's performance
+// ai: (Decoder, Batch size, the phone's PC link and Compression; titled Decoder until 2026-11-13).
 // ai: Send's: the code and its place on the screen (Density or Blocks, Ring, Codes, then Size or the phone's Brightness,
 // ai: Spacing, Margin; a Layout fold of their own until 2026-11-13), its refresh (FPS, Rate refresh), the painter
 // ai: (Encoder, VSync). The web pages the same (lizard-web).
-val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvCode to "Code", FoldKey.RecvDecoder to "Decoder")
+val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvPerformance to "Performance")
 val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendPerformance to "Performance")
 
 // ai: each fold of `order` that the app gives a setting, open as `folds` keeps it

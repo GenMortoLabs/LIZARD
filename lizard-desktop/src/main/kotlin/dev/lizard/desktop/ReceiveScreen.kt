@@ -138,14 +138,13 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         r.preview?.let { Image(it, contentDescription = null, modifier, contentScale = ContentScale.Fit, filterQuality = FilterQuality.Low) }
     }
 
-    // ai: Settings by topic (2026-11-12, lizard-ui RECV_FOLDS; one fold before, the web's #dev): the camera, the code, the
-    // ai: decoder; chips, a slider or a menu each (lizard-ui Settings.kt: the menus Camera and Resolution, a webcam's
+    // ai: Settings by topic (2026-11-12, lizard-ui RECV_FOLDS; one fold before, the web's #dev): the camera (with Crop since
+    // ai: 2026-11-13, a Code fold's before), Performance (the decoder; titled Decoder until 2026-11-13); chips, a slider or a menu each (lizard-ui Settings.kt: the menus Camera and Resolution, a webcam's
     // ai: sizes a long list), the camera's controls where it has them
     override val settings: Map<FoldKey, List<Setting>> get() {
         val ci = r.info
         val m = r.mode
         val camera = mutableListOf<Setting>()
-        val code = mutableListOf<Setting>()
         val decoder = mutableListOf<Setting>()
         // ai: GPU and CPU; with neither chosen the decoder is auto's and the one it runs on is shown
         decoder += ChipChoice("Decoder", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "GPU", "cpu" to "CPU")) { r.chooseDecoder(it) }
@@ -174,17 +173,17 @@ class DesktopReceive(private val app: App) : ReceiveHost {
                 rates.firstOrNull { ReceiveState.fpsText(it) == v }?.let { r.chooseFps(it) }
             }
         }
-        // ai: a phone crops on its side, an upload was cropped when recorded (the receiver takes their crop): no Codes
-        // ai: here (the crop: 1 the 1:1, 2 the 2:1, Send's Codes), nor the camera's controls
+        // ai: a phone crops on its side, an upload was cropped when recorded (the receiver takes their crop): no Crop
+        // ai: here (1:1, 2:1; Codes, 1 and 2, from 2026-11-09 to 11-13), nor the camera's controls
         if (!r.fixed) {
-            code += ChipChoice("Codes", r.layout, listOf("1:1" to "1", "2:1" to "2")) { r.chooseLayout(it) }
+            camera += ChipChoice("Crop", r.layout, listOf("1:1" to "1:1", "2:1" to "2:1")) { r.chooseLayout(it) }
             ci?.control("zoom")?.let { camera += zoom(it) }
             ci?.control("exposure")?.let { camera += exposure(it) }
             ci?.control("gain")?.let { camera += gain(it) }
         }
         // ai: the most frames a GPU launch takes: none for the C, which decodes a frame at a time
         if (!r.cpu) decoder += Slide("Batch size", "${r.batch}", r.batch.toFloat(), 1f..32f, 30, done = { r.commitBatch() }) { r.chooseBatch(it.roundToInt()) }
-        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvCode to code, FoldKey.RecvDecoder to decoder)
+        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder)
     }
 
     // ai: Zoom (UVC zoom_absolute), live: shown as a ratio of its least ("1.5x") where it starts above 0

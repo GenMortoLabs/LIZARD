@@ -114,7 +114,7 @@
   <dialog id="first" class="dialog"><p>Browsers have severely limited performance and lack support for many critical features. Use the Android app for higher speed and stability. In a browser, set the sender to at most half the camera's frame rate.</p><div class="row end"><button id="firstCancel" type="button">Cancel</button><button id="firstStart" class="primary" type="button">Start</button></div></dialog>
   <section class="settings">
     <!-- ai: the settings in folds by topic (2026-11-12; one Settings fold, #dev, before): Camera (#foldCamera: the
-         camera, its resolution, the phase lock, the frame rate, the zoom where the track has one), Decoder (#foldDecoder),
+         camera, its resolution, the phase lock, the frame rate, the zoom where the track has one), Performance (#foldPerf; #foldDecoder, titled Decoder, until 2026-11-13),
          then Developer Tools (#logs) the lab line and the readouts. Each fold's open state and every menu in it kept as
          recv:<id> (ui.mjs remember, persist); each fold holds a control that is never hidden (the camera, the decoder).
          Every control a labelled field, its options bare (2026-10-02). -->
@@ -132,7 +132,7 @@
       <div id="zoomRow" class="blocks" hidden><span class="row"><span>Zoom</span><span id="zoomOut"></span></span><input id="zoom" type="range" aria-label="Zoom"></div>
     </div>
   </details>
-  <details class="dev" id="foldDecoder"><summary>Decoder</summary>
+  <details class="dev" id="foldPerf"><summary>Performance</summary>
     <div class="grid">
       <!-- ai: the apps' Decoder (2026-11-06): GPU or CPU; with neither chosen auto runs, named after what it runs
            (recv.mjs showDecoder): the GPU where WebGPU makes the decoder, else the C -->

@@ -54,10 +54,12 @@ import dev.lizard.ui.Screen
 
 // ai: The tool screens' folds and rail on the phone, under the keys the preferences kept them by (MainActivity.FOLDS);
 // ai: the settings folds by topic (2026-11-12, lizard-ui RECV_FOLDS and SEND_FOLDS; "recvSettings" and "sendSettings"
-// ai: the one Settings fold's before, "sendLayout" Send's Layout fold's until 2026-11-13, unread)
+// ai: the one Settings fold's before, "sendLayout" Send's Layout fold's and "recvCode" Receive's Code fold's and "recvDecoder" its
+// ai: Performance fold's (titled Decoder) until 2026-11-13,
+// ai: unread)
 internal class AndroidFolds(private val a: MainActivity) : Folds {
     private fun key(k: FoldKey) = when (k) {
-        FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvCode -> "recvCode"; FoldKey.RecvDecoder -> "recvDecoder"
+        FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvPerformance -> "recvPerformance"
         FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
         FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefresh"
         FoldKey.SendPerformance -> "sendPerformance"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
@@ -207,9 +209,10 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     }
 
     // ai: Settings by topic (2026-11-12, lizard-ui RECV_FOLDS; one fold from 2026-10-02, the web's): Camera (the back
-    // ai: lenses and File; its mode: Resolution, Format, Phase lock and Frame rate, the session's; Zoom), Code (Codes, the
-    // ai: crop), Decoder (auto shows what it runs on; PC only while a PC receiver is heard on the link; the PC link while a
-    // ai: cable is in, the PC decoder's Compression, the GPU's Batch size)
+    // ai: lenses and File; its mode: Resolution, Format, Phase lock and Frame rate, the session's; Crop, in a Code fold of its
+    // ai: own as Codes until 2026-11-13; Zoom), Performance (titled Decoder until 2026-11-13: the Decoder, auto showing
+    // ai: what it runs on, PC only while a PC receiver is heard on the link; the PC link while a cable is in, the PC
+    // ai: decoder's Compression, the GPU's Batch size)
     override val settings: Map<FoldKey, List<Setting>> get() {
         val camera = mutableListOf<Setting>()
         val decoder = mutableListOf<Setting>()
@@ -238,14 +241,15 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
                 }
             }
         }
-        // ai: a file's one mode is its own and it has no lens: none of the camera's settings but the crop
-        if (!r.fileMode) cameraSettings(camera, res, fmt, sizes)
-        val code = listOf(ChipChoice("Codes", s.layout, Settings.LAYOUTS.map { it to it.substringBefore(":") }) { a.change(s.copy(layout = it)) })
-        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvCode to code, FoldKey.RecvDecoder to decoder)
+        // ai: the crop, 1:1 or 2:1 (Codes, 1 and 2, from 2026-11-09 to 11-13); a file's one mode is its own and it has no
+        // ai: lens: none of the camera's settings but the crop
+        val crop = ChipChoice("Crop", s.layout, Settings.LAYOUTS.map { it to it }) { a.change(s.copy(layout = it)) }
+        if (!r.fileMode) cameraSettings(camera, res, fmt, sizes, crop) else camera += crop
+        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder)
     }
 
-    // ai: the camera's mode (Resolution, Format, Frame rate, the session's) and its zoom
-    private fun cameraSettings(out: MutableList<Setting>, res: String, fmt: String, sizes: Set<String>) {
+    // ai: the camera's mode (Resolution, Format, Frame rate, the session's), the crop and its zoom
+    private fun cameraSettings(out: MutableList<Setting>, res: String, fmt: String, sizes: Set<String>, crop: Setting) {
         out += ChipChoice("Resolution", res, Settings.RESOLUTIONS.map { it to it }, enabledFor = { sizes.isEmpty() || it in sizes }) { r.chooseResolution(it) }
         // ai: the camera's format: Auto, or each the lens offers at this resolution (RAW at any) that the decoder reads
         // ai: (Private with the GPU decoder alone); shown where there is a choice
@@ -268,6 +272,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         if (rates.size > 1) out += ChipChoice("Frame rate", cur?.let { rateText(it) } ?: "", rates.map { rateText(it) to rateText(it) }) { v ->
             rates.firstOrNull { rateText(it) == v }?.let { r.chooseRate(it) }
         }
+        out += crop
         out += zoom(r.zoomRange)
     }
 
