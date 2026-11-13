@@ -298,7 +298,7 @@ object Received {
     // ai: app, one click from the list).
     // ai: Windows: the Zone.Identifier stream of each file, ZoneId=3 (the Internet zone), which SmartScreen, the
     // ai: Attachment Manager's prompt and Office's Protected View read; written through java.io, which opens a
-    // ai: "path:stream" name as NTFS takes it (JDK 17: jdk.io.File.enableADS, true unless set false). A volume with no
+    // ai: "path:stream" name as NTFS takes it (jdk.io.File.enableADS since JDK 17, true unless set false). A volume with no
     // ai: streams (FAT32, exFAT) takes none, as a browser's download there.
     // ai: macOS: com.apple.quarantine on each file and each folder (an app is a folder), "0081;<seconds, hex>;LIZARD;", the
     // ai: flags a browser outside the App Sandbox writes on a download: 0x0001, downloaded, set and 0x0040, approved by

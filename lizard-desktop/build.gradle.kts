@@ -218,10 +218,16 @@ tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(ap
 compose.desktop {
     application {
         mainClass = "dev.lizard.desktop.MainKt"
-        jvmArgs += listOf("-Dsun.java2d.uiScale.enabled=true")
-        // ai: The packages (2026-10-04): jpackage puts a Java runtime
-        // ai: in each, jlink's cut of the build JDK to the modules the app uses (suggestRuntimeModules: java.prefs the kept
-        // ai: settings, jdk.unsupported Compose's Skia, java.instrument), so nothing needs Java installed.
+        // ai: native access for the app's own library (Native.load's System.load) and Skia's (skiko): JDK 24 and later warn
+        // ai: on it otherwise (JEP 472)
+        jvmArgs += listOf("-Dsun.java2d.uiScale.enabled=true", "--enable-native-access=ALL-UNNAMED")
+        // ai: The packages (2026-10-04): jpackage puts a Java runtime in each, jlink's cut of the runtime JDK to the
+        // ai: modules the app uses (suggestRuntimeModules: java.prefs the kept settings, jdk.unsupported Compose's Skia,
+        // ai: java.instrument), so nothing needs Java installed. The runtime JDK the latest LTS, 25 (2026-11-13; the build
+        // ai: JDK's, 17, before), jpackage and jlink its own, the run task too; the code is still compiled for 17
+        // ai: (jvmToolchain), which 25 runs (Kotlin 2.1.20 emits no 25 bytecode, Gradle 8.14 does not run on 25). A system
+        // ai: that cannot run JDK 25 takes the web app.
+        javaHome = javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(25)) }.get().metadata.installationPath.asFile.absolutePath
         // ai: `./gradlew packageDeb` (debDeps after it adds the native library's own needs to Depends).
         nativeDistributions {
             targetFormats(TargetFormat.Deb, TargetFormat.Msi, TargetFormat.Dmg)

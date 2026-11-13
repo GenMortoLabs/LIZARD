@@ -499,7 +499,9 @@ lizard-android/build.sh gen    # the GPU decoder's and encoder's kernels and tab
 ```
 
 Every Gradle build below runs on JDK 17, which Gradle finds among the JDKs installed (each project's
-`gradle/gradle-daemon-jvm.properties`): `JAVA_HOME` is not needed.
+`gradle/gradle-daemon-jvm.properties`): `JAVA_HOME` is not needed. The desktop app's packages carry their own Java
+runtime, JDK 25, which Gradle downloads where none is installed (its toolchain resolver); a system that cannot run
+JDK 25 uses the web app.
 
 **The Android app** needs the Android SDK, through `ANDROID_HOME` or `sdk.dir` in `lizard-android/local.properties`,
 with the packages `platforms;android-36`, `build-tools;35.0.0`, `ndk;27.1.12297006` and `cmake;3.22.1`.
