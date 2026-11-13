@@ -172,8 +172,10 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
         // ai: the extents before the restored size: the request was the monitor's own rectangle, which Muffin takes from
         // ai: an old application as a full-screen request ("Treating resize request of legacy application ... as a
         // ai: fullscreen request"), so every leave came back full screen. With the bounds set first that request is the
-        // ai: window's own. `normal`: the bounds whenever the window is neither maximized nor its monitor's size (a floating
-        // ai: window of a monitor's exact size the manager makes full screen itself), null until one is seen.
+        // ai: window's own. `normal`: the bounds whenever the window is neither maximized nor covering a monitor (a floating
+        // ai: window of a monitor's exact size the manager makes full screen itself), null until one is seen. Full screen
+        // ai: is told by the bounds with or without AWT's insets matching a monitor's: AWT reports a full-screen frame as
+        // ai: the monitor grown by the title bar it still counts ([1920, -28, 1920 x 1108] on a 1920 x 1080 monitor).
         var normal by remember { mutableStateOf<java.awt.Rectangle?>(null) }
         s.fullscreen = { on ->
             val top = runCatching { Native.windowOf(window) }.getOrDefault(0L)
@@ -188,8 +190,11 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
             val seen = object : java.awt.event.ComponentAdapter() {
                 fun keep() {
                     val b = window.bounds
+                    val i = window.insets
+                    val inner = java.awt.Rectangle(b.x + i.left, b.y + i.top, b.width - i.left - i.right, b.height - i.top - i.bottom)
+                    val monitors = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { it.defaultConfiguration.bounds }
                     if (window.extendedState and java.awt.Frame.MAXIMIZED_BOTH == 0 && b.width > 0 && b.height > 0 &&
-                        b != window.graphicsConfiguration?.bounds) normal = b
+                        monitors.none { it == b || it == inner }) normal = b
                 }
                 override fun componentResized(e: java.awt.event.ComponentEvent) = keep()
                 override fun componentMoved(e: java.awt.event.ComponentEvent) = keep()
