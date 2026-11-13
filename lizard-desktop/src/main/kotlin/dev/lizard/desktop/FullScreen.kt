@@ -147,18 +147,19 @@ fun EdgeRail(full: FullScreen, h: ToolHost, owner: ComposeWindow) {
     val shown = full.edgeRail || full.sideOver
     val over = full.sideOver
     // ai: the column's width as the landscape layout takes it on this screen (sideWidthOf)
-    val sideDp = sideWidthOf(h, (owner.contentPane.width / owner.graphicsConfiguration.defaultTransform.scaleX).toFloat().dp).value
+    val sideDp = sideWidthOf(h, (owner.graphicsConfiguration.bounds.width / owner.graphicsConfiguration.defaultTransform.scaleX).toFloat().dp).value
     DialogWindow(visible = true,
         create = { ComposeDialog(owner, Dialog.ModalityType.MODELESS).apply { type = Window.Type.POPUP; isUndecorated = true; isResizable = false; focusableWindowState = false } },
         dispose = ComposeDialog::dispose,
         update = { d ->
-            // ai: full screen's main area is the window's whole content; the window's width the rail's or the column's,
-            // ai: and its divider, in the screen's pixels
-            val c = owner.contentPane
-            val hgt = maxOf(1, c.height)
+            // ai: full screen covers the window's monitor: the strip at its left edge, as tall as it (2026-11-13: placed by
+            // ai: the window's content before, which AWT counts a title bar off while the window is maximized under its
+            // ai: full screen, the column's top cut off on the owner's screen); the width the rail's or the column's, and
+            // ai: its divider, in the screen's pixels
+            val m = owner.graphicsConfiguration.bounds
             val scale = owner.graphicsConfiguration.defaultTransform.scaleX
             val w = if (over) ((sideDp + 1) * scale).roundToInt() else 57
-            if (shown && c.isShowing) c.locationOnScreen.let { d.setBounds(it.x, it.y, w, hgt) } else d.setBounds(-10000, -10000, w, hgt)
+            if (shown && owner.isShowing) d.setBounds(m.x, m.y, w, m.height) else d.setBounds(-10000, -10000, w, m.height)
         }) {
         LaunchedEffect(shown, over) {
             while (shown && !over) {
