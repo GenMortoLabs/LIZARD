@@ -116,15 +116,16 @@ class DesktopSend(private val app: App) : SendHost {
             if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
             else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
-        FoldKey.SendPerformance to listOf(
+        FoldKey.SendPerformance to listOfNotNull(
             // ai: GPU and CPU alone: with neither chosen the encoder is auto's and the painter running is the chip marked
             // ai: (the GPU before a first send); a choice takes that one outright
             ChipChoice("Encoder", if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.chooseEnc(it) },
-            ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
-    // ai: lab arms a user may try: Exclusive fullscreen (2026-10-31), the monitor taken for the code while sending, shown
-    // ai: on Linux alone (X11's lease)
-    override val experimental: List<Setting> get() = listOfNotNull(
-        if (!Native.mac && !Native.windows) ChipChoice("Exclusive fullscreen", s.exclusiveFull, listOf(true to "On", false to "Off")) { s.chooseExclusiveFull(it) } else null)
+            ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) },
+            // ai: Exclusive fullscreen (2026-10-31; Experimental's until 2026-11-13): the monitor taken for the code while
+            // ai: sending, shown on Linux alone (X11's lease)
+            if (!Native.mac && !Native.windows) ChipChoice("Exclusive fullscreen", s.exclusiveFull, listOf(true to "On", false to "Off")) { s.chooseExclusiveFull(it) } else null))
+    // ai: lab arms a user may try: none since Exclusive fullscreen went to Performance (2026-11-13), so no fold
+    override val experimental: List<Setting> get() = emptyList()
     // ai: Show statistics, Receive's setting (ReceiveState.showStats, Prefs.Rx.stats), one switch for both screens (2026-11-07)
     private val stats get() = app.recv.showStats
     override val tools: List<Setting> get() = listOf(
