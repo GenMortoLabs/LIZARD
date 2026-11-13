@@ -25,8 +25,20 @@ export function collapser(button, key) {
 // ai: under `key` on release (each page's inline script restores it before the first paint). An editor's sash: dragged
 // ai: under half the floor the column closes to the rail (body.collapsed, kept under shutKey as the collapser keeps
 // ai: it), and dragged back over it opens again at the floor or wider; the width kept is the last open one. The
-// ai: sender re-picks as it does for a resized window.
+// ai: default width (ui.css --side, 20rem) is held to the floor as well, through --side-floor. The sender re-picks as
+// ai: it does for a resized window.
 export const SIDE_MIN = 180, sideClamp = (px, min = SIDE_MIN) => Math.max(min, Math.min(px, innerWidth * 0.6));
+// ai: scrollbarRoom(el): the width a scrollbar takes beside the content of a column scrolling in el (15 px in Chrome on
+// ai: Linux, 17 on Windows; 0 where scrollbars overlay the content). A floor counts it, since a fold opened can show
+// ai: the scrollbar at any time.
+export function scrollbarRoom(el) {
+  const p = document.createElement("div");
+  p.style.cssText = "position:absolute;visibility:hidden;width:100px;height:50px;overflow-y:scroll";
+  el.append(p);
+  const w = p.offsetWidth - p.clientWidth;
+  p.remove();
+  return w;
+}
 export function sideResizer(key, floor, shutKey) {
   const root = document.documentElement, edge = document.createElement("div"), lo = () => Math.max(SIDE_MIN, floor?.() || 0);
   edge.className = "side-edge";
@@ -37,7 +49,11 @@ export function sideResizer(key, floor, shutKey) {
   const light = (on) => { edge.classList.toggle("lit", on); document.body.classList.toggle("edge-lit", on); };   // ai: body's for the column's scrollbar (ui.css)
   edge.addEventListener("pointerenter", () => { clearTimeout(lit); lit = setTimeout(() => light(true), 300); });
   edge.addEventListener("pointerleave", () => { clearTimeout(lit); light(false); });
-  const restore = () => { try { const v = +localStorage.getItem(key); if (v > 0) root.style.setProperty("--side", `${sideClamp(v, lo())}px`); } catch {} };
+  const restore = () => {
+    const min = lo();
+    root.style.setProperty("--side-floor", `${min}px`);
+    try { const v = +localStorage.getItem(key); if (v > 0) root.style.setProperty("--side", `${sideClamp(v, min)}px`); } catch {}
+  };
   restore();
   document.fonts?.ready.then(restore);   // ai: a floor measured in the page's font: again once it is loaded (ui.css, Inter)
   edge.addEventListener("pointerdown", (e) => {

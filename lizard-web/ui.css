@@ -113,7 +113,9 @@ pre.readout{font-size:12px;color:var(--fg)}
    Since 2026-11-01 by the pointer: a phone's (coarse) the collapser alone, no edge and no switch in the column's bar;
    anything else (a mouse's fine pointer, or none) no collapser in the open column's bar, the column's edge an editor's
    sash (ui.mjs sideResizer); the rail's expander on both. */
-:root{--side:20rem}
+/* ai: the default column 20rem, or the page's floor where that is wider (ui.mjs sideResizer sets --side-floor: the
+   sender's row with a 17 px Windows scrollbar beside it needs more than 20rem) */
+:root{--side:max(20rem,var(--side-floor,0px))}
 .side-edge{display:none}
 .bar .collapse{display:none}
 @media (orientation:landscape){

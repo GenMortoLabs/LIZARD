@@ -11,7 +11,7 @@ import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMA
 import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
 import { bundle } from "./tar.mjs";
 import { everyOf, ratesFor } from "./refresh.mjs";
-import { remember, persist, say, bytes, rate, registerApp, collapser, sideResizer, icon, nameParts, slider, details, chips } from "./ui.mjs";
+import { remember, persist, say, bytes, rate, registerApp, collapser, sideResizer, scrollbarRoom, icon, nameParts, slider, details, chips } from "./ui.mjs";
 // ai: the sliders filled to their values as the apps draw them (ui.mjs slider), before the codec's load
 for (const el of document.querySelectorAll('input[type="range"]')) slider(el);
 // ai: the few-choice settings as chips (ui.mjs chips; the inline script drew them before the first paint)
@@ -903,13 +903,16 @@ $("fs").onclick = enterFull;
 // ai: the sidebar collapser (ui.mjs): <main> grows, and the ResizeObserver re-picks as for Fullscreen
 collapser($("collapse"), "send:collapsed");
 // ai: The column's floor (the PC's RowFloor): the sending row, Stop, Resume and Fullscreen, each its label's width, with
-// ai: no word broken
+// ai: no word broken, beside the pane's scrollbar (shown once the folds overflow it) and inside the column's border.
+// ai: Without the scrollbar's room the row had 1 px to spare in the default column on Linux, and Fullscreen wrapped
+// ai: to a second row under Windows' 17 px scrollbar.
 function rowFloor() {
   const b = getComputedStyle($("fs")), side = getComputedStyle($("side")), row = getComputedStyle($("fs").parentElement);
   const c = (rowFloor.ctx ??= document.createElement("canvas").getContext("2d"));
   c.font = `${b.fontStyle} ${b.fontWeight} ${b.fontSize} ${b.fontFamily}`;
   const w = (label) => c.measureText(label).width + parseFloat(b.paddingLeft) + parseFloat(b.paddingRight);
-  return Math.ceil(w("Stop") + w("Resume") + w("Fullscreen") + 2 * (parseFloat(row.columnGap) || 0) + parseFloat(side.paddingLeft) + parseFloat(side.paddingRight));
+  return Math.ceil(w("Stop") + w("Resume") + w("Fullscreen") + 2 * (parseFloat(row.columnGap) || 0) + parseFloat(side.paddingLeft) + parseFloat(side.paddingRight)
+    + scrollbarRoom($("pane")) + (parseFloat(getComputedStyle($("col")).borderRightWidth) || 0));
 }
 sideResizer("send:side", rowFloor, "send:collapsed");   // ai: the column's edge dragged to resize it (2026-10-05); <main> re-picks as for a resized window
 // ai: A tap on the code in full screen does nothing (2026-10-24), except in the fallback, body.full with no browser full
