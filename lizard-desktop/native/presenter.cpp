@@ -41,14 +41,10 @@
 #include <windows.h>
 #include <vulkan/vulkan_win32.h>
 #elif LIZ_X11
-#include <fcntl.h>
-#include <spawn.h>
-#include <unistd.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
 #include <vulkan/vulkan_xlib.h>
-#include <vulkan/vulkan_xlib_xrandr.h>
 #elif defined(__APPLE__)
 #include <vulkan/vulkan_metal.h>
 
@@ -420,36 +416,6 @@ unsigned long x11TopLevel(unsigned long window) {
 #endif
 }
 
-std::string x11OutputAt(unsigned long window) {
-#if LIZ_X11 && !defined(_WIN32)
-  Display* d = XOpenDisplay(nullptr);
-  if (!d) return "";
-  std::string name;
-  int ev = 0, er = 0;
-  XWindowAttributes wa{};
-  if (XRRQueryExtension(d, &ev, &er) && XGetWindowAttributes(d, static_cast<Window>(window), &wa)) {
-    int cx = 0, cy = 0;
-    Window child = 0;
-    XTranslateCoordinates(d, static_cast<Window>(window), wa.root, wa.width / 2, wa.height / 2, &cx, &cy, &child);
-    if (XRRScreenResources* res = XRRGetScreenResourcesCurrent(d, wa.root)) {
-      if (const RRCrtc crtc = crtcAt(d, res, cx, cy)) {
-        if (XRRCrtcInfo* ci = XRRGetCrtcInfo(d, res, crtc)) {
-          if (ci->noutput > 0)
-            if (XRROutputInfo* oi = XRRGetOutputInfo(d, res, ci->outputs[0])) { name = oi->name; XRRFreeOutputInfo(oi); }
-          XRRFreeCrtcInfo(ci);
-        }
-      }
-      XRRFreeScreenResources(res);
-    }
-  }
-  XCloseDisplay(d);
-  return name;
-#else
-  (void)window;
-  return "";
-#endif
-}
-
 // ai: Full screen as other apps ask for it (2026-10-23): the window manager's own, _NET_WM_STATE_FULLSCREEN added or
 // ai: removed by the EWMH client message on the managed window (x11TopLevel's), the way GTK, Qt and the browsers do it;
 // ai: the manager keeps the window's place, size and maximized state and gives them back. Until then the presenter set
@@ -696,43 +662,6 @@ struct Presenter::Impl {
   bool calOk = false;
   std::vector<VkPastPresentationTimingEXT> past;
   std::vector<VkPresentStageTimeEXT> pastStages;
-  // ai: the display taken (PresentOptions::direct): its handle, the mode's size and refresh
-  VkDisplayKHR display = VK_NULL_HANDLE;
-  bool displayTaken = false;
-  VkExtent2D displayExtent{};
-  double displayHz = 0;
-  PFN_vkReleaseDisplayEXT releaseDisplay = nullptr;
-#if LIZ_X11 && !defined(_WIN32)
-  // ai: the desktop's layout before the display was taken (every CRTC's mode, place, rotation and outputs, the primary
-  // ai: output, the screen's size), put back once it is given back: taking an output turns it off first, and the
-  // ai: window manager may lay the other monitors out again meanwhile
-  struct CrtcWas { RRCrtc crtc = 0; RRMode mode = 0; int x = 0, y = 0; Rotation rot = RR_Rotate_0; std::vector<RROutput> outs; };
-  std::vector<CrtcWas> layoutWas;
-  RROutput primaryWas = 0;
-  int fbW = 0, fbH = 0, fbMmW = 0, fbMmH = 0;
-  void saveLayout();
-  void restoreLayout();
-  // ai: the guard for a crash (armGuard): a shell waiting on a pipe this process holds the other end of; its end
-  // ai: closed without the word "given-back" (the process gone while the display was taken), it puts the saved
-  // ai: layout back with xrandr (the lease itself ends with the process; the output would stay off without this)
-  int guardFd = -1;
-  void armGuard();
-  void disarmGuard();
-  // ai: while the only monitor is taken the keyboard and the pointer are this presenter's (XGrabKeyboard, XGrabPointer
-  // ai: on the app's window, else the root where it is not viewable): nothing else takes the input no screen shows, and
-  // ai: a key press or a click, any, gives the display back (leaveDisplay). Where another monitor stays on the desktop
-  // ai: nothing is grabbed: the app's window there is the control (its Stop, Pause and Fullscreen, and its keys)
-  bool grabbed = false;
-  double grabTried = -1e9;
-  void grabInput();
-  void ungrabInput();
-  bool inputArrived();
-#endif
-  // ai: (outside the X11 block: the start line and the stats read them on every system; set where a display is taken)
-  bool grabToLeave = true;
-  std::string directName;   // ai: the taken monitor's own name (its EDID's), else the output's; the stats' directName
-  bool leaseEnded = false;   // ai: the display given back by a key or a click (the stats' leaseEnded), the window since
-  void leaveDisplay(const std::string& why);
   // ai: the mark (PresentOptions::mark): a host-visible strip an image in flight, copied into the image's corner
   static constexpr int MARK_BITS = 12, MARK_PX = 8, MARK_W = 2 * MARK_BITS * MARK_PX;
   VkBuffer markBuf = VK_NULL_HANDLE;
@@ -821,7 +750,6 @@ struct Presenter::Impl {
   uint64_t gridNs(double slot) const;
   double nowSlot();
   void pollTiming();
-  std::string takeDisplay();
 };
 
 VkResult Presenter::Impl::qSubmit(const VkSubmitInfo& si, VkFence f) {
@@ -882,10 +810,6 @@ void Presenter::Impl::setup() {
     timingDev = T.setQueueSize && T.props && T.domains && T.past && T.calibrate && T.caps2;
   }
 
-#if !(LIZ_X11 && !defined(_WIN32))
-  if (opt.directOnly) throw std::runtime_error("no direct display on this system");
-  if (!opt.direct.empty()) say("presenter: the display " + opt.direct + " not taken (no direct display on this system): the window instead");
-#endif
 #if defined(_WIN32)
   if (!target.hwnd) throw std::runtime_error("no window to present to");
   auto createSurface = reinterpret_cast<PFN_vkCreateWin32SurfaceKHR>(vkGetInstanceProcAddr(inst, "vkCreateWin32SurfaceKHR"));
@@ -900,18 +824,12 @@ void Presenter::Impl::setup() {
   xq = dpy ? XOpenDisplay(nullptr) : nullptr;
   if (!dpy || !xq) throw std::runtime_error("no X display");
   xwin = static_cast<Window>(target.x11Window);
-  if (opt.directOnly && opt.direct.empty()) throw std::runtime_error("no monitor under the window to take");
-  if (!opt.direct.empty()) {
-    const std::string why = takeDisplay();
-    if (!why.empty() && opt.directOnly) throw std::runtime_error("the display " + opt.direct + " not taken (" + why + ")");
-    if (!why.empty()) say("presenter: the display " + opt.direct + " not taken (" + why + "): the window instead");
-  }
   auto createSurface = reinterpret_cast<PFN_vkCreateXlibSurfaceKHR>(vkGetInstanceProcAddr(inst, "vkCreateXlibSurfaceKHR"));
   if (!createSurface) throw std::runtime_error("the sender's Vulkan instance has no VK_KHR_xlib_surface");
   VkXlibSurfaceCreateInfoKHR si{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
   si.dpy = dpy;
   si.window = xwin;
-  if (!surf) vkCheck(createSurface(inst, &si, nullptr, &surf), "vkCreateXlibSurfaceKHR");
+  vkCheck(createSurface(inst, &si, nullptr, &surf), "vkCreateXlibSurfaceKHR");
 #elif defined(__APPLE__)
   if (!target.metalLayer) throw std::runtime_error("no layer to present to");
   auto createSurface = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(vkGetInstanceProcAddr(inst, "vkCreateMetalSurfaceEXT"));
@@ -985,9 +903,6 @@ void Presenter::Impl::setup() {
   if (csv) std::fprintf(csv, "# t0_steady_ms=%s\n", fmt("%.3f", t0).c_str());
   window(0);
   say("presenter: " + name + (shareQueue ? ", the painter's queue shared" : ", the family's second queue") +
-      (displayTaken ? ", the display " + opt.direct + " taken (" + std::to_string(displayExtent.width) + " x " +
-                          std::to_string(displayExtent.height) + " at " + fmt("%.3f", displayHz) + " Hz; " +
-                          (grabToLeave ? "the only monitor: any key or click gives it back" : "the window on another monitor the control") + ")" : "") +
       (timingDev ? ", present timing on the device" : "") +
       (presentWait ? ", times from present_wait" : ", times from acquire (no present_wait)") +
       (modeHz > 0 ? ", the mode's refresh " + fmt("%.3f", modeHz) + " Hz" : ""));
@@ -1011,8 +926,6 @@ VkExtent2D Presenter::Impl::windowSize() {
 // ai: X11: the mode's refresh of the monitor (a CRTC) holding the window's centre; Windows: the display settings of the
 // ai: monitor nearest the window (whole Hz: 59 for 59.94, the measurement corrects it); macOS: the main display's mode
 void Presenter::Impl::queryMode() {
-  // ai: the display taken: its mode is the presenter's own choice (takeDisplay)
-  if (displayTaken) { modeHz = displayHz; return; }
 #if defined(_WIN32)
   HMONITOR mon = MonitorFromWindow(static_cast<HWND>(target.hwnd), MONITOR_DEFAULTTONEAREST);
   MONITORINFOEXW mi{};
@@ -1055,8 +968,6 @@ void Presenter::Impl::queryMode() {
 // ai: centre and the refresh of its mode before ours; where fps divides that, its own mode (ours put back), else the
 // ai: mode at the same size pickRate takes, set. Each monitor and fps is looked at once (held.decided).
 void Presenter::Impl::holdMode() {
-  // ai: the display taken shows a mode chosen for the asked rate already (takeDisplay); the desktop's modes are not ours
-  if (displayTaken) return;
   if (!vsync) { releaseMode(); held.decided = false; return; }
   const int f = std::max(1, fps.load());
   auto fpsText = [&] { return std::to_string(f) + " pictures a second"; };
@@ -1400,335 +1311,6 @@ void Presenter::Impl::pollTiming() {
   }
 }
 
-#if LIZ_X11 && !defined(_WIN32)
-// ai: The display taken from the X server (PresentOptions::direct): the RandR output by name, its Vulkan display
-// ai: (vkGetRandROutputDisplayEXT), taken (vkAcquireXlibDisplayEXT: the server leases it away from the desktop), a mode
-// ai: of the output's present size at a refresh the asked rate divides (pickRate), else the nearest 60 Hz there, a
-// ai: plane that shows this display, and the display's own surface on them (vkCreateDisplayPlaneSurfaceKHR). "" or why
-// ai: not; given back (vkReleaseDisplayEXT) at teardown, or here where a later step fails.
-// ai: a monitor's own name from its EDID (the display descriptor tagged 0xFC, up to 13 characters ended by a line
-// ai: feed), as a settings dialog shows it; empty where the output has no EDID or none names it
-static std::string monitorName(Display* xq, RROutput out) {
-  std::string name;
-  const Atom edid = XInternAtom(xq, "EDID", True);
-  if (edid == None) return name;
-  Atom type = None;
-  int format = 0;
-  unsigned long n = 0, after = 0;
-  unsigned char* data = nullptr;
-  if (XRRGetOutputProperty(xq, out, edid, 0, 64, False, False, AnyPropertyType, &type, &format, &n, &after, &data) == Success && data) {
-    for (int d = 54; d + 18 <= 126 && static_cast<unsigned long>(d + 18) <= n; d += 18)
-      if (!data[d] && !data[d + 1] && !data[d + 2] && data[d + 3] == 0xFC) {
-        for (int k = 5; k < 18 && data[d + k] != '\n' && data[d + k]; k++) name += static_cast<char>(data[d + k]);
-        while (!name.empty() && name.back() == ' ') name.pop_back();
-        break;
-      }
-    XFree(data);
-  }
-  return name;
-}
-
-std::string Presenter::Impl::takeDisplay() {
-  auto getOutput = reinterpret_cast<PFN_vkGetRandROutputDisplayEXT>(vkGetInstanceProcAddr(inst, "vkGetRandROutputDisplayEXT"));
-  auto acquire = reinterpret_cast<PFN_vkAcquireXlibDisplayEXT>(vkGetInstanceProcAddr(inst, "vkAcquireXlibDisplayEXT"));
-  releaseDisplay = reinterpret_cast<PFN_vkReleaseDisplayEXT>(vkGetInstanceProcAddr(inst, "vkReleaseDisplayEXT"));
-  auto modesOf = reinterpret_cast<PFN_vkGetDisplayModePropertiesKHR>(vkGetInstanceProcAddr(inst, "vkGetDisplayModePropertiesKHR"));
-  auto planesOf = reinterpret_cast<PFN_vkGetPhysicalDeviceDisplayPlanePropertiesKHR>(vkGetInstanceProcAddr(inst, "vkGetPhysicalDeviceDisplayPlanePropertiesKHR"));
-  auto planeDisplays = reinterpret_cast<PFN_vkGetDisplayPlaneSupportedDisplaysKHR>(vkGetInstanceProcAddr(inst, "vkGetDisplayPlaneSupportedDisplaysKHR"));
-  auto createSurface = reinterpret_cast<PFN_vkCreateDisplayPlaneSurfaceKHR>(vkGetInstanceProcAddr(inst, "vkCreateDisplayPlaneSurfaceKHR"));
-  if (!getOutput || !acquire || !releaseDisplay || !modesOf || !planesOf || !planeDisplays || !createSurface)
-    return "the Vulkan instance has no VK_KHR_display with VK_EXT_acquire_xlib_display";
-  int ev = 0, er = 0;
-  if (!XRRQueryExtension(xq, &ev, &er)) return "no XRandR";
-  XRRScreenResources* res = XRRGetScreenResourcesCurrent(xq, DefaultRootWindow(xq));
-  if (!res) return "no XRandR resources";
-  RROutput out = 0;
-  uint32_t w = 0, h = 0;
-  for (int i = 0; i < res->noutput && !out; i++) {
-    XRROutputInfo* oi = XRRGetOutputInfo(xq, res, res->outputs[i]);
-    if (!oi) continue;
-    if (opt.direct == oi->name && oi->connection == RR_Connected) {
-      out = res->outputs[i];
-      if (XRRCrtcInfo* ci = oi->crtc ? XRRGetCrtcInfo(xq, res, oi->crtc) : nullptr) {
-        w = ci->width;
-        h = ci->height;
-        XRRFreeCrtcInfo(ci);
-      }
-    }
-    XRRFreeOutputInfo(oi);
-  }
-  XRRFreeScreenResources(res);
-  if (!out) return "no connected output of that name";
-  VkDisplayKHR d = VK_NULL_HANDLE;
-  if (getOutput(pd, dpy, out, &d) != VK_SUCCESS || !d) return name + " shows no Vulkan display on that output";
-  // ai: an output the desktop shows is not leased (NVIDIA: VK_ERROR_UNKNOWN): its CRTC turned off first, the screen's
-  // ai: size kept, the layout kept to put back
-  saveLayout();
-  if (XRRScreenResources* r2 = XRRGetScreenResourcesCurrent(xq, DefaultRootWindow(xq))) {
-    if (XRROutputInfo* oi = XRRGetOutputInfo(xq, r2, out)) {
-      if (oi->crtc) XRRSetCrtcConfig(xq, r2, oi->crtc, CurrentTime, 0, 0, None, RR_Rotate_0, nullptr, 0);
-      XRRFreeOutputInfo(oi);
-    }
-    XRRFreeScreenResources(r2);
-  }
-  XSync(xq, False);
-  const VkResult ar = acquire(pd, dpy, d);
-  if (ar != VK_SUCCESS) {
-    restoreLayout();
-    return "the X server kept it (VkResult " + std::to_string(static_cast<int>(ar)) + ")";
-  }
-  display = d;
-  displayTaken = true;
-  grabToLeave = layoutWas.size() <= 1;
-  directName = monitorName(xq, out);
-  if (directName.empty()) directName = opt.direct;
-  armGuard();
-  auto giveBack = [&](const std::string& why) {
-    releaseDisplay(pd, display);
-    displayTaken = false;
-    display = VK_NULL_HANDLE;
-    restoreLayout();
-    disarmGuard();
-    return why;
-  };
-  uint32_t nm = 0;
-  modesOf(pd, display, &nm, nullptr);
-  std::vector<VkDisplayModePropertiesKHR> modes(nm);
-  modesOf(pd, display, &nm, modes.data());
-  if (!w || !h) {
-    for (const auto& m : modes) if (m.parameters.visibleRegion.width * m.parameters.visibleRegion.height > w * h) { w = m.parameters.visibleRegion.width; h = m.parameters.visibleRegion.height; }
-  }
-  std::vector<double> hz;
-  std::vector<size_t> at;
-  for (size_t k = 0; k < modes.size(); k++)
-    if (modes[k].parameters.visibleRegion.width == w && modes[k].parameters.visibleRegion.height == h && modes[k].parameters.refreshRate) {
-      hz.push_back(modes[k].parameters.refreshRate / 1000.0);
-      at.push_back(k);
-    }
-  if (hz.empty()) return giveBack("no mode at " + std::to_string(w) + " x " + std::to_string(h));
-  int b = pickRate(hz, std::max(1, fps.load()));
-  if (b < 0) {
-    b = 0;
-    for (size_t k = 1; k < hz.size(); k++) if (std::fabs(hz[k] - 60) < std::fabs(hz[static_cast<size_t>(b)] - 60)) b = static_cast<int>(k);
-  }
-  const VkDisplayModePropertiesKHR& mode = modes[at[static_cast<size_t>(b)]];
-  uint32_t np = 0;
-  planesOf(pd, &np, nullptr);
-  std::vector<VkDisplayPlanePropertiesKHR> planes(np);
-  planesOf(pd, &np, planes.data());
-  uint32_t plane = UINT32_MAX;
-  for (uint32_t p = 0; p < np && plane == UINT32_MAX; p++) {
-    if (planes[p].currentDisplay && planes[p].currentDisplay != display) continue;
-    uint32_t nd = 0;
-    planeDisplays(pd, p, &nd, nullptr);
-    std::vector<VkDisplayKHR> ds(nd);
-    planeDisplays(pd, p, &nd, ds.data());
-    for (VkDisplayKHR x : ds) if (x == display) plane = p;
-  }
-  if (plane == UINT32_MAX) return giveBack("no plane shows it");
-  VkDisplaySurfaceCreateInfoKHR dsi{VK_STRUCTURE_TYPE_DISPLAY_SURFACE_CREATE_INFO_KHR};
-  dsi.displayMode = mode.displayMode;
-  dsi.planeIndex = plane;
-  dsi.planeStackIndex = planes[plane].currentStackIndex;
-  dsi.transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-  dsi.alphaMode = VK_DISPLAY_PLANE_ALPHA_OPAQUE_BIT_KHR;
-  dsi.imageExtent = mode.parameters.visibleRegion;
-  const VkResult sr = createSurface(inst, &dsi, nullptr, &surf);
-  if (sr != VK_SUCCESS) { surf = VK_NULL_HANDLE; return giveBack("its surface refused (VkResult " + std::to_string(static_cast<int>(sr)) + ")"); }
-  displayExtent = mode.parameters.visibleRegion;
-  displayHz = mode.parameters.refreshRate / 1000.0;
-  modeHz = displayHz;
-  return "";
-}
-
-void Presenter::Impl::saveLayout() {
-  layoutWas.clear();
-  const Window root = DefaultRootWindow(xq);
-  fbW = DisplayWidth(xq, DefaultScreen(xq));
-  fbH = DisplayHeight(xq, DefaultScreen(xq));
-  fbMmW = DisplayWidthMM(xq, DefaultScreen(xq));
-  fbMmH = DisplayHeightMM(xq, DefaultScreen(xq));
-  primaryWas = XRRGetOutputPrimary(xq, root);
-  XRRScreenResources* res = XRRGetScreenResourcesCurrent(xq, root);
-  if (!res) return;
-  for (int i = 0; i < res->ncrtc; i++) {
-    XRRCrtcInfo* ci = XRRGetCrtcInfo(xq, res, res->crtcs[i]);
-    if (!ci) continue;
-    if (ci->mode) {
-      CrtcWas w;
-      w.crtc = res->crtcs[i];
-      w.mode = ci->mode;
-      w.x = ci->x;
-      w.y = ci->y;
-      w.rot = ci->rotation;
-      w.outs.assign(ci->outputs, ci->outputs + ci->noutput);
-      layoutWas.push_back(w);
-    }
-    XRRFreeCrtcInfo(ci);
-  }
-  XRRFreeScreenResources(res);
-}
-
-// ai: the layout as saveLayout found it: the screen's size, then each CRTC that differs, then the primary output
-void Presenter::Impl::restoreLayout() {
-  if (layoutWas.empty()) return;
-  const Window root = DefaultRootWindow(xq);
-  XSync(xq, False);
-  if (DisplayWidth(xq, DefaultScreen(xq)) != fbW || DisplayHeight(xq, DefaultScreen(xq)) != fbH) XRRSetScreenSize(xq, root, fbW, fbH, fbMmW, fbMmH);
-  // ai: just after the display is released the server may refuse its CRTC (NVIDIA 615, a DisplayPort monitor:
-  // ai: RRSetConfigFailed on the first try, where an HDMI one took it), and a monitor left without a signal sleeps in
-  // ai: seconds and drops off the link until it is switched off and on: each CRTC asked again every 100 ms for 3 s
-  for (CrtcWas& w : layoutWas) {
-    for (int tries = 0;; tries++) {
-      XRRScreenResources* res = XRRGetScreenResourcesCurrent(xq, root);
-      if (!res) break;
-      XRRCrtcInfo* ci = XRRGetCrtcInfo(xq, res, w.crtc);
-      const bool same = ci && ci->mode == w.mode && ci->x == w.x && ci->y == w.y && ci->rotation == w.rot &&
-                        ci->noutput == static_cast<int>(w.outs.size()) && std::equal(w.outs.begin(), w.outs.end(), ci->outputs);
-      if (ci) XRRFreeCrtcInfo(ci);
-      const bool done = same || XRRSetCrtcConfig(xq, res, w.crtc, CurrentTime, w.x, w.y, w.mode, w.rot, w.outs.data(), static_cast<int>(w.outs.size())) == RRSetConfigSuccess;
-      XRRFreeScreenResources(res);
-      if (done) break;
-      if (tries == 30) { say("presenter: the desktop's layout not put back for a monitor"); break; }
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-  }
-  if (primaryWas && XRRGetOutputPrimary(xq, root) != primaryWas) XRRSetOutputPrimary(xq, root, primaryWas);
-  XSync(xq, False);
-  layoutWas.clear();
-}
-
-void Presenter::Impl::grabInput() {
-  if (grabbed || nowMs() - grabTried < 250) return;
-  grabTried = nowMs();
-  Window top = topLevel(xq, xwin);
-  XWindowAttributes wa{};
-  if (!XGetWindowAttributes(xq, top, &wa) || wa.map_state != IsViewable) top = DefaultRootWindow(xq);
-  const int k = XGrabKeyboard(xq, top, False, GrabModeAsync, GrabModeAsync, CurrentTime);
-  const int m = XGrabPointer(xq, top, False, ButtonPressMask, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
-  XFlush(xq);
-  if (k == GrabSuccess && m == GrabSuccess) { grabbed = true; return; }
-  // ai: another client holds one (a menu, the manager's switcher): both let go and asked again in a quarter second
-  if (k == GrabSuccess) XUngrabKeyboard(xq, CurrentTime);
-  if (m == GrabSuccess) XUngrabPointer(xq, CurrentTime);
-  XFlush(xq);
-}
-
-void Presenter::Impl::ungrabInput() {
-  if (!grabbed) return;
-  XUngrabKeyboard(xq, CurrentTime);
-  XUngrabPointer(xq, CurrentTime);
-  XFlush(xq);
-  grabbed = false;
-}
-
-bool Presenter::Impl::inputArrived() {
-  bool hit = false;
-  while (XPending(xq)) {
-    XEvent e;
-    XNextEvent(xq, &e);
-    hit = hit || e.type == KeyPress || e.type == ButtonPress;
-  }
-  return hit;
-}
-
-void Presenter::Impl::armGuard() {
-  // ai: xrandr's words for the saved layout: the screen's size, then each output's mode (by id), place and rotation,
-  // ai: the primary marked
-  std::string cmd = "xrandr --fb " + std::to_string(fbW) + "x" + std::to_string(fbH);
-  XRRScreenResources* res = XRRGetScreenResourcesCurrent(xq, DefaultRootWindow(xq));
-  if (!res) return;
-  for (const CrtcWas& w : layoutWas)
-    for (RROutput o : w.outs)
-      if (XRROutputInfo* oi = XRRGetOutputInfo(xq, res, o)) {
-        char mode[32];
-        std::snprintf(mode, sizeof mode, "0x%lx", static_cast<unsigned long>(w.mode));
-        const Rotation r = w.rot & 0xf;
-        const char* rot = r == RR_Rotate_90 ? "left" : r == RR_Rotate_180 ? "inverted" : r == RR_Rotate_270 ? "right" : "normal";
-        cmd += std::string(" --output '") + oi->name + "' --mode " + mode + " --pos " + std::to_string(w.x) + "x" + std::to_string(w.y) +
-               " --rotate " + rot + (o == primaryWas ? " --primary" : "");
-        XRRFreeOutputInfo(oi);
-      }
-  XRRFreeScreenResources(res);
-  int fds[2];
-  if (pipe2(fds, O_CLOEXEC) != 0) return;
-  // ai: asked again every 100 ms for 3 s, as restoreLayout does: the server may refuse a CRTC just after the release
-  const std::string script = "read x; [ \"$x\" = given-back ] || { command -v xrandr >/dev/null || exit 0; i=0; until " + cmd +
-                             "; do i=$((i+1)); [ $i -ge 30 ] && exit 1; sleep 0.1; done; }";
-  posix_spawn_file_actions_t fa;
-  posix_spawn_file_actions_init(&fa);
-  posix_spawn_file_actions_adddup2(&fa, fds[0], 0);
-  // ai: none of this process's other files in the guard: an X connection held open there would keep the lease alive
-  // ai: past a crash
-#if defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 34))
-  posix_spawn_file_actions_addclosefrom_np(&fa, 3);
-#endif
-  const char* argv[] = {"sh", "-c", script.c_str(), nullptr};
-  pid_t pid = 0;
-  const int rc = posix_spawn(&pid, "/bin/sh", &fa, nullptr, const_cast<char* const*>(argv), environ);
-  posix_spawn_file_actions_destroy(&fa);
-  close(fds[0]);
-  if (rc != 0) { close(fds[1]); say("presenter: no guard for the display (the layout stays off if this process dies)"); return; }
-  guardFd = fds[1];
-}
-
-// ai: the display given back by this process: the guard told so and let go (it exits without a word to xrandr)
-void Presenter::Impl::disarmGuard() {
-  if (guardFd < 0) return;
-  const char word[] = "given-back\n";
-  if (write(guardFd, word, sizeof word - 1) < 0) {}
-  close(guardFd);
-  guardFd = -1;
-}
-#else
-std::string Presenter::Impl::takeDisplay() { return "no direct display on this system"; }
-#endif
-
-// ai: The display given back while presenting (a key or a click): the chain and the display's surface let go, the
-// ai: display released, the desktop's layout put back, the input let go, and the window's surface made, on which the
-// ai: next present makes a chain; the app follows the stats' leaseEnded and puts its window back.
-void Presenter::Impl::leaveDisplay(const std::string& why) {
-  if (!displayTaken) return;
-  waiter.finish();
-  drain();
-  qIdle();
-  for (VkSemaphore a : c.done) D.vkDestroySemaphore(dev, a, nullptr);
-  if (c.sc) D.vkDestroySwapchainKHR(dev, c.sc, nullptr);
-  c = Chain{};
-  if (surf) I.vkDestroySurfaceKHR(inst, surf, nullptr);
-  surf = VK_NULL_HANDLE;
-  if (releaseDisplay) releaseDisplay(pd, display);
-  displayTaken = false;
-  display = VK_NULL_HANDLE;
-  leaseEnded = true;
-#if LIZ_X11 && !defined(_WIN32)
-  restoreLayout();
-  disarmGuard();
-  ungrabInput();
-#endif
-  // ai: the display or nothing: no window to go on in (the app stops this presenter at the stats' leaseEnded)
-  if (opt.directOnly) {
-    say("presenter: the display " + opt.direct + " given back (" + why + ")");
-    return;
-  }
-#if LIZ_X11 && !defined(_WIN32)
-  auto createSurface = reinterpret_cast<PFN_vkCreateXlibSurfaceKHR>(vkGetInstanceProcAddr(inst, "vkCreateXlibSurfaceKHR"));
-  VkXlibSurfaceCreateInfoKHR si{VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR};
-  si.dpy = dpy;
-  si.window = xwin;
-  vkCheck(createSurface(inst, &si, nullptr, &surf), "vkCreateXlibSurfaceKHR");
-#endif
-  VkBool32 ok = VK_FALSE;
-  I.vkGetPhysicalDeviceSurfaceSupportKHR(pd, qf, surf, &ok);
-  if (!ok) throw std::runtime_error(name + " cannot present to this window");
-  capsAt = -1e9;
-  rateMoved();
-  say("presenter: the display " + opt.direct + " given back (" + why + "): the window");
-  // ai: the stats made now, so the app sees leaseEnded at its next read rather than a second on
-  window((nowMs() - lastWin) / 1000);
-  lastWin = nowMs();
-}
-
 void Presenter::Impl::makeChain(const VkSurfaceCapabilitiesKHR& caps, VkExtent2D ext) {
   if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) throw std::runtime_error("the swapchain cannot be written by transfers");
   uint32_t fn = 0;
@@ -1949,9 +1531,7 @@ void Presenter::Impl::window(double secs, bool last) {
                    std::to_string(s ? s->w : 0) + "x" + std::to_string(s ? s->h : 0) + "\",\"presentWait\":" + (presentWait ? "true" : "false") +
                    ",\"vsync\":" + (vsync ? "true" : "false") + ",\"modeFrom\":" + fmt("%.3f", held.on ? held.origHz : 0.0) +
                    ",\"timing\":" + (timing ? "true" : "false") + ",\"late\":" + std::to_string(win.late) + ",\"slips\":" + std::to_string(win.slips) +
-                   ",\"errMs\":" + fmt("%.3f", win.errMaxMs) + ",\"direct\":\"" + (displayTaken ? esc(opt.direct) : std::string()) + "\",\"directName\":\"" + (displayTaken ? esc(directName) : std::string()) + "\",\"directPx\":\"" +
-                   (displayTaken ? std::to_string(displayExtent.width) + "x" + std::to_string(displayExtent.height) : std::string()) + "\",\"leaseEnded\":" + (leaseEnded ? "true" : "false") +
-                   ",\"device\":\"" + esc(name) + "\",\"error\":\"";
+                   ",\"errMs\":" + fmt("%.3f", win.errMaxMs) + ",\"device\":\"" + esc(name) + "\",\"error\":\"";
   {
     std::lock_guard<std::mutex> l(statsMu);
     statsJson = st + esc(error) + "\",\"secs\":" + fmt("%.3f", secs) + "}";
@@ -2229,24 +1809,12 @@ void Presenter::Impl::run() {
   try {
     while (!quit) {
       if (vsyncDirty.exchange(false)) holdMode();
-#if LIZ_X11 && !defined(_WIN32)
-      if (displayTaken && grabToLeave) {
-        grabInput();
-        if (inputArrived()) leaveDisplay("a key or a click");
-      }
-#endif
       const double now = nowMs();
       if (now - lastWin >= 1000) {
         window((now - lastWin) / 1000);
         lastWin = now;
       }
       if (snapAsk) takeSnapshot();
-      // ai: the display given back with no window to go on in (directOnly): idle until stopped, the stats still kept
-      if (opt.directOnly && !displayTaken) {
-        std::unique_lock<std::mutex> l(wakeMu);
-        wake.wait_for(l, std::chrono::milliseconds(100), [&] { return quit.load() || snapAsk.load(); });
-        continue;
-      }
       const bool p = paused;
       if (p) {
         // ai: paused: the last picture presented again a few times a second (a resize or an expose shows it), none taken
@@ -2378,18 +1946,6 @@ void Presenter::Impl::teardown() {
   }
   if (surf && I.vkDestroySurfaceKHR) I.vkDestroySurfaceKHR(inst, surf, nullptr);
   surf = VK_NULL_HANDLE;
-  // ai: the display given back to the desktop (the X server's lease ends; it also ends with this process)
-  if (displayTaken && releaseDisplay) {
-    const VkResult rr = releaseDisplay(pd, display);
-    say("presenter: the display " + opt.direct + (rr == VK_SUCCESS ? " given back" : " not given back (VkResult " + std::to_string(static_cast<int>(rr)) + ")"));
-  }
-  displayTaken = false;
-  display = VK_NULL_HANDLE;
-#if LIZ_X11 && !defined(_WIN32)
-  if (xq) restoreLayout();
-  disarmGuard();
-  if (xq) ungrabInput();
-#endif
   dev = VK_NULL_HANDLE;
   inst = VK_NULL_HANDLE;
   releaseMode();
@@ -2414,15 +1970,8 @@ const wg::DeviceExtras& Presenter::deviceExtras() {
                       VK_EXT_METAL_SURFACE_EXTENSION_NAME
 #endif
     };
-    // ai: the display's own surface where a host asks for it (PresentOptions::direct): VK_KHR_display, and on X11 an
-    // ai: output taken from the X server (VK_EXT_acquire_xlib_display, given back by VK_EXT_direct_mode_display);
-    // ai: present_timing's surface query (VK_KHR_get_surface_capabilities2). Each enabled where offered.
+    // ai: present_timing's surface query (VK_KHR_get_surface_capabilities2), enabled where offered
     x.instanceExts.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
-    x.instanceExts.push_back(VK_KHR_DISPLAY_EXTENSION_NAME);
-    x.instanceExts.push_back(VK_EXT_DIRECT_MODE_DISPLAY_EXTENSION_NAME);
-#if LIZ_X11 && !defined(_WIN32)
-    x.instanceExts.push_back(VK_EXT_ACQUIRE_XLIB_DISPLAY_EXTENSION_NAME);
-#endif
     // ai: present_id2, present_timing and calibrated timestamps (2026-10-31): each present's target refresh and the
     // ai: time its first pixel left for the display (wg enables them with their features, or none of them)
     x.deviceExts = {VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_PRESENT_ID_EXTENSION_NAME, VK_KHR_PRESENT_WAIT_EXTENSION_NAME,

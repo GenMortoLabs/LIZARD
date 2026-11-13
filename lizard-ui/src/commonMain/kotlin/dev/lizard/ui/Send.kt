@@ -85,9 +85,6 @@ interface SendHost {
     val error: String
     fun clearError() {}
     val reading: Boolean get() = false // ai: the pick being read (a dropped folder walked): a spinner, no words
-    // ai: the block drawn (the desktop's control window, while a monitor of its own shows the code, has none: its area
-    // ai: says it)
-    val lineShown: Boolean get() = true
     val heat: Warn?                    // ai: the heat warning (the phone's Throttling), null while nothing throttles
     val railCapacity: Double?
     val settings: Map<FoldKey, List<Setting>>   // ai: each of SEND_FOLDS' settings; a fold given none is not drawn
@@ -226,8 +223,7 @@ private fun Side(h: SendHost, home: Boolean = false) {
     // ai: what goes as elements (2026-11-07, Details; "Sending x, 2.4 GB (4.4 GB raw)" over "1.69 MB/s, pass 2" before),
     // ai: or a spinner while the pick is read; an error a popup (SendScreen), never the column's
     val d = h.details
-    if (!h.lineShown) Spacer(Modifier.height(10.dp))
-    else if (d != null) DetailsBlock(d, Modifier.padding(top = 12.dp))
+    if (d != null) DetailsBlock(d, Modifier.padding(top = 12.dp))
     else if (h.reading) CircularProgressIndicator(Modifier.padding(top = 12.dp).size(16.dp), color = Fg, strokeWidth = 2.dp, trackColor = Line)
     h.heat?.let { WarnRow(it, Modifier.padding(top = 8.dp)) }
     Spacer(Modifier.height(16.dp))

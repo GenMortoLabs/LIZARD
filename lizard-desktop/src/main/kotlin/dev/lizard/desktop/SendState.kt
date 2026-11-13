@@ -45,8 +45,8 @@ import dev.lizard.ui.*
 // ai: runs (`want`, 2026-11-02, as the phone's SurfaceView): idle, the area is Compose's, the file upload or the test
 // ai: stream's note, under no window of its own (that look painted here by AWT went, its every resize a frame of bare
 // ai: fill before the paint, a blink of the test stream's note on each step of a dragged edge; a hidden canvas would not
-// ai: do, its SwingPanel's container painting AWT's grey over Compose's area). White, nothing of AWT painted on it;
-// ai: never in the control window while a monitor of its own shows the code (SendState.lease). Before its window goes
+// ai: do, its SwingPanel's container painting AWT's grey over Compose's area). White, nothing of AWT painted on it.
+// ai: Before its window goes
 // ai: (removeNotify: a dispose, a window made again) it stops the presenter on it. A click on it does nothing; files and
 // ai: folders dropped on it are taken (a run stops first).
 class CodeCanvas(private val s: SendState) : Canvas() {
@@ -71,7 +71,7 @@ class CodeCanvas(private val s: SendState) : Canvas() {
         // ai: SendHost.edgeRoom)
         addMouseMotionListener(object : MouseAdapter() {
             override fun mouseMoved(e: MouseEvent) {
-                if (s.full && !s.leased && e.x < EDGE_NEAR && !s.edgeRail) s.edgeRail = true
+                if (s.full && e.x < EDGE_NEAR && !s.edgeRail) s.edgeRail = true
             }
         })
         // ai: Files and folders dropped are added (a run stops first, as the web's does; refused while sending until
@@ -211,23 +211,6 @@ class SendState {
     // ai: there, and the presenter bypassed the compositor.
     var full by mutableStateOf(false)
     var fullscreen: ((Boolean) -> Unit)? = null
-    // ai: Full screen on the display itself (2026-10-31, Exclusive fullscreen on): a Fullscreen press while the codes
-    // ai: play (sending, not paused) takes the monitor under the window's centre from the desktop (Native.presentStart's
-    // ai: direct; X11 through VK_EXT_acquire_xlib_display) and shows the code alone on it, presented FIFO at the
-    // ai: display's own refresh. With another monitor the window, moved there by the window manager, is the control
-    // ai: (Pause, Stop, Fullscreen, its keys; the code area plain); on the only monitor the presenter holds the keyboard
-    // ai: and the pointer and any key or click gives it back, as Stop does. The window is then put back where it was
-    // ai: (keepPlace before, placeBack after, App.kt). Where no monitor is lent (Windows, macOS, Wayland, a driver
-    // ai: without the extensions, a press while nothing plays), the window manager's full screen as before.
-    // ai: an experimental setting, off unless chosen (Prefs.exclusiveFull; X11 alone offers the lease): off, Fullscreen is
-    // ai: the window manager's full screen whatever the system
-    var exclusiveFull by mutableStateOf(Prefs.exclusiveFull)
-    var leased by mutableStateOf(false)
-    // ai: the taken monitor's name (its EDID's, else the output's: the stats' directName), the control window's line
-    var leasedOn by mutableStateOf("")
-        private set
-    var keepPlace: (() -> Unit)? = null
-    var placeBack: (() -> Unit)? = null
     // ai: full screen's rail shown (Screen.kt EdgeRail): the pointer came within EDGE_NEAR of the code area's left edge
     var edgeRail by mutableStateOf(false)
     // ai: the window maximized, as a title bar's double click does (Main.kt sets it; the test hook's `max` step)
@@ -258,15 +241,12 @@ class SendState {
     private var runTest = false
     private var runName = ""
     private val timer = Timer(1000) { poll() }
-    // ai: while the monitor is taken: the presenter's word read five times a second, so a key or a click that gave it
-    // ai: back brings the window back at once
-    private val leaseTimer = Timer(200) { if (leased && p != 0L && parse(Native.presentStats(p))?.str("direct").isNullOrEmpty()) giveBack() }
 
     val presenting get() = p != 0L
     // ai: the code area's colour at its left edge (the column's margin beside it takes it, SendHost.codeFill; the canvas's
-    // ai: X background): the soft fill under the test stream's note and while a monitor of its own shows the code, white
-    // ai: under the file upload, round the presenter's code (it clears to white) and round a paused run's still
-    val codeFill: Color get() = if (leased || (test && !canvas.shown && stamp == null)) Soft else Bg
+    // ai: X background): the soft fill under the test stream's note, white under the file upload, round the presenter's
+    // ai: code (it clears to white) and round a paused run's still
+    val codeFill: Color get() = if (test && !canvas.shown && stamp == null) Soft else Bg
     val sending get() = phase == Phase.On || phase == Phase.Preparing
     val canStart get() = loadError.isEmpty() && !sending && (test || (choice != null && !reading))
     val railShown get() = collapsed
@@ -429,7 +409,6 @@ class SendState {
         timer.stop()
         settle.stop()
         if (p != 0L) { Native.presentStop(p); p = 0L }
-        if (leased) leaseEnded()
         canvas.want(false)
         stamp = null
         if (h != 0L && h != preparing) Native.txDestroy(h)
@@ -458,18 +437,13 @@ class SendState {
     // ai: Paused: the last picture stays; a receiver holds what it has. In the window (2026-11-02) it becomes a still:
     // ai: the picture on screen read back (`stamp`), the presenter stopped and the canvas out of the window, so the area
     // ai: is Compose's (DesktopSend.Stamped) and a resize moves nothing native; Resume makes both again, the format picked
-    // ai: for the area as it is then. On a monitor of its own the presenter holds it there ("Paused on").
+    // ai: for the area as it is then.
     class Stamp(val w: Int, val h: Int, val image: ImageBitmap)
     var stamp by mutableStateOf<Stamp?>(null)
         private set
     fun pause(on: Boolean) {
         if (phase != Phase.On) return
         paused = on
-        if (leased) {
-            if (p != 0L) Native.presentPause(p, on)
-            if (!on) takeOver()
-            return
-        }
         if (on) {
             if (p != 0L) {
                 Native.presentPause(p, true)
@@ -493,83 +467,20 @@ class SendState {
     }
     // ai: The code area resized by hand while the codes play in the window (the column's edge dragged, the window
     // ai: resized; 2026-11-02): paused, a still until Resume. Not a full screen's own sizes (toggleFull, the manager's
-    // ai: word, a monitor given back: `quietUntil`), nor a fold of the column to the rail (a re-pick, as before).
+    // ai: word: `quietUntil`), nor a fold of the column to the rail (a re-pick, as before).
     private var quietUntil = 0L
     private fun quiet() { quietUntil = System.nanoTime() + 1_500_000_000L }
-    fun resizing() { if (phase == Phase.On && !paused && !leased && !full && System.nanoTime() > quietUntil) pause(true) }
+    fun resizing() { if (phase == Phase.On && !paused && !full && System.nanoTime() > quietUntil) pause(true) }
 
     fun toggleFull() {
         edgeRail = false
         quiet()
-        if (leased) { giveBack(); return }
         full = !full
-        if (full && exclusiveFull && phase == Phase.On && !paused && p != 0L && lease()) return
         fullscreen?.invoke(full)
-    }
-    // ai: Exclusive fullscreen from the window manager's full screen: the codes began playing there (Start, Resume) or
-    // ai: the setting was turned on while they play. That full screen is left first, so keepPlace keeps the window's
-    // ai: own place, and the monitor taken once the manager has given the window back (takeOverSoon); where no monitor
-    // ai: is lent the window goes back to the manager's full screen, and no take-over is tried again this session
-    private var leaseRefused = false
-    private fun takeOver() {
-        if (!full || leased || leaseRefused || !exclusiveFull || phase != Phase.On || paused || p == 0L) return
-        fullscreen?.invoke(false)
-        takeOverSoon.restart()
-    }
-    private val takeOverSoon = Timer(400) {
-        if (leased || !exclusiveFull || phase != Phase.On || paused || p == 0L) return@Timer
-        full = true
-        if (!lease()) { leaseRefused = true; fullscreen?.invoke(true) }
-    }.apply { isRepeats = false }
-    // ai: the presenter begun again on the monitor under the window, the display or nothing (presenter.h directOnly,
-    // ai: 2026-11-02): handed the app's window, which only names the monitor and takes the grab, so the control window
-    // ai: has no canvas and its area is Compose's (DesktopSend.LeasedNote). true where the monitor was taken; else the
-    // ai: codes go on in the window as before, and no take-over is tried again this session.
-    private fun lease(): Boolean {
-        val win = frame ?: return false
-        keepPlace?.invoke()
-        Native.presentStop(p); p = 0L
-        val pr = Native.presentStart(win, h, fps, size / 100f, edge, vsync, true, FloatArray(5))
-        if (pr == 0L) {
-            System.err.println("send: no monitor taken: ${Native.txError()}")
-            leaseRefused = true
-            begin()
-            return false
-        }
-        p = pr
-        if (paused) Native.presentPause(p, true)
-        val st = parse(Native.presentStats(p))
-        leased = true
-        leasedOn = st?.str("directName").orEmpty().ifEmpty { st?.str("direct").orEmpty() }
-        canvas.want(false)
-        // ai: the format for the monitor taken: its pixels the area (an auto pick, Size, Margin and Spacing measured on it),
-        // ai: held while leased; each setting changed in the control window re-picks on it
-        st?.str("directPx")?.split("x")?.mapNotNull { it.toIntOrNull() }?.takeIf { it.size == 2 && it[0] > 0 && it[1] > 0 }
-            ?.let { areaW = it[0]; areaH = it[1] }
-        leaseTimer.start(); repick()
-        return true
-    }
-    // ai: the monitor given back by hand (Fullscreen, Escape, a key or a click to the presenter): that presenter stopped
-    // ai: (it has no window to go on in), the codes on in the window, or, paused, the picture there a still
-    private fun giveBack() {
-        if (p != 0L) { if (paused) stamp = snapshot(p); Native.presentStop(p); p = 0L }
-        leaseEnded()
-        if (sending && !paused) begin() else canvas.want(false)
-    }
-    // ai: the monitor given back (a key or a click to the presenter, Stop, the window closing): full screen left and
-    // ai: the window where it was before
-    private fun leaseEnded() {
-        quiet()
-        leaseTimer.stop()
-        leased = false
-        full = false
-        placeBack?.invoke()
-        // ai: the area's size followed again (the window's presenter, begun after, picks from it)
-        if (seenW > 0 && seenH > 0) { areaW = seenW; areaH = seenH }
     }
     // ai: the manager's own word on the window (its shortcut, a leave of its own, a request of ours taken): followed,
     // ai: nothing asked
-    fun fullFromManager(on: Boolean) { if (!leased && on != full) { full = on; edgeRail = false; quiet() } }
+    fun fullFromManager(on: Boolean) { if (on != full) { full = on; edgeRail = false; quiet() } }
 
     fun toggleRail() { collapsed = !collapsed; Prefs.collapsed = collapsed }
     fun toggleTools() { toolsOpen = !toolsOpen; Prefs.toolsOpen = toolsOpen }
@@ -621,11 +532,6 @@ class SendState {
         if (h != preparing) refreshNow()
     }
     private fun refreshNow() { if (h != 0L) Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]) }
-    // ai: turned on in full screen while the codes play: the monitor taken (takeOver); turned off while it is: given back
-    fun chooseExclusiveFull(on: Boolean) {
-        exclusiveFull = on; Prefs.exclusiveFull = on
-        if (on) takeOver() else if (leased) toggleFull()
-    }
     fun commitFps() {
         if (phase != Phase.On) return
         configure()
@@ -647,9 +553,6 @@ class SendState {
     private var seenH = 0
     fun areaChanged(w: Int, hh: Int) { seenW = w; seenH = hh; areaNow() }
     private fun areaNow() {
-        // ai: while a monitor is taken the area is the monitor's (lease): the control window's is no measure of it (read
-        // ai: again at leaseEnded)
-        if (leased) return
         // ai: an area not yet laid out keeps the area it had (Auto's label flickered on each entry to Send, 2026-11-02)
         if (seenW <= 0 || seenH <= 0) return
         areaW = seenW; areaH = seenH
@@ -658,13 +561,11 @@ class SendState {
     private val settle = Timer(300) { repick() }.apply { isRepeats = false }
 
     // ai: macOS: the presenter's layer follows the canvas (a move or a resize of it or of the window)
-    fun canvasMoved() { if (p != 0L && !leased) Native.presentPlace(p, canvas.place()) }
+    fun canvasMoved() { if (p != 0L) Native.presentPlace(p, canvas.place()) }
 
     // ai: the canvas's window going: the presenter stopped first (its surface is that window); begun again on the next
-    // ai: (a leased presenter is not on it: handed the app's window, it goes on; stopping it here gave the monitor back
-    // ai: the moment the lease took the canvas out, 2026-11-02)
     fun canvasGone() {
-        if (p != 0L && !leased) { Native.presentStop(p); p = 0L }
+        if (p != 0L) { Native.presentStop(p); p = 0L }
     }
     // ai: the canvas's window made: the presenter begun where one is wanted
     fun canvasMade() { if (phase == Phase.On && p == 0L) repick() }
@@ -675,13 +576,12 @@ class SendState {
         if (h == 0L || p != 0L || paused || areaW <= 0 || areaH <= 0) return
         if (!canvas.isDisplayable) { canvas.want(true); return }
         if (!configure()) return
-        val pr = Native.presentStart(canvas, h, fps, size / 100f, edge, vsync, false, canvas.place())
+        val pr = Native.presentStart(canvas, h, fps, size / 100f, edge, vsync, canvas.place())
         if (pr == 0L) { fail("Display failed: ${Native.txError()}"); return }
         p = pr
         stamp = null
         if (paused) Native.presentPause(p, true)
         timer.start()
-        takeOver()
     }
 
     // ai: The format chosen (Blocks), configured where it changed. false where it was refused (the run then ends with

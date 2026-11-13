@@ -12,7 +12,7 @@ import dev.lizard.ui.*
 // ai: printed to stdout as one JSON line {"present": {...}, "sender": {...}} and the app exits 0. Any failure prints
 // ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 4 to 64 (Pick.VERSION_MIN to VERSION_MAX); fps 1 to
 // ai: 60; size 25 to 100 (%); spacing 4 to 68 and margin 2 to 34 (modules); ring auto, 64, 128 or 256; full 0 or 1 (the
-// ai: window manager's full screen); exclusive 0 or 1 (Exclusive fullscreen: 0 unless named); vsync 0 or 1 (1 unless named); file=<path>[:<path>...] (files or folders in place
+// ai: window manager's full screen); vsync 0 or 1 (1 unless named); file=<path>[:<path>...] (files or folders in place
 // ai: of the test stream, as a pick or a drop gives them: one file as itself, else one tar, 2026-10-16; the paths split
 // ai: on the platform's separator, ';' on Windows); steps (2026-10-04, the app's own controls, which only a hand had
 // ai: moved): comma separated <seconds>:<action>, from when the presenter first presents, each as the control does it:
@@ -25,7 +25,7 @@ import dev.lizard.ui.*
 // ai: presenter stats go to stderr as "present: {...}".
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
     companion object {
-        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "exclusive", "refresh")
+        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh")
         // ai: how long the presenter may take to start (the canvas shown, the GPU painter made) before the check fails
         private const val START_SECS = 60.0
 
@@ -69,7 +69,6 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             s.pick(fs)
         }
         int("codes", 1..2)?.let { s.codes = it }
-        s.exclusiveFull = int("exclusive", 0..1) == 1   // ai: settings from the defaults: off unless named
         kv["enc"]?.let { if (it in setOf("auto", "gpu", "cpu")) s.enc = it else fail("LIZ_SENDER_TEST: enc=$it") }
         int("blocks", Pick.VERSION_MIN..Pick.VERSION_MAX)?.let { s.blocks = it }
         int("fps", 1..60)?.let { s.fps = it }

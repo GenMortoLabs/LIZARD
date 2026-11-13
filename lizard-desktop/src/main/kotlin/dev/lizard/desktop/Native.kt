@@ -34,7 +34,7 @@ object Native {
     // ai: the frame's own (Room.edgeShare); the frame stretched (linear).
     // ai: place: macOS's layer over the canvas (CodeCanvas.place), ignored elsewhere; presentPlace when the canvas moves.
     // ai: vsync: the monitor held at a refresh fps divides while presenting (presenter.h setVsync), presentVsync after.
-    @JvmStatic external fun presentStart(canvas: java.awt.Component, tx: Long, fps: Int, size: Float, edge: Float, vsync: Boolean, direct: Boolean, place: FloatArray): Long
+    @JvmStatic external fun presentStart(canvas: java.awt.Component, tx: Long, fps: Int, size: Float, edge: Float, vsync: Boolean, place: FloatArray): Long
     @JvmStatic external fun presentPlace(p: Long, place: FloatArray)
     // ai: the desktop's file chooser (2026-10-23, native/portal.cpp): the window manager's window around a canvas (0 none,
     // ai: on the UI thread), and the XDG portal's OpenFile attached to it (Windows: the shell's dialog), blocking until it

@@ -253,13 +253,9 @@ static bool canvasTarget(JNIEnv* e, jobject canvas, lizard::PresentTarget& targe
 // ai: place: macOS's layer over the canvas (x, y, w, h in points from the top left of the window's content, the
 // ai: backing scale; presentPlace when it moves), ignored elsewhere.
 // ai: vsync: the monitor held at a refresh fps divides while presenting (presenter.h setVsync; presentVsync after).
-// ai: direct: the monitor itself, where it is lent (above; presentStats' direct names it, "" for the window).
-FN(jlong, presentStart)(JNIEnv* e, jclass, jobject canvas, jlong h, jint fps, jfloat size, jfloat edge, jboolean vsync, jboolean direct,
+FN(jlong, presentStart)(JNIEnv* e, jclass, jobject canvas, jlong h, jint fps, jfloat size, jfloat edge, jboolean vsync,
                         jfloatArray place) {
   if (!h) { setError("no sender"); return 0; }
-#if !defined(__linux__)
-  if (direct == JNI_TRUE) { setError("no direct display on this system"); return 0; }
-#endif
   auto out = std::make_unique<Pres>();
   lizard::PresentTarget target;
 #if defined(__APPLE__)
@@ -276,15 +272,6 @@ FN(jlong, presentStart)(JNIEnv* e, jclass, jobject canvas, jlong h, jint fps, jf
   o.size = size;
   o.edge = edge;
   o.vsync = vsync == JNI_TRUE;
-  // ai: direct (2026-10-31, the Fullscreen press while sending): the monitor under the window's centre taken for the
-  // ai: code alone (presenter.h PresentOptions::direct; X11), the display or nothing (directOnly, 2026-11-02: the
-  // ai: component is the app's window, which only names the monitor and takes the grab); elsewhere refused
-  if (direct == JNI_TRUE) {
-#if defined(__linux__)
-    o.direct = lizard::x11OutputAt(lizard::x11TopLevel(target.x11Window));
-#endif
-    o.directOnly = true;
-  }
   // ai: LIZ_PRESENT_CSV=<path>: a line a present, for reading a run's cadence around a resize;
   // ai: the path in UTF-8, as the presenter opens it (Windows: read wide, since getenv gives the ANSI code page)
 #if defined(_WIN32)

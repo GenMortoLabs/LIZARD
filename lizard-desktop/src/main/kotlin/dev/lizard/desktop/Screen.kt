@@ -16,10 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -27,7 +24,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.awt.SwingPanel
@@ -52,15 +48,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import dev.lizard.readout.Readout
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 
 // ai: Send on the desktop (the screen is ../lizard-ui's SendScreen): the sender's state (SendState), the desktop's
-// ai: settings (Ring, Size; Exclusive fullscreen on Linux), Fullscreen beside Start, the code area the presenter's
+// ai: settings (Ring, Size), Fullscreen beside Start, the code area the presenter's
 // ai: heavyweight AWT canvas (CodeCanvas: its idle look and the upload painted by AWT, since nothing of Compose draws
 // ai: over it), drops anywhere in the window (2026-10-23), and full screen's edge rail, a window of its own
 class DesktopSend(private val app: App) : SendHost {
@@ -89,8 +83,6 @@ class DesktopSend(private val app: App) : SendHost {
     override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: s.loadError
     override fun clearError() { if (s.phase is SendState.Phase.Error) s.phase = SendState.Phase.Idle }
     override val reading get() = s.phase == SendState.Phase.Idle && !s.test && s.reading
-    // ai: the control window says what plays where in its area (LeasedNote): no state line in its column
-    override val lineShown get() = !s.leased
     override val heat: Warn? = null
     override val railCapacity get() = s.capacityKBs
     // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
@@ -116,15 +108,12 @@ class DesktopSend(private val app: App) : SendHost {
             if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
             else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
-        FoldKey.SendPerformance to listOfNotNull(
+        FoldKey.SendPerformance to listOf(
             // ai: GPU and CPU alone: with neither chosen the encoder is auto's and the painter running is the chip marked
             // ai: (the GPU before a first send); a choice takes that one outright
             ChipChoice("Encoder", if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.chooseEnc(it) },
-            ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) },
-            // ai: Exclusive fullscreen (2026-10-31; Experimental's until 2026-11-13): the monitor taken for the code while
-            // ai: sending, shown on Linux alone (X11's lease)
-            if (!Native.mac && !Native.windows) ChipChoice("Exclusive fullscreen", s.exclusiveFull, listOf(true to "On", false to "Off")) { s.chooseExclusiveFull(it) } else null))
-    // ai: lab arms a user may try: none since Exclusive fullscreen went to Performance (2026-11-13), so no fold
+            ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
+    // ai: lab arms a user may try: none (Exclusive fullscreen, the last, deleted 2026-11-13), so no fold
     override val experimental: List<Setting> get() = emptyList()
     // ai: Show statistics, Receive's setting (ReceiveState.showStats, Prefs.Rx.stats), one switch for both screens (2026-11-07)
     private val stats get() = app.recv.showStats
@@ -134,7 +123,7 @@ class DesktopSend(private val app: App) : SendHost {
     override val readout get() = s.readout.takeIf { it.isNotEmpty() }?.let { Code(it, 12) }
     // ai: full screen: the code alone (2026-10-23, as the web's and the app's); while a monitor is taken for the code the
     // ai: window is the control: the column as when not full
-    override val codeAlone get() = s.full && !s.leased
+    override val codeAlone get() = s.full
     override val codeAloneInPlace = true
     override val edgeTap = false
     // ai: the column over the code in full screen (2026-11-07; the rail's collapser left full screen before, the column
@@ -162,8 +151,7 @@ class DesktopSend(private val app: App) : SendHost {
     // ai: drag's outline over it. While codes play the canvas (a window of its own, the presenter's) in its place, from
     // ai: the presenter's start to its end; paused in the window, the picture as a still (`Stamped`) until the canvas is
     // ai: back. Its size, laid out here, is the room the format is picked from (SendState.areaChanged); in full screen
-    // ai: the pointer near its left edge shows the rail (the canvas hears that while shown). The control window while a
-    // ai: monitor of its own shows the code: "Playing on <monitor>" or "Paused on" (LeasedNote). The column's edge dragged
+    // ai: the pointer near its left edge shows the rail (the canvas hears that while shown). The column's edge dragged
     // ai: pauses a run (SendState.resizing).
     @OptIn(ExperimentalComposeUiApi::class)
     @Composable
@@ -172,11 +160,10 @@ class DesktopSend(private val app: App) : SendHost {
         LaunchedEffect(dragging) { if (dragging) s.resizing() }
         val near = with(LocalDensity.current) { EDGE_NEAR.toPx() }
         Box(modifier.onSizeChanged { s.areaChanged(it.width, it.height) }.onPointerEvent(PointerEventType.Move) { e ->
-            if (s.full && !s.leased && !s.edgeRail && (e.changes.firstOrNull()?.position?.x ?: near) < near) s.edgeRail = true
+            if (s.full && !s.edgeRail && (e.changes.firstOrNull()?.position?.x ?: near) < near) s.edgeRail = true
         }) {
             val stamp = s.stamp
             if (s.canvas.shown) SwingPanel(background = s.codeFill, factory = { s.canvas }, modifier = Modifier.fillMaxSize())
-            else if (s.leased) LeasedNote("${if (s.paused) "Paused" else "Playing"} on ${s.leasedOn}")
             else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare)
             else {
                 if (s.test) TestStreamNote()
@@ -193,19 +180,12 @@ class DesktopSend(private val app: App) : SendHost {
     override fun Windows() {
         LaunchedEffect(s.full) { sideOver = false }
         val w = window ?: return
-        if (s.full && !s.leased) EdgeRail(this, s, w)
+        if (s.full) EdgeRail(this, s, w)
     }
 }
 
 // ai: how near the code area's left edge the pointer shows full screen's rail
 private val EDGE_NEAR = 24.dp
-
-// ai: the control window's area while the code plays on a monitor of its own (2026-11-02; painted on the code canvas by
-// ai: AWT until then): the line centred on the soft fill
-@Composable
-private fun LeasedNote(text: String) = Box(Modifier.fillMaxSize().background(Soft), contentAlignment = Alignment.Center) {
-    Text(text, style = MaterialTheme.typography.bodyLarge, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
-}
 
 // ai: the picture a run was paused on in the window (SendState.stamp), placed as the presenter places it: on white,
 // ai: centred, the largest that fits with the edge's light round it (edge, a share of its height, each side), times

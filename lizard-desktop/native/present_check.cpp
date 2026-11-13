@@ -4,11 +4,10 @@
 // ai: on stderr, its CSV a line a present (csv=), and with mark=1 the picture's count drawn into the window's top-left
 // ai: corner (PresentOptions::mark) for tools that read the screen back.
 // ai:   present_check [secs=30] [fps=60] [version=41] [ring=256] [codes=2] [gap=12] [x=0] [y=0] [w=1600] [h=900]
-// ai:                 [full=0] [above=0] [direct=<output>] [size=0.9] [margin=2] [vsync=0] [mark=0] [csv=<path>] [device=<name>]
+// ai:                 [full=0] [above=0] [size=0.9] [margin=2] [vsync=0] [mark=0] [csv=<path>] [device=<name>]
 // ai:                 [assets=<liblizard/out>]
-// ai: direct=<output>: the presenter takes that monitor (PresentOptions::direct), this window stays unmapped, and while
-// ai: it is taken any key press or click gives it back and ends the run (the presenter grabs the keyboard and the
-// ai: pointer); TERM or INT end it too. Exit 0 after secs with a summary line on stdout (the presenter's last stats and the sender's), 1 with FAIL <why>.
+// ai: TERM or INT end the run. Exit 0 after secs with a summary line on stdout (the presenter's last stats and the
+// ai: sender's), 1 with FAIL <why>.
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -29,7 +28,7 @@
 
 namespace {
 
-// ai: a TERM or an INT ends the run as its time would (the presenter stopped, a display taken given back)
+// ai: a TERM or an INT ends the run as its time would (the presenter stopped)
 std::atomic<bool> gQuit{false};
 void onSignal(int) { gQuit = true; }
 
@@ -86,16 +85,11 @@ int main(int argc, char** argv) {
   hints.flags = USPosition | USSize | PPosition | PSize;
   hints.x = x; hints.y = y; hints.width = w; hints.height = h;
   XSetWMNormalHints(d, win, &hints);
-  // ai: direct=: the window stays unmapped (the presenter's fallback target only), so nothing shows on the desktop's
-  // ai: other monitors while the output is taken
-  const bool direct = !str(kv, "direct", "").empty();
-  if (!direct) {
-    XMapWindow(d, win);
-    for (;;) {
-      XEvent e;
-      XNextEvent(d, &e);
-      if (e.type == MapNotify) break;
-    }
+  XMapWindow(d, win);
+  for (;;) {
+    XEvent e;
+    XNextEvent(d, &e);
+    if (e.type == MapNotify) break;
   }
   XMoveWindow(d, win, x, y);
   XSync(d, False);
@@ -159,7 +153,6 @@ int main(int argc, char** argv) {
   o.edge = (num(kv, "margin", 2) - 2) / (2.0 * ring + 2 * 15 + 2 * 2);
   o.vsync = num(kv, "vsync", 0) != 0;
   o.mark = num(kv, "mark", 0) != 0;
-  o.direct = str(kv, "direct", "");
   o.csv = str(kv, "csv", "");
   o.log = [](const std::string& m) { std::fprintf(stderr, "lizard: %s\n", m.c_str()); };
   auto p = lizard::Presenter::start(target, &sender, &lock, o, &why);
@@ -177,8 +170,6 @@ int main(int argc, char** argv) {
     next += std::chrono::seconds(1);
     last = p->stats();
     std::fprintf(stderr, "present: %s\n", last.c_str());
-    // ai: direct=: a key or a click gave the display back (the presenter's grab): the run ends there
-    if (direct && last.find("\"leaseEnded\":true") != std::string::npos) break;
   }
   p->stop();
   last = p->stats();

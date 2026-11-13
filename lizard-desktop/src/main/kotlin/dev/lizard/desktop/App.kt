@@ -153,15 +153,6 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
         // ai: Maximized once the bounds held still, since Compose cannot set a window maximized again. The window is
         // ai: found through itself (through the sender's canvas until 2026-11-02, which now has a window only while codes
         // ai: play). Its other resizes on Send are resizes by hand (SendState.resizing: a run pauses).
-        // ai: the window's place kept as a monitor is taken for the code (the window manager moves it off that monitor)
-        // ai: and put back once it is given back (SendState.leased)
-        var placeWas by remember { mutableStateOf(WindowPlacement.Floating to java.awt.Rectangle()) }
-        s.keepPlace = { placeWas = ws.placement to window.bounds }
-        s.placeBack = {
-            val (pl, b) = placeWas
-            if (pl == WindowPlacement.Floating) window.bounds = b else ws.placement = pl
-            window.toFront()
-        }
         s.maximize = { ws.placement = WindowPlacement.Maximized }
         s.raise = { window.toFront() }
         app.hide = { window.isVisible = false }
