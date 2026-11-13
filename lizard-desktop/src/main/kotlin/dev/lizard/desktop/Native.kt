@@ -42,10 +42,10 @@ object Native {
     // ai: could not be asked (why: txError)
     @JvmStatic external fun windowOf(canvas: java.awt.Component): Long
     @JvmStatic external fun portalPick(window: Long, title: String, directory: Boolean, multiple: Boolean): Array<String>?
-    // ai: the window manager's own full screen for the window windowOf gave (2026-10-23): asked (false where it could not
-    // ai: be: not X11), and read
-    @JvmStatic external fun windowFullscreen(window: Long, on: Boolean): Boolean
-    @JvmStatic external fun windowIsFullscreen(window: Long): Boolean
+    // ai: the window manager's own states for the window windowOf gave (FullScreen.kt): full screen and maximized added or
+    // ai: removed, in that order (false where they could not be asked: macOS), and read (FullScreen.WM_FULL, WM_MAXIMIZED)
+    @JvmStatic external fun windowState(window: Long, add: Boolean, full: Boolean, maximized: Boolean): Boolean
+    @JvmStatic external fun windowStateOf(window: Long): Int
     // ai: a heavyweight component's native window given its own background, 0xRRGGBB: what X fills it with where it is
     // ai: shown or uncovered before it draws (2026-11-02; AWT's is the desktop theme's grey); false where it could not be
     @JvmStatic external fun windowBackground(component: java.awt.Component, rgb: Int): Boolean

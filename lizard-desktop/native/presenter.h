@@ -26,9 +26,11 @@ class Sender;
 struct PresentTarget { unsigned long x11Window = 0; void* hwnd = nullptr; void* metalLayer = nullptr; };
 // ai: the window manager's window around an X11 window (the ancestor with WM_STATE), else the window itself
 unsigned long x11TopLevel(unsigned long window);
-// ai: the window manager's own full screen for its window (x11TopLevel's), asked (true where the request went) and read
-bool x11Fullscreen(unsigned long top, bool on);
-bool x11IsFullscreen(unsigned long top);
+// ai: the window manager's own states for its window (x11TopLevel's): full screen and maximized, asked (added, maximized
+// ai: first; removed, full screen first; true where the requests went) and read (WM_FULL | WM_MAXIMIZED)
+constexpr int WM_FULL = 1, WM_MAXIMIZED = 2;
+bool x11WmState(unsigned long top, bool add, bool full, bool maximized);
+int x11WmStateOf(unsigned long top);
 // ai: an X11 window's own background, 0xRRGGBB: what X fills the window with where it is shown or uncovered before its
 // ai: client draws (2026-11-02). AWT gives its windows the desktop theme's grey (dark on a dark theme) whatever the
 // ai: component's colour, and with sun.awt.noerasebackground nothing of AWT paints over it: a frame of it showed where

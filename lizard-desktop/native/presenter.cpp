@@ -416,54 +416,71 @@ unsigned long x11TopLevel(unsigned long window) {
 #endif
 }
 
-// ai: Full screen as other apps ask for it (2026-10-23): the window manager's own, _NET_WM_STATE_FULLSCREEN added or
-// ai: removed by the EWMH client message on the managed window (x11TopLevel's), the way GTK, Qt and the browsers do it;
-// ai: the manager keeps the window's place, size and maximized state and gives them back. Until then the presenter set
-// ai: _NET_WM_BYPASS_COMPOSITOR and _NET_WM_STATE_ABOVE with the app's full screen (2026-10-03 to 2026-10-23), for a
-// ai: vsync whose losses were the machine's power-saving profile. false off X11 (the app then asks Compose).
-bool x11Fullscreen(unsigned long top, bool on) {
+// ai: The window manager's own states for its window (x11TopLevel's), asked as other apps ask: EWMH _NET_WM_STATE client
+// ai: messages, the way GTK, Qt and the browsers do it; the manager keeps the window's place, size and maximized state
+// ai: and gives them back. `full` asks full screen (2026-10-23), `maximized` both maximized directions (2026-11-13: the
+// ai: app keeps a full-screen window maximized underneath, FullScreen.kt), each where true, on one connection so the
+// ai: manager takes them in order: added, maximized first (a manager refuses to maximize a full-screen window: Muffin's
+// ai: recalc_features), removed, full screen first. true where the requests went; false off X11 (the app then asks
+// ai: Compose).
+// ai: Until 2026-10-23 the presenter set _NET_WM_BYPASS_COMPOSITOR and _NET_WM_STATE_ABOVE with the app's full screen,
+// ai: for a vsync whose losses were the machine's power-saving profile.
+bool x11WmState(unsigned long top, bool add, bool full, bool maximized) {
 #if LIZ_X11 && !defined(_WIN32)
   Display* d = XOpenDisplay(nullptr);
   if (!d) return false;
-  XEvent e{};
-  e.xclient.type = ClientMessage;
-  e.xclient.window = top;
-  e.xclient.message_type = XInternAtom(d, "_NET_WM_STATE", False);
-  e.xclient.format = 32;
-  e.xclient.data.l[0] = on ? 1 : 0;   // ai: _NET_WM_STATE_ADD, _NET_WM_STATE_REMOVE
-  e.xclient.data.l[1] = static_cast<long>(XInternAtom(d, "_NET_WM_STATE_FULLSCREEN", False));
-  e.xclient.data.l[2] = 0;
-  e.xclient.data.l[3] = 1;   // ai: the source: an application
-  const Status sent = XSendEvent(d, DefaultRootWindow(d), False, SubstructureRedirectMask | SubstructureNotifyMask, &e);
+  bool sent = true;
+  auto ask = [&](const char* a, const char* b) {
+    XEvent e{};
+    e.xclient.type = ClientMessage;
+    e.xclient.window = top;
+    e.xclient.message_type = XInternAtom(d, "_NET_WM_STATE", False);
+    e.xclient.format = 32;
+    e.xclient.data.l[0] = add ? 1 : 0;   // ai: _NET_WM_STATE_ADD, _NET_WM_STATE_REMOVE
+    e.xclient.data.l[1] = static_cast<long>(XInternAtom(d, a, False));
+    e.xclient.data.l[2] = b ? static_cast<long>(XInternAtom(d, b, False)) : 0;
+    e.xclient.data.l[3] = 1;   // ai: the source: an application
+    sent = XSendEvent(d, DefaultRootWindow(d), False, SubstructureRedirectMask | SubstructureNotifyMask, &e) != 0 && sent;
+  };
+  if (add && maximized) ask("_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ");
+  if (full) ask("_NET_WM_STATE_FULLSCREEN", nullptr);
+  if (!add && maximized) ask("_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ");
   XFlush(d);
   XCloseDisplay(d);
-  return sent != 0;
+  return sent;
 #else
-  (void)top; (void)on;
+  (void)top; (void)add; (void)full; (void)maximized;
   return false;
 #endif
 }
-// ai: whether the manager has the window full screen: _NET_WM_STATE_FULLSCREEN among its _NET_WM_STATE
-bool x11IsFullscreen(unsigned long top) {
+// ai: the states the manager has the window in, from its _NET_WM_STATE: WM_FULL, WM_MAXIMIZED (both directions)
+int x11WmStateOf(unsigned long top) {
 #if LIZ_X11 && !defined(_WIN32)
   Display* d = XOpenDisplay(nullptr);
-  if (!d) return false;
-  const Atom state = XInternAtom(d, "_NET_WM_STATE", False), full = XInternAtom(d, "_NET_WM_STATE_FULLSCREEN", False);
+  if (!d) return 0;
+  const Atom state = XInternAtom(d, "_NET_WM_STATE", False), full = XInternAtom(d, "_NET_WM_STATE_FULLSCREEN", False),
+             vert = XInternAtom(d, "_NET_WM_STATE_MAXIMIZED_VERT", False), horz = XInternAtom(d, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
   Atom type = None;
   int format = 0;
   unsigned long n = 0, after = 0;
   unsigned char* data = nullptr;
-  bool is = false;
+  int bits = 0;
   if (XGetWindowProperty(d, top, state, 0, 64, False, XA_ATOM, &type, &format, &n, &after, &data) == Success && data) {
     const Atom* atoms = reinterpret_cast<const Atom*>(data);
-    for (unsigned long i = 0; i < n; i++) is = is || atoms[i] == full;
+    bool v = false, h = false;
+    for (unsigned long i = 0; i < n; i++) {
+      if (atoms[i] == full) bits |= WM_FULL;
+      v = v || atoms[i] == vert;
+      h = h || atoms[i] == horz;
+    }
+    if (v && h) bits |= WM_MAXIMIZED;
     XFree(data);
   }
   XCloseDisplay(d);
-  return is;
+  return bits;
 #else
   (void)top;
-  return false;
+  return 0;
 #endif
 }
 

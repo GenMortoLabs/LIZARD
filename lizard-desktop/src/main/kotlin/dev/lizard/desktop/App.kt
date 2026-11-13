@@ -107,7 +107,6 @@ class App {
 fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: ReceiverTest?) {
     val s = app.send
     val ws = rememberWindowState(width = 1280.dp, height = 800.dp)
-    var before by remember { mutableStateOf(WindowPlacement.Floating) }
     Window(onCloseRequest = { app.close(); exitApplication() }, state = ws, title = "LIZARD", icon = rememberVectorPainter(Icons.mark)) {
         // ai: the frame white before Compose's first frame (2026-10-07): AWT's default grey showed until Skia drew
         remember { window.background = java.awt.Color.WHITE; window.contentPane.background = java.awt.Color.WHITE; if (app.loadError.isEmpty()) whiten(window); app.frame = window; app.sendUi.window = window; s.frame = window }
@@ -145,60 +144,19 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
             KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(keys)
             onDispose { KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(keys) }
         }
-        // ai: Full screen as other apps have it (2026-10-23): the window manager's own (_NET_WM_STATE_FULLSCREEN,
-        // ai: Native.windowFullscreen), which gives the window back as it was, maximized or not; the app follows the
-        // ai: manager's word, read back at each resize of the window, so its own shortcut works too. Windows
-        // ai: (2026-10-24): the same, the window's frame off over its monitor (Native.windowFullscreen); macOS,
-        // ai: Compose's placement. Until then: Compose's placement on X11, and a leave through Floating then
-        // ai: Maximized once the bounds held still, since Compose cannot set a window maximized again. The window is
-        // ai: found through itself (through the sender's canvas until 2026-11-02, which now has a window only while codes
-        // ai: play). Its other resizes on Send are resizes by hand (SendState.resizing: a run pauses).
+        // ai: full screen, the window manager's own (FullScreen.kt); the window's other resizes on Send are resizes by hand
+        // ai: (SendState.resizing: a run pauses)
+        val full = remember { FullScreen(window, ws) }
         s.maximize = { ws.placement = WindowPlacement.Maximized }
         s.raise = { window.toFront() }
         app.hide = { window.isVisible = false }
-        // ai: Leaving the manager's full screen sets the window's own bounds again, as AWT's own full screen does
-        // ai: (GraphicsDevice.setFullScreenWindow(null)), unless the window was maximized (2026-11-13). AWT answers a
-        // ai: change of the frame's extents under a Mutter-family manager by requesting the bounds it last knew
-        // ai: (XDecoratedPeer.handleCorrectInsets, skipped for a maximized frame), and Muffin, leaving full screen, sends
-        // ai: the extents before the restored size: the request was the monitor's own rectangle, which Muffin takes from
-        // ai: an old application as a full-screen request ("Treating resize request of legacy application ... as a
-        // ai: fullscreen request"), so every leave came back full screen. With the bounds set first that request is the
-        // ai: window's own. `normal`: the bounds whenever the window is neither maximized nor covering a monitor (a floating
-        // ai: window of a monitor's exact size the manager makes full screen itself), null until one is seen. Full screen
-        // ai: is told by the bounds with or without AWT's insets matching a monitor's: AWT reports a full-screen frame as
-        // ai: the monitor grown by the title bar it still counts ([1920, -28, 1920 x 1108] on a 1920 x 1080 monitor).
-        var normal by remember { mutableStateOf<java.awt.Rectangle?>(null) }
-        s.fullscreen = { on ->
-            val top = runCatching { Native.windowOf(window) }.getOrDefault(0L)
-            val maximized = window.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0
-            if (runCatching { Native.windowFullscreen(top, on) }.getOrDefault(false)) {
-                if (!on && !maximized) normal?.let { window.bounds = it }
-            } else {
-                if (on) { before = ws.placement; ws.placement = WindowPlacement.Fullscreen } else ws.placement = before
-            }
-        }
-        DisposableEffect(Unit) {
-            val seen = object : java.awt.event.ComponentAdapter() {
-                fun keep() {
-                    val b = window.bounds
-                    val i = window.insets
-                    val inner = java.awt.Rectangle(b.x + i.left, b.y + i.top, b.width - i.left - i.right, b.height - i.top - i.bottom)
-                    val monitors = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map { it.defaultConfiguration.bounds }
-                    if (window.extendedState and java.awt.Frame.MAXIMIZED_BOTH == 0 && b.width > 0 && b.height > 0 &&
-                        monitors.none { it == b || it == inner }) normal = b
-                }
-                override fun componentResized(e: java.awt.event.ComponentEvent) = keep()
-                override fun componentMoved(e: java.awt.event.ComponentEvent) = keep()
-            }
-            window.addComponentListener(seen)
-            onDispose { window.removeComponentListener(seen) }
-        }
+        s.fullscreen = { on -> full.set(on) }
         DisposableEffect(Unit) {
             val resized = object : java.awt.event.ComponentAdapter() {
                 override fun componentResized(e: java.awt.event.ComponentEvent) {
+                    val f = full.seen()
                     if (app.screen != Screen.Send) return
-                    val top = runCatching { Native.windowOf(window) }.getOrDefault(0L)
-                    if (top != 0L) s.fullFromManager(Native.windowIsFullscreen(top))
+                    if (f != null) s.fullFromManager(f)
                     s.resizing()
                 }
             }

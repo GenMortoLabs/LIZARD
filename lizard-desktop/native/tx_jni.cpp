@@ -364,21 +364,26 @@ FN(jobjectArray, portalPick)(JNIEnv* e, jclass, jlong window, jstring title, jbo
   }
   return out;
 }
-// ai: full screen as other apps ask for it (2026-10-23, presenter.cpp x11Fullscreen): the window manager's own for the
-// ai: window windowOf gave (Windows: win32Fullscreen, 2026-10-24); false where it could not be asked (macOS), for
+// ai: the window manager's states for the window windowOf gave, as other apps ask for them (presenter.cpp x11WmState:
+// ai: full screen, 2026-10-23; maximized, 2026-11-13; added maximized first, removed full screen first); Windows' full screen alone
+// ai: (win32Fullscreen, 2026-10-24; `maximized` not asked there); false where they could not be asked (macOS), for
 // ai: Compose's placement instead
-FN(jboolean, windowFullscreen)(JNIEnv*, jclass, jlong window, jboolean on) {
+FN(jboolean, windowState)(JNIEnv*, jclass, jlong window, jboolean add, jboolean full, jboolean maximized) {
 #if defined(_WIN32)
-  return window && lizard::win32Fullscreen(reinterpret_cast<void*>(static_cast<uintptr_t>(window)), on == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+  (void)maximized;
+  return window && (full != JNI_TRUE || lizard::win32Fullscreen(reinterpret_cast<void*>(static_cast<uintptr_t>(window)), add == JNI_TRUE)) ? JNI_TRUE : JNI_FALSE;
 #else
-  return window && lizard::x11Fullscreen(static_cast<unsigned long>(window), on == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+  return window && lizard::x11WmState(static_cast<unsigned long>(window), add == JNI_TRUE, full == JNI_TRUE, maximized == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 #endif
 }
-FN(jboolean, windowIsFullscreen)(JNIEnv*, jclass, jlong window) {
+// ai: the states the manager has it in: 1 full screen, 2 maximized (presenter.h WM_FULL, WM_MAXIMIZED; Windows' full
+// ai: screen alone)
+FN(jint, windowStateOf)(JNIEnv*, jclass, jlong window) {
+  if (!window) return 0;
 #if defined(_WIN32)
-  return window && lizard::win32IsFullscreen(reinterpret_cast<void*>(static_cast<uintptr_t>(window))) ? JNI_TRUE : JNI_FALSE;
+  return lizard::win32IsFullscreen(reinterpret_cast<void*>(static_cast<uintptr_t>(window))) ? lizard::WM_FULL : 0;
 #else
-  return window && lizard::x11IsFullscreen(static_cast<unsigned long>(window)) ? JNI_TRUE : JNI_FALSE;
+  return lizard::x11WmStateOf(static_cast<unsigned long>(window));
 #endif
 }
 // ai: a heavyweight component's native window given its own background, 0xRRGGBB (presenter.h x11Background,

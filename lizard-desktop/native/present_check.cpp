@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
   }
   XMoveWindow(d, win, x, y);
   XSync(d, False);
-  if (full) lizard::x11Fullscreen(lizard::x11TopLevel(win), true);
+  if (full) lizard::x11WmState(lizard::x11TopLevel(win), true, true, false);
   if (num(kv, "above", 0) != 0) {
     // ai: the check's window kept above the others (_NET_WM_STATE_ABOVE), so a tool reading the screen back sees it
     XEvent e{};
@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
   }
   std::printf("{\"present\":%s,\"sender\":%s}\n", last.c_str(), tx.c_str());
   p.reset();
-  if (full) lizard::x11Fullscreen(lizard::x11TopLevel(win), false);
+  if (full) lizard::x11WmState(lizard::x11TopLevel(win), false, true, false);
   XDestroyWindow(d, win);
   XCloseDisplay(d);
   return 0;
