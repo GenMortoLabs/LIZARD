@@ -583,22 +583,17 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val heat get() = heatText(a.heat, a.clocks)
     override val railCapacity get() = if (on) s.capacityKBs else null
     // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
-    // ai: 2026-10-23): what the symbol carries, how often its blocks change, where it sits, how this phone paints it
+    // ai: 2026-10-23): what the symbol carries and where it sits (Layout's own fold until 2026-11-13), how often its blocks
+    // ai: change, how this phone paints it
     override val settings: Map<FoldKey, List<Setting>> get() = mapOf(
-        FoldKey.SendCode to listOf(
+        FoldKey.SendCode to listOfNotNull(
             // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size
             // ai: carries, Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
             Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
                 Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) },
             ChipChoice("Ring", s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) },
             // ai: one code, or two side by side for a receiver's 2:1 crop (the web's #codes)
-            ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) }),
-        // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui rateRefreshSettings)
-        FoldKey.SendRefresh to listOf(
-            if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
-            else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
-            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
-        FoldKey.SendLayout to listOfNotNull(
+            ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) },
             autoSlide("Brightness", s.brightness, 0, 1..100, { "$it%" }, {}, auto = "System") { if (it != s.brightness) s.chooseBrightness(it) },
             // ai: the space between two codes' rings, modules (the web's #spacing): the painter's gap and the two quiet zones
             if (s.codes == 2) Slide("Spacing", "${s.gap + SPACING_PAST} modules", (s.gap + SPACING_PAST).toFloat(), SPACING_PAST.toFloat()..(64f + SPACING_PAST), 63, { s.settle() }) { v ->
@@ -606,6 +601,11 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             // ai: the light round the code (SendState.margin), its label live and the box resized at the release
             Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Pick.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Pick.QUIET - 1,
                 { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() }),
+        // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui rateRefreshSettings)
+        FoldKey.SendRefresh to listOf(
+            if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
+            else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
+            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
         FoldKey.SendPerformance to listOf(
             // ai: with nothing chosen the setting stays auto and the painter running is the chip marked; a choice takes it outright
             ChipChoice("Encoder", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.choosePainter(it) },

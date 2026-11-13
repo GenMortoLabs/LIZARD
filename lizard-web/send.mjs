@@ -4,7 +4,7 @@
 // ai: For a user the page is a file, several or a folder (bundled as one tar, tar.mjs): choose or drop them, Start,
 // ai: Fullscreen, Stop, the version picked from the window over
 // ai: the whole ladder (up to LIZARD-560 until 2026-09-29, APP_TOP). The lab's switches are in the folds (Code, Refresh,
-// ai: Layout, Performance, Developer Tools), their ids the URL presets.
+// ai: Performance, Developer Tools; Layout merged into Code 2026-11-13), their ids the URL presets.
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
 import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
@@ -303,7 +303,7 @@ function spec() {
 // which is the whole payload above the first few, so the canvas stretches up to fill the room (an upscale only
 // interpolates; research/09 measures smoothed fractional scaling at 2% of the mean and 11% at worst), and a format
 // chosen larger than the room is shown squeezed, which #tx says.
-// ai: Spacing and Margin, Layout's sliders (2026-10-23; one Margin, two of them between codes, that morning; a gap
+// ai: Spacing and Margin, Code's sliders (Layout's until 2026-11-13; 2026-10-23; one Margin, two of them between codes, that morning; a gap
 // ai: between two codes before it, from 2026-10-03): the light between two codes' rings, two quiet zones (OB_QUIET) at
 // ai: least and 68 modules at most (a painter's widest gap, 64, and its quiet zones), shown with two codes; and between a
 // ai: ring and the area's edge, one quiet zone at least, 34 at most. The defaults the encoders' own gap (GAP_MODULES) and
@@ -325,7 +325,7 @@ function room() {
   Object.assign($("tx").dataset, { wf, hf });
   return Math.max(64, Math.min(box.clientWidth / wf, box.clientHeight / hf) * dpr * sizeOf());
 }
-// ai: The code's size, Layout's slider (2026-10-03, against instability at a monitor's edges): a share of <main>'s
+// ai: The code's size, Code's slider (Layout's until 2026-11-13; 2026-10-03, against instability at a monitor's edges): a share of <main>'s
 // ai: room, 25 to 100%, which both the pick (room) and the canvas (layout)
 // ai: take, so the code sits smaller in the middle with the surround round it; under auto the pick follows the smaller
 // ai: room, as it follows a smaller window. Commits on release, as blocks a frame does.

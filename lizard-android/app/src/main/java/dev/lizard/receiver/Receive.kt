@@ -54,12 +54,12 @@ import dev.lizard.ui.Screen
 
 // ai: The tool screens' folds and rail on the phone, under the keys the preferences kept them by (MainActivity.FOLDS);
 // ai: the settings folds by topic (2026-11-12, lizard-ui RECV_FOLDS and SEND_FOLDS; "recvSettings" and "sendSettings"
-// ai: the one Settings fold's before, unread)
+// ai: the one Settings fold's before, "sendLayout" Send's Layout fold's until 2026-11-13, unread)
 internal class AndroidFolds(private val a: MainActivity) : Folds {
     private fun key(k: FoldKey) = when (k) {
         FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvCode -> "recvCode"; FoldKey.RecvDecoder -> "recvDecoder"
         FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
-        FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefresh"; FoldKey.SendLayout -> "sendLayout"
+        FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefresh"
         FoldKey.SendPerformance -> "sendPerformance"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
         FoldKey.Collapsed -> "collapsed"   // ai: one for both screens (2026-11-07; recvCollapsed and sendCollapsed before)
         FoldKey.HomeUnfinished -> "homeUnfinished"; FoldKey.HomeFiles -> "homeFiles"

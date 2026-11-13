@@ -98,10 +98,10 @@
     </div>
     <section id="settings" class="settings">
       <!-- ai: the settings in folds by topic (2026-11-12; one Settings fold, #dev, before): Code (#foldCode: the blocks a
-           frame, the ring, the codes), Refresh (#foldRefresh: the display rate, each code rate's refresh), Layout
-           (#foldLayout: the code's size, the gap between two codes, the margin), Performance (#foldPerf: the encoder),
-           then Developer Tools (#logs: what is sent, 2026-10-03: the test stream is for developers and testers; the
-           readout). Each fold's open state and every control in it kept as send:<id> (ui.mjs remember, persist); each
+           frame, the ring, the codes, then the code's size, the gap between two codes, the margin: #foldLayout's until
+           2026-11-13), Refresh (#foldRefresh: the display rate, each code rate's refresh), Performance (#foldPerf: the
+           encoder), then Developer Tools (#logs: what is sent, 2026-10-03: the test stream is for developers and
+           testers; the readout). Each fold's open state and every control in it kept as send:<id> (ui.mjs remember, persist); each
            fold holds a control that is never hidden. No group headings inside a fold. Options and labels bare. -->
     <details id="foldCode" class="dev"><summary>Code</summary>
       <div class="grid">
@@ -117,6 +117,12 @@
         <!-- ai: two codes side by side for the app's 2:1 crop (2026-09-28); "(browsers cannot decode 2 codes)" after Two until
              2026-10-05, when it went for being wider than the menu -->
         <label>Codes <select id="codes" data-chips><option value="1" selected>1</option><option value="2">2</option></select></label>
+        <!-- ai: the code's size, a share of <main>'s room, 25 to 100% (send.mjs sizeOf), so the code can be kept off a monitor's edges -->
+        <div class="blocks"><span class="row"><span>Size</span><span id="sizeOut">100%</span></span><input id="size" type="range" min="25" max="100" step="1" value="100" aria-label="size"></div>
+        <!-- ai: the light between two codes' rings, 4 to 68 modules (send.mjs spacingOf), shown with two codes; and between a
+             ring and the area's edge, 2 to 34 (marginOf) -->
+        <div class="blocks" id="spacingRow" hidden><span class="row"><span>Spacing</span><span id="spacingOut">16 modules</span></span><input id="spacing" type="range" min="4" max="68" step="1" value="16" aria-label="spacing"></div>
+        <div class="blocks"><span class="row"><span>Margin</span><span id="marginOut">8 modules</span></span><input id="margin" type="range" min="2" max="34" step="1" value="8" aria-label="margin"></div>
       </div>
     </details>
     <details id="foldRefresh" class="dev"><summary>Refresh</summary>
@@ -130,16 +136,6 @@
         <div class="blocks"><span class="row"><span>3/4</span><span id="refresh34Out">1</span></span><input id="refresh34" type="range" min="1" max="4" step="1" value="1" aria-label="3/4"></div>
         <div class="blocks"><span class="row"><span>2/3</span><span id="refresh23Out">1</span></span><input id="refresh23" type="range" min="1" max="4" step="1" value="1" aria-label="2/3"></div>
         <div class="blocks"><span class="row"><span>1/2</span><span id="refresh12Out">1</span></span><input id="refresh12" type="range" min="1" max="4" step="1" value="1" aria-label="1/2"></div>
-      </div>
-    </details>
-    <details id="foldLayout" class="dev"><summary>Layout</summary>
-      <div class="grid">
-        <!-- ai: the code's size, a share of <main>'s room, 25 to 100% (send.mjs sizeOf), so the code can be kept off a monitor's edges -->
-        <div class="blocks"><span class="row"><span>Size</span><span id="sizeOut">100%</span></span><input id="size" type="range" min="25" max="100" step="1" value="100" aria-label="size"></div>
-        <!-- ai: the light between two codes' rings, 4 to 68 modules (send.mjs spacingOf), shown with two codes; and between a
-             ring and the area's edge, 2 to 34 (marginOf) -->
-        <div class="blocks" id="spacingRow" hidden><span class="row"><span>Spacing</span><span id="spacingOut">16 modules</span></span><input id="spacing" type="range" min="4" max="68" step="1" value="16" aria-label="spacing"></div>
-        <div class="blocks"><span class="row"><span>Margin</span><span id="marginOut">8 modules</span></span><input id="margin" type="range" min="2" max="34" step="1" value="8" aria-label="margin"></div>
       </div>
     </details>
     <details id="foldPerf" class="dev"><summary>Performance</summary>

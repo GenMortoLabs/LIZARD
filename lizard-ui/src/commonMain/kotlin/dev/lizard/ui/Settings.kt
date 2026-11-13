@@ -45,11 +45,11 @@ class Press(val act: Act, val enabled: Boolean = true) : Setting
 // ai: The settings folds by topic (2026-11-12; one Settings fold a screen before): each a fold's key and title in the
 // ai: column's order, before Experimental and Developer Tools. Receive's: the camera (its choice, its mode, Phase lock, its
 // ai: controls), the code (Codes, the crop), the decoder (Decoder, Batch size, the phone's PC link and Compression).
-// ai: Send's: the code (Density or Blocks, Ring, Codes), its refresh (FPS, Rate refresh), its layout on the screen (Size
-// ai: or the phone's Brightness, Spacing, Margin), the painter (Encoder, VSync). The web pages the same (lizard-web).
+// ai: Send's: the code and its place on the screen (Density or Blocks, Ring, Codes, then Size or the phone's Brightness,
+// ai: Spacing, Margin; a Layout fold of their own until 2026-11-13), its refresh (FPS, Rate refresh), the painter
+// ai: (Encoder, VSync). The web pages the same (lizard-web).
 val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvCode to "Code", FoldKey.RecvDecoder to "Decoder")
-val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendLayout to "Layout",
-    FoldKey.SendPerformance to "Performance")
+val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendPerformance to "Performance")
 
 // ai: each fold of `order` that the app gives a setting, open as `folds` keeps it
 @Composable

@@ -47,7 +47,7 @@ const BASE = `http://localhost:${PORT}/${DIR}/recv.html`, SEND = `http://localho
 const DT = `(() => { const el = document.getElementById("dt"); if (!el || el.hidden) return null; const rows = {}; for (const r of el.querySelectorAll(".dt-row")) rows[r.dataset.k] = r.lastElementChild.textContent; const m = el.querySelector(".meter>span"); return { name: el.querySelector(".nm")?.textContent ?? "", end: el.querySelector(".pc")?.textContent ?? "", spin: !!el.querySelector(".spin"), frac: m ? parseFloat(m.style.width) / 100 : null, ghost: el.classList.contains("ghost"), rows }; })()`;
 // ai: the settings' folds by topic (2026-11-12; one Settings fold, #dev, before), each kept as <page>:<id>; FOLDS_AT
 // ai: each fold of the column as "<id> <title>: <its controls' ids>", and any group heading left inside one
-const SEND_FOLDS = ["foldCode", "foldRefresh", "foldLayout", "foldPerf"], RECV_FOLDS = ["foldCamera", "foldDecoder"];
+const SEND_FOLDS = ["foldCode", "foldRefresh", "foldPerf"], RECV_FOLDS = ["foldCamera", "foldDecoder"];
 // ai: (open: one state for every fold, or a state a fold)
 const statesOf = (ids, open) => ids.map((_, i) => (Array.isArray(open) ? open[i] : open));
 const foldsOpen = (ids) => `${JSON.stringify(ids)}.map((id) => document.getElementById(id).open)`;
@@ -152,7 +152,7 @@ const SIZES = [
     if (k === 0) check(idle.dev.every((o) => !o), `send ${z.name}: every settings fold closed on a fresh profile (${idle.dev.join()})`);
     if (k === 0) {
       const at = await evaluate(s, FOLDS_AT);
-      check(at === "foldCode Code: blocks subch ring codes | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldLayout Layout: size spacing margin | foldPerf Performance: enc | logs Developer Tools: stats payload", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
+      check(at === "foldCode Code: blocks subch ring codes size spacing margin | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
     }
     check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles and the empty card ("0 items", Clear dimmed) shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);
@@ -192,7 +192,7 @@ const SIZES = [
     if (k === 0) {
       // ai: the page stores each fold's state on its toggle event, a task a busy page can run late: reload after it;
       // ai: Code and Layout left open, Refresh and Performance closed, so each fold is seen to keep its own
-      const MIX = [true, false, true, false];
+      const MIX = [true, false, false];
       await evaluate(s, setFolds(SEND_FOLDS, MIX));
       await until(s, foldsKept("send", SEND_FOLDS, MIX), 5000, "the folds' open states stored");
       await navigate(s, SEND);

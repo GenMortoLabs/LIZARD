@@ -94,9 +94,10 @@ class DesktopSend(private val app: App) : SendHost {
     override val heat: Warn? = null
     override val railCapacity get() = s.capacityKBs
     // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
-    // ai: 2026-10-23): what the symbol carries, how often its blocks change, where it sits, how this machine paints it
+    // ai: 2026-10-23): what the symbol carries and where it sits (Layout's own fold until 2026-11-13), how often its blocks
+    // ai: change, how this machine paints it
     override val settings: Map<FoldKey, List<Setting>> get() = mapOf(
-        FoldKey.SendCode to listOf(
+        FoldKey.SendCode to listOfNotNull(
             // ai: Blocks a frame (send.html #blocks): a version 4 to 64, committed on release (its first step auto until
             // ai: 2026-11-07); Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
             Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
@@ -104,18 +105,17 @@ class DesktopSend(private val app: App) : SendHost {
             // ai: the rings alone (2026-10-05): none chosen shows the default
             ChipChoice("Ring", if (s.ring == -1) Pick.RING_DEFAULT else s.ring, SendRows.rings(stats)) { s.chooseRing(it) },
             // ai: two codes side by side for the receiver's 2:1 crop (send.html #codes)
-            ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) }),
-        // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui rateRefreshSettings)
-        FoldKey.SendRefresh to listOf(
-            if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
-            else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
-            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
-        FoldKey.SendLayout to listOfNotNull(
+            ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) },
             Slide("Size", "${s.size}%", s.size.toFloat(), 25f..100f, 74, done = { s.commitSize() }) { s.chooseSize(it.roundToInt()) },
             if (s.codes == 2) Slide("Spacing", "${s.spacing} modules", s.spacing.toFloat(), Room.SPACING_MIN.toFloat()..Room.SPACING_MAX.toFloat(),
                 Room.SPACING_MAX - Room.SPACING_MIN - 1, done = { s.repick() }) { s.chooseSpacing(it.roundToInt()) } else null,
             Slide("Margin", "${s.margin} modules", s.margin.toFloat(), Pick.QUIET.toFloat()..Room.MARGIN_MAX.toFloat(), Room.MARGIN_MAX - Pick.QUIET - 1,
                 done = { s.repick() }) { s.chooseMargin(it.roundToInt()) }),
+        // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui rateRefreshSettings)
+        FoldKey.SendRefresh to listOf(
+            if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
+            else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
+            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
         FoldKey.SendPerformance to listOf(
             // ai: GPU and CPU alone: with neither chosen the encoder is auto's and the painter running is the chip marked
             // ai: (the GPU before a first send); a choice takes that one outright
