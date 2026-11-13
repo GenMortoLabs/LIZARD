@@ -165,11 +165,37 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
         s.maximize = { ws.placement = WindowPlacement.Maximized }
         s.raise = { window.toFront() }
         app.hide = { window.isVisible = false }
+        // ai: Leaving the manager's full screen sets the window's own bounds again, as AWT's own full screen does
+        // ai: (GraphicsDevice.setFullScreenWindow(null)), unless the window was maximized (2026-11-13). AWT answers a
+        // ai: change of the frame's extents under a Mutter-family manager by requesting the bounds it last knew
+        // ai: (XDecoratedPeer.handleCorrectInsets, skipped for a maximized frame), and Muffin, leaving full screen, sends
+        // ai: the extents before the restored size: the request was the monitor's own rectangle, which Muffin takes from
+        // ai: an old application as a full-screen request ("Treating resize request of legacy application ... as a
+        // ai: fullscreen request"), so every leave came back full screen. With the bounds set first that request is the
+        // ai: window's own. `normal`: the bounds whenever the window is neither maximized nor its monitor's size (a floating
+        // ai: window of a monitor's exact size the manager makes full screen itself), null until one is seen.
+        var normal by remember { mutableStateOf<java.awt.Rectangle?>(null) }
         s.fullscreen = { on ->
             val top = runCatching { Native.windowOf(window) }.getOrDefault(0L)
-            if (!runCatching { Native.windowFullscreen(top, on) }.getOrDefault(false)) {
+            val maximized = window.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0
+            if (runCatching { Native.windowFullscreen(top, on) }.getOrDefault(false)) {
+                if (!on && !maximized) normal?.let { window.bounds = it }
+            } else {
                 if (on) { before = ws.placement; ws.placement = WindowPlacement.Fullscreen } else ws.placement = before
             }
+        }
+        DisposableEffect(Unit) {
+            val seen = object : java.awt.event.ComponentAdapter() {
+                fun keep() {
+                    val b = window.bounds
+                    if (window.extendedState and java.awt.Frame.MAXIMIZED_BOTH == 0 && b.width > 0 && b.height > 0 &&
+                        b != window.graphicsConfiguration?.bounds) normal = b
+                }
+                override fun componentResized(e: java.awt.event.ComponentEvent) = keep()
+                override fun componentMoved(e: java.awt.event.ComponentEvent) = keep()
+            }
+            window.addComponentListener(seen)
+            onDispose { window.removeComponentListener(seen) }
         }
         DisposableEffect(Unit) {
             val resized = object : java.awt.event.ComponentAdapter() {
