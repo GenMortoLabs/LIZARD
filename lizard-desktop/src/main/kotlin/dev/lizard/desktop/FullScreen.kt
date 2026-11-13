@@ -54,7 +54,10 @@ import kotlinx.coroutines.delay
 // ai: request"; window-x11.c, no opt-out): every leave came back full screen. AWT skips that request for a maximized
 // ai: frame, maximized read from _NET_WM_STATE whether or not it is also full screen (XNETProtocol.getStateImpl), and
 // ai: Muffin keeps the window's own rectangle through the maximize and the full screen (meta_window_save_rect), so the
-// ai: unmaximize after the leave gives the window back its size. A full screen the manager makes itself (its own
+// ai: unmaximize after the leave gives the window back its size. The unmaximize waits for the window to say it left
+// ai: (seen, at its resize), the app's own leave and the manager's alike: AWT reads _NET_WM_STATE as it handles each
+// ai: change, so with the unmaximize asked right behind the leave it read the window unmaximized as the extents came
+// ai: (JDK 25 on Xvfb) and asked for the full-screen rectangle anyway. A full screen the manager makes itself (its own
 // ai: shortcut) gets no maximize: the manager refuses it there. Setting the window's bounds after the leave instead
 // ai: (b53a843, a9c11cf) raced AWT's toolkit thread and lost.
 class FullScreen {
@@ -81,18 +84,18 @@ class FullScreen {
 
     fun toggle() = set(!on)
 
-    // ai: asked on or off: on X11 on with the window maximized first where it is not, off with that maximize removed
-    // ai: after it (one connection, in that order)
+    // ai: asked on or off: on X11 on with the window maximized first where it is not (one connection, in that order); off
+    // ai: full screen alone, the maximize removed once the window says it left (seen)
     fun set(v: Boolean) {
         changed(v)
         val w = window ?: return
-        val under = x11 && if (v) w.extendedState and Frame.MAXIMIZED_BOTH != Frame.MAXIMIZED_BOTH else maxedUnder
-        if (runCatching { Native.windowState(top(w), v, true, under) }.getOrDefault(false)) maxedUnder = v && under
+        val under = v && x11 && w.extendedState and Frame.MAXIMIZED_BOTH != Frame.MAXIMIZED_BOTH
+        if (runCatching { Native.windowState(top(w), v, true, under) }.getOrDefault(false)) { if (v) maxedUnder = under }
         else ws?.let { s -> if (v) { before = s.placement; s.placement = WindowPlacement.Fullscreen } else s.placement = before }
     }
 
-    // ai: at each resize of the window: the manager's word followed (nothing asked); a full screen the app made and the
-    // ai: manager left (its own shortcut) unmaximized as the app's own leave does
+    // ai: at each resize of the window: the manager's word followed (nothing asked); a window the app maximized under its
+    // ai: full screen unmaximized once it is no longer full screen, whoever left (the app, the manager's own shortcut)
     fun seen() {
         val w = window ?: return
         val t = top(w)
