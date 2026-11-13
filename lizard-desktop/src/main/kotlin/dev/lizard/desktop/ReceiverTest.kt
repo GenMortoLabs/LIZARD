@@ -154,7 +154,7 @@ class ReceiverTest private constructor(private val secs: Double, private val kv:
             "layout" -> if (v == "1:1" || v == "2:1") r.chooseLayout(v) else fail("LIZ_RECEIVER_TEST: step $act")
             "decoder" -> if (v in setOf("auto", "gpu", "cpu")) r.chooseDecoder(v) else fail("LIZ_RECEIVER_TEST: step $act")
             "lock" -> if (v == "0" || v == "1") r.chooseLock(v == "1") else fail("LIZ_RECEIVER_TEST: step $act")
-            "settings" -> r.toggleSettings()
+            "settings" -> for ((k, _) in dev.lizard.ui.RECV_FOLDS) app.folds.toggle(k)   // ai: Receive's settings folds, each turned (2026-11-12)
             "tools" -> r.toggleTools()
             "replaymb" -> v.toIntOrNull()?.takeIf { it in dev.lizard.ui.REPLAY_MB_MIN..dev.lizard.ui.REPLAY_MB_MAX }?.let { r.chooseReplayMb(dev.lizard.ui.replayMb(it)) }
                 ?: fail("LIZ_RECEIVER_TEST: step $act: Replay size is 256 to 8192 MB")

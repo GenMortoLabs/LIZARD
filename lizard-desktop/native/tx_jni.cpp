@@ -178,6 +178,15 @@ FN(jstring, txConfigure)(JNIEnv* e, jclass, jlong h, jint subch, jint span, jint
   return jstr(e, r);
 }
 
+// ai: Rate refresh (Sender::setRefresh, 2026-11-12): the blocks of the code rates 7/8, 3/4, 2/3 and 1/2 new in every
+// ai: a-th, b-th, c-th and d-th frame (1 to Sender::REFRESH_MAX), the frame before's repeated between; from the next frame
+// ai: made, kept across configures
+FN(void, txRefresh)(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
+  const int every[4] = {a, b, c, d};
+  std::lock_guard<std::mutex> l(tx(h)->mu);
+  tx(h)->s->setRefresh(every);
+}
+
 // ai: The blocks a frame of subch sub-channels carries under the format's rate profile (src/lizard_phy.h lizard_blocks_for),
 // ai: for the Blocks slider's figures before a configure
 FN(jint, blocksFor)(JNIEnv*, jclass, jint subch) { return lizard_blocks_for(subch); }

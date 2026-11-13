@@ -217,8 +217,9 @@ a.item{text-decoration:none}
 @media (hover:hover){.menu .acts>*:hover{background:var(--soft)}}
 .empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:24px 0;color:var(--muted);font-size:14px;text-align:center}
 
-/* ai: Settings and Developer Tools (details.dev; the Developer panel until 2026-10-01, Advanced until 2026-10-03): the
-   switches and readouts, closed unless opened (ui.mjs remember keeps it); its summary a row with a chevron that turns. */
+/* ai: the tool pages' folds (details.dev: the settings by topic since 2026-11-12, one Settings fold before, and Developer
+   Tools; the Developer panel until 2026-10-01, Advanced until 2026-10-03): the switches and readouts, closed unless
+   opened (ui.mjs remember keeps each); its summary a row with a chevron that turns. */
 details.dev{border-top:1px solid var(--line);margin-top:0}
 details.dev>summary{list-style:none;display:flex;align-items:center;min-height:56px;cursor:pointer;font-weight:500;user-select:none}
 details.dev>summary::-webkit-details-marker{display:none}
@@ -228,9 +229,9 @@ details.dev>summary::after{content:"";flex:none;margin-left:auto;width:24px;heig
 details.dev[open]>summary::after{transform:rotate(180deg)}
 /* ai: a fold's first line straight under its row (2026-10-02) */
 details.dev>summary+*,details.dev>summary+.grid>label:first-child{margin-top:0}
-/* ai: Settings' fields, one rhythm (2026-10-02): a label 4 px over its control,
-   16 px between fields whatever the control (a menu, a slider), a group's header 16 px above it and 8 px
-   over its first field */
+/* ai: a fold's fields, one rhythm (2026-10-02): a label 4 px over its control,
+   16 px between fields whatever the control (a menu, a slider); no group headings inside a fold (the folds by topic,
+   2026-11-12) */
 details.dev .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,14rem),1fr));gap:16px;margin:4px 0 16px}
 /* ai: a field's title as the apps' (lizard-ui Parts.kt Field, 2026-11-06): 14 px semibold, muted, in a 36 px row, 4 px
    over its control */
@@ -240,18 +241,14 @@ details.dev label{display:grid;grid-template-rows:minmax(36px,auto) auto;align-i
 .blocks{display:flex;flex-direction:column;gap:4px;margin:0}.blocks .row{display:flex;align-items:center;gap:12px;justify-content:space-between;min-height:36px}
 /* ai: a slider's title and value in the fields' style (2026-10-02): the title semibold, its value regular (the apps' Field) */
 .blocks .row>span{font-size:14px;color:var(--muted)}.blocks .row>span:first-child{font-weight:600}
-/* ai: the Code group's first field right under its heading */
-#f-focus>.grid{margin-top:0}#f-focus>.grid>.blocks:first-child{margin-top:0}
 .item .s:empty{display:none}
 #blocksOut,#fpsOut{color:var(--muted);font-variant-numeric:tabular-nums}
-details.dev fieldset{border:0;margin:16px 0 0;padding:0;min-width:0}
 /* ai: About, a fold (2026-11-06, the apps' AboutFold): closed until opened and not kept, its text in paragraphs 10 px
    apart (ui.mjs about): the build line muted, the license, the design it is based on, the credits a line a license */
 .about-text{display:flex;flex-direction:column;gap:10px;margin:0 0 16px;font-size:14px;line-height:20px}
 .about-text>p{margin:0}.about-text>.build{color:var(--muted)}
 /* ai: Source code after About on a tool page, a hairline over it (the apps' SourceRow) */
 details.dev+a.item{border-top:1px solid var(--line)}
-details.dev legend{font-size:14px;font-weight:600;color:var(--fg);padding:0;margin-bottom:8px}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);
   white-space:nowrap;border:0}
 /* ai: a send's or a receive's block (ui.mjs details, 2026-11-07; the apps' lizard-ui Details): the head (the file's icon,

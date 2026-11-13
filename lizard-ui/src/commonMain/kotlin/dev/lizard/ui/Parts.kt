@@ -249,8 +249,8 @@ fun ListRow(title: String, sub: String? = null, lead: ImageVector? = null, divid
     }
 }
 
-// ai: A row that opens (the web's details.dev, 2026-10-02: Settings, Experimental and Developer Tools on Send and
-// ai: Receive): a hairline over it, its title in medium, a chevron that turns, and what it holds straight under it; its state the
+// ai: A row that opens (the web's details.dev, 2026-10-02: the settings folds, Experimental and Developer Tools on Send
+// ai: and Receive): a hairline over it, its title in medium, a chevron that turns, and what it holds straight under it; its state the
 // ai: caller's, kept by the app. count: muted after the title (Home's lists, 2026-11-07: "Received files 4"); action:
 // ai: in the row before the chevron while open (their Delete all)
 @Composable

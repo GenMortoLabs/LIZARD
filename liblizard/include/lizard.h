@@ -308,6 +308,11 @@ LIZ_API int liz_sender_ready(liz_sender *s);
  * ai: yet (dst untouched). Each frame taken once; show them in order, each for as long as the display rate asks. */
 LIZ_API int liz_sender_take(liz_sender *s, uint8_t *dst, int stride, liz_pixfmt fmt);
 LIZ_API const char *liz_sender_stats(liz_sender *s);
+/* ai: Rate refresh: every[r] frames between new blocks of code rate r (0 7/8, 1 3/4, 2 2/3, 3 1/2), 1 to
+ * ai: LIZ_REFRESH_MAX, 1 by default; a block of a held rate repeats the frame before's. No format change: a receiver
+ * ai: reads each frame as ever. From the next frame made, kept across configures. */
+enum { LIZ_REFRESH_MAX = 4 };
+LIZ_API int liz_sender_refresh(liz_sender *s, const int every[4]);
 
 /* ---- 5. the receive session: a camera into a receiver, with what a receiving app does around it ---------------- */
 /* ai: What every app's receive screen runs (core/rx/session.h): a camera of the system's (UVC through V4L2, Media

@@ -419,6 +419,7 @@ jboolean senderTakeBuffer(JNIEnv* e, jclass, jlong v, jobject out, jint stride, 
   return ok(e, liz_sender_take(h<liz_sender>(v), direct(e, out), stride, liz_pixfmt(fmt))) > 0;
 }
 jstring senderStats(JNIEnv* e, jclass, jlong v) { return e->NewStringUTF(liz_sender_stats(h<liz_sender>(v))); }
+void senderRefresh(JNIEnv* e, jclass, jlong v, jint a, jint b, jint c, jint d) { const int every[4] = {a, b, c, d}; ok(e, liz_sender_refresh(h<liz_sender>(v), every)); }
 
 #define M(name, sig) {const_cast<char*>(#name), const_cast<char*>(sig), reinterpret_cast<void*>(name)}
 const JNINativeMethod METHODS[] = {
@@ -472,6 +473,7 @@ const JNINativeMethod METHODS[] = {
     M(senderTake, "(J[BII)Z"),
     M(senderTakeBuffer, "(JLjava/nio/ByteBuffer;II)Z"),
     M(senderStats, "(J)Ljava/lang/String;"),
+    M(senderRefresh, "(JIIII)V"),
 };
 #undef M
 

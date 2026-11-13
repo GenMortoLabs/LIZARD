@@ -33,6 +33,9 @@ static int send(const char *assets, const char *painter, const char *device) {
   if (!snd || liz_sender_configure(snd, &f, painter_of(painter), 4, assets, device) != LIZ_OK) {
     printf("FAIL sender: %s\n", liz_last_error()); return 1;
   }
+  /* ai: Rate refresh's bounds: 11 refused, all 1 (every frame new, the default) taken */
+  const int past[4] = {1, 1, 1, LIZ_REFRESH_MAX + 1}, plain[4] = {1, 1, 1, 1};
+  if (liz_sender_refresh(snd, past) == LIZ_OK || liz_sender_refresh(snd, plain) != LIZ_OK) { printf("FAIL refresh: %s\n", liz_last_error()); return 1; }
   liz_geometry g;
   liz_sender_geometry(snd, &g);
   liz_decoder *d = liz_decoder_new(0);

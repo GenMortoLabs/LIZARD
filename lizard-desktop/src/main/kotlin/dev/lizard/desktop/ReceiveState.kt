@@ -84,7 +84,6 @@ class ReceiveState(private val app: App) {
     var root by mutableStateOf("")                             // ai: the transfer's root the receiver holds
     var autoRan by mutableStateOf("")                          // ai: "GPU" or "CPU": what auto runs on
     var preview by mutableStateOf<ImageBitmap?>(null)
-    var settingsOpen by mutableStateOf(Prefs.Rx.settingsOpen)
     var toolsOpen by mutableStateOf(Prefs.Rx.toolsOpen)
     var experimentalOpen by mutableStateOf(Prefs.Rx.experimentalOpen)
     var showStats by mutableStateOf(Prefs.Rx.stats)
@@ -420,7 +419,6 @@ class ReceiveState(private val app: App) {
         session?.phaseLock(on)
     }
     fun commitBatch() { session?.batchCap(batch) }
-    fun toggleSettings() { settingsOpen = !settingsOpen; Prefs.Rx.settingsOpen = settingsOpen }
     fun toggleTools() { toolsOpen = !toolsOpen; Prefs.Rx.toolsOpen = toolsOpen }
     fun toggleExperimental() { experimentalOpen = !experimentalOpen; Prefs.Rx.experimentalOpen = experimentalOpen }
     fun chooseStats(on: Boolean) { showStats = on; Prefs.Rx.stats = on }

@@ -188,6 +188,16 @@ LIZ_API int liz_sender_take(liz_sender* s, uint8_t* dst, int stride, liz_pixfmt 
   });
 }
 
+static_assert(LIZ_REFRESH_MAX == lizard::Sender::REFRESH_MAX, "lizard.h's refresh bound is the sender's");
+LIZ_API int liz_sender_refresh(liz_sender* s, const int every[4]) {
+  return guard([&] {
+    need(s && every, "a sender and four refreshes");
+    for (int r = 0; r < 4; r++) need(every[r] >= 1 && every[r] <= LIZ_REFRESH_MAX, "a refresh is 1 to LIZ_REFRESH_MAX frames");
+    s->s->setRefresh(every);
+    return LIZ_OK;
+  });
+}
+
 LIZ_API const char* liz_sender_stats(liz_sender* s) {
   const char* r = "";
   guard([&] { need(s, "a sender"); s->stats = s->s->stats(); r = s->stats.c_str(); return LIZ_OK; });

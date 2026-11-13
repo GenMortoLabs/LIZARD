@@ -22,6 +22,8 @@ object Native {
     @JvmStatic external fun txPrepare(h: Long, assets: String): String
     // ai: painter: 0 the CPU, 1 the GPU, 2 auto; gap: modules between two codes; "" or the refusal
     @JvmStatic external fun txConfigure(h: Long, subch: Int, span: Int, fps: Int, codes: Int, gap: Int, threads: Int, painter: Int, assets: String): String
+    // ai: Rate refresh: a new block of the rates 7/8, 3/4, 2/3, 1/2 every a, b, c, d frames (1 to 10), from the next frame
+    @JvmStatic external fun txRefresh(h: Long, a: Int, b: Int, c: Int, d: Int)
     // ai: the blocks a frame of subch sub-channels carries (the format's rate profile, src/lizard_phy.h lizard_blocks_for)
     @JvmStatic external fun blocksFor(subch: Int): Int
     @JvmStatic external fun txStats(h: Long): String

@@ -6,7 +6,7 @@
   /* ai: context) in it (layout()) and fills it with the surround (paintSurround()). So nothing the */
   /* ai: controls do may move that box while a symbol is painted: a resize re-picks the version mid-stream. */
   /* ai: Portrait (a phone sending): the bar and the controls on top, <main> the rest of one screen. svh, so a phone's */
-  /* ai: address bar coming and going moves nothing (vh where there is no svh). Settings and Developer Tools hang below */
+  /* ai: address bar coming and going moves nothing (vh where there is no svh). The folds hang below */
   /* ai: that screen, reached by scrolling or the bar's Settings, so opening them never shrinks <main>. */
   #stage{position:relative;display:flex;flex-direction:column;height:100vh;height:100svh}
   #col,#pane{display:contents}
@@ -50,7 +50,7 @@
   #selSum .tot{font-weight:400;color:var(--muted)}
   /* ai: a file dragged over the page: the whole of <main> takes the drop, and the outline says so */
   main.drop{outline:3px dashed var(--fg);outline-offset:-12px}
-  /* ai: Landscape and desktop: a 20rem column beside <main>, the bar fixed at its top and the controls over Settings in */
+  /* ai: Landscape and desktop: a 20rem column beside <main>, the bar fixed at its top and the controls over the folds in */
   /* ai: a pane under it that scrolls on its own (#pane, 2026-10-02, its scrollbar below the top bar, */
   /* ai: as the receiver's), so Developer Tools opens inside it. The figures' reserved line is portrait's alone (it keeps <main> */
   /* ai: still there); here an empty state or figures line takes no room. */
@@ -72,7 +72,7 @@
     body.collapsed .bar::after{left:0;right:0}
     #state{margin:12px 0 0;line-height:normal}
     #state:empty{display:none}
-    #dev{margin-top:16px}
+    #settings>details:first-of-type{margin-top:16px}
   }
   /* ai: under a mouse (or no pointer) each 40 px button in a 48 px target, as the PC's (lizard-ui LocalTarget) */
   @media (orientation:landscape) and (pointer:fine),(orientation:landscape) and (pointer:none){#side .row>button{margin:4px 0}}
@@ -97,40 +97,57 @@
       <div id="dt" class="dt" role="status" hidden></div>
     </div>
     <section id="settings" class="settings">
-      <!-- ai: Settings and Developer Tools, two rows that open (2026-10-02): Settings (#dev, its open state and every control in
-           it kept) holds the encoder and the code (blocks a frame, the rate its word states, its size, the gap, the ring,
-           the codes); Developer Tools (#logs) what is sent (2026-10-03: the test stream is for developers and testers)
-           and the readout; About the last row. Options and labels bare. -->
-    <details id="dev" class="dev"><summary>Settings</summary>
+      <!-- ai: the settings in folds by topic (2026-11-12; one Settings fold, #dev, before): Code (#foldCode: the blocks a
+           frame, the ring, the codes), Refresh (#foldRefresh: the display rate, each code rate's refresh), Layout
+           (#foldLayout: the code's size, the gap between two codes, the margin), Performance (#foldPerf: the encoder),
+           then Developer Tools (#logs: what is sent, 2026-10-03: the test stream is for developers and testers; the
+           readout). Each fold's open state and every control in it kept as send:<id> (ui.mjs remember, persist); each
+           fold holds a control that is never hidden. No group headings inside a fold. Options and labels bare. -->
+    <details id="foldCode" class="dev"><summary>Code</summary>
+      <div class="grid">
+        <!-- ai: the format's size, a slider of versions 4 to 64 (16 sub-channels a step; its first step auto, the largest
+             that fit the room, until 2026-11-07); #subch the value the page reads (the sub-channels), the slider a
+             view over it (send.mjs); its label the rate profile's blocks, titled Blocks with Show statistics on and
+             Density, the bytes alone, with it off (#blocksTitle) -->
+        <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 27.4 KB</span></span><input id="blocks" type="range" min="4" max="64" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
+        <!-- ai: the ring, the 128 by default (sim/lizard_pick.mjs RING_DEFAULT; an Auto option, the same ring, until 2026-10-05),
+             named by its border's look with Show statistics off (Thin the 256, Medium the 128, Thick the 64, that order)
+             and by its cells with it on (64, 128, 256): send.mjs ringOptions, the inline script below -->
+        <label>Ring <select id="ring" data-chips><option value="256">Thin</option><option value="128" selected>Medium</option><option value="64">Thick</option></select></label>
+        <!-- ai: two codes side by side for the app's 2:1 crop (2026-09-28); "(browsers cannot decode 2 codes)" after Two until
+             2026-10-05, when it went for being wider than the menu -->
+        <label>Codes <select id="codes" data-chips><option value="1" selected>1</option><option value="2">2</option></select></label>
+      </div>
+    </details>
+    <details id="foldRefresh" class="dev"><summary>Refresh</summary>
+      <div class="grid">
+        <!-- ai: the display rate, 1 to 60, which the word states -->
+        <div class="blocks"><span class="row"><span>FPS</span><span id="fpsOut">60</span></span><input id="fps" type="range" min="1" max="60" step="1" value="60" aria-label="FPS"></div>
+        <!-- ai: Rate refresh (refresh.mjs; the native sender's setRefresh): frames between new blocks of each code rate, the
+             format's tiers from the inside out, 1 to 4, 1 each by default; a held rate's blocks repeat the frame before's
+             (send.mjs refreshOf, the worker's "refresh") -->
+        <div class="blocks"><span class="row"><span>7/8</span><span id="refresh78Out">1</span></span><input id="refresh78" type="range" min="1" max="4" step="1" value="1" aria-label="7/8"></div>
+        <div class="blocks"><span class="row"><span>3/4</span><span id="refresh34Out">1</span></span><input id="refresh34" type="range" min="1" max="4" step="1" value="1" aria-label="3/4"></div>
+        <div class="blocks"><span class="row"><span>2/3</span><span id="refresh23Out">1</span></span><input id="refresh23" type="range" min="1" max="4" step="1" value="1" aria-label="2/3"></div>
+        <div class="blocks"><span class="row"><span>1/2</span><span id="refresh12Out">1</span></span><input id="refresh12" type="range" min="1" max="4" step="1" value="1" aria-label="1/2"></div>
+      </div>
+    </details>
+    <details id="foldLayout" class="dev"><summary>Layout</summary>
+      <div class="grid">
+        <!-- ai: the code's size, a share of <main>'s room, 25 to 100% (send.mjs sizeOf), so the code can be kept off a monitor's edges -->
+        <div class="blocks"><span class="row"><span>Size</span><span id="sizeOut">100%</span></span><input id="size" type="range" min="25" max="100" step="1" value="100" aria-label="size"></div>
+        <!-- ai: the light between two codes' rings, 4 to 68 modules (send.mjs spacingOf), shown with two codes; and between a
+             ring and the area's edge, 2 to 34 (marginOf) -->
+        <div class="blocks" id="spacingRow" hidden><span class="row"><span>Spacing</span><span id="spacingOut">16 modules</span></span><input id="spacing" type="range" min="4" max="68" step="1" value="16" aria-label="spacing"></div>
+        <div class="blocks"><span class="row"><span>Margin</span><span id="marginOut">8 modules</span></span><input id="margin" type="range" min="2" max="34" step="1" value="8" aria-label="margin"></div>
+      </div>
+    </details>
+    <details id="foldPerf" class="dev"><summary>Performance</summary>
       <div class="grid">
         <!-- ai: GPU and CPU alone (2026-10-05): with neither chosen the encoder is auto's (the GPU where it builds and its first
              frame is the C's, else the CPU), held by a hidden option that names the one auto runs (send.mjs showEnc) -->
         <label>Encoder <select id="enc" data-chips><option value="auto" selected hidden disabled>GPU</option><option value="gpu">GPU</option><option value="wasm">CPU</option></select></label>
       </div>
-      <fieldset id="f-focus"><legend>Code</legend>
-        <div class="grid">
-          <!-- ai: the format's size, a slider of versions 4 to 64 (16 sub-channels a step; its first step auto, the largest
-               that fit the room, until 2026-11-07); #subch the value the page reads (the sub-channels), the slider a
-               view over it (send.mjs); its label the rate profile's blocks, titled Blocks with Show statistics on and
-               Density, the bytes alone, with it off (#blocksTitle) -->
-          <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 27.4 KB</span></span><input id="blocks" type="range" min="4" max="64" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
-          <!-- ai: the display rate, 1 to 60, which the word states -->
-          <div class="blocks"><span class="row"><span>FPS</span><span id="fpsOut">60</span></span><input id="fps" type="range" min="1" max="60" step="1" value="60" aria-label="FPS"></div>
-          <!-- ai: the code's size, a share of <main>'s room, 25 to 100% (send.mjs sizeOf), so the code can be kept off a monitor's edges -->
-          <div class="blocks"><span class="row"><span>Size</span><span id="sizeOut">100%</span></span><input id="size" type="range" min="25" max="100" step="1" value="100" aria-label="size"></div>
-          <!-- ai: the light between two codes' rings, 4 to 68 modules (send.mjs spacingOf), shown with two codes; and between a
-               ring and the area's edge, 2 to 34 (marginOf) -->
-          <div class="blocks" id="spacingRow" hidden><span class="row"><span>Spacing</span><span id="spacingOut">16 modules</span></span><input id="spacing" type="range" min="4" max="68" step="1" value="16" aria-label="spacing"></div>
-          <div class="blocks"><span class="row"><span>Margin</span><span id="marginOut">8 modules</span></span><input id="margin" type="range" min="2" max="34" step="1" value="8" aria-label="margin"></div>
-          <!-- ai: the ring, the 128 by default (sim/lizard_pick.mjs RING_DEFAULT; an Auto option, the same ring, until 2026-10-05),
-               named by its border's look with Show statistics off (Thin the 256, Medium the 128, Thick the 64, that order)
-               and by its cells with it on (64, 128, 256): send.mjs ringOptions, the inline script below -->
-          <label>Ring <select id="ring" data-chips><option value="256">Thin</option><option value="128" selected>Medium</option><option value="64">Thick</option></select></label>
-          <!-- ai: two codes side by side for the app's 2:1 crop (2026-09-28); "(browsers cannot decode 2 codes)" after Two until
-               2026-10-05, when it went for being wider than the menu -->
-          <label>Codes <select id="codes" data-chips><option value="1" selected>1</option><option value="2">2</option></select></label>
-        </div>
-      </fieldset>
     </details>
     <details id="logs" class="dev"><summary>Developer Tools</summary>
       <div class="grid">
@@ -143,9 +160,9 @@
     </section>
     <script>
     // ai: Saved state before the first paint (2026-10-02): the modules run after the page is
-    // ai: drawn (send.mjs awaits the codec first), so Settings and Developer Tools opened, and the kept values moved, a moment
+    // ai: drawn (send.mjs awaits the codec first), so the folds opened, and the kept values moved, a moment
     // ai: after the page showed, the chevrons turning as they did. ui.mjs remember and persist's rules, the same keys; the
-    // ai: blocks slider and the labels drawn from the values as send.mjs showBlocks and showFps draw
+    // ai: blocks slider and the labels drawn from the values as send.mjs showBlocks, showFps and showRefresh draw
     // ai: them. The modules run them again later and change nothing. The blocks a frame are the rate profile's
     // ai: (sim/lizard_pick.mjs tiersFor, src/lizard_phy.c lizard_tiers_for): over the frame's 640 s slots, a 7/8 blocks of 4496,
     // ai: t 2/3 of 5760 and c 1/2 of 7680 nearest 39, 15 and 20% of them in least squares (in units of 16 slots),
@@ -153,9 +170,9 @@
     // ai: 16; a kept "auto" from before 2026-11-07 among them) is the page's default, LIZARD-480, as send.mjs makes it.
     (() => { try {
       const ls = localStorage, $ = (id) => document.getElementById(id);
-      for (const id of ["dev", "logs"]) { const v = ls.getItem("send:" + id); if (v !== null) $(id).open = v === "1"; }
+      for (const d of document.querySelectorAll("#settings>details")) { const v = ls.getItem("send:" + d.id); if (v !== null) d.open = v === "1"; }
       if (ls.getItem("send:collapsed") === "1") document.body.classList.add("collapsed"); { const w = +ls.getItem("send:side"); if (w > 0) document.documentElement.style.setProperty("--side", Math.max(180, Math.min(w, innerWidth * 0.6)) + "px"); }
-      for (const el of document.querySelectorAll("#dev select, #dev input, #logs select")) {
+      for (const el of document.querySelectorAll("#settings select, #settings input")) {
         if (el.type === "file" || "view" in el.dataset) continue;
         const v = ls.getItem(el.dataset.shared || "send:" + el.id);
         if (v !== null && (el.tagName !== "SELECT" || [...el.options].some((o) => o.value === v))) el.value = v;
@@ -179,6 +196,7 @@
       if (stats) { const r = $("ring"), rv = r.value; r.innerHTML = [64, 128, 256].map((x) => `<option value="${x}">${x}</option>`).join(""); r.value = rv; }
       $("blocksOut").textContent = stats ? `${k}, ${kb}` : kb;   // ai: 472 B a block (sim/xfer.mjs PAYLOAD), before the modules load
       $("fpsOut").textContent = `${+$("fps").value}`;
+      for (const k of ["78", "34", "23", "12"]) $(`refresh${k}Out`).textContent = `${Math.max(1, Math.min(4, Math.round(+$(`refresh${k}`).value) || 1))}`;
       $("sizeOut").textContent = `${+$("size").value}%`;
       $("spacingOut").textContent = `${+$("spacing").value} modules`;
       $("spacingRow").hidden = $("codes").value !== "2";

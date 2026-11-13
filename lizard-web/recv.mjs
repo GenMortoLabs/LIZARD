@@ -30,13 +30,13 @@ import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
 import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings, icon, chips } from "./ui.mjs";
 import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
-// ai: Settings and Developer Tools (the Developer panel until 2026-10-01) open as they were left, a phone session
+// ai: The folds (Camera, Decoder, Developer Tools; one Settings fold, recv:dev, until 2026-11-12; the Developer panel
+// ai: until 2026-10-01) open as they were left, each its own, kept as recv:<id>, a phone session
 // ai: being a series of reloads; restored here, at the top of the module, so nothing is seen to move. Errors a user must
 // ai: see go over the camera's box (#idle) instead.
 // ai: the few-choice settings as chips (ui.mjs chips; the inline script drew them before the first paint)
 for (const sel of document.querySelectorAll("select[data-chips]")) chips(sel);
-remember($("dev"), "recv:dev");
-remember($("logs"), "recv:logs");
+for (const d of document.querySelectorAll(".settings>details")) remember(d, `recv:${d.id}`);
 collapser($("collapse"), "recv:collapsed");   // ai: the sidebar collapser (ui.mjs); the camera box takes the width
 // ai: The column's floor (ui.mjs sideResizer; the apps' RowFloor): Start or Stop with no word broken, the longer label
 // ai: in the button's font plus its padding, and the column's own padding (2026-11-06: the column's one button; the
@@ -1303,7 +1303,7 @@ let srcCrop = "";
 const held_ = { basic: {}, focus: [] };
 const basicOf = (c) => { const { advanced, ...rest } = c ?? {}; return rest; };
 // ai: Zoom (2026-11-06, the apps' Zoom): the camera's own, where the track exposes it (getCapabilities' zoom), a slider in
-// ai: Settings with its value as a ratio of its least ("1.3x"; the number where the least is 0); set live as it is
+// ai: Camera with its value as a ratio of its least ("1.3x"; the number where the least is 0); set live as it is
 // ai: dragged, one applyConstraints at a time (the newest value waiting), and kept per camera (recv:zoom@<deviceId>),
 // ai: set again at each start. Hidden for a camera that exposes none; kept shown with the camera off once one did.
 let zoomCaps = null, zoomBusy = false, zoomWant = null;
@@ -1471,9 +1471,9 @@ navigator.mediaDevices?.addEventListener?.("devicechange", listCameras);
 // The browser drops the wake lock whenever the page is hidden; take it back on return.
 document.addEventListener("visibilitychange", async () => { if (track && document.visibilityState === "visible") try { wake = await navigator.wakeLock?.request("screen"); } catch {} });
 // Controls can be preset from the URL: recv.html?workers=4&res=1280x720&auto
-// ai: Settings' menus as the user last left them (localStorage, since 2026-09-29);
+// ai: The folds' menus as the user last left them (localStorage, since 2026-09-29);
 // ai: the URL's presets after, so a scripted run still gets what it names. The camera's menu fills later (listCameras).
-for (const el of document.querySelectorAll("#dev select:not(#cam):not(#lock), #logs select")) persist(el, `recv:${el.id}`);
+for (const el of document.querySelectorAll(".settings select:not(#cam):not(#lock)")) persist(el, `recv:${el.id}`);
 // ai: Show statistics (Developer Tools, the apps'): on, the green line once a file is in and the lab line and readouts
 $("stats").addEventListener("change", () => { document.body.classList.toggle("stats", $("stats").value === "1"); showState(); });
 document.body.classList.toggle("stats", $("stats").value === "1");

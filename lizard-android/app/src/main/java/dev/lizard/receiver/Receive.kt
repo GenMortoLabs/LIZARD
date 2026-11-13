@@ -52,11 +52,15 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import dev.lizard.ui.Screen
 
-// ai: The tool screens' folds and rail on the phone, under the keys the preferences kept them by (MainActivity.FOLDS)
+// ai: The tool screens' folds and rail on the phone, under the keys the preferences kept them by (MainActivity.FOLDS);
+// ai: the settings folds by topic (2026-11-12, lizard-ui RECV_FOLDS and SEND_FOLDS; "recvSettings" and "sendSettings"
+// ai: the one Settings fold's before, unread)
 internal class AndroidFolds(private val a: MainActivity) : Folds {
     private fun key(k: FoldKey) = when (k) {
-        FoldKey.RecvSettings -> "recvSettings"; FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
-        FoldKey.SendSettings -> "sendSettings"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
+        FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvCode -> "recvCode"; FoldKey.RecvDecoder -> "recvDecoder"
+        FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
+        FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefresh"; FoldKey.SendLayout -> "sendLayout"
+        FoldKey.SendPerformance -> "sendPerformance"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
         FoldKey.Collapsed -> "collapsed"   // ai: one for both screens (2026-11-07; recvCollapsed and sendCollapsed before)
         FoldKey.HomeUnfinished -> "homeUnfinished"; FoldKey.HomeFiles -> "homeFiles"
     }
@@ -202,27 +206,29 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         v.setTransform(m)
     }
 
-    // ai: Settings (2026-10-02, the web's): the decoder (auto shows what it runs on; PC only while a PC receiver is heard
-    // ai: on the link), the PC link while a cable is in, the PC decoder's Compression, the GPU's Batch size, the camera
-    // ai: (the back lenses), its mode (Resolution, Format, Phase lock and Frame rate, the session's), Zoom, Codes (the crop)
-    override val settings: List<Setting> get() {
-        val out = mutableListOf<Setting>()
+    // ai: Settings by topic (2026-11-12, lizard-ui RECV_FOLDS; one fold from 2026-10-02, the web's): Camera (the back
+    // ai: lenses and File; its mode: Resolution, Format, Phase lock and Frame rate, the session's; Zoom), Code (Codes, the
+    // ai: crop), Decoder (auto shows what it runs on; PC only while a PC receiver is heard on the link; the PC link while a
+    // ai: cable is in, the PC decoder's Compression, the GPU's Batch size)
+    override val settings: Map<FoldKey, List<Setting>> get() {
+        val camera = mutableListOf<Setting>()
+        val decoder = mutableListOf<Setting>()
         val sizes = r.modes.map { it.size }.toSet()
         val res = r.mode?.size ?: "1920x1080"
         val fmt = r.mode?.format ?: "auto"
         val decoders = listOf("gpu" to "GPU", "cpu" to "CPU") + listOfNotNull(("pc" to "PC").takeIf { a.pcPresent || s.decoder == "pc" })
-        out += ChipChoice("Decoder", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder, decoders) { a.change(s.copy(decoder = it)) }
-        if (a.usb.connected) out += pcLink()
+        decoder += ChipChoice("Decoder", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder, decoders) { a.change(s.copy(decoder = it)) }
+        if (a.usb.connected) decoder += pcLink()
         // ai: the PC decoder's frames packed as .lizard frames or raw (Settings.pcPack): raw for a phone too weak or too warm
-        if (s.decoder == "pc") out += ChipChoice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) }
+        if (s.decoder == "pc") decoder += ChipChoice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) }
         // ai: the most frames a GPU launch takes (Settings.batch); the C decodes a frame at a time: not shown with it
-        if (s.decoder != "cpu" && s.decoder != "pc") out += Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
+        if (s.decoder != "cpu" && s.decoder != "pc") decoder += Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
             val n = v.roundToInt().coerceIn(1, 32); if (n != s.frames) a.change(s.copy(batch = n.toString()))
         }
         // ai: the back cameras by lens (the closest-focusing where none is chosen: the session's first listed), then File
         // ai: (2026-11-07: images, videos and .lizard replays played as the camera; since 2026-11-09 picked in the camera's
         // ai: area, ReceiveState.picks, the field saying File and no file named here)
-        out += Choice("Camera", if (r.fileMode) "file:" else s.camera.ifEmpty { r.camId }, r.lenses.map { it.id to it.label } + ("file:" to "File"), blank = "Camera") { id ->
+        camera += Choice("Camera", if (r.fileMode) "file:" else s.camera.ifEmpty { r.camId }, r.lenses.map { it.id to it.label } + ("file:" to "File"), blank = "Camera") { id ->
             when {
                 id == "file:" -> r.enterFiles()
                 else -> {
@@ -233,9 +239,9 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
             }
         }
         // ai: a file's one mode is its own and it has no lens: none of the camera's settings but the crop
-        if (!r.fileMode) cameraSettings(out, res, fmt, sizes)
-        out += ChipChoice("Codes", s.layout, Settings.LAYOUTS.map { it to it.substringBefore(":") }) { a.change(s.copy(layout = it)) }
-        return out
+        if (!r.fileMode) cameraSettings(camera, res, fmt, sizes)
+        val code = listOf(ChipChoice("Codes", s.layout, Settings.LAYOUTS.map { it to it.substringBefore(":") }) { a.change(s.copy(layout = it)) })
+        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvCode to code, FoldKey.RecvDecoder to decoder)
     }
 
     // ai: the camera's mode (Resolution, Format, Frame rate, the session's) and its zoom

@@ -5,6 +5,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -23,6 +24,8 @@ import dev.lizard.ui.FoldKey
 import dev.lizard.ui.Folds
 import dev.lizard.ui.Icons
 import dev.lizard.ui.Press
+import dev.lizard.ui.RECV_FOLDS
+import dev.lizard.ui.SEND_FOLDS
 import dev.lizard.ui.ReceiveUpload
 import dev.lizard.ui.UploadItem
 import dev.lizard.ui.ReceiveHost
@@ -43,24 +46,28 @@ import kotlin.math.roundToInt
 import dev.lizard.ui.Screen
 
 // ai: The tool screens' folds and rail on the desktop, under the keys Prefs kept them by; Home's lists' folds (its
-// ai: narrow window's column, 2026-11-07) here, kept in Prefs as the others
+// ai: narrow window's column, 2026-11-07) here, kept in Prefs as the others; the settings folds by topic (2026-11-12,
+// ai: lizard-ui RECV_FOLDS and SEND_FOLDS) under their keys' names (Prefs.foldOpen)
 class DesktopFolds(private val app: App) : Folds {
     private val r get() = app.recv
     private val s get() = app.send
     private var unfinishedOpen by mutableStateOf(Prefs.homeUnfinishedOpen)
     private var filesOpen by mutableStateOf(Prefs.homeFilesOpen)
+    private val topics = mutableStateMapOf<FoldKey, Boolean>().apply { for ((k, _) in RECV_FOLDS + SEND_FOLDS) put(k, Prefs.foldOpen(k.name)) }
     override fun open(k: FoldKey) = when (k) {
-        FoldKey.RecvSettings -> r.settingsOpen; FoldKey.RecvExperimental -> r.experimentalOpen; FoldKey.RecvTools -> r.toolsOpen
-        FoldKey.SendSettings -> s.settingsOpen; FoldKey.SendExperimental -> s.experimentalOpen; FoldKey.SendTools -> s.toolsOpen
+        FoldKey.RecvExperimental -> r.experimentalOpen; FoldKey.RecvTools -> r.toolsOpen
+        FoldKey.SendExperimental -> s.experimentalOpen; FoldKey.SendTools -> s.toolsOpen
         FoldKey.Collapsed -> s.collapsed   // ai: one for both screens (2026-11-07), kept as Send's was (Prefs.collapsed)
         FoldKey.HomeUnfinished -> unfinishedOpen; FoldKey.HomeFiles -> filesOpen
+        else -> topics[k] == true
     }
     override fun toggle(k: FoldKey) = when (k) {
-        FoldKey.RecvSettings -> r.toggleSettings(); FoldKey.RecvExperimental -> r.toggleExperimental(); FoldKey.RecvTools -> r.toggleTools()
-        FoldKey.SendSettings -> s.toggleSettings(); FoldKey.SendExperimental -> s.toggleExperimental(); FoldKey.SendTools -> s.toggleTools()
+        FoldKey.RecvExperimental -> r.toggleExperimental(); FoldKey.RecvTools -> r.toggleTools()
+        FoldKey.SendExperimental -> s.toggleExperimental(); FoldKey.SendTools -> s.toggleTools()
         FoldKey.Collapsed -> s.toggleRail()
         FoldKey.HomeUnfinished -> { unfinishedOpen = !unfinishedOpen; Prefs.homeUnfinishedOpen = unfinishedOpen; Unit }
         FoldKey.HomeFiles -> { filesOpen = !filesOpen; Prefs.homeFilesOpen = filesOpen; Unit }
+        else -> { val v = topics[k] != true; topics[k] = v; Prefs.setFoldOpen(k.name, v) }
     }
 }
 
@@ -131,50 +138,53 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         r.preview?.let { Image(it, contentDescription = null, modifier, contentScale = ContentScale.Fit, filterQuality = FilterQuality.Low) }
     }
 
-    // ai: Settings (the web's #dev): chips, a slider or a menu each (lizard-ui Settings.kt: the menus Camera and
-    // ai: Resolution, a webcam's sizes a long list), the camera's controls where it has them
-    override val settings: List<Setting> get() {
+    // ai: Settings by topic (2026-11-12, lizard-ui RECV_FOLDS; one fold before, the web's #dev): the camera, the code, the
+    // ai: decoder; chips, a slider or a menu each (lizard-ui Settings.kt: the menus Camera and Resolution, a webcam's
+    // ai: sizes a long list), the camera's controls where it has them
+    override val settings: Map<FoldKey, List<Setting>> get() {
         val ci = r.info
         val m = r.mode
-        val out = mutableListOf<Setting>()
+        val camera = mutableListOf<Setting>()
+        val code = mutableListOf<Setting>()
+        val decoder = mutableListOf<Setting>()
         // ai: GPU and CPU; with neither chosen the decoder is auto's and the one it runs on is shown
-        out += ChipChoice("Decoder", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "GPU", "cpu" to "CPU")) { r.chooseDecoder(it) }
+        decoder += ChipChoice("Decoder", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "GPU", "cpu" to "CPU")) { r.chooseDecoder(it) }
         // ai: the file camera's field says File (its files are the camera area's, ReceiveState.picks)
-        out += Choice("Camera", r.driverFor?.id ?: if (r.fileCamera) "file:" else r.camera.ifEmpty { r.cameras.firstOrNull()?.id ?: "" }, r.cameraOptions, blank = "Camera", onOpen = { r.refreshCameras() }) { r.chooseCameraOption(it) }
-        if (r.usb?.installed == true) out += Press(Act("Remove USB driver") { r.removeDriver() }, enabled = !r.driverBusy)
+        camera += Choice("Camera", r.driverFor?.id ?: if (r.fileCamera) "file:" else r.camera.ifEmpty { r.cameras.firstOrNull()?.id ?: "" }, r.cameraOptions, blank = "Camera", onOpen = { r.refreshCameras() }) { r.chooseCameraOption(it) }
+        if (r.usb?.installed == true) camera += Press(Act("Remove USB driver") { r.removeDriver() }, enabled = !r.driverBusy)
         // ai: a phone by its address (ReceiveState.askAddress): asked for, or the camera already one
         if (r.askAddress || r.typedPhone != null)
-            out += Typed("Phone address", r.typedPhone?.removePrefix("phone:")?.removeSuffix(":${ReceiveState.PHONE_PORT}").orEmpty(), "IP address") { r.choosePhoneAddress(it) }
+            camera += Typed("Phone address", r.typedPhone?.removePrefix("phone:")?.removeSuffix(":${ReceiveState.PHONE_PORT}").orEmpty(), "IP address") { r.choosePhoneAddress(it) }
         // ai: the sizes and rates the camera offers, once one has been opened. None for a phone or an upload: their
         // ai: frames are a camera's crop already (cam/phone.cpp, upload.cpp), not a UVC device's modes; none for a file,
         // ai: whose one mode is its frames' size
         if (ci != null && m != null && !r.fixed && !r.played) {
             val sizes = ci.modes.distinctBy { it.size }.sortedBy { it.w.toLong() * it.h }
-            out += Choice("Resolution", m.size, sizes.map { it.size to "${it.w} x ${it.h}" }) { r.chooseRes(it) }
+            camera += Choice("Resolution", m.size, sizes.map { it.size to "${it.w} x ${it.h}" }) { r.chooseRes(it) }
             // ai: the pixel formats at this size, where there is a choice (a webcam's uncompressed one against its Motion-JPEG)
             val formats = ci.modes.filter { it.size == m.size }.map { it.format }.distinct()
-            if (formats.size > 1) out += ChipChoice("Format", m.format, formats.map { it to it }) { r.chooseFormat(it) }
+            if (formats.size > 1) camera += ChipChoice("Format", m.format, formats.map { it to it }) { r.chooseFormat(it) }
             // ai: Phase lock (2026-11-08), above the rates: On or Off on a camera that can delay a capture (Aravis on its
             // ai: software trigger), greyed "Not supported" on one that cannot (UVC); with it on, the rates at most 60
             val locks = ci.lockBar.isEmpty()
-            out += phaseLockSetting(r.lockOn, locks) { r.chooseLock(it) }
+            camera += phaseLockSetting(r.lockOn, locks) { r.chooseLock(it) }
             val rates = lockedRates(ci.modes.filter { it.size == m.size && it.format == m.format }.map { it.fps }.distinctBy { ReceiveState.fpsText(it) }.sorted(),
                 locks && r.lockOn)
-            out += ChipChoice("Frame rate", ReceiveState.fpsText(m.fps), rates.map { ReceiveState.fpsText(it) to ReceiveState.fpsText(it) }) { v ->
+            camera += ChipChoice("Frame rate", ReceiveState.fpsText(m.fps), rates.map { ReceiveState.fpsText(it) to ReceiveState.fpsText(it) }) { v ->
                 rates.firstOrNull { ReceiveState.fpsText(it) == v }?.let { r.chooseFps(it) }
             }
         }
         // ai: a phone crops on its side, an upload was cropped when recorded (the receiver takes their crop): no Codes
-        // ai: here (the crop: 1 the 1:1, 2 the 2:1, Send's Codes)
+        // ai: here (the crop: 1 the 1:1, 2 the 2:1, Send's Codes), nor the camera's controls
         if (!r.fixed) {
-            out += ChipChoice("Codes", r.layout, listOf("1:1" to "1", "2:1" to "2")) { r.chooseLayout(it) }
-            ci?.control("zoom")?.let { out += zoom(it) }
-            ci?.control("exposure")?.let { out += exposure(it) }
-            ci?.control("gain")?.let { out += gain(it) }
+            code += ChipChoice("Codes", r.layout, listOf("1:1" to "1", "2:1" to "2")) { r.chooseLayout(it) }
+            ci?.control("zoom")?.let { camera += zoom(it) }
+            ci?.control("exposure")?.let { camera += exposure(it) }
+            ci?.control("gain")?.let { camera += gain(it) }
         }
         // ai: the most frames a GPU launch takes: none for the C, which decodes a frame at a time
-        if (!r.cpu) out += Slide("Batch size", "${r.batch}", r.batch.toFloat(), 1f..32f, 30, done = { r.commitBatch() }) { r.chooseBatch(it.roundToInt()) }
-        return out
+        if (!r.cpu) decoder += Slide("Batch size", "${r.batch}", r.batch.toFloat(), 1f..32f, 30, done = { r.commitBatch() }) { r.chooseBatch(it.roundToInt()) }
+        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvCode to code, FoldKey.RecvDecoder to decoder)
     }
 
     // ai: Zoom (UVC zoom_absolute), live: shown as a ratio of its least ("1.5x") where it starts above 0

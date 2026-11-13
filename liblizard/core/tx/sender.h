@@ -95,6 +95,13 @@ class Sender {
   std::string painter() const { return onGpu_ ? "gpu" : "cpu"; }
   const std::string& gpuWhy() const { return gpuWhy_; }
   const XferTx* xfer() const { return xfer_.get(); }
+  // ai: Rate refresh (2026-11-12, the senders' setting): every[r] for the code rate r (0 7/8, 1 3/4, 2 2/3, 1/2 3; the
+  // ai: format's tiers from the inside out), 1 to REFRESH_MAX, 1 the default. A block of rate r takes a new id in a
+  // ai: frame whose count is a multiple of every[r] and repeats the frame before's otherwise (its pilots still the
+  // ai: picture's count, as every frame's): no format change, a receiver reads each frame as ever and a repeated block
+  // ai: is one it has. From the next frame made (frames already made ahead keep theirs); kept across configures.
+  void setRefresh(const int every[4]);
+  static constexpr int REFRESH_MAX = 4;   // ai: two bits a rate; 4 at 60 is 15 a second
 
  private:
   struct Job { uint64_t seq; std::vector<uint8_t> blocks; int data; };
@@ -109,6 +116,8 @@ class Sender {
   TxFormat fmt_;
   int n_ = 0, side_ = 0, width_ = 0, gap_ = 0, blocks_ = 0, blockBytes_ = 0, gen_ = 0;
   std::string label_, error_, tiers_;   // ai: tiers_: the format's rate profile as text (the stats' tiers)
+  int refresh_[4] = {1, 1, 1, 1};   // ai: setRefresh's, under mu_
+  std::vector<uint8_t> rateOf_;     // ai: a symbol's block b's code rate (0 7/8 ... 3 1/2), from the format's tiers
   std::mutex mu_;
   std::mutex xferMu_;               // ai: the transfer's state: the producer fills a frame under it, stats reads under it
   std::condition_variable cv_;

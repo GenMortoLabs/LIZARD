@@ -3,13 +3,14 @@
 // ai: encodes and paints the test stream or a file picked from this device with no server.
 // ai: For a user the page is a file, several or a folder (bundled as one tar, tar.mjs): choose or drop them, Start,
 // ai: Fullscreen, Stop, the version picked from the window over
-// ai: the whole ladder (up to LIZARD-560 until 2026-09-29, APP_TOP). The lab's switches are in Settings and Developer
-// ai: Tools, their ids the URL presets.
+// ai: the whole ladder (up to LIZARD-560 until 2026-09-29, APP_TOP). The lab's switches are in the folds (Code, Refresh,
+// ai: Layout, Performance, Developer Tools), their ids the URL presets.
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
 import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
 import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
 import { bundle } from "./tar.mjs";
+import { everyOf, ratesFor } from "./refresh.mjs";
 import { remember, persist, say, bytes, rate, registerApp, collapser, sideResizer, icon, nameParts, slider, details, chips } from "./ui.mjs";
 // ai: the sliders filled to their values as the apps draw them (ui.mjs slider), before the codec's load
 for (const el of document.querySelectorAll('input[type="range"]')) slider(el);
@@ -24,7 +25,7 @@ let fileBytes = 0, sentBytes = 0;   // ai: the file's bytes and its bytes as sen
 let runTest = false, runFiles = 1, passTime = 0;
 // ai: What goes, as elements from Start until Stop (ui.mjs details, 2026-11-07; the apps' lizard-ui SendRows.details;
 // ai: "Sending <name>, <compressed> (<raw> raw)" over the rate before): the name, a spinner until the first picture
-// ai: paints, Size, Files (a bundle's), Speed (the rate the pictures painted carry, none while paused), and with Show
+// ai: paints, Size, Files (a bundle's), Speed (the new data the pictures painted carry, none while paused), and with Show
 // ai: statistics on Compressed (the bytes that go), Pass and Pass time; the test stream its name and Speed. Every row
 // ai: from Start, a value "" until known, so nothing under the block moves. Module scope: start() names its file's bytes
 // ai: `bytes`, which there shadows ui.mjs's formatter.
@@ -90,7 +91,7 @@ function swCall(msg, transfer = []) {
   return new Promise((res, rej) => { pending = { type: msg.type === "start" ? "ready" : msg.type, res, rej }; sw.postMessage({ ...msg, gen }, transfer); });
 }
 
-// ai: The GPU encoder (Settings' #enc, 2026-09-29; gpu/encoder.mjs), for a PC with a good GPU: the sender
+// ai: The GPU encoder (Performance's #enc, 2026-09-29; gpu/encoder.mjs), for a PC with a good GPU: the sender
 // ai: had lagged at LIZARD-1024. Its latency matters little and a dropped frame does, so frames go in batches (16, fewer
 // ai: where the device's memory holds fewer: cfg.batch): the worker makes a batch's blocks alone, the page encodes the batch on
 // ai: the device into one of its configuration's two halves as it arrives, and presents a frame's slot on #cg when the
@@ -286,7 +287,7 @@ function spec() {
   // ai: since 2026-10-08), equal power, soft LDPC: the power tilt and RS(80,64) lost (research/10).
   // n is derived from the version (N_FOR in sim/lizard_pick.mjs) and is never chosen here.
   const subch = +$("subch").value, n = N_FOR(subch);
-  // ai: The span of the ring Settings names, or of the default ring, the same for every picture (sim/lizard_pick.mjs
+  // ai: The span of the ring Code names, or of the default ring, the same for every picture (sim/lizard_pick.mjs
   // ai: RING_DEFAULT).
   return { phy: "lizard", n, subch, mode: 1, span: SPAN(n, ringChosen() ?? RING_DEFAULT), bitmap: LIZARD_BITMAP,
     variants: [{ name: "rx" }], stream: STREAM };
@@ -302,7 +303,7 @@ function spec() {
 // which is the whole payload above the first few, so the canvas stretches up to fill the room (an upscale only
 // interpolates; research/09 measures smoothed fractional scaling at 2% of the mean and 11% at worst), and a format
 // chosen larger than the room is shown squeezed, which #tx says.
-// ai: Spacing and Margin, Settings' sliders (2026-10-23; one Margin, two of them between codes, that morning; a gap
+// ai: Spacing and Margin, Layout's sliders (2026-10-23; one Margin, two of them between codes, that morning; a gap
 // ai: between two codes before it, from 2026-10-03): the light between two codes' rings, two quiet zones (OB_QUIET) at
 // ai: least and 68 modules at most (a painter's widest gap, 64, and its quiet zones), shown with two codes; and between a
 // ai: ring and the area's edge, one quiet zone at least, 34 at most. The defaults the encoders' own gap (GAP_MODULES) and
@@ -324,16 +325,16 @@ function room() {
   Object.assign($("tx").dataset, { wf, hf });
   return Math.max(64, Math.min(box.clientWidth / wf, box.clientHeight / hf) * dpr * sizeOf());
 }
-// ai: The code's size, Settings' slider (2026-10-03, against instability at a monitor's edges): a share of <main>'s
+// ai: The code's size, Layout's slider (2026-10-03, against instability at a monitor's edges): a share of <main>'s
 // ai: room, 25 to 100%, which both the pick (room) and the canvas (layout)
 // ai: take, so the code sits smaller in the middle with the surround round it; under auto the pick follows the smaller
 // ai: room, as it follows a smaller window. Commits on release, as blocks a frame does.
 const sizeOf = () => Math.max(0.25, Math.min(1, (+$("size").value || 100) / 100));
-// ai: Symbols a frame, Settings' "codes": two side by side for a native receiver reading a 2:1 crop. No
+// ai: Symbols a frame, Code's "codes": two side by side for a native receiver reading a 2:1 crop. No
 // ai: browser decodes two (the receiver's 2:1 path was archived 2026-09-28 and deleted 2026-09-29, the receiver's side
 // ai: planned as two 960 x 960 frames divided by a line); the option says so.
 const codesOf = () => (+$("codes").value === 2 ? 2 : 1);
-// ai: Settings' ring (an index into RINGS), or null for the default ring (RING_DEFAULT): the menu has no auto
+// ai: Code's ring (an index into RINGS), or null for the default ring (RING_DEFAULT): the menu has no auto
 // ai: since 2026-10-05 (the 128 selected), so null only where it holds no ring at all. Its options are the rings'
 // ai: cells since 2026-10-10 (indices before, when the 96 was the third), so a saved index no longer matches one.
 function ringChosen() { const v = $("ring").value, i = RINGS.indexOf(+v); return v === "" || v === "auto" || i < 0 ? null : i; }
@@ -421,14 +422,23 @@ function setPaused(p) {
   showRail();
 }
 // ai: The collapsed rail (send.html #rail): pause while sending, play to resume or to start, and the code's capacity,
-// ai: what it offers at most (codes x blocks a frame x 472 B x pictures a second), while a run is configured. Written
+// ai: what it offers at most (codes x new blocks a frame (freshBlocks) x 472 B x pictures a second), while a run is configured. Written
 // ai: only when it changes (tick calls it every frame). The pictures a second are the asked rate, or the browser's own
 // ai: animation frames where fewer (drawFps, measured each second while sending; since 2026-10-04, so an external
 // ai: limiter shows in the MB/s: Edge's efficiency mode drew 30 of 60 while the rail offered 60's capacity).
 let railKey = "", drawFps = 0;
+// ai: a symbol's new blocks a frame on average under Rate refresh (a block of a rate refreshed every k frames counts 1 / k;
+// ai: all of them at 1, the default)
+function freshBlocks() {
+  const rates = shown ? ratesFor(shown.subch, cfg.blocksPerFrame) : null, every = refreshOf();
+  if (!rates) return cfg.blocksPerFrame;
+  let n = 0;
+  for (const r of rates) n += 1 / every[r];
+  return n;
+}
 function showRail() {
   const asked = Math.max(1, +$("fps").value), shows = drawFps ? Math.min(asked, Math.round(drawFps)) : asked;
-  const kbs = cfg ? cfg.codes * cfg.blocksPerFrame * cfg.usefulBytes * shows / 1000 : null;
+  const kbs = cfg ? cfg.codes * freshBlocks() * cfg.usefulBytes * shows / 1000 : null;
   const key = `${running}|${paused}|${kbs}|${$("go").disabled}`;
   if (key === railKey) return;
   railKey = key;
@@ -519,7 +529,7 @@ async function start() {
   swInit();
   ahead.clear(); inflight = 0; reqSeq = 0; spare = []; respecPending = false; behind = 0;
   const fps = Math.max(0, Math.min(255, Math.round(+$("fps").value) || 0));
-  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, fps, xfer, codes, gap });
+  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, fps, xfer, codes, gap, every: refreshOf() });
   bandFps = fps;
   // ai: The GPU encoder for this run, where the menu asks for it and it builds (WebGPU by name: its failure is the start's).
   // ai: Its configuration is this run's only if the run is still this one when it comes back.
@@ -614,7 +624,9 @@ async function start() {
       const line = `${auto().slice(1)}\n${cfg.label}${xferLine}${passLine}\n${samples} x ${samples} samples with the quiet zone${cfg.codes > 1 ? `, ${cfg.codes} side by side` : ""}, ${$("tx").dataset.scale} device px per cell\n${cfg.codes > 1 ? `${cfg.codes} x ` : ""}${cfg.blocksPerFrame} x ${cfg.usefulBytes} B = ${cfg.codes * cfg.blocksPerFrame * cfg.usefulBytes} B per frame\npainted ${(painted / dt).toFixed(1)}/s of ${$("fps").value} asked (${how})` +
         `\nworker ${ahead.size} ready ahead, ${behind} animation frames found nothing ready\nanimation frames ${afps.toFixed(1)} a second, the screen ${(1000 / tickMs).toFixed(1)} Hz by their intervals; pictures held 1, 2, 3, 4+ refreshes: ${held.join(", ")}\n${encLine}`;
       $("tx").textContent = line;
-      offeredKBs = (painted / dt) * cfg.codes * cfg.blocksPerFrame * cfg.usefulBytes / 1000;
+      // ai: the new data blocks the pictures carried (the worker's data: a header, manifest or repeated block none; Rate
+      // ai: refresh's repeats add nothing), as the native sender's offeredKBs
+      offeredKBs = (dataWin / dt) * cfg.usefulBytes / 1000;
       // ai: #tx's first line names the format (auto(): "LIZARD-480 (54 blocks), picture ..."; the lab line #lab did until
       // ai: 2026-10-02, repeating #nums' rate and pass: deleted). The user's figure (#nums): the offered rate alone (the
       // ai: pass went to #tx on 2026-10-05).
@@ -937,6 +949,16 @@ $("subch").onchange = $("ring").onchange = () => roomChanged();
 // ai: and the page's pace and the word's rate follow it as they followed the box (both read #fps as they go)
 const showFps = () => { $("fpsOut").textContent = `${+$("fps").value}`; };   // ai: "FPS" over the bare count (2026-10-05; "Pictures a second", "60 a second" before)
 for (const ev of ["input", "change"]) $("fps").addEventListener(ev, showFps);
+// ai: Rate refresh (refresh.mjs; the native sender's setRefresh): four sliders 1 to 4, frames between new blocks of
+// ai: the 7/8, 3/4, 2/3 and 1/2 rates, each label the bare count as FPS's; kept as the other settings (send:<id>). A
+// ai: release tells the worker, which applies it from the next frame it makes; every start sends it too.
+const REFRESH = ["refresh78", "refresh34", "refresh23", "refresh12"];
+const refreshOf = () => everyOf(REFRESH.map((id) => $(id).value));
+const showRefresh = () => { refreshOf().forEach((v, r) => { $(`${REFRESH[r]}Out`).textContent = `${v}`; }); };
+for (const id of REFRESH) {
+  $(id).addEventListener("input", showRefresh);
+  $(id).addEventListener("change", () => { showRefresh(); sw?.postMessage({ type: "refresh", every: refreshOf() }); });
+}
 // ai: the size slider (sizeOf): its label live while dragged, the room changed on release
 const showSize = () => { $("sizeOut").textContent = `${Math.round(sizeOf() * 100)}%`; };
 $("size").addEventListener("input", showSize);
@@ -999,11 +1021,10 @@ function paintSurround() {
 new ResizeObserver(paintSurround).observe(bgc.parentElement);
 // ai: Any control can be preset from the URL: send.html?payload=test&subch=512&fps=30&auto (&bg=noise&bgseed=3 for a
 // ai: surround). The file input is not one: a page cannot be handed a file by its URL.
-// ai: Settings' controls as the user last left them (localStorage, since 2026-09-29), then
-// ai: the URL's presets over them for this load.
-// ai: and Developer Tools' payload (there since 2026-10-03), under the same keys
+// ai: The folds' controls as the user last left them (localStorage, since 2026-09-29), then
+// ai: the URL's presets over them for this load; Developer Tools' payload among them (there since 2026-10-03)
 // ai: Show statistics kept under the receiver's key (data-shared, recv:stats): one switch for both pages
-for (const el of document.querySelectorAll("#dev select, #dev input, #logs select")) if (el.type !== "file" && !("view" in el.dataset)) persist(el, el.dataset.shared || `send:${el.id}`);
+for (const el of document.querySelectorAll("#settings select, #settings input")) if (el.type !== "file" && !("view" in el.dataset)) persist(el, el.dataset.shared || `send:${el.id}`);
 // ai: a menu takes a preset only where it is one of its options (?ring=auto, from before the menu lost its auto, keeps the default)
 for (const [k, v] of URLP) { const el = $(k); if (el && "value" in el && el.type !== "file" && (el.tagName !== "SELECT" || [...el.options].some((o) => o.value === v))) el.value = v; }
 // ai: A preset that is no format (?subch=16, ?subch=24, ?subch=auto) is no symbol: back to the page's default,
@@ -1016,10 +1037,11 @@ if (!VERSIONS.includes(+$("subch").value)) {
 showStatsLabels();
 showEnc();
 showFps();
+showRefresh();
 showSize();
 showMargin();
-remember($("dev"), "send:dev");
-remember($("logs"), "send:logs");
+// ai: each fold's open state its own, kept as send:<id> (the folds by topic since 2026-11-12; one Settings fold, send:dev, before)
+for (const d of document.querySelectorAll("#settings>details")) remember(d, `send:${d.id}`);
 paintSurround();
 showReady();
 if (URLP.has("auto")) begin();

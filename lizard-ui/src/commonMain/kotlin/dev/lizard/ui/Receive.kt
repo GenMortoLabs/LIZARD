@@ -42,9 +42,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import dev.lizard.readout.Readout
 
 // ai: The folds of the tool screens and Home's lists (HomeUnfinished, HomeFiles: the phone's Home, 2026-11-07), kept by
-// ai: each app under its own keys, closed until opened. Collapsed: the tool screens' column at its rail, one for Receive
-// ai: and Send (2026-11-07; each its own before)
-enum class FoldKey { RecvSettings, RecvExperimental, RecvTools, SendSettings, SendExperimental, SendTools, Collapsed, HomeUnfinished, HomeFiles }
+// ai: each app under its own keys, closed until opened. The settings by topic (2026-11-12; one Settings fold a screen
+// ai: before, RecvSettings and SendSettings): Receive's Camera, Code, Decoder; Send's Code, Refresh, Layout, Performance
+// ai: (RECV_FOLDS, SEND_FOLDS). Collapsed: the tool screens' column at its rail, one for Receive and Send (2026-11-07;
+// ai: each its own before)
+enum class FoldKey {
+    RecvCamera, RecvCode, RecvDecoder, RecvExperimental, RecvTools,
+    SendCode, SendRefresh, SendLayout, SendPerformance, SendExperimental, SendTools,
+    Collapsed, HomeUnfinished, HomeFiles
+}
 
 interface Folds {
     fun open(k: FoldKey): Boolean
@@ -91,7 +97,7 @@ interface ReceiveHost {
     val off: String                    // ai: over the preview: "No camera yet", "Camera off", or "" while it shows
     val waiting: Boolean               // ai: "Getting ready" until the receiver first answers
     @Composable fun Picture(modifier: Modifier, portrait: Boolean)
-    val settings: List<Setting>
+    val settings: Map<FoldKey, List<Setting>>   // ai: each of RECV_FOLDS' settings; a fold given none is not drawn
     val experimental: List<Setting>    // ai: the Experimental fold's lab arms; no fold where there are none
     val tools: List<Setting>
 }
@@ -200,7 +206,7 @@ private fun RailSquares(h: ReceiveHost) {
 @Composable
 private fun Side(h: ReceiveHost, home: Boolean = false) {
     TransferPanel(h)
-    Fold("Settings", h.folds.open(FoldKey.RecvSettings), { h.folds.toggle(FoldKey.RecvSettings) }) { Settings(h.settings) }
+    SettingFolds(h.folds, RECV_FOLDS, h.settings)
     if (h.experimental.isNotEmpty()) Fold("Experimental", h.folds.open(FoldKey.RecvExperimental), { h.folds.toggle(FoldKey.RecvExperimental) }) { Settings(h.experimental) }
     Fold("Developer Tools", h.folds.open(FoldKey.RecvTools), { h.folds.toggle(FoldKey.RecvTools) }) { Settings(h.tools) }
     if (home) HomeRow { h.goHome() }

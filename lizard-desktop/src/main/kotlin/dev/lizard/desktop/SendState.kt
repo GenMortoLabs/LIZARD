@@ -196,7 +196,9 @@ class SendState {
     var margin by mutableStateOf(Prefs.margin.coerceIn(Pick.QUIET, Room.MARGIN_MAX))
     var ring by mutableStateOf(Prefs.ring.let { if (it in Pick.RINGS.indices) it else -1 })
     var codes by mutableStateOf(if (Prefs.codes == 2) 2 else 1)
-    var settingsOpen by mutableStateOf(Prefs.settingsOpen)
+    // ai: Rate refresh (2026-11-12, lizard-ui rateRefreshSettings): each code rate's blocks new every n-th frame, 7/8,
+    // ai: 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change (refreshNow), kept
+    var refresh by mutableStateOf(refreshOf(Prefs.refresh))
     var toolsOpen by mutableStateOf(Prefs.toolsOpen)
     var experimentalOpen by mutableStateOf(Prefs.experimentalOpen)
     var collapsed by mutableStateOf(Prefs.collapsed)
@@ -413,6 +415,7 @@ class SendState {
                 if (hnd == 0L) { phase = Phase.Error("Not sendable: $err"); return@invokeLater }
                 h = hnd; gpuWhy = why; prepared = true; fmt = null; phase = Phase.On
                 if (why.isNotEmpty()) System.err.println("send: no GPU painter: $why")
+                refreshNow()
                 areaNow()
             }
         }
@@ -566,7 +569,6 @@ class SendState {
     fun fullFromManager(on: Boolean) { if (!leased && on != full) { full = on; edgeRail = false; quiet() } }
 
     fun toggleRail() { collapsed = !collapsed; Prefs.collapsed = collapsed }
-    fun toggleSettings() { settingsOpen = !settingsOpen; Prefs.settingsOpen = settingsOpen }
     fun toggleTools() { toolsOpen = !toolsOpen; Prefs.toolsOpen = toolsOpen }
     fun toggleExperimental() { experimentalOpen = !experimentalOpen; Prefs.experimentalOpen = experimentalOpen }
 
@@ -590,6 +592,7 @@ class SendState {
                 if (my != gen || h != hnd) { Native.txDestroy(hnd); return@invokeLater }   // ai: stopped meanwhile: it is this thread's
                 prepared = true; gpuWhy = why
                 if (why.isNotEmpty()) System.err.println("send: no GPU painter: $why")
+                refreshNow()   // ai: a change made while it prepared
                 configure()
             }
         }
@@ -606,6 +609,15 @@ class SendState {
     fun chooseMargin(v: Int) { margin = v.coerceIn(Pick.QUIET, Room.MARGIN_MAX); Prefs.margin = margin }
     fun chooseRing(v: Int) { ring = if (v in Pick.RINGS.indices) v else -1; Prefs.ring = ring; repick() }
     fun chooseCodes(v: Int) { codes = if (v == 2) 2 else 1; Prefs.codes = codes; repick() }
+    // ai: a rate's refresh, applied at once (the sender's next frame; no configure): not while a prepare holds the
+    // ai: sender's lock (the UI thread would wait out the driver's compile), which hands it on as it ends
+    fun chooseRefresh(rate: Int, v: Int) {
+        if (refresh[rate] == v) return
+        refresh = refresh.copyOf().also { it[rate] = v.coerceIn(1, REFRESH_MAX) }
+        Prefs.refresh = refreshText(refresh)
+        if (h != preparing) refreshNow()
+    }
+    private fun refreshNow() { if (h != 0L) Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]) }
     // ai: turned on in full screen while the codes play: the monitor taken (takeOver); turned off while it is: given back
     fun chooseExclusiveFull(on: Boolean) {
         exclusiveFull = on; Prefs.exclusiveFull = on

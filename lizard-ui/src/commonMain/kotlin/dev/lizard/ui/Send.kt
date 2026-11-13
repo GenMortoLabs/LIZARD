@@ -90,10 +90,10 @@ interface SendHost {
     val lineShown: Boolean get() = true
     val heat: Warn?                    // ai: the heat warning (the phone's Throttling), null while nothing throttles
     val railCapacity: Double?
-    val settings: List<Setting>
+    val settings: Map<FoldKey, List<Setting>>   // ai: each of SEND_FOLDS' settings; a fold given none is not drawn
     val experimental: List<Setting>    // ai: the Experimental fold's lab arms; no fold where there are none
     val tools: List<Setting>
-    val readout: Code?                 // ai: the lab's text under Developer Tools' fields (CodeBlock's own 6 dp under them)
+    val readout: Code?                // ai: the lab's text under Developer Tools' fields (CodeBlock's own 6 dp under them)
     val codeAlone: Boolean             // ai: the code alone on the screen (the phone's send running; the desktop's full screen)
     // ai: the code alone drawn as the landscape layout bare (ToolLandscape's `bare`), the code area never moved in the tree:
     // ai: the desktop's, whose code area is a heavyweight canvas a move destroys and makes again, its presenter stopped
@@ -231,7 +231,7 @@ private fun Side(h: SendHost, home: Boolean = false) {
     else if (h.reading) CircularProgressIndicator(Modifier.padding(top = 12.dp).size(16.dp), color = Fg, strokeWidth = 2.dp, trackColor = Line)
     h.heat?.let { WarnRow(it, Modifier.padding(top = 8.dp)) }
     Spacer(Modifier.height(16.dp))
-    Fold("Settings", h.folds.open(FoldKey.SendSettings), { h.folds.toggle(FoldKey.SendSettings) }) { Settings(h.settings) }
+    SettingFolds(h.folds, SEND_FOLDS, h.settings)
     if (h.experimental.isNotEmpty()) Fold("Experimental", h.folds.open(FoldKey.SendExperimental), { h.folds.toggle(FoldKey.SendExperimental) }) { Settings(h.experimental) }
     Fold("Developer Tools", h.folds.open(FoldKey.SendTools), { h.folds.toggle(FoldKey.SendTools) }) {
         Settings(h.tools)

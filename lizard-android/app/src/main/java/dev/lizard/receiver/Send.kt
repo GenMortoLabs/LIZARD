@@ -131,6 +131,10 @@ class SendState(private val a: MainActivity) {
     // ai: MARGIN_MAX at most, MARGIN_DEFAULT unless set; kept (sendMargin). Not painted: the box keeps it round the code's
     // ai: surface (CodeBox), as the desktop's presenter keeps it round the frame.
     var margin by mutableStateOf(prefs.getInt("sendMargin", MARGIN_DEFAULT).coerceIn(Pick.QUIET, MARGIN_MAX))
+    // ai: Rate refresh (2026-11-12, the desktop's; lizard-ui rateRefreshSettings): each code rate's blocks new every n-th
+    // ai: frame, 7/8, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change, kept
+    // ai: (sendRefresh, "a,b,c,d")
+    var refresh by mutableStateOf(refreshOf(prefs.getString("sendRefresh", null)))
     private val sideModules get() = Pick.modules(ringIndex) + 2.0 * Pick.QUIET   // ai: a painted symbol's side, its quiet zone in
     private val past get() = (margin - Pick.QUIET).toDouble()           // ai: the margin past that quiet zone, modules
     // ai: the painted frame's width over its height: the codes and the gaps between them, each code as tall as the frame
@@ -285,6 +289,14 @@ class SendState(private val a: MainActivity) {
     fun chooseGap(g: Int) { gap = g.coerceIn(0, 64); prefs.edit().putInt("sendGap", gap).apply(); unsettled = true }
     // ai: at the slider's release (the box resized once: a resize mid-send reconfigures where the room changed)
     fun chooseMargin(m: Int) { margin = m.coerceIn(Pick.QUIET, MARGIN_MAX); prefs.edit().putInt("sendMargin", margin).apply() }
+    // ai: a rate's refresh, applied at once (the sender's next frame; no configure)
+    fun chooseRefresh(rate: Int, v: Int) {
+        if (refresh[rate] == v) return
+        refresh = refresh.copyOf().also { it[rate] = v.coerceIn(1, REFRESH_MAX) }
+        prefs.edit().putString("sendRefresh", refreshText(refresh)).apply()
+        refreshNow()
+    }
+    private fun refreshNow() { if (h != 0L) Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]) }
     // ai: one code's room in the view, px: the box's height, or its width's share where that is less
     private fun roomOf() = min((vw / frameAspect).toInt(), vh)   // ai: the surface holds the frame alone
     // ai: the column's edge let go (2026-10-05): configured again for the box it left
@@ -361,6 +373,7 @@ class SendState(private val a: MainActivity) {
                 vsynced = Build.VERSION.SDK_INT >= 33
                 refused = ""
                 screenFor(true)
+                refreshNow()
                 reconfigure()
                 due = 0; lastStats = 0; lastTimeline = 0; vsyncNs = 0
                 Log.i(TAG, "send: ${if (vsynced) "frames posted for their vsync" else "frames into the window's queue"}")
@@ -567,28 +580,34 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val reading get() = s.reading && !on && s.phase != SendState.Phase.Preparing
     override val heat get() = heatText(a.heat, a.clocks)
     override val railCapacity get() = if (on) s.capacityKBs else null
-    override val settings: List<Setting> get() = listOfNotNull(
-        // ai: what the symbol carries, then how this phone paints and shows it (one list since 2026-11-01; headed Code and
-        // ai: Display from 2026-10-23)
-        // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size carries,
-        // ai: Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
-        Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
-            Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) },
-        if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
-        else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) },
-        ChipChoice("Ring", s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) },
-        // ai: one code, or two side by side for a receiver's 2:1 crop (the web's #codes)
-        ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) },
-        // ai: with nothing chosen the setting stays auto and the painter running is the chip marked; a choice takes it outright
-        ChipChoice("Encoder", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.choosePainter(it) },
-        ChipChoice("VSync", s.vsyncOn, listOf(true to "On", false to "Off")) { s.chooseVsync(it) },
-        autoSlide("Brightness", s.brightness, 0, 1..100, { "$it%" }, {}, auto = "System") { if (it != s.brightness) s.chooseBrightness(it) },
-        // ai: the space between two codes' rings, modules (the web's #spacing): the painter's gap and the two quiet zones
-        if (s.codes == 2) Slide("Spacing", "${s.gap + SPACING_PAST} modules", (s.gap + SPACING_PAST).toFloat(), SPACING_PAST.toFloat()..(64f + SPACING_PAST), 63, { s.settle() }) { v ->
-            val g = v.roundToInt() - SPACING_PAST; if (g != s.gap) s.chooseGap(g) } else null,
-        // ai: the light round the code (SendState.margin), its label live and the box resized at the release
-        Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Pick.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Pick.QUIET - 1,
-            { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() })
+    // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
+    // ai: 2026-10-23): what the symbol carries, how often its blocks change, where it sits, how this phone paints it
+    override val settings: Map<FoldKey, List<Setting>> get() = mapOf(
+        FoldKey.SendCode to listOf(
+            // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size
+            // ai: carries, Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
+            Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
+                Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) },
+            ChipChoice("Ring", s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) },
+            // ai: one code, or two side by side for a receiver's 2:1 crop (the web's #codes)
+            ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) }),
+        // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui rateRefreshSettings)
+        FoldKey.SendRefresh to listOf(
+            if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
+            else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
+            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
+        FoldKey.SendLayout to listOfNotNull(
+            autoSlide("Brightness", s.brightness, 0, 1..100, { "$it%" }, {}, auto = "System") { if (it != s.brightness) s.chooseBrightness(it) },
+            // ai: the space between two codes' rings, modules (the web's #spacing): the painter's gap and the two quiet zones
+            if (s.codes == 2) Slide("Spacing", "${s.gap + SPACING_PAST} modules", (s.gap + SPACING_PAST).toFloat(), SPACING_PAST.toFloat()..(64f + SPACING_PAST), 63, { s.settle() }) { v ->
+                val g = v.roundToInt() - SPACING_PAST; if (g != s.gap) s.chooseGap(g) } else null,
+            // ai: the light round the code (SendState.margin), its label live and the box resized at the release
+            Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Pick.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Pick.QUIET - 1,
+                { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() }),
+        FoldKey.SendPerformance to listOf(
+            // ai: with nothing chosen the setting stays auto and the painter running is the chip marked; a choice takes it outright
+            ChipChoice("Encoder", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.choosePainter(it) },
+            ChipChoice("VSync", s.vsyncOn, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
     private var marginDrag by mutableStateOf<Int?>(null)
     override val experimental: List<Setting> get() = emptyList()
     // ai: Show statistics, Receive's setting (Settings.stats), one switch for both screens (2026-11-07)

@@ -105,7 +105,6 @@ object Prefs {
         // ai: Phase lock (2026-11-08; the session's phaseLock): on unless set off
         var lock: Boolean get() = bool("lock", true); set(v) { put("lock", v.toString()) }
         var experimentalOpen: Boolean get() = bool("recvExperimental", false); set(v) { put("recvExperimental", v.toString()) }
-        var settingsOpen: Boolean get() = bool("recvSettings", false); set(v) { put("recvSettings", v.toString()) }
         var toolsOpen: Boolean get() = bool("recvTools", false); set(v) { put("recvTools", v.toString()) }
         var stats: Boolean get() = bool("stats", false); set(v) { put("stats", v.toString()) }
         // ai: Save replays, kept across starts (since 2026-11-02; every start began off before)
@@ -131,13 +130,18 @@ object Prefs {
         get() = Pick.RINGS.indexOf(int("ringCells", 0))
         set(v) { p?.putInt("ringCells", if (v in Pick.RINGS.indices) Pick.RINGS[v] else -1) }
     var codes: Int get() = int("codes", 1); set(v) { p?.putInt("codes", v) }
+    // ai: Rate refresh (2026-11-12): "a,b,c,d", lizard-ui refreshText; "1,1,1,1" unless set
+    var refresh: String get() = str("refresh", "1,1,1,1"); set(v) { p?.put("refresh", v) }
     // ai: Exclusive fullscreen (Send's Experimental fold, 2026-10-31): Fullscreen while sending takes the monitor (SendState.lease)
     var exclusiveFull: Boolean get() = bool("exclusiveFull", false); set(v) { p?.putBoolean("exclusiveFull", v) }
     var experimentalOpen: Boolean get() = bool("experimental", false); set(v) { p?.putBoolean("experimental", v) }
     var vsync: Boolean get() = bool("vsync", true); set(v) { p?.putBoolean("vsync", v) }   // ai: on unless turned off
-    var settingsOpen: Boolean get() = bool("dev", false); set(v) { p?.putBoolean("dev", v) }
     var toolsOpen: Boolean get() = bool("logs", false); set(v) { p?.putBoolean("logs", v) }
     var collapsed: Boolean get() = bool("collapsed", false); set(v) { p?.putBoolean("collapsed", v) }
+    // ai: the settings folds by topic (2026-11-12, Receive's and Send's), each under its FoldKey's name ("fold.RecvCamera"),
+    // ai: closed until opened; the one Settings fold's keys before them, "dev" and the receiver's "recvSettings", unread
+    fun foldOpen(name: String) = bool("fold.$name", false)
+    fun setFoldOpen(name: String, v: Boolean) { p?.putBoolean("fold.$name", v) }
     // ai: Home's lists' folds (its narrow window's column, 2026-11-07), closed until opened
     var homeUnfinishedOpen: Boolean get() = bool("homeUnfinished", false); set(v) { p?.putBoolean("homeUnfinished", v) }
     var homeFilesOpen: Boolean get() = bool("homeFiles", false); set(v) { p?.putBoolean("homeFiles", v) }

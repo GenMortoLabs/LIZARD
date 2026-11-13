@@ -22,6 +22,9 @@
 // ai:       W x W luma, a code a frame, and its meta.json), which lizard_gpu_check replay reads (2026-10-07)
 // ai:   LIZ_SPAN=<2 B> tx_check paint ...   the symbols in ring B (2026-10-10; 128, the 64 ring's, unset): 512 the 256 ring
 // ai:   LIZ_TYPE=<media type> tx_check paint <file> ...   the header carries that type, as the apps' files do (2026-10-10)
+// ai:   LIZ_REFRESH=<7/8>,<3/4>,<2/3>,<1/2> tx_check paint ...   Rate refresh (2026-11-12, Sender::setRefresh) set before the
+// ai:       first frame: every read block's id held against the frame before's at its place, the same exactly where its
+// ai:       rate holds (the frame's count not a multiple of its refresh), a fault otherwise; the repeats a rate counted
 // ai:   tx_check gpucheck ...   the GPU's frames against the C's: the anchors' squares (SPEC 6.13) to the byte besides
 // ai:   the border, their pixels and the dark ones counted
 #include <fcntl.h>
@@ -156,6 +159,9 @@ int main(int argc, char** argv) {
     f.assets = assets();
     // ai: the blocks a frame carries: the format's rate profile's (src/lizard_phy.h lizard_blocks_for)
     const int wantBlocks = lizard_blocks_for(subch), wantSubch = subch;
+    int every[4] = {1, 1, 1, 1};
+    const bool refresh = getenv("LIZ_REFRESH") && sscanf(getenv("LIZ_REFRESH"), "%d,%d,%d,%d", &every[0], &every[1], &every[2], &every[3]) == 4;
+    if (refresh) s.setRefresh(every);
     const std::string err = s.configure(f);
     if (!err.empty()) { printf("FAIL configure: %s\n", err.c_str()); return 1; }
     printf("painter: %s%s%s\n", s.painter().c_str(), s.gpuWhy().empty() ? "" : ", not the GPU: ", s.gpuWhy().c_str());
@@ -168,6 +174,16 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> rgba(static_cast<size_t>(FW) * W * 4), luma(static_cast<size_t>(W) * W), blocks(static_cast<size_t>(top) * BB), ok(top), want(XFER_PAYLOAD);
     int held = 0, words = 0, faults = 0;
     long verified = 0, total = 0;
+    // ai: LIZ_REFRESH: each block's code rate (0 7/8 ... 3 1/2) in the format's order, and the ids read a symbol before
+    std::vector<int> rateAt;
+    std::vector<std::vector<int64_t>> before(static_cast<size_t>(codes));
+    long same[4] = {0, 0, 0, 0}, seen[4] = {0, 0, 0, 0};
+    if (refresh) {
+      lizard_t p{};
+      if (lizard_init(&p, s.n(), subch, f.span)) { printf("FAIL: the codec refused the format\n"); return 1; }
+      for (int t = 0; t < p.tiers; t++) rateAt.insert(rateAt.end(), static_cast<size_t>(p.tier[t].blocks), p.tier[t].rate == 6 ? 0 : p.tier[t].rate == 4 ? 1 : p.tier[t].rate == 3 ? 2 : 3);
+      lizard_free(&p);
+    }
     std::unique_ptr<lizard::lizfile::Writer> runOut;
     std::string runWhy;
     if (const char* ro = getenv("LIZ_RUN_OUT")) {
@@ -185,12 +201,26 @@ int main(int argc, char** argv) {
       if (fr.word) { words++; held = fr.version; }
       verified += got; total += fr.total;
       if (fr.version != wantSubch / LIZARD_STEP || got != wantBlocks) { faults++; if (faults < 5) printf("frame %d: word %d version %d, %d of %d blocks\n", k, fr.word, fr.version, got, fr.total); }
+      std::vector<int64_t> now(static_cast<size_t>(fr.total), -1);
       for (int b = 0; b < fr.total; b++) {
         if (!ok[b]) continue;
         const uint8_t* blk = blocks.data() + static_cast<size_t>(b) * BB;
         const uint32_t id = blk[0] | blk[1] << 8 | blk[2] << 16 | static_cast<uint32_t>(blk[3]) << 24;
+        now[static_cast<size_t>(b)] = id;
         if (test) { stream_fill(id, want.data(), XFER_PAYLOAD); if (memcmp(want.data(), blk + 4, XFER_PAYLOAD)) { faults++; if (faults < 5) printf("frame %d block %d: id %u not its stream\n", k, b, id); } }
         else rx->take(blk);
+      }
+      if (refresh) {
+        auto& was = before[static_cast<size_t>(k % codes)];
+        const uint64_t seq = static_cast<uint64_t>(k / codes);
+        for (int b = 0; b < fr.total && b < static_cast<int>(was.size()) && b < static_cast<int>(rateAt.size()); b++) {
+          if (now[static_cast<size_t>(b)] < 0 || was[static_cast<size_t>(b)] < 0) continue;
+          const int r = rateAt[static_cast<size_t>(b)], e = std::clamp(every[r], 1, Sender::REFRESH_MAX);
+          const bool hold = e > 1 && seq % static_cast<uint64_t>(e) != 0, rep = now[static_cast<size_t>(b)] == was[static_cast<size_t>(b)];
+          seen[r]++; same[r] += rep;
+          if (hold != rep) { faults++; if (faults < 5) printf("frame %llu block %d (rate %d, every %d): %s\n", static_cast<unsigned long long>(seq), b, r, e, rep ? "repeated" : "new where held"); }
+        }
+        was = now;
       }
     }
     const double ms = nowMs() - t0;
@@ -202,6 +232,8 @@ int main(int argc, char** argv) {
     printf("paint: LIZARD-%d x %d n %d, %d x %d px (gap %d px), %d painters: %d frames, %ld of %ld blocks verified, words %d, %.1f frames a second taken\n",
            wantSubch, codes, s.n(), FW, W, gap, threads, frames, verified, total, words, 1000.0 * frames / ms);
     printf("stats: %s\n", s.stats().c_str());
+    if (refresh) printf("refresh %d,%d,%d,%d: repeated 7/8 %ld of %ld, 3/4 %ld of %ld, 2/3 %ld of %ld, 1/2 %ld of %ld\n", every[0], every[1], every[2], every[3],
+                        same[0], seen[0], same[1], seen[1], same[2], seen[2], same[3], seen[3]);
     if (!test) {
       rx->drain();
       const XferProgress p = rx->progress();

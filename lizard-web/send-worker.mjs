@@ -19,18 +19,27 @@
 // ai: Under the page's GPU encoder (gpu/encoder.mjs, since 2026-09-29) frames are asked for a batch at a time
 // ai: ("frames": count frames from seq) and come back as their blocks alone, one buffer, frame after frame, each codes x
 // ai: blocksPerFrame x 476 bytes; the page encodes them.
+// ai: Rate refresh (refresh.mjs, the page's "refresh", sent with every start too): a block of a held rate repeats the
+// ai: id at its place in the frame before, so only the new places take ids (the transfer's schedule, or the test
+// ai: stream's from baseId); the frame before is forgotten at start, an accepted respec and stop.
 import { makePhy } from "../liblizard/sim/phy.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initFountain, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { isControlId } from "../liblizard/sim/xfer.mjs";
 import { makeXfer } from "./xfer-pool.mjs";
+import { Refresh, batchIds } from "./refresh.mjs";
 
 let phy = null, xs = null, fps = 0, codes = 1, chain = Promise.resolve();
 // ai: The transfer made at a pick's first Start ("prepare", sent just before "start"; at the pick from 2026-10-19 to
 // ai: 2026-11-01): every chunk compressed and its fountain set up. made: { pick, xs } while no run sends it; a run takes
 // ai: it (xsPick its pick) and a stop gives it back, so the next Start sends the same transfer on, with nothing made again.
 let made = null, xsPick = null;
+const refresh = new Refresh();
+// ai: the test stream's n new ids from the page's base (a frame's own range: baseId to baseId + its blocks)
+const run = (base, n) => Uint32Array.from({ length: n }, (_, i) => base + i);
+// ai: a frame's new data blocks: its new ids but the transfer's header and manifest (every test stream block is data)
+const dataOf = (ids, fresh) => { let n = 0; for (let t = 0; t < ids.length; t++) if (fresh[t] && (!xs || !isControlId(ids[t]))) n++; return n; };
 function dropRun() {
   if (xs) { if (xsPick !== null && !made) made = { pick: xsPick, xs }; else xs.free(); }
   xs = null; xsPick = null;
@@ -77,6 +86,8 @@ async function handle(m) {
       phy.setSource(source());
     }
     fps = m.fps; phy.setFps?.(fps); codes = m.codes ?? 1; gapModules = m.gap;
+    if (m.every) refresh.setEvery(m.every);
+    refresh.setFormat(m.spec.subch, phy.blocksPerFrame);
     postMessage({ type: "ready", gen: m.gen, label: phy.label, usefulBytes: phy.usefulBytes, blocksPerFrame: phy.blocksPerFrame, xfer: xs?.info() });
   } else if (m.type === "respec") {
     // A re-pick (the room changed): a new code for the same transfer. Refused if the block size would move, which
@@ -85,15 +96,19 @@ async function handle(m) {
     if (next.usefulBytes !== phy.usefulBytes) { next.free(); postMessage({ type: "respec", gen: m.gen, ok: false }); return; }
     phy.free(); phy = next; phy.setFps?.(fps); codes = m.codes ?? codes; gapModules = m.gap;
     if (xs) phy.setSource(source());
+    refresh.setFormat(m.spec.subch, phy.blocksPerFrame);
     postMessage({ type: "respec", gen: m.gen, ok: true, label: phy.label, blocksPerFrame: phy.blocksPerFrame });
   } else if (m.type === "fps") {
     fps = m.fps; phy?.setFps?.(fps);
+  } else if (m.type === "refresh") {
+    refresh.setEvery(m.every);
   } else if (m.type === "stop") {
-    phy?.free(); phy = null; dropRun();
+    phy?.free(); phy = null; dropRun(); refresh.reset();
   } else if (m.type === "frame") {
     if (!phy) return;
-    const t = performance.now(), V = phy.blocksPerFrame, ids = xs ? xs.frameIds(V * codes) : null;
-    await fetchFor(ids);
+    const t = performance.now(), V = phy.blocksPerFrame;
+    const { ids, fresh } = refresh.next(m.seq, V * codes, (n) => (xs ? xs.frameIds(n) : run(m.baseId, n)));
+    await fetchFor(xs ? ids : null);
     // ai: Each symbol's pixels are a view into the wasm heap, good until the next paint, so each is copied row by row
     // ai: into its place (side k of codes) before the next is painted. The page hands its last buffer back to be filled.
     // ai: Two codes sit a gap of gapModules apart (since 2026-09-30; packed to their quiet zones before), the gap the
@@ -101,7 +116,7 @@ async function handle(m) {
     // ai: codes w + (codes - 1) gap px wide and the message says the gap.
     let out = null, w = 0, gap = 0, fw = 0;
     for (let k = 0; k < codes; k++) {
-      const part = phy.frameRGBA(m.seq, ids ? ids.slice(k * V, (k + 1) * V) : m.baseId + k * V), row = 4 * part.w;
+      const part = phy.frameRGBA(m.seq, ids.subarray(k * V, (k + 1) * V)), row = 4 * part.w;
       if (!out) {
         w = part.w; gap = codes > 1 ? gapOf(phy) : 0; fw = codes * w + (codes - 1) * gap;
         const bytes = 4 * fw * w;
@@ -113,25 +128,20 @@ async function handle(m) {
         if (k + 1 < codes) for (let x = 0; x < gap; x++) out.set(part.rgba.subarray((y + 1) * row - 4, (y + 1) * row), at + row + 4 * x);
       }
     }
-    // ai: data: the frame's data blocks, its header and manifest blocks not counted; the page counts laps with it
-    // ai: (xfer.lap data blocks a lap). Every block of the test stream is data.
-    let data = V * codes;
-    if (ids) { data = 0; for (const id of ids) if (!isControlId(id)) data++; }
+    // ai: data: the frame's new data blocks, its header and manifest blocks and its repeats not counted; the page
+    // ai: counts laps with it (xfer.lap data blocks a lap). Every new block of the test stream is data.
+    const data = dataOf(ids, fresh);
     postMessage({ type: "frame", gen: m.gen, seq: m.seq, w, codes, gap, buf: out.buffer, ms: performance.now() - t, data }, [out.buffer]);
   } else if (m.type === "frames") {
     if (!phy) return;
     const t = performance.now(), V = phy.blocksPerFrame, B = phy.usefulBytes + 4, per = codes * V * B, bytes = m.count * per;
-    const out = m.buf && m.buf.byteLength === bytes ? new Uint8Array(m.buf) : new Uint8Array(bytes), data = [];
-    const all = xs ? Array.from({ length: m.count }, () => xs.frameIds(V * codes)) : null;
-    if (all) {
-      const flat = new Uint32Array(m.count * V * codes);
-      all.forEach((f, k) => flat.set(f, k * V * codes));
-      await fetchFor(flat);
-    }
+    const out = m.buf && m.buf.byteLength === bytes ? new Uint8Array(m.buf) : new Uint8Array(bytes), T = V * codes;
+    // ai: the batch's frames in order, each holding against the one before (the batch before's last for the first)
+    const all = Array.from({ length: m.count }, (_, f) => refresh.next(m.seq + f, T, (n) => (xs ? xs.frameIds(n) : run(m.baseId + f * T, n))));
+    if (xs) await fetchFor(batchIds(all));
+    const data = all.map(({ ids, fresh }) => dataOf(ids, fresh));
     for (let f = 0; f < m.count; f++) {
-      const ids = all ? all[f] : null, base = m.baseId + f * V * codes;
-      for (let k = 0; k < codes; k++) out.set(phy.frameBlocks(m.seq + f, ids ? ids.slice(k * V, (k + 1) * V) : base + k * V), f * per + k * V * B);
-      data.push(ids ? ids.filter((id) => !isControlId(id)).length : V * codes);
+      for (let k = 0; k < codes; k++) out.set(phy.frameBlocks(m.seq + f, all[f].ids.subarray(k * V, (k + 1) * V)), f * per + k * V * B);
     }
     postMessage({ type: "frames", gen: m.gen, seq: m.seq, count: m.count, codes, buf: out.buffer, ms: performance.now() - t, data }, [out.buffer]);
   }

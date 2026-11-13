@@ -113,17 +113,16 @@
   <dialog id="errDlg" class="dialog" aria-labelledby="errTitle"><p id="errTitle"></p><p id="errBody"></p><div class="row end"><button id="errOk" type="button">OK</button></div></dialog>
   <dialog id="first" class="dialog"><p>Browsers have severely limited performance and lack support for many critical features. Use the Android app for higher speed and stability. In a browser, set the sender to at most half the camera's frame rate.</p><div class="row end"><button id="firstCancel" type="button">Cancel</button><button id="firstStart" class="primary" type="button">Start</button></div></dialog>
   <section class="settings">
-    <!-- ai: Settings and Developer Tools, two rows that open (2026-10-02): Settings (#dev, its open state and every menu in it
-         kept) holds the camera; Developer Tools (#logs) the lab line and the readouts; About the last row. -->
-  <details class="dev" id="dev"><summary>Settings</summary>
-    <!-- ai: every control a labelled field, its options bare (2026-10-02) -->
+    <!-- ai: the settings in folds by topic (2026-11-12; one Settings fold, #dev, before): Camera (#foldCamera: the
+         camera, its resolution, the phase lock, the frame rate, the zoom where the track has one), Decoder (#foldDecoder),
+         then Developer Tools (#logs) the lab line and the readouts. Each fold's open state and every menu in it kept as
+         recv:<id> (ui.mjs remember, persist); each fold holds a control that is never hidden (the camera, the decoder).
+         Every control a labelled field, its options bare (2026-10-02). -->
+  <details class="dev" id="foldCamera"><summary>Camera</summary>
     <div class="grid">
       <!-- ai: no Auto entries (2026-10-05): the cameras, the rates 30 and 60; with none chosen the page's default runs,
            held by a hidden option named after what it runs (recv.mjs showCamera). The camera's field always shown, "Camera"
            until one has opened and the browser names them (2026-11-06, as the apps'). -->
-      <!-- ai: the apps' Decoder (2026-11-06): GPU or CPU; with neither chosen auto runs, named after what it runs
-           (recv.mjs showDecoder): the GPU where WebGPU makes the decoder, else the C -->
-      <label>Decoder <select id="dec" data-chips><option value="auto" selected hidden disabled>GPU</option><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
       <label id="camRow">Camera <select id="cam"><option value="auto" selected hidden disabled>Camera</option></select></label>
       <label id="resRow">Resolution <select id="res" data-chips><option value="1280x720">1280 x 720</option><option value="1920x1080" selected>1920 x 1080</option><option value="2560x1440">2560 x 1440</option><option value="3840x2160">3840 x 2160</option></select></label>
       <!-- ai: the apps' Phase lock (2026-11-08): a browser cannot delay a capture, so greyed, never kept -->
@@ -131,6 +130,13 @@
       <label id="fpsRow">Frame rate <select id="fps" data-chips><option value="auto" selected hidden disabled>60</option><option value="60">60</option><option value="30">30</option></select></label>
       <!-- ai: the camera's own zoom, where the browser exposes it (2026-11-06; the apps' Zoom: the value a ratio of its least) -->
       <div id="zoomRow" class="blocks" hidden><span class="row"><span>Zoom</span><span id="zoomOut"></span></span><input id="zoom" type="range" aria-label="Zoom"></div>
+    </div>
+  </details>
+  <details class="dev" id="foldDecoder"><summary>Decoder</summary>
+    <div class="grid">
+      <!-- ai: the apps' Decoder (2026-11-06): GPU or CPU; with neither chosen auto runs, named after what it runs
+           (recv.mjs showDecoder): the GPU where WebGPU makes the decoder, else the C -->
+      <label>Decoder <select id="dec" data-chips><option value="auto" selected hidden disabled>GPU</option><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
     </div>
   </details>
   <!-- ai: Developer Tools ("Advanced" until 2026-10-03): the lab line and the readouts (no replay recording since
@@ -142,14 +148,14 @@
   </details>
   </section>
   <script>
-  // ai: Saved state before the first paint (2026-10-02): Settings and Developer Tools open and the kept
+  // ai: Saved state before the first paint (2026-10-02): the folds open and the kept
   // ai: menus set as ui.mjs remember and persist set them, with the same keys, before the module runs and the page is
   // ai: drawn (the chevrons turned on load otherwise). A camera kept by id waits for its option (recv.mjs restoreSaved).
   (() => { try {
     const ls = localStorage, $ = (id) => document.getElementById(id);
-    for (const id of ["dev", "logs"]) { const v = ls.getItem("recv:" + id); if (v !== null) $(id).open = v === "1"; }
+    for (const d of document.querySelectorAll(".settings>details")) { const v = ls.getItem("recv:" + d.id); if (v !== null) d.open = v === "1"; }
     if (ls.getItem("recv:collapsed") === "1") document.body.classList.add("collapsed"); { const w = +ls.getItem("recv:side"); if (w > 0) document.documentElement.style.setProperty("--side", Math.max(180, Math.min(w, innerWidth * 0.6)) + "px"); }
-    for (const el of document.querySelectorAll("#dev select, #logs select")) { const v = ls.getItem("recv:" + el.id); if (v !== null && [...el.options].some((o) => o.value === v)) el.value = v; }
+    for (const el of document.querySelectorAll(".settings select")) { const v = ls.getItem("recv:" + el.id); if (v !== null && [...el.options].some((o) => o.value === v)) el.value = v; }
     document.body.classList.toggle("stats", $("stats").value === "1");
     // ai: the chips drawn before the first paint, as ui.mjs chips draws them (it takes these rows over at the module's start)
     for (const sel of document.querySelectorAll("select[data-chips]")) {

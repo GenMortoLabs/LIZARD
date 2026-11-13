@@ -2,12 +2,15 @@
 // ai: headless Chrome, driven through phone.mjs's DevTools calls, at four sizes: phone portrait 412 x 915 at 2.625,
 // ai: phone landscape 915 x 412, laptop 1366 x 768, desktop 1920 x 1080. Screenshots of every step go to research/build/ui/.
 // ai:   0. The sender: idle (Start disabled until a file, a tap on the middle opens the file chooser; Start and
-// ai:      Fullscreen in its controls, the other tool in the bar), then the test stream on auto, Settings (#dev, the
-// ai:      checks' "Advanced") closed then open: <main>'s box and the version unmoved by it (a resize re-picks
+// ai:      Fullscreen in its controls, the other tool in the bar), then the test stream on auto, the settings' folds
+// ai:      (Code, Refresh, Layout, Performance; the checks' "Advanced") closed then open: <main>'s box and the version
+// ai:      unmoved by them (a resize re-picks
 // ai:      mid-stream), #c inside <main>; #tx's first line names the version (the lab line #lab did until 2026-10-02), the
 // ai:      numbers line (#nums) the speed;
-// ai:      the defaults LIZARD-480 at 60; Fullscreen, then its end clearing body.full.
-// ai:   1. The receiver on Chrome's fake camera, Settings (#dev) closed then open: #v visible and above 100 x 100 px with
+// ai:      the defaults LIZARD-480 at 60; the folds and their controls in order, no group headings; Rate refresh's four
+// ai:      sliders after FPS in Refresh, at 1, one kept over a reload and drawn before the first paint; Fullscreen, then
+// ai:      its end clearing body.full.
+// ai:   1. The receiver on Chrome's fake camera, its folds (Camera, Decoder) in order, closed then open: #v visible and above 100 x 100 px with
 // ai:      more than 10 frame callbacks a second; at the phone sizes #go and #view on screen with no scrolling.
 // ai:   2. getUserMedia made to throw NotAllowedError, then navigator.mediaDevices taken away: each sentence in red.
 // ai:   3. LIZARD-96 through a 1920 x 1080 clip as the fake camera: the test stream read (its state, speed and lab line),
@@ -16,7 +19,8 @@
 // ai:      camera left on (Receive again, which received it anew, went 2026-10-05).
 // ai:   4. Home in the same profile at the four sizes: the received file listed, Save holding its bytes, Open, no tips
 // ai:      card, Settings, Delete emptying the received files.
-// ai: All pages: no horizontal scroll, Settings (#dev) closed on a fresh profile and remembered over a reload, a menu's
+// ai: All pages: no horizontal scroll, the settings' folds closed on a fresh profile and each one's state remembered
+// ai: over a reload (some open, some closed), a menu's
 // ai: setting kept over a reload with a URL preset winning its own load (the sender's ring, the receiver's frame rate),
 // ai: no console error but the ones the start errors put there on purpose. The sender's blocks label before the first
 // ai: paint (send.html's inline script) the rate profile's, as send.mjs draws it.
@@ -41,6 +45,15 @@ const BASE = `http://localhost:${PORT}/${DIR}/recv.html`, SEND = `http://localho
 // ai: the column's block as the pages draw it (ui.mjs details and detailsOf, 2026-11-07: the state line and figures
 // ai: before): { name, end, spin, frac, ghost, rows: { label: value } }, null while hidden
 const DT = `(() => { const el = document.getElementById("dt"); if (!el || el.hidden) return null; const rows = {}; for (const r of el.querySelectorAll(".dt-row")) rows[r.dataset.k] = r.lastElementChild.textContent; const m = el.querySelector(".meter>span"); return { name: el.querySelector(".nm")?.textContent ?? "", end: el.querySelector(".pc")?.textContent ?? "", spin: !!el.querySelector(".spin"), frac: m ? parseFloat(m.style.width) / 100 : null, ghost: el.classList.contains("ghost"), rows }; })()`;
+// ai: the settings' folds by topic (2026-11-12; one Settings fold, #dev, before), each kept as <page>:<id>; FOLDS_AT
+// ai: each fold of the column as "<id> <title>: <its controls' ids>", and any group heading left inside one
+const SEND_FOLDS = ["foldCode", "foldRefresh", "foldLayout", "foldPerf"], RECV_FOLDS = ["foldCamera", "foldDecoder"];
+// ai: (open: one state for every fold, or a state a fold)
+const statesOf = (ids, open) => ids.map((_, i) => (Array.isArray(open) ? open[i] : open));
+const foldsOpen = (ids) => `${JSON.stringify(ids)}.map((id) => document.getElementById(id).open)`;
+const setFolds = (ids, open) => `${JSON.stringify(ids)}.forEach((id, i) => { document.getElementById(id).open = ${JSON.stringify(statesOf(ids, open))}[i]; })`;
+const foldsKept = (page, ids, open) => statesOf(ids, open).map((o, i) => `localStorage.getItem("${page}:${ids[i]}") === "${o ? 1 : 0}"`).join(" && ");
+const FOLDS_AT = `[...document.querySelectorAll(".settings>details")].map((d) => d.id + " " + d.querySelector("summary").textContent + ": " + [...d.querySelectorAll("select, input")].map((e) => e.id).join(" ")).join(" | ") + (document.querySelector(".settings fieldset, .settings legend") ? " + a group heading" : "")`;
 const scratch = mkdtempSync(join(tmpdir(), "lizard-ui-"));
 mkdirSync(OUT, { recursive: true });
 const server = spawn("node", [at("./server.mjs")], { env: { ...process.env, RIG_HTTP: PORT, RIG_HTTPS: PORT + 363 }, stdio: "ignore" });
@@ -90,7 +103,7 @@ const MEASURE = `(async () => {
   const v = $("v"), cs = getComputedStyle(v);
   const rate = await new Promise((ok) => { let n = 0; const t0 = performance.now(); const f = () => { n++; const t = performance.now() - t0; if (t < 2000) v.requestVideoFrameCallback(f); else ok(n / (t / 1000)); }; v.requestVideoFrameCallback(f); });
   return { rate, iw: innerWidth, ih: innerHeight, sw: document.documentElement.scrollWidth, view: box("view"), v: box("v"), vDisplay: cs.display, vVisibility: cs.visibility,
-    dt: ${DT}, lab: $("lab").textContent, why: $("why").textContent, go: $("go").textContent, goBox: box("go"), swapBox: box("swap"), swap: $("swap").textContent + " " + $("swap").getAttribute("href"), dev: $("dev").open };
+    dt: ${DT}, lab: $("lab").textContent, why: $("why").textContent, go: $("go").textContent, goBox: box("go"), swapBox: box("swap"), swap: $("swap").textContent + " " + $("swap").getAttribute("href"), dev: ${foldsOpen(RECV_FOLDS)} };
 })()`;
 // ai: The bar's Settings button (#set) and its check went 2026-10-02.
 
@@ -127,7 +140,7 @@ const SIZES = [
   const MEASURE_SEND = `(() => {
     const $ = (id) => document.getElementById(id), box = (el) => { const b = el.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right, w: b.width, h: b.height }; };
     return { iw: innerWidth, ih: innerHeight, sw: document.documentElement.scrollWidth, main: box(document.querySelector("main")), c: box($("c")),
-      state: $("state").textContent, dt: ${DT}, lab: $("tx").textContent.split("\\n")[0], go: $("go").disabled, full: document.body.classList.contains("full"), dev: $("dev").open, hint: !$("pick").hidden && $("sel").checkVisibility() && $("selSum").textContent === "0 items" && !$("pickList").children.length && $("clearPick").disabled,
+      state: $("state").textContent, dt: ${DT}, lab: $("tx").textContent.split("\\n")[0], go: $("go").disabled, full: document.body.classList.contains("full"), dev: ${foldsOpen(SEND_FOLDS)}, hint: !$("pick").hidden && $("sel").checkVisibility() && $("selSum").textContent === "0 items" && !$("pickList").children.length && $("clearPick").disabled,
       buttons: [...document.querySelectorAll("#side button:not([hidden]), #side .btn")].map((b) => b.textContent), bar: [...document.querySelectorAll(".bar .brand, .bar h1, .bar > .btn, .bar > button")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(","), railHome: document.getElementById("railHome")?.getAttribute("href") ?? "" };
   })()`;
   const same = (a, b) => ["top", "left", "w", "h"].every((k) => Math.abs(a[k] - b[k]) < 0.5);
@@ -136,7 +149,11 @@ const SIZES = [
     await navigate(s, SEND);
     await sleep(300);
     const idle = await evaluate(s, MEASURE_SEND);
-    if (k === 0) check(!idle.dev, `send ${z.name}: the Developer panel is closed on a fresh profile`);
+    if (k === 0) check(idle.dev.every((o) => !o), `send ${z.name}: every settings fold closed on a fresh profile (${idle.dev.join()})`);
+    if (k === 0) {
+      const at = await evaluate(s, FOLDS_AT);
+      check(at === "foldCode Code: blocks subch ring codes | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldLayout Layout: size spacing margin | foldPerf Performance: enc | logs Developer Tools: stats payload", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
+    }
     check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles and the empty card ("0 items", Clear dimmed) shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);
     // ai: since 2026-11-01 a phone's landscape bar the collapser alone, a mouse's the switch alone (its edge a sash)
@@ -159,7 +176,7 @@ const SIZES = [
     await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && /^LIZARD-\\d+/.test(document.getElementById("tx").textContent) && !!(${DT})?.rows?.Speed`, 20000, "the test stream painted");
     const seen = [];
     for (const openPanel of [false, true]) {
-      await evaluate(s, `document.getElementById("dev").open = ${openPanel}`);
+      await evaluate(s, setFolds(SEND_FOLDS, openPanel));
       await sleep(500);
       const m = await evaluate(s, MEASURE_SEND), tag = `send ${z.name}, Advanced ${openPanel ? "open" : "closed"}`, v = +m.lab.match(/LIZARD-(\d+)/)[1];
       seen.push({ ...m, v });
@@ -173,14 +190,18 @@ const SIZES = [
     }
     check(same(seen[0].main, seen[1].main) && seen[0].v === seen[1].v, `send ${z.name}: Advanced moves neither <main> nor the version (LIZARD-${seen[0].v})`);
     if (k === 0) {
-      // ai: the page stores the panel's state on its toggle event, a task a busy page can run late: reload after it
-      await until(s, `localStorage.getItem("send:dev") === "1"`, 5000, "the panel's open state stored");
+      // ai: the page stores each fold's state on its toggle event, a task a busy page can run late: reload after it;
+      // ai: Code and Layout left open, Refresh and Performance closed, so each fold is seen to keep its own
+      const MIX = [true, false, true, false];
+      await evaluate(s, setFolds(SEND_FOLDS, MIX));
+      await until(s, foldsKept("send", SEND_FOLDS, MIX), 5000, "the folds' open states stored");
       await navigate(s, SEND);
       // ai: send.mjs awaits the codec's wasm before anything else, and restores the panel at its end: read it once the
       // ai: module has run (the rate slider's label filled; About is empty on the rig's pages since 2026-10-02), not at the
       // ai: load event
       await until(s, `document.getElementById("fpsOut").textContent !== ""`, 10000, "send.mjs run");
-      check(await evaluate(s, `document.getElementById("dev").open`), `send ${z.name}: Advanced's open state remembered over a reload`);
+      const kept = await evaluate(s, foldsOpen(SEND_FOLDS));
+      check(kept.join() === MIX.join(), `send ${z.name}: each fold's open state remembered over a reload (${kept.join()})`);
       await remembered(s, SEND, "ring", "256", "64", `send ${z.name}`);   // ai: the options are the rings' cells since 2026-10-10
       // ai: the page's defaults, LIZARD-480 at 60 (2026-10-01)
       const defaults = await evaluate(s, `[document.getElementById("subch").value, document.getElementById("fps").value].join()`);
@@ -205,7 +226,21 @@ const SIZES = [
       await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "0"; e.dispatchEvent(new Event("change")); })()`);
       const back = await evaluate(s, `[localStorage.getItem("recv:stats"), document.getElementById("blocksTitle").textContent, document.getElementById("blocksOut").textContent, document.getElementById("ring").value].join(" / ")`);
       check(back === `0 / Density / 27.4 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
-      await evaluate(s, `document.getElementById("dev").open = false`);
+      // ai: Rate refresh (2026-11-12, refresh.mjs): four sliders 1 to 4 in Refresh after FPS, 1 each by default; one
+      // ai: moved to 3 kept over a reload (send:refresh34), its label 3 before the first paint (the inline script's) and
+      // ai: after the codec; set back to 1 for the steps after
+      const REF = `["refresh78", "refresh34", "refresh23", "refresh12"].map((id) => { const e = document.getElementById(id), o = document.getElementById(id + "Out"); return e ? [e.closest("details")?.id, e.type, e.min, e.max, e.value, o?.textContent].join(":") : "none"; }).join(" ")`;
+      const refAt = await evaluate(s, REF);
+      check(refAt === ["78", "34", "23", "12"].map(() => "foldRefresh:range:1:4:1:1").join(" "), `send ${z.name}: Rate refresh in Refresh, four sliders 1 to 4 at 1 (${refAt})`);
+      await evaluate(s, `(() => { const e = document.getElementById("refresh34"); e.value = "3"; e.dispatchEvent(new Event("change")); })()`);
+      await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstRefresh = document.getElementById("refresh34Out")?.textContent ?? null; });` });
+      await navigate(s, SEND);
+      await until(s, `typeof window.__firstRefresh === "string" && document.getElementById("fpsOut").textContent !== ""`, 10000, "send.mjs run").catch(() => {});
+      await sleep(300);
+      const refKept = await evaluate(s, `[localStorage.getItem("send:refresh34"), window.__firstRefresh, document.getElementById("refresh34").value, document.getElementById("refresh34Out").textContent].join(" / ")`);
+      check(refKept === "3 / 3 / 3 / 3", `send ${z.name}: a refresh of 3 kept over a reload, its label before the first paint and after (${refKept})`);
+      await evaluate(s, `(() => { const e = document.getElementById("refresh34"); e.value = "1"; e.dispatchEvent(new Event("change")); })()`);
+      await evaluate(s, setFolds(SEND_FOLDS, false));
       await navigate(s, `${SEND}?fps=24&payload=test&auto`);
       await until(s, `/^LIZARD-\\d+/.test(document.getElementById("tx").textContent)`, 20000, "the test stream painted");
     }
@@ -399,9 +434,13 @@ const SIZES = [
       await evaluate(s, `document.getElementById("firstStart").click()`);
     } else check(!(await evaluate(s, `document.getElementById("first").open`)), `${z.name}: the browser's limit shown once`);
     await until(s, `document.getElementById("v").videoWidth > 0 && !document.getElementById("go").disabled && document.getElementById("lab").textContent !== ""`, 20000, "the camera and a stats tick");
-    if (k === 0) check(!(await evaluate(s, `document.getElementById("dev").open`)), `${z.name}: Advanced is closed on a fresh profile`);
+    if (k === 0) {
+      const shut = await evaluate(s, foldsOpen(RECV_FOLDS)), at = await evaluate(s, FOLDS_AT);
+      check(shut.every((o) => !o), `${z.name}: every settings fold closed on a fresh profile (${shut.join()})`);
+      check(at === "foldCamera Camera: cam res lock fps zoom | foldDecoder Decoder: dec | logs Developer Tools: stats", `${z.name}: the folds and their controls in order, no group heading (${at})`);
+    }
     for (const openPanel of [false, true]) {
-      await evaluate(s, `document.getElementById("dev").open = ${openPanel}`);
+      await evaluate(s, setFolds(RECV_FOLDS, openPanel));
       await sleep(400);
       const m = await evaluate(s, MEASURE), tag = `${z.name}, Advanced ${openPanel ? "open" : "closed"}`;
       await screenshot(s, `${OUT}/recv-${z.name}-${openPanel ? "open" : "closed"}.png`);
@@ -415,15 +454,18 @@ const SIZES = [
       if (z.mobile && z.w > z.h) check(m.swapBox.w === 0, `${tag}: no switch in the landscape bar`);
       else check(m.swap === "Sender send.html" && m.swapBox.w > 0 && (!z.phone || (m.swapBox.top >= 0 && m.swapBox.bottom <= m.ih)), `${tag}: "${m.swap}" in the bar`);
     }
-    // ai: open now: remembered over a reload (then closed again for the next size)
+    // ai: Camera closed and Decoder open: each remembered over a reload (then closed again for the next size)
     if (k === 0) {
-      await until(s, `localStorage.getItem("recv:dev") === "1"`, 5000, "the panel's open state stored");
+      const MIX = [false, true];
+      await evaluate(s, setFolds(RECV_FOLDS, MIX));
+      await until(s, foldsKept("recv", RECV_FOLDS, MIX), 5000, "the folds' open states stored");
       await navigate(s, BASE);
-      check(await evaluate(s, `document.getElementById("dev").open`), `${z.name}: Advanced's open state remembered over a reload`);
-      // ai: a Settings menu (#dev), kept as the sender's are (the decoder's and the GPU crop's went 2026-10-25)
+      const kept = await evaluate(s, foldsOpen(RECV_FOLDS));
+      check(kept.join() === MIX.join(), `${z.name}: each fold's open state remembered over a reload (${kept.join()})`);
+      // ai: a menu in a fold, kept as the sender's are (the decoder's and the GPU crop's went 2026-10-25)
       await remembered(s, BASE, "fps", "30", "60", z.name);
     }
-    await evaluate(s, `document.getElementById("dev").open = false`);
+    await evaluate(s, setFolds(RECV_FOLDS, false));
   }
   check(!s.errors.length, `no console errors over the four sizes${s.errors.length ? `: ${s.errors.join("; ")}` : ""}`);
   s.close();

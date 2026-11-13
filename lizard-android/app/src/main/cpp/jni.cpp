@@ -765,6 +765,14 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txConfigure
   return e->NewStringUTF(err.c_str());
 }
 
+// ai: Rate refresh (Sender::setRefresh, 2026-11-12): the blocks of the code rates 7/8, 3/4, 2/3 and 1/2 new in every
+// ai: a-th, b-th, c-th and d-th frame (1 to Sender::REFRESH_MAX), the frame before's repeated between; from the next frame
+// ai: made, kept across configures
+extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txRefresh(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
+  const int every[4] = {a, b, c, d};
+  if (h) tx(h)->s->setRefresh(every);
+}
+
 // ai: The device and the GPU painter made ahead, off the main thread: "" or why there is none. Then the probe: whether
 // ai: this device takes a storage image on a hardware buffer (the GPU ring's way), logged.
 extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txPrepare(JNIEnv* e, jclass, jlong h, jstring assets) {

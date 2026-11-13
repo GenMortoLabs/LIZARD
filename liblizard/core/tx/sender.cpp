@@ -121,7 +121,13 @@ std::string Sender::configure(const TxFormat& f) {
   // ai: the profile as text: "7/8 x 34, 3/4 x 18, 2/3 x 10, 1/2 x 10" at LIZARD-592 (the stats' tiers), read before
   // ai: the probe is freed
   tiers_.clear();
-  for (int t = 0; t < probe.tiers; t++) tiers_ += (t ? ", " : "") + std::string(probe.tier[t].rate == 6 ? "7/8" : probe.tier[t].rate == 4 ? "3/4" : probe.tier[t].rate == 3 ? "2/3" : "1/2") + " x " + std::to_string(probe.tier[t].blocks);
+  rateOf_.clear();
+  for (int t = 0; t < probe.tiers; t++) {
+    const int r = probe.tier[t].rate == 6 ? 0 : probe.tier[t].rate == 4 ? 1 : probe.tier[t].rate == 3 ? 2 : 3;
+    tiers_ += (t ? ", " : "") + std::string(r == 0 ? "7/8" : r == 1 ? "3/4" : r == 2 ? "2/3" : "1/2") + " x " + std::to_string(probe.tier[t].blocks);
+    rateOf_.insert(rateOf_.end(), static_cast<size_t>(probe.tier[t].blocks), static_cast<uint8_t>(r));
+  }
+  rateOf_.resize(static_cast<size_t>(probe.blocks), 3);   // ai: (the tiers lay every block: a guard, not a case)
   lizard_free(&probe);
   label_ = "LIZARD-" + std::to_string(f.subch) + (f.codes > 1 ? " x " + std::to_string(f.codes) : "");
   // ai: what was made or painted under the old format goes; the count goes on from the screen's
@@ -156,23 +162,40 @@ void Sender::produce() {
   std::unique_lock<std::mutex> l(mu_);
   const int T = blocks_ * fmt_.codes, B = blockBytes_, room = std::max(1, depth_ - fmt_.margin);   // ai: a frame's blocks: its codes' one after the other
   std::vector<uint32_t> ids(T);
+  // ai: Rate refresh (setRefresh): the frame before's blocks, which a held rate's blocks repeat; none at a configure's
+  // ai: first frame (this thread is new), so it is new throughout
+  std::vector<uint8_t> last;
+  std::vector<uint8_t> held(T);
   for (;;) {
     cv_.wait(l, [&] { return stop_ || made_ < shown_ + static_cast<uint64_t>(room); });
     if (stop_) return;
     Job j{made_++, std::vector<uint8_t>(static_cast<size_t>(T) * B), 0};
+    int every[4];
+    std::copy(refresh_, refresh_ + 4, every);
     l.unlock();
+    int fresh = 0;
+    for (int t = 0; t < T; t++) {
+      const int r = every[rateOf_[static_cast<size_t>(t % blocks_)]];
+      held[t] = !last.empty() && r > 1 && j.seq % static_cast<uint64_t>(r) != 0;
+      fresh += !held[t];
+    }
     {
       std::lock_guard<std::mutex> x(xferMu_);
-      if (xfer_) xfer_->frameIds(ids.data(), T);
-      else for (int t = 0; t < T; t++) ids[t] = nextId_++;
-      for (int t = 0; t < T; t++) {
+      if (fresh) {
+        if (xfer_) xfer_->frameIds(ids.data(), fresh);
+        else for (int k = 0; k < fresh; k++) ids[k] = nextId_++;
+      }
+      for (int t = 0, k = 0; t < T; t++) {
         uint8_t* o = j.blocks.data() + static_cast<size_t>(t) * B;
-        for (int i = 0; i < ID_BYTES; i++) o[i] = static_cast<uint8_t>(ids[t] >> 8 * i);
-        if (xfer_) xfer_->block(ids[t], o + ID_BYTES);
-        else stream_fill(ids[t], o + ID_BYTES, PAYLOAD);
-        if (!xfer_ || !control(ids[t])) j.data++;
+        if (held[t]) { std::memcpy(o, last.data() + static_cast<size_t>(t) * B, static_cast<size_t>(B)); continue; }
+        const uint32_t id = ids[k++];
+        for (int i = 0; i < ID_BYTES; i++) o[i] = static_cast<uint8_t>(id >> 8 * i);
+        if (xfer_) xfer_->block(id, o + ID_BYTES);
+        else stream_fill(id, o + ID_BYTES, PAYLOAD);
+        if (!xfer_ || !control(id)) j.data++;   // ai: new data blocks only: a repeat adds nothing to the lap
       }
     }
+    last = j.blocks;
     l.lock();
     dataOf_[j.seq] = j.data;
     jobs_.push_back(std::move(j));
@@ -398,6 +421,12 @@ std::shared_ptr<wg::Buffer> Sender::ring() const { return gpu_ ? gpu_->ring() : 
 uint32_t Sender::ringFrameWords() const { return gpu_ ? gpu_->frameWords() : 0; }
 uint32_t Sender::ringRowWords() const { return gpu_ ? gpu_->rowWords() : 0; }
 
+// ai: Rate refresh (sender.h setRefresh), clamped to 1 .. REFRESH_MAX
+void Sender::setRefresh(const int every[4]) {
+  std::lock_guard<std::mutex> l(mu_);
+  for (int r = 0; r < 4; r++) refresh_[r] = std::clamp(every[r], 1, REFRESH_MAX);
+}
+
 // ai: The stats a second (the app asks): label, n, subch, fps (asked), shownFps (frames on the screen a second over the
 // ai: window), offeredKBs (data blocks shown a second x 472 B, 1000 B a KB, as the page's), paintMs (a frame's encode
 // ai: and paint on one painter; on the GPU its ms a frame, an encode's timestamps over its frames), paintBatch (the GPU's
@@ -405,7 +434,8 @@ uint32_t Sender::ringRowWords() const { return gpu_ ? gpu_->rowWords() : 0; }
 // ai: GPU's: frames an encode), painter ("gpu" or "cpu"), device (the GPU's), gpuWhy (why not the GPU where it was
 // ai: asked for), ahead (painted, not shown), side, test, and for a file chunks, lap (data blocks a lap), pass (laps
 // ai: shown, 1 the first), root, sentBytes (the file's bytes as they go, every chunk's zstd frame or its own;
-// ai: 2026-10-05); error, the last failure.
+// ai: 2026-10-05); refresh (Rate refresh's four, 7/8 to 1/2; offeredKBs counts new data blocks alone, a repeat none);
+// ai: error, the last failure.
 std::string Sender::stats() {
   const double now = nowMs(), secs = std::max(1e-3, (now - winStart_) / 1000);
   if (secs >= 0.5) {
@@ -426,6 +456,7 @@ std::string Sender::stats() {
     << ",\"painters\":" << fmt_.threads << ",\"painter\":\"" << (onGpu_ ? "gpu" : "cpu") << "\",\"device\":\"" << esc(gpuDevice_)
     << "\",\"gpuWhy\":\"" << esc(gpuWhy_) << "\",\"ahead\":" << ready_.size() << ",\"depth\":" << depth_ << ",\"side\":" << side_ << ",\"width\":" << width_
     << ",\"codes\":" << fmt_.codes << ",\"shown\":" << shown_ << ",\"blocks\":" << blocks_ << ",\"tiers\":\"" << tiers_ << "\""
+    << ",\"refresh\":\"" << refresh_[0] << "," << refresh_[1] << "," << refresh_[2] << "," << refresh_[3] << "\""
     << ",\"test\":" << (xfer_ ? "false" : "true");
   if (xfer_) {
     std::lock_guard<std::mutex> x(xferMu_);

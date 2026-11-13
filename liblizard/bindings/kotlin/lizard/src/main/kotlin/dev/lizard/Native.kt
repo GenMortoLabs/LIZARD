@@ -83,4 +83,5 @@ internal object Native {
   @JvmStatic external fun senderTake(h: Long, out: ByteArray, stride: Int, fmt: Int): Boolean
   @JvmStatic external fun senderTakeBuffer(h: Long, out: ByteBuffer, stride: Int, fmt: Int): Boolean
   @JvmStatic external fun senderStats(h: Long): String
+  @JvmStatic external fun senderRefresh(h: Long, a: Int, b: Int, c: Int, d: Int)
 }

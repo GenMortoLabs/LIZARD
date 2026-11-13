@@ -73,4 +73,11 @@ class Sender(bytes: ByteArray? = null, name: String = "", type: String = "") : H
     return Native.senderTakeBuffer(live(), out, stride, fmt.code)
   }
   val stats: String get() = Native.senderStats(live())
+  // ai: Rate refresh (lizard.h liz_sender_refresh): frames between new blocks of each code rate, 7/8, 3/4, 2/3, 1/2 in
+  // ai: that order, 1 to REFRESH_MAX each
+  fun refresh(every: IntArray) {
+    require(every.size == 4 && every.all { it in 1..REFRESH_MAX }) { "four refreshes of 1 to $REFRESH_MAX" }
+    Native.senderRefresh(live(), every[0], every[1], every[2], every[3])
+  }
+  companion object { const val REFRESH_MAX = 4 }
 }

@@ -42,6 +42,24 @@ class Lines(val title: String, val value: String, val lines: List<String>, val a
 class Code(val text: String, val size: Int = 13) : Setting
 class Press(val act: Act, val enabled: Boolean = true) : Setting
 
+// ai: The settings folds by topic (2026-11-12; one Settings fold a screen before): each a fold's key and title in the
+// ai: column's order, before Experimental and Developer Tools. Receive's: the camera (its choice, its mode, Phase lock, its
+// ai: controls), the code (Codes, the crop), the decoder (Decoder, Batch size, the phone's PC link and Compression).
+// ai: Send's: the code (Density or Blocks, Ring, Codes), its refresh (FPS, Rate refresh), its layout on the screen (Size
+// ai: or the phone's Brightness, Spacing, Margin), the painter (Encoder, VSync). The web pages the same (lizard-web).
+val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvCode to "Code", FoldKey.RecvDecoder to "Decoder")
+val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendLayout to "Layout",
+    FoldKey.SendPerformance to "Performance")
+
+// ai: each fold of `order` that the app gives a setting, open as `folds` keeps it
+@Composable
+fun SettingFolds(folds: Folds, order: List<Pair<FoldKey, String>>, settings: Map<FoldKey, List<Setting>>) {
+    for ((k, title) in order) {
+        val items = settings[k].orEmpty()
+        if (items.isNotEmpty()) Fold(title, folds.open(k), { folds.toggle(k) }) { Settings(items) }
+    }
+}
+
 // ai: The receivers' Phase lock (2026-11-08, both apps; the web's #lockRow the same row): On or Off where the camera
 // ai: can delay a capture (the session's camera "lockBar" ""), else one greyed chip "Not supported"; above Frame rate. With it
 // ai: on such a camera runs at most LOCK_FPS captures a second (session.h phaseLock), so Frame rate offers no more
@@ -72,6 +90,30 @@ fun replaySizeSetting(mb: Int, choose: (Int) -> Unit): Setting =
 
 // ai: the bytes the session takes for Replay size's MB
 fun replayBytes(mb: Int): Long = replayMb(mb).toLong() shl 20
+
+// ai: Send's Rate refresh (2026-11-12, both apps; liblizard/core/tx/sender.h Sender::setRefresh): for each code rate,
+// ai: from the picture's inside out (REFRESH_RATES), a block
+// ai: of that rate takes a new id in every n-th frame and repeats the frame before's otherwise, n 1 (each frame, the
+// ai: default) to REFRESH_MAX. A slider a rate in the Refresh fold, under FPS (a heading over them until the folds by
+// ai: topic, 2026-11-12), each value applied as it moves (the sender takes it from its next frame, no configure); kept
+// ai: as "a,b,c,d" (refreshText, refreshOf), as the sender's stats carry it ("refresh").
+const val REFRESH_MAX = 4
+val REFRESH_RATES = listOf("7/8", "3/4", "2/3", "1/2")
+
+// ai: a kept text to the four values: a missing or unreadable one 1, each held to 1..REFRESH_MAX
+fun refreshOf(text: String?): IntArray {
+    val v = text?.split(',')?.map { it.trim().toIntOrNull() }
+    return IntArray(REFRESH_RATES.size) { r -> (v?.getOrNull(r) ?: 1).coerceIn(1, REFRESH_MAX) }
+}
+
+fun refreshText(every: IntArray): String = every.joinToString(",")
+
+fun rateRefreshSettings(every: IntArray, choose: (rate: Int, value: Int) -> Unit): List<Setting> =
+    REFRESH_RATES.mapIndexed { r, title ->
+        val v = every[r]
+        Slide(title, "$v", v.toFloat(), 1f..REFRESH_MAX.toFloat(), REFRESH_MAX - 2) { x ->
+            val n = x.roundToInt().coerceIn(1, REFRESH_MAX); if (n != v) choose(r, n) }
+    }
 
 // ai: the rates Frame rate offers: none past LOCK_FPS while a camera that can lock has the lock on
 fun lockedRates(rates: List<Double>, locks: Boolean): List<Double> = if (locks) rates.filter { it <= LOCK_FPS * 1.005 } else rates
