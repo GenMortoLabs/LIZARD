@@ -277,12 +277,15 @@ class SendState {
     val edgeShare get() = Room.edgeShare(fmt?.span ?: Pick.span(ringIndex), margin).toFloat()
     // ai: what the code offers at most, KB/s: codes x blocks a frame x 472 B x the pictures a second it can show, the
     // ai: asked rate or the measured refresh where lower, so a limit outside the sender shows in the figure
-    // ai: (2026-10-04); null before a configure
+    // ai: (2026-10-04), x the share of blocks new in a frame (freshShare); null before a configure
     val capacityKBs: Double? get() {
         val f = fmt ?: return null
         val hz = present?.num("hz") ?: 0.0
-        return f.codes * sentBlocks * Pick.PAYLOAD.toDouble() * (if (hz > 0) min(f.fps.toDouble(), hz) else f.fps.toDouble()) / 1000
+        return f.codes * sentBlocks * Pick.PAYLOAD.toDouble() * (if (hz > 0) min(f.fps.toDouble(), hz) else f.fps.toDouble()) * freshShare / 1000
     }
+    // ai: the share of a frame's blocks new in each frame under Rate refresh (the sender's stats' fresh, 2026-11-12), 1
+    // ai: before the stats or with none held: a held rate's repeats carry nothing new
+    private val freshShare: Double get() = sender?.num("fresh")?.takeIf { it > 0 } ?: 1.0
     // ai: the blocks a code of the painted format carries, from the sender's stats, the configured format's before the
     // ai: first stats; its profile, "" none
     val sentBlocks: Int get() = sender?.num("blocks")?.toInt()?.takeIf { it > 0 } ?: fmt?.let { Native.blocksFor(it.subch) } ?: 0
@@ -724,12 +727,13 @@ class SendState {
             choice?.takeIf { it.single == null }?.files ?: 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("lap") ?: 0.0, stats)
     }
     // ai: the rate the pictures actually presented carry (the presenter's fresh pictures a second x codes x blocks a frame
-    // ai: x 472 B, so a limit outside the sender shows in it; 2026-10-04), 0 while paused or before the first present
+    // ai: x 472 B, so a limit outside the sender shows in it; 2026-10-04; x the share of blocks new in a frame, Rate
+    // ai: refresh's repeats none, 2026-11-12), 0 while paused or before the first present
     private val speedKBs: Double get() {
         if (phase != Phase.On || paused) return 0.0
         val f = fmt ?: return 0.0
         val pr = present ?: return 0.0
-        return pr.num("shownFps") * f.codes * sentBlocks * Pick.PAYLOAD / 1000.0
+        return pr.num("shownFps") * f.codes * sentBlocks * Pick.PAYLOAD * freshShare / 1000.0
     }
 
     // ai: The readout (the web's #tx, Developer Tools): the format and why, the file, the frame on the surface, a frame's

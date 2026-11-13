@@ -70,8 +70,9 @@ class SendState(private val a: MainActivity) {
                      // ai: the GPU ring's tally over the last second (2026-10-07, jni.cpp txPostStats): posted, held by
                      // ai: vsyncs, late, behind, buffers filled of the ring's
                      val gpuRing: Boolean = false, val posted: Long = 0, val held: String = "", val late: Long = 0, val behind: Long = 0, val filled: Int = 0, val slots: Int = 0,
-                     // ai: the blocks a code carries (2026-10-07); lap: a pass's data blocks (Pass time, 2026-11-07)
-                     val blocks: Int = 0, val lap: Double = 0.0)
+                     // ai: the blocks a code carries (2026-10-07); lap: a pass's data blocks (Pass time, 2026-11-07);
+                     // ai: fresh: the share of a frame's blocks new in each frame under Rate refresh (2026-11-12)
+                     val blocks: Int = 0, val lap: Double = 0.0, val fresh: Double = 1.0)
 
     private val prefs = a.getSharedPreferences("lizard", Context.MODE_PRIVATE)
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
@@ -281,8 +282,9 @@ class SendState(private val a: MainActivity) {
         if (phase == Phase.On) a.window.let { w -> w.attributes = w.attributes.apply { screenBrightness = brightnessOverride } }
     }
     fun pause(p: Boolean) { if (phase == Phase.On) paused = p }
-    // ai: what the code offers at most, KB/s: blocks a frame x 472 B x pictures a second; null before the first configure
-    val capacityKBs get() = if (picked > 0) codes * (if (stats.blocks > 0) stats.blocks else Native.blocksFor(picked)) * Pick.PAYLOAD.toDouble() * rate / 1000 else null
+    // ai: what the code offers at most, KB/s: blocks a frame x 472 B x pictures a second x the share of blocks new in a
+    // ai: frame (Rate refresh's repeats none: the stats' fresh, 1 before them); null before the first configure
+    val capacityKBs get() = if (picked > 0) codes * (if (stats.blocks > 0) stats.blocks else Native.blocksFor(picked)) * Pick.PAYLOAD.toDouble() * rate * stats.fresh / 1000 else null
     fun choosePainter(p: String) { painter = p; prefs.edit().putString("sendPainter", p).apply(); if (phase == Phase.On) reconfigure() }
     fun chooseCodes(c: Int) { codes = c.coerceIn(1, 2); prefs.edit().putInt("sendCodes", codes).apply(); if (phase == Phase.On) reconfigure() }
     fun chooseRing(v: Int) { ring = if (v in Pick.RINGS.indices) v else -1; prefs.edit().putInt("sendRing", ring).apply(); if (phase == Phase.On) reconfigure() }
@@ -490,7 +492,7 @@ class SendState(private val a: MainActivity) {
             stats = Stats(j.optString("label"), j.optDouble("shownFps"), j.optDouble("offeredKBs"), j.optDouble("paintMs"), j.optDouble("pass", 0.0),
                 j.optString("painter"), j.optString("gpuWhy"), j.optLong("sentBytes", 0),
                 p?.optBoolean("gpu") ?: false, p?.optLong("posted") ?: 0, held, p?.optLong("late") ?: 0, p?.optLong("behind") ?: 0, p?.optInt("filled") ?: 0, p?.optInt("slots") ?: 0,
-                j.optInt("blocks", 0), j.optDouble("lap", 0.0))
+                j.optInt("blocks", 0), j.optDouble("lap", 0.0), j.optDouble("fresh", 1.0).takeIf { it > 0 } ?: 1.0)
             if (p?.optBoolean("gpu") == true) Log.i(TAG, "send: posted ${stats.posted}, held {${held}}, late ${stats.late}, behind ${stats.behind}, ${stats.filled} of ${stats.slots} buffers filled, ${j.optInt("ahead")} of ${j.optInt("depth")} frames painted ahead")
             if (j.optString("error").isNotEmpty()) phase = Phase.Error(j.optString("error"))
             // ai: the bytes as they go, known once every chunk is made (the core streams: its first frames go while the

@@ -25,7 +25,7 @@ import dev.lizard.ui.*
 // ai: presenter stats go to stderr as "present: {...}".
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
     companion object {
-        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "exclusive")
+        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "exclusive", "refresh")
         // ai: how long the presenter may take to start (the canvas shown, the GPU painter made) before the check fails
         private const val START_SECS = 60.0
 
@@ -78,6 +78,11 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         int("spacing", Room.SPACING_MIN..Room.SPACING_MAX)?.let { s.spacing = it }
         int("margin", Pick.QUIET..Room.MARGIN_MAX)?.let { s.margin = it }
         kv["ring"]?.let { v -> s.ring = if (v == "auto") -1 else Pick.RINGS.indexOf(v.toIntOrNull() ?: 0).takeIf { it >= 0 } ?: fail("LIZ_SENDER_TEST: ring=$v") }
+        // ai: Rate refresh (2026-11-12): four values 1 to REFRESH_MAX, 7/8 to 1/2, as the setting keeps them ("4,4,4,1")
+        kv["refresh"]?.let { v ->
+            if (v.split(',').let { e -> e.size != 4 || e.any { it.trim().toIntOrNull() !in 1..dev.lizard.ui.REFRESH_MAX } }) fail("LIZ_SENDER_TEST: refresh=$v")
+            s.refresh = dev.lizard.ui.refreshOf(v)
+        }
     }
 
     // ai: on the UI thread (Main.kt's LaunchedEffect)

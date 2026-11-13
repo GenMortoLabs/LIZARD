@@ -435,6 +435,8 @@ void Sender::setRefresh(const int every[4]) {
 // ai: asked for), ahead (painted, not shown), side, test, and for a file chunks, lap (data blocks a lap), pass (laps
 // ai: shown, 1 the first), root, sentBytes (the file's bytes as they go, every chunk's zstd frame or its own;
 // ai: 2026-10-05); refresh (Rate refresh's four, 7/8 to 1/2; offeredKBs counts new data blocks alone, a repeat none);
+// ai: fresh (the share of a frame's blocks new in each frame under Rate refresh, by the format's blocks of each rate: the
+// ai: sum of 1/every over them, over their count; 1 with none held), so a rate figured from blocks a frame counts new ones;
 // ai: error, the last failure.
 std::string Sender::stats() {
   const double now = nowMs(), secs = std::max(1e-3, (now - winStart_) / 1000);
@@ -458,6 +460,11 @@ std::string Sender::stats() {
     << ",\"codes\":" << fmt_.codes << ",\"shown\":" << shown_ << ",\"blocks\":" << blocks_ << ",\"tiers\":\"" << tiers_ << "\""
     << ",\"refresh\":\"" << refresh_[0] << "," << refresh_[1] << "," << refresh_[2] << "," << refresh_[3] << "\""
     << ",\"test\":" << (xfer_ ? "false" : "true");
+  double fresh = 0;
+  for (const uint8_t r : rateOf_) fresh += 1.0 / refresh_[r];
+  o.precision(4);
+  o << ",\"fresh\":" << (rateOf_.empty() ? 1.0 : fresh / static_cast<double>(rateOf_.size()));
+  o.precision(1);
   if (xfer_) {
     std::lock_guard<std::mutex> x(xferMu_);
     const uint32_t lap = xfer_->lap();
