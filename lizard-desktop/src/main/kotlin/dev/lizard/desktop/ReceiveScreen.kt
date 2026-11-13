@@ -97,7 +97,12 @@ class DesktopReceive(private val app: App) : ReceiveHost {
     override val canPortrait = false
     override val swapInColumn = true
     override fun goHome() = app.go(Screen.Home)
-    override fun goSend() = app.go(Screen.Send)
+    override fun goOther() = app.go(Screen.Send)
+    // ai: full screen, the window's (FullScreen.kt, 2026-11-13, as Send's): the camera alone, its edge strip and the
+    // ai: column over it
+    override fun toggleFull() = app.full.toggle()
+    override val alone get() = app.full.on
+    override val areaModifier get() = edgeModifier(app.full)
     override val line get() = r.line
     override val showStats get() = r.showStats
     override val heat: Warn? = null

@@ -18,7 +18,8 @@ import dev.lizard.ui.*
 // ai: moved): comma separated <seconds>:<action>, from when the presenter first presents, each as the control does it:
 // ai: full (Fullscreen, F11), max (the window maximized), pause, resume, stop, start, size=N, spacing=N, margin=N,
 // ai: codes=N, blocks=N (4 to 64) (each a slider's release), fps=N (any 1 to 60, a chip's or the
-// ai: slider's), vsync=0|1, enc=auto|gpu|cpu, rail, and the selection's (2026-10-23):
+// ai: slider's), vsync=0|1, enc=auto|gpu|cpu, rail, over (in full screen the column over the code, 2026-11-13), and the
+// ai: selection's (2026-10-23):
 // ai: add=<path>[:<path>...] (as a pick adds; ';' on Windows), remove=<an item's name> (its Remove), clear (Clear),
 // ai: list (the items and what goes on stderr as "list: <name> | ... | <choice>, <n> files, <bytes> B", "reading" while the pick is walked); a change stops the run, as
 // ai: the app's does, until a start; each logged on stderr as "step <s>: <action>" when it is taken. Each second's
@@ -88,7 +89,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
     suspend fun run(s: SendState) {
         running = s
         if (s.loadError.isNotEmpty()) fail(s.loadError)
-        if (int("full", 0..1) == 1) s.toggleFull()
+        if (int("full", 0..1) == 1) s.full.toggle()
         // ai: a pick is walked off the UI thread (SendState.pick): Start once it is in
         val t0 = System.nanoTime()
         while (s.reading) { if (System.nanoTime() - t0 > START_SECS * 1e9) fail("the files were not read in ${START_SECS.toInt()} s"); delay(50) }
@@ -147,9 +148,10 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         val v = if (i > 0) act.substring(i + 1) else ""
         fun n(r: IntRange) = v.toIntOrNull()?.takeIf { it in r } ?: fail("LIZ_SENDER_TEST: step $act")
         when (k) {
-            "full" -> s.toggleFull()
+            "full" -> s.full.toggle()
             "max" -> s.maximize?.invoke()
             "rail" -> s.toggleRail()
+            "over" -> s.full.sideOver = true   // ai: in full screen the column over the code, as the edge strip's collapser opens it
             "pause" -> s.pause(true)
             "resume" -> s.pause(false)
             "stop" -> { s.stop(); return true }

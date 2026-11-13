@@ -50,8 +50,8 @@ import dev.lizard.ui.*
 // ai: (removeNotify: a dispose, a window made again) it stops the presenter on it. A click on it does nothing; files and
 // ai: folders dropped on it are taken (a run stops first).
 class CodeCanvas(private val s: SendState) : Canvas() {
-    // ai: how near the left edge the pointer shows full screen's rail, the window's units
-    private val EDGE_NEAR = 24
+    // ai: how near the left edge the pointer shows full screen's edge strip, the window's units (FullScreen.kt EDGE_NEAR)
+    private val near = 24f
     // ai: wanted in the window (a presenter is to draw into it; Screen.kt composes its SwingPanel while it is)
     var shown by mutableStateOf(false)
         private set
@@ -67,12 +67,10 @@ class CodeCanvas(private val s: SendState) : Canvas() {
             override fun ancestorMoved(e: HierarchyEvent) = s.canvasMoved()
             override fun ancestorResized(e: HierarchyEvent) = s.canvasMoved()
         })
-        // ai: full screen's rail near the left edge (the column's edge is Compose's: the canvas begins past its strip,
-        // ai: SendHost.edgeRoom)
+        // ai: full screen's edge strip near the left edge, heard here over the canvas as the main area hears it elsewhere
+        // ai: (FullScreen.kt edgeModifier; the column's edge is Compose's: the canvas begins past its strip, SendHost.edgeRoom)
         addMouseMotionListener(object : MouseAdapter() {
-            override fun mouseMoved(e: MouseEvent) {
-                if (s.full && e.x < EDGE_NEAR && !s.edgeRail) s.edgeRail = true
-            }
+            override fun mouseMoved(e: MouseEvent) = s.full.pointerAt(e.x.toFloat(), near)
         })
         // ai: Files and folders dropped are added (a run stops first, as the web's does; refused while sending until
         // ai: 2026-10-23); the window's column and the idle area take them too (Screen.kt)
@@ -127,8 +125,9 @@ class CodeCanvas(private val s: SendState) : Canvas() {
 // ai: size, Size, Spacing, Margin, Ring, Codes or Blocks re-picks, and configures where the format changed (a configure
 // ai: drops the frames painted ahead; the transfer goes on, as the web's re-pick); FPS configures (the word states it)
 // ai: and tells the presenter. Every Native call here is on the UI thread but txCreate and txPrepare; the native side
-// ai: holds one lock for configure and the presenter's take.
-class SendState {
+// ai: holds one lock for configure and the presenter's take. `full`: the window's full screen, Send's and Receive's
+// ai: (FullScreen.kt, 2026-11-13; this class's own before), the code alone in it as the web's and the app's.
+class SendState(val full: FullScreen) {
     sealed interface Phase { data object Idle : Phase; data object Preparing : Phase; data object On : Phase; data class Error(val why: String) : Phase }
     // ai: what is painted: the format configured (its picture the sender's own, lizard_n_for, in its stats)
     data class Format(val subch: Int, val span: Int, val fps: Int, val codes: Int, val gap: Int, val painter: Int)
@@ -205,14 +204,6 @@ class SendState {
 
     var phase by mutableStateOf<Phase>(Phase.Idle)
     var paused by mutableStateOf(false)
-    // ai: Full screen (the Fullscreen button, F or F11; Escape, F, F11 or the rail's collapser leaves), as other apps have it
-    // ai: (2026-10-23): the window manager's own (Main.kt fullscreen), the code alone in it as the web's and the app's;
-    // ai: the manager's word followed (fullFromManager). Until then the column folded to the rail, which a toggle opened
-    // ai: there, and the presenter bypassed the compositor.
-    var full by mutableStateOf(false)
-    var fullscreen: ((Boolean) -> Unit)? = null
-    // ai: full screen's rail shown (Screen.kt EdgeRail): the pointer came within EDGE_NEAR of the code area's left edge
-    var edgeRail by mutableStateOf(false)
     // ai: the window maximized, as a title bar's double click does (Main.kt sets it; the test hook's `max` step)
     var maximize: (() -> Unit)? = null
     // ai: the window brought to the front, as paths handed in by a later launch arrive (Main.kt)
@@ -420,14 +411,9 @@ class SendState {
     }
     // ai: the window closing: the run stopped and the made transfer let go
     fun close() { closing = true; stop(); dropMade() }
-    // ai: Send left for another screen (App.go, 2026-10-25; the Android app's go()): full screen left while its canvas
-    // ai: still has a window, the run stopped (the presenter's canvas leaves the window with the
-    // ai: screen); the made transfer kept for a return
-    fun leave() {
-        if (full) toggleFull()
-        edgeRail = false
-        if (sending) stop()
-    }
+    // ai: Send left for another screen (App.go, 2026-10-25; the Android app's go()): the run stopped (the presenter's canvas
+    // ai: leaves the window with the screen); the made transfer kept for a return. Full screen is the window's (App.go)
+    fun leave() { if (sending) stop() }
 
     private fun fail(why: String) { stop(); phase = Phase.Error(why) }
 
@@ -466,21 +452,9 @@ class SendState {
         return Stamp(w, h, bm.asComposeImageBitmap())
     }
     // ai: The code area resized by hand while the codes play in the window (the column's edge dragged, the window
-    // ai: resized; 2026-11-02): paused, a still until Resume. Not a full screen's own sizes (toggleFull, the manager's
-    // ai: word: `quietUntil`), nor a fold of the column to the rail (a re-pick, as before).
-    private var quietUntil = 0L
-    private fun quiet() { quietUntil = System.nanoTime() + 1_500_000_000L }
-    fun resizing() { if (phase == Phase.On && !paused && !full && System.nanoTime() > quietUntil) pause(true) }
-
-    fun toggleFull() {
-        edgeRail = false
-        quiet()
-        full = !full
-        fullscreen?.invoke(full)
-    }
-    // ai: the manager's own word on the window (its shortcut, a leave of its own, a request of ours taken): followed,
-    // ai: nothing asked
-    fun fullFromManager(on: Boolean) { if (on != full) { full = on; edgeRail = false; quiet() } }
+    // ai: resized; 2026-11-02): paused, a still until Resume. Not a full screen's own sizes (FullScreen.settling), nor a
+    // ai: fold of the column to the rail (a re-pick, as before).
+    fun resizing() { if (phase == Phase.On && !paused && !full.on && !full.settling) pause(true) }
 
     fun toggleRail() { collapsed = !collapsed; Prefs.collapsed = collapsed }
     fun toggleTools() { toolsOpen = !toolsOpen; Prefs.toolsOpen = toolsOpen }

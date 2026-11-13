@@ -557,7 +557,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val canPortrait = true
     override val swapInColumn = false
     override fun goHome() = a.go(Screen.Home)
-    override fun goReceive() = a.go(Screen.Receive)
+    override fun goOther() = a.go(Screen.Receive)
     override val on get() = s.phase == SendState.Phase.On
     override val busy get() = on || s.phase == SendState.Phase.Preparing
     override val paused get() = s.paused
@@ -566,7 +566,6 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override fun stop() = s.stop()
     override fun pause(on: Boolean) = s.pause(on)
     override val pauseShown get() = s.paused
-    override fun toggleFull() {}
     // ai: what goes as elements from Start until Stop (lizard-ui SendRows.details, 2026-11-07; the state line "Sending
     // ai: <name>, <compressed> (<raw> raw)" over the rate before): the name, a spinner while it is made, Size, Files,
     // ai: Speed (the rate the code carries, none while paused), and with Show statistics on (Receive's setting)
@@ -620,7 +619,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val readout get() = sendLab(s).takeIf { it.isNotEmpty() }?.let { Code(it) }
     // ai: While a send runs the code is the whole screen (2026-10-26): the code alone, the bars hidden (SendState.screenFor);
     // ai: the page only while paused; the collapser over it pauses and opens the page with the column
-    override val codeAlone get() = on && !s.paused
+    override val alone get() = on && !s.paused
     override val edgeTap = true
     override fun leaveCodeAlone() { s.pause(true); if (a.isOpen("collapsed")) a.toggle("collapsed") }
     override val codePadding = 16.dp
@@ -635,7 +634,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
         if (portrait) { val h = maxWidth / ar; return DpSize(maxWidth, if (tall) maxOf(h, UPLOAD_ONE_ROW) else h) }
         if (uploading() && !sending()) return null
         val w = minOf(maxWidth, maxHeight * ar)
-        return DpSize(w, if (tall && !codeAlone) minOf(maxHeight, maxOf(w / ar, UPLOAD_ONE_ROW)) else w / ar)
+        return DpSize(w, if (tall && !alone) minOf(maxHeight, maxOf(w / ar, UPLOAD_ONE_ROW)) else w / ar)
     }
     override val rootModifier: Modifier = Modifier
 

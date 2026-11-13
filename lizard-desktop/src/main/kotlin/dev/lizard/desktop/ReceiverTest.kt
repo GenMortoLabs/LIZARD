@@ -22,7 +22,8 @@ import dev.lizard.ui.*
 // ai: auto, gpu or cpu; replays 0|1 (Save replays on from the start); lock 0|1 (Settings' Phase lock from the start, 1
 // ai: unless named); steps, comma separated
 // ai: <seconds>:<action> from the first answer, each as its control does it:
-// ai: start, stop (Start and Stop), swap (the bar's swap: to Send, or back to Receive), home (Home), receive
+// ai: start, stop (Start and Stop), swap (the bar's swap: to Send, or back to Receive), home (Home), full (full screen
+// ai: on or off, Fullscreen's; 2026-11-13), over (in full screen the column over the camera, the edge strip's collapser), receive
 // ai: (Home's Receive), layout=1:1|2:1, decoder=auto|gpu|cpu, res=<W>x<H>, format=<name>, lock=0|1 and fps=<rate> (Settings'
 // ai: menus), settings (Settings' fold opened or closed, its header pressed), tools (Developer Tools' the same), replaymb=<MB> (Replay size's slider, 256 to 8192), zoom=<v>,
 // ai: exposure=<us>|auto and gain=<v>|auto (Settings' bars, a value the camera's own units), driver (Windows: the first
@@ -150,6 +151,8 @@ class ReceiverTest private constructor(private val secs: Double, private val kv:
             "stop" -> { r.stop(); return true }
             "swap" -> { app.go(if (app.screen == Screen.Send) Screen.Receive else Screen.Send); return app.screen != Screen.Receive || away }
             "home" -> { app.go(Screen.Home); return true }
+            "full" -> app.full.toggle()   // ai: full screen on or off (FullScreen.kt, 2026-11-13; F, F11 and Fullscreen do it)
+            "over" -> app.full.sideOver = true   // ai: the column over the main area, as the edge strip's collapser opens it
             "receive" -> { app.go(Screen.Receive); return away }
             "layout" -> if (v == "1:1" || v == "2:1") r.chooseLayout(v) else fail("LIZ_RECEIVER_TEST: step $act")
             "decoder" -> if (v in setOf("auto", "gpu", "cpu")) r.chooseDecoder(v) else fail("LIZ_RECEIVER_TEST: step $act")

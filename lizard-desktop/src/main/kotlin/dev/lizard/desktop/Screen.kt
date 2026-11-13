@@ -11,33 +11,17 @@ import androidx.compose.ui.draganddrop.DragAndDropTarget
 import androidx.compose.ui.draganddrop.awtTransferable
 import java.awt.datatransfer.DataFlavor
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.awt.SwingPanel
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.DialogWindow
 import kotlin.math.roundToInt
-import kotlinx.coroutines.delay
-import androidx.compose.ui.awt.ComposeDialog
-import java.awt.Dialog
-import java.awt.MouseInfo
-import java.awt.Window
 import dev.lizard.ui.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
@@ -45,8 +29,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.layout.onSizeChanged
 import dev.lizard.readout.Readout
 import androidx.compose.ui.graphics.FilterQuality
@@ -56,17 +38,15 @@ import androidx.compose.ui.unit.IntSize
 // ai: Send on the desktop (the screen is ../lizard-ui's SendScreen): the sender's state (SendState), the desktop's
 // ai: settings (Ring, Size), Fullscreen beside Start, the code area the presenter's
 // ai: heavyweight AWT canvas (CodeCanvas: its idle look and the upload painted by AWT, since nothing of Compose draws
-// ai: over it), drops anywhere in the window (2026-10-23), and full screen's edge rail, a window of its own
+// ai: over it), drops anywhere in the window (2026-10-23); full screen and its edge strip are FullScreen.kt's
 class DesktopSend(private val app: App) : SendHost {
     private val s get() = app.send
-    // ai: the window (LizardWindow sets it): the owner of the edge rail
-    var window: ComposeWindow? = null
     override val folds = app.folds
     override val width = app.column
     override val canPortrait = false
     override val swapInColumn = true
     override fun goHome() = app.go(Screen.Home)
-    override fun goReceive() = app.go(Screen.Receive)
+    override fun goOther() = app.go(Screen.Receive)
     override val busy get() = s.sending
     override val on get() = s.phase == SendState.Phase.On
     override val paused get() = s.paused
@@ -75,7 +55,7 @@ class DesktopSend(private val app: App) : SendHost {
     override fun stop() = s.stop()
     override fun pause(on: Boolean) = s.pause(on)
     override val pauseShown = true
-    override fun toggleFull() = s.toggleFull()
+    override fun toggleFull() = app.full.toggle()
     // ai: what goes as elements (SendState.details: Show statistics, Receive's own setting, names the rows it adds), the
     // ai: error a popup, and the spinner while a pick is walked or a bundle made (2026-11-07; the state line before)
     override val details get() = s.details(app.recv.showStats)
@@ -121,15 +101,13 @@ class DesktopSend(private val app: App) : SendHost {
         ChipChoice("Show statistics", app.recv.showStats, listOf(true to "On", false to "Off")) { app.recv.chooseStats(it) },
         ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = !s.sending) { s.chooseTest(it) })
     override val readout get() = s.readout.takeIf { it.isNotEmpty() }?.let { Code(it, 12) }
-    // ai: full screen: the code alone (2026-10-23, as the web's and the app's); while a monitor is taken for the code the
-    // ai: window is the control: the column as when not full
-    override val codeAlone get() = s.full
+    // ai: full screen: the code alone (2026-10-23, as the web's and the app's; FullScreen.kt, Receive's too since
+    // ai: 2026-11-13), the edge strip's collapser opening the column over it (FullScreen.sideOver)
+    override val alone get() = app.full.on
+    override val areaModifier get() = edgeModifier(app.full)
     override val codeAloneInPlace = true
     override val edgeTap = false
-    // ai: the column over the code in full screen (2026-11-07; the rail's collapser left full screen before, the column
-    // ai: open): open until its collapser, a change of full screen closing it (Windows)
-    var sideOver by mutableStateOf(false)
-    override fun leaveCodeAlone() { sideOver = true }
+    override fun leaveCodeAlone() { app.full.sideOver = true }
     override val codePadding = 0.dp
     // ai: the column's margin the edge's whole strip: the canvas begins past it, so a drag of the edge is Compose's from
     // ai: its start (a run paused at it takes the canvas out of the window, which ended a drag it had)
@@ -151,17 +129,13 @@ class DesktopSend(private val app: App) : SendHost {
     // ai: drag's outline over it. While codes play the canvas (a window of its own, the presenter's) in its place, from
     // ai: the presenter's start to its end; paused in the window, the picture as a still (`Stamped`) until the canvas is
     // ai: back. Its size, laid out here, is the room the format is picked from (SendState.areaChanged); in full screen
-    // ai: the pointer near its left edge shows the rail (the canvas hears that while shown). The column's edge dragged
-    // ai: pauses a run (SendState.resizing).
-    @OptIn(ExperimentalComposeUiApi::class)
+    // ai: the pointer near its left edge shows the edge strip (areaModifier; the canvas hears that while shown). The
+    // ai: column's edge dragged pauses a run (SendState.resizing).
     @Composable
     override fun CodeArea(modifier: Modifier) {
         val dragging = width.dragging
         LaunchedEffect(dragging) { if (dragging) s.resizing() }
-        val near = with(LocalDensity.current) { EDGE_NEAR.toPx() }
-        Box(modifier.onSizeChanged { s.areaChanged(it.width, it.height) }.onPointerEvent(PointerEventType.Move) { e ->
-            if (s.full && !s.edgeRail && (e.changes.firstOrNull()?.position?.x ?: near) < near) s.edgeRail = true
-        }) {
+        Box(modifier.onSizeChanged { s.areaChanged(it.width, it.height) }) {
             val stamp = s.stamp
             if (s.canvas.shown) SwingPanel(background = s.codeFill, factory = { s.canvas }, modifier = Modifier.fillMaxSize())
             else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare)
@@ -175,17 +149,7 @@ class DesktopSend(private val app: App) : SendHost {
             }
         }
     }
-
-    @Composable
-    override fun Windows() {
-        LaunchedEffect(s.full) { sideOver = false }
-        val w = window ?: return
-        if (s.full) EdgeRail(this, s, w)
-    }
 }
-
-// ai: how near the code area's left edge the pointer shows full screen's rail
-private val EDGE_NEAR = 24.dp
 
 // ai: the picture a run was paused on in the window (SendState.stamp), placed as the presenter places it: on white,
 // ai: centred, the largest that fits with the edge's light round it (edge, a share of its height, each side), times
@@ -208,47 +172,3 @@ private fun DropOutline() = Canvas(Modifier.fillMaxSize()) {
     drawRect(Fg, topLeft = Offset(inset, inset), size = Size(size.width - 2 * inset, size.height - 2 * inset),
         style = Stroke(3.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(9.dp.toPx(), 6.dp.toPx()))))
 }
-
-// ai: Full screen's rail (2026-10-23): the collapsed column over the screen's left edge while the pointer is within
-// ai: EDGE_NEAR of it (the code area's, or the canvas's while it shows: CodeCanvas) or over the rail, in a window of its own (nothing of Compose draws over the
-// ai: code's heavyweight canvas), over the code rather than beside it so the area and the format stay as they are. A
-// ai: popup (override-redirect on X11): the window manager neither places it (a dialog it centres on its owner at
-// ai: first) nor shades it, nor gives it the focus full screen holds. Mapped for as long as full screen lasts, parked
-// ai: off every screen while hidden, so a show is a move (a window mapped and drawn at each show took 0.5 to 1.1 s).
-// ai: Its collapser opens the column over the code (SendSideOver, 2026-11-07; it left full screen with the column open
-// ai: before): the window as wide as the column, the code under it keeping its size and format, open until the column's
-// ai: own collapser or full screen left. The rail alone is hidden once the pointer is off it (read a few times a second:
-// ai: the canvas below hears nothing while the pointer is over the rail, nor once it goes past the screen's edge).
-@Composable
-private fun EdgeRail(h: DesktopSend, s: SendState, owner: ComposeWindow) {
-    val shown = s.edgeRail || h.sideOver
-    val over = h.sideOver
-    // ai: the column's width as the landscape layout takes it on this screen (sendSideWidth)
-    val sideDp = sendSideWidth(h, (owner.contentPane.width / owner.graphicsConfiguration.defaultTransform.scaleX).toFloat().dp).value
-    DialogWindow(visible = true,
-        create = { ComposeDialog(owner, Dialog.ModalityType.MODELESS).apply { type = Window.Type.POPUP; isUndecorated = true; isResizable = false; focusableWindowState = false } },
-        dispose = ComposeDialog::dispose,
-        update = { d ->
-            // ai: full screen's code area is the window's whole content; the window's width the rail's or the column's,
-            // ai: and its divider, in the screen's pixels
-            val c = owner.contentPane
-            val h = maxOf(1, c.height)
-            val scale = owner.graphicsConfiguration.defaultTransform.scaleX
-            val w = if (over) ((sideDp + 1) * scale).roundToInt() else 57
-            if (shown && c.isShowing) c.locationOnScreen.let { d.setBounds(it.x, it.y, w, h) } else d.setBounds(-10000, -10000, w, h)
-        }) {
-        LaunchedEffect(shown, over) {
-            while (shown && !over) {
-                delay(150)
-                val p = MouseInfo.getPointerInfo()?.location
-                if (p == null || !window.bounds.contains(p)) { s.edgeRail = false; break }
-            }
-        }
-        if (over) SendSideOver(h, sideDp.dp) { h.sideOver = false }
-        else Row(Modifier.fillMaxSize().background(Bg)) {
-            Rail(onClick = { h.leaveCodeAlone() }) { SendRail(h) }
-            VerticalDivider(color = Line)
-        }
-    }
-}
-

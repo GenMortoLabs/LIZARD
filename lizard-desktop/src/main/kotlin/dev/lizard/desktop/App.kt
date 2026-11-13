@@ -47,7 +47,9 @@ val RESIZE = PointerIcon(java.awt.Cursor(java.awt.Cursor.E_RESIZE_CURSOR))
 // ai: app's go(). Files handed in (handIn) go to Send, replays to Receive.
 class App {
     var screen by mutableStateOf(Screen.Home)
-    val send = SendState()
+    // ai: the window's full screen, Send's and Receive's (FullScreen.kt)
+    val full = FullScreen()
+    val send = SendState(full)
     val recv = ReceiveState(this)
     val home = DesktopHome(this)
     val folds = DesktopFolds(this)
@@ -67,6 +69,8 @@ class App {
             else -> {}
         }
         screen = to
+        // ai: full screen is Send's and Receive's: Send ↔ Receive keeps it, Home leaves it (2026-11-13)
+        if (to == Screen.Home && full.on) full.set(false)
         when (to) {
             Screen.Home -> recv.refreshLists()
             Screen.Receive -> recv.enter()
@@ -101,7 +105,7 @@ class App {
     fun close() { send.close(); runCatching { hide?.invoke() }; recv.close() }
 }
 
-// ai: The window: the screen shown, the sender's keys while it is Send's, full screen as the sender asks it; the test
+// ai: The window: the screen shown, the keys while it is Send's or Receive's, full screen and its edge strip; the test
 // ai: hooks run inside it (SenderTest.kt, ReceiverTest.kt).
 @Composable
 fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: ReceiverTest?) {
@@ -109,12 +113,13 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
     val ws = rememberWindowState(width = 1280.dp, height = 800.dp)
     Window(onCloseRequest = { app.close(); exitApplication() }, state = ws, title = "LIZARD", icon = rememberVectorPainter(Icons.mark)) {
         // ai: the frame white before Compose's first frame (2026-10-07): AWT's default grey showed until Skia drew
-        remember { window.background = java.awt.Color.WHITE; window.contentPane.background = java.awt.Color.WHITE; if (app.loadError.isEmpty()) whiten(window); app.frame = window; app.sendUi.window = window; s.frame = window }
+        remember { window.background = java.awt.Color.WHITE; window.contentPane.background = java.awt.Color.WHITE; if (app.loadError.isEmpty()) whiten(window); app.frame = window; s.frame = window; app.full.attach(window, ws) }
         // ai: Keys wherever the focus is (the canvas takes none), as video players have them (2026-10-23; F11 and Escape
-        // ai: before): Space or K play and pause (SendState.playPause), F or F11 full screen and back, Escape out of it,
-        // ai: Ctrl+O (Command+O on macOS) add files where files are sent. A key held down acts once; the keys taken are taken whole (press,
-        // ai: typed, release), so Space on a focused button is the hotkey and not that button's press. Send's alone
-        // ai: (2026-10-25): Home and Receive take no key.
+        // ai: before), Send's and Receive's (Receive's since 2026-11-13; Home takes none): F or F11 full screen and back,
+        // ai: Escape out of it; Space or K Send's play and pause (SendState.playPause), Receive's Start and Stop
+        // ai: (ReceiveState.toggle); Ctrl+O (Command+O on macOS) Send's add files where files are sent. A key held down
+        // ai: acts once; the keys taken are taken whole (press, typed, release), so Space on a focused button is the
+        // ai: hotkey and not that button's press.
         DisposableEffect(Unit) {
             val held = HashSet<Int>()
             val taken = HashSet<Int>()
@@ -126,13 +131,13 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
                     KeyEvent.KEY_PRESSED -> {
                         val first = held.add(e.keyCode)
                         val m = e.modifiersEx and mods
+                        val send = app.screen == Screen.Send
                         val act: (() -> Unit)? = when {
-                            app.screen != Screen.Send -> null
-                            e.keyCode == KeyEvent.VK_F11 -> ({ s.toggleFull() })
-                            e.keyCode == KeyEvent.VK_ESCAPE && s.full -> ({ s.toggleFull() })
-                            m == 0 && (e.keyCode == KeyEvent.VK_SPACE || e.keyCode == KeyEvent.VK_K) -> ({ s.playPause() })
-                            m == 0 && e.keyCode == KeyEvent.VK_F -> ({ s.toggleFull() })
-                            m == (if (Native.mac) InputEvent.META_DOWN_MASK else InputEvent.CTRL_DOWN_MASK) && e.keyCode == KeyEvent.VK_O -> ({ if (!s.test) s.chooseFile() })
+                            !send && app.screen != Screen.Receive -> null
+                            e.keyCode == KeyEvent.VK_F11 || (m == 0 && e.keyCode == KeyEvent.VK_F) -> ({ app.full.toggle() })
+                            e.keyCode == KeyEvent.VK_ESCAPE && app.full.on -> ({ app.full.toggle() })
+                            m == 0 && (e.keyCode == KeyEvent.VK_SPACE || e.keyCode == KeyEvent.VK_K) -> if (send) ({ s.playPause() }) else ({ app.recv.toggle() })
+                            send && m == (if (Native.mac) InputEvent.META_DOWN_MASK else InputEvent.CTRL_DOWN_MASK) && e.keyCode == KeyEvent.VK_O -> ({ if (!s.test) s.chooseFile() })
                             else -> null
                         }
                         if (act != null) { taken += e.keyCode; if (first) act() }
@@ -144,20 +149,16 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
             KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(keys)
             onDispose { KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(keys) }
         }
-        // ai: full screen, the window manager's own (FullScreen.kt); the window's other resizes on Send are resizes by hand
-        // ai: (SendState.resizing: a run pauses)
-        val full = remember { FullScreen(window, ws) }
         s.maximize = { ws.placement = WindowPlacement.Maximized }
         s.raise = { window.toFront() }
         app.hide = { window.isVisible = false }
-        s.fullscreen = { on -> full.set(on) }
+        // ai: at each resize the window manager's word on full screen (FullScreen.seen); on Send the window's other resizes
+        // ai: are resizes by hand (SendState.resizing: a run pauses)
         DisposableEffect(Unit) {
             val resized = object : java.awt.event.ComponentAdapter() {
                 override fun componentResized(e: java.awt.event.ComponentEvent) {
-                    val f = full.seen()
-                    if (app.screen != Screen.Send) return
-                    if (f != null) s.fullFromManager(f)
-                    s.resizing()
+                    app.full.seen()
+                    if (app.screen == Screen.Send) s.resizing()
                 }
             }
             window.addComponentListener(resized)
@@ -166,6 +167,12 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
         LizardTheme(TARGET, scrollbar = { s, m -> FadingScrollbar(s, m) }, resizeIcon = RESIZE, credits = CREDITS_HERE,
             browse = { Received.browse(it) }) {
             Screens(app.screen, app.home, app.sendUi, app.receive)
+            // ai: full screen's edge strip, the screen's own rail and column (FullScreen.kt EdgeRail)
+            if (app.full.on) when (app.screen) {
+                Screen.Send -> EdgeRail(app.full, app.sendUi, window)
+                Screen.Receive -> EdgeRail(app.full, app.receive, window)
+                else -> {}
+            }
         }
         if (sendTest != null) LaunchedEffect(Unit) { sendTest.run(s) }
         if (recvTest != null) LaunchedEffect(Unit) { recvTest.run(app) }

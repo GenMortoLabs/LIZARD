@@ -62,8 +62,9 @@ interface ColumnWidth {
     // ai: its floor it closes to the rail, and pulled out from the rail it opens again; no collapse button. False (the
     // ai: phone's): the collapse button alone and no edge, a drag at the screen's side being the system's swipe.
     val sash: Boolean get() = false
-    // ai: The platform's Send row carries a Fullscreen button (the desktop's; the phone's send is the whole screen): the
-    // ai: button itself (SendHost.fullscreen) and both screens' floor (columnFloor) count it
+    // ai: The platform's Send and Receive rows carry a Fullscreen button (the desktop's, Receive's since 2026-11-13; the
+    // ai: phone's send is the whole screen): the button itself (ToolHost.fullscreen) and both screens' floor (columnFloor)
+    // ai: count it
     val fullscreen: Boolean get() = false
     fun default(screen: Dp): Dp
     fun save()
@@ -188,12 +189,14 @@ private fun SideEdge(e: Edge, modifier: Modifier) {
 // ai: beside the hairline. Its edge a sash on the desktop (ColumnWidth.sash: no collapse button in the column's bar, the
 // ai: edge at the rail's hairline too), the collapse button alone on the phone; the rail's button opens it on both.
 // ai: `bare`: the main area alone, the column, rail, hairline, padding and edge gone, the main area's content where it was
-// ai: in the tree (the desktop's full screen, 2026-11-02: SendHost.codeAloneInPlace). `room`: the sash's margin past
+// ai: in the tree (the desktop's full screen, 2026-11-02: SendHost.codeAloneInPlace; Receive's too, 2026-11-13).
+// ai: `mainModifier`: the platform's on the main area (ToolHost.areaModifier). `room`: the sash's margin past
 // ai: its hairline (EdgeRoom; EdgeStrip where the main area is a view Compose cannot hear over, the desktop's code
 // ai: canvas, so the edge's whole strip is Compose's); `roomFill`: the main area's colour beside it, the margin's.
 @Composable
 fun ToolLandscape(title: String, collapsed: Boolean, onCollapse: () -> Unit, onHome: () -> Unit, swap: (@Composable () -> Unit)?,
                   width: ColumnWidth, floor: Dp, mainPadding: Dp = 16.dp, onResized: () -> Unit = {}, room: Dp = EdgeRoom, roomFill: Color = Bg, bare: Boolean = false,
+                  mainModifier: Modifier = Modifier,
                   rail: @Composable () -> Unit, side: @Composable () -> Unit, main: @Composable BoxWithConstraintsScope.() -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Bg).safeDrawingPadding()) {
         val screen = maxWidth
@@ -219,7 +222,7 @@ fun ToolLandscape(title: String, collapsed: Boolean, onCollapse: () -> Unit, onH
                 // ai: as a sash, the room the edge's wide line grows into, in the main area's colour, the main area past it
                 if (sash) Spacer(Modifier.width(room).fillMaxHeight().background(roomFill))
             }
-            BoxWithConstraints(Modifier.weight(1f).fillMaxHeight().padding(if (bare) 0.dp else mainPadding), contentAlignment = Alignment.Center) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxHeight().then(mainModifier).padding(if (bare) 0.dp else mainPadding), contentAlignment = Alignment.Center) {
                 main()
             }
         }

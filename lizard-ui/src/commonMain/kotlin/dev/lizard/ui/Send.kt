@@ -56,15 +56,10 @@ import androidx.compose.ui.unit.dp
 import dev.lizard.readout.Readout
 import kotlinx.coroutines.delay
 
-// ai: What Send shows and does, the app's: the run (the sender's state), its settings, the platform's code area and
-// ai: the windows and full screen around it
-interface SendHost {
-    val folds: Folds
-    val width: ColumnWidth
-    val canPortrait: Boolean
-    val swapInColumn: Boolean
-    fun goHome()
-    fun goReceive()
+// ai: What Send shows and does, the app's: the run (the sender's state), the platform's code area and how it is shown;
+// ai: the column, its settings and full screen are ToolHost's (Tool.kt), as Receive's
+interface SendHost : ToolHost {
+    override val kind: ToolKind get() = SEND
     val busy: Boolean                  // ai: a send runs or is being prepared
     val on: Boolean                    // ai: a send runs
     val paused: Boolean
@@ -73,8 +68,6 @@ interface SendHost {
     fun stop()
     fun pause(on: Boolean)
     val pauseShown: Boolean            // ai: Pause or Resume beside Stop (the desktop's while sending; the phone's paused)
-    val fullscreen: Boolean get() = width.fullscreen   // ai: a Fullscreen button (ColumnWidth.fullscreen)
-    fun toggleFull()
     // ai: what goes, from Start until Stop (null otherwise): the file's or the test stream's block (Details: the name, a
     // ai: spinner while it is prepared, a row a fact), its rows the same from Start, so nothing moves as figures arrive
     val details: Details?
@@ -85,26 +78,20 @@ interface SendHost {
     val error: String
     fun clearError() {}
     val reading: Boolean get() = false // ai: the pick being read (a dropped folder walked): a spinner, no words
-    val heat: Warn?                    // ai: the heat warning (the phone's Throttling), null while nothing throttles
     val railCapacity: Double?
-    val settings: Map<FoldKey, List<Setting>>   // ai: each of SEND_FOLDS' settings; a fold given none is not drawn
-    val experimental: List<Setting>    // ai: the Experimental fold's lab arms; no fold where there are none
-    val tools: List<Setting>
-    val readout: Code?                // ai: the lab's text under Developer Tools' fields (CodeBlock's own 6 dp under them)
-    val codeAlone: Boolean             // ai: the code alone on the screen (the phone's send running; the desktop's full screen)
-    // ai: the code alone drawn as the landscape layout bare (ToolLandscape's `bare`), the code area never moved in the tree:
+    // ai: (`alone`, ToolHost's: the code alone on the screen, the phone's send running, the desktop's full screen) the code
+    // ai: alone drawn as the landscape layout bare (ToolLandscape's `bare`), the code area never moved in the tree:
     // ai: the desktop's, whose code area is a heavyweight canvas a move destroys and makes again, its presenter stopped
     // ai: and begun anew (2026-11-02, every full-screen switch); the phone's CodeAlone otherwise
     val codeAloneInPlace: Boolean get() = false
     val edgeTap: Boolean               // ai: a tap near the left edge shows the rail over the code alone (the phone's)
-    fun leaveCodeAlone()               // ai: the rail's collapser over the code alone (the desktop's: the column over it, SendSideOver)
+    fun leaveCodeAlone()               // ai: the rail's collapser over the code alone (the phone's; the desktop's edge strip opens SideOver)
     val codePadding: Dp                // ai: the light round the code area in the page (the phone's 16 dp; the desktop's canvas fills)
     val codeFill: Color get() = Bg     // ai: the code area's fill at its left edge, which the column's margin beside it takes
     val edgeRoom: Dp get() = EdgeRoom  // ai: the column's margin past its edge (ToolLandscape's `room`; the desktop's the edge's whole strip)
     fun codeSize(maxWidth: Dp, maxHeight: Dp, portrait: Boolean): DpSize?   // ai: the code area's size in its room, null to fill it
     val rootModifier: Modifier         // ai: the platform's on the whole screen (the desktop's drops)
     @Composable fun CodeArea(modifier: Modifier)
-    @Composable fun Windows() {}       // ai: what the platform shows apart: the desktop's edge rail in full screen
 }
 
 // ai: Send (the web's send.html; both apps' since 2026-10-31): a column (Start, or Stop and Pause or Resume while sending,
@@ -118,23 +105,22 @@ fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
     val code = remember(h) { movableContentOf<Modifier> { m -> h.CodeArea(m) } }
     BoxWithConstraints {
         val portrait = h.canPortrait && maxHeight > maxWidth
-        if (h.codeAlone && !(h.codeAloneInPlace && !portrait)) CodeAlone(h, code)
-        else if (portrait) ToolPortrait("Send", { h.goHome() }, { SwapBtn("Receiver") { h.goReceive() } }) {
+        if (h.alone && !(h.codeAloneInPlace && !portrait)) CodeAlone(h, code)
+        else if (portrait) ToolPortrait(h.kind.title, { h.goHome() }, { ToolSwap(h) }) {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val size = h.codeSize(maxWidth, maxHeight, true)
                 code(if (size != null) Modifier.size(size.width, size.height) else Modifier.fillMaxWidth())
             }
-            Side(h)
-        } else ToolLandscape("Send", h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
-            if (h.swapInColumn) ({ SwapBtn("Receiver") { h.goReceive() } }) else null, h.width,
+            SendSide(h)
+        } else ToolLandscape(h.kind.title, h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
+            if (h.swapInColumn) ({ ToolSwap(h) }) else null, h.width,
             columnFloor(h.width),
-            mainPadding = h.codePadding, room = h.edgeRoom, roomFill = h.codeFill, bare = h.codeAlone,
-            rail = { SendRail(h) }, side = { Side(h, home = true) }) {
+            mainPadding = h.codePadding, room = h.edgeRoom, roomFill = h.codeFill, bare = h.alone, mainModifier = h.areaModifier,
+            rail = { SendRail(h) }, side = { SendSide(h, home = true) }) {
             val size = h.codeSize(maxWidth, maxHeight, false)
             code(if (size != null) Modifier.size(size.width, size.height) else Modifier.fillMaxSize())
         }
     }
-    h.Windows()
     val err = h.error
     var said by remember(h) { mutableStateOf("") }
     LaunchedEffect(err) { if (err.isEmpty()) said = "" }
@@ -162,32 +148,6 @@ private fun CodeAlone(h: SendHost, code: @Composable (Modifier) -> Unit) {
     }
 }
 
-// ai: The Send column's width on a screen `screen` wide, as the landscape layout takes it (SideWidth: its default or
-// ai: the width its edge was dragged to, within its floor and three fifths of the screen)
-@Composable
-fun sendSideWidth(h: SendHost, screen: Dp): Dp = SideWidth(screen, h.width.dp, h.width.default(screen), columnFloor(h.width))
-
-// ai: The column over the code alone (the desktop's full screen, 2026-11-07): the rail's collapser opens it over the
-// ai: code's left part, full screen kept (it was left before), the code keeping its size and format under it; the
-// ai: column as the landscape layout draws it (the bar with the swap, Side scrolling), its own collapser closing it.
-// ai: Fullscreen, its keys or Escape still leave full screen.
-@Composable
-fun SendSideOver(h: SendHost, width: Dp, onClose: () -> Unit) = Row(Modifier.fillMaxHeight().background(Bg)) {
-    Column(Modifier.width(width).fillMaxHeight()) {
-        Box(Modifier.padding(horizontal = SidePad)) {
-            TopBar("Send") { if (h.swapInColumn) SwapBtn("Receiver") { h.goReceive() }; CollapseBtn(false, onClose) }
-        }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            val scroll = rememberScrollState()
-            Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = SidePad)) {
-                CompositionLocalProvider(LocalButtonsFill provides h.width.stretch) { Side(h, home = true) }
-            }
-            LocalScrollbar.current(scroll, Modifier.align(Alignment.CenterEnd).fillMaxHeight())
-        }
-    }
-    VerticalDivider(color = Line)
-}
-
 // ai: how near the left edge a tap shows the rail over the code alone, and how long it stays untouched
 private val EDGE = 72.dp
 private const val RAIL_MS = 4000L
@@ -205,7 +165,7 @@ fun SendRail(h: SendHost) {
 }
 
 @Composable
-private fun Side(h: SendHost, home: Boolean = false) {
+internal fun SendSide(h: SendHost, home: Boolean = false) {
     Spacer(Modifier.height(12.dp))
     val fill = LocalButtonsFill.current
     Row(if (fill) Modifier.fillMaxWidth() else Modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -218,7 +178,7 @@ private fun Side(h: SendHost, home: Boolean = false) {
                 else Btn("Pause", enabled = h.on, pad = 16.dp) { h.pause(true) }
             }
         }
-        if (h.fullscreen) Btn("Fullscreen", pad = 16.dp) { h.toggleFull() }
+        FullscreenBtn(h)
     }
     // ai: what goes as elements (2026-11-07, Details; "Sending x, 2.4 GB (4.4 GB raw)" over "1.69 MB/s, pass 2" before),
     // ai: or a spinner while the pick is read; an error a popup (SendScreen), never the column's
@@ -227,14 +187,7 @@ private fun Side(h: SendHost, home: Boolean = false) {
     else if (h.reading) CircularProgressIndicator(Modifier.padding(top = 12.dp).size(16.dp), color = Fg, strokeWidth = 2.dp, trackColor = Line)
     h.heat?.let { WarnRow(it, Modifier.padding(top = 8.dp)) }
     Spacer(Modifier.height(16.dp))
-    SettingFolds(h.folds, SEND_FOLDS, h.settings)
-    if (h.experimental.isNotEmpty()) Fold("Experimental", h.folds.open(FoldKey.SendExperimental), { h.folds.toggle(FoldKey.SendExperimental) }) { Settings(h.experimental) }
-    Fold("Developer Tools", h.folds.open(FoldKey.SendTools), { h.folds.toggle(FoldKey.SendTools) }) {
-        Settings(h.tools)
-        h.readout?.let { CodeBlock(it.text, it.size) }
-    }
-    if (home) HomeRow { h.goHome() }
-    Spacer(Modifier.height(24.dp))
+    ToolFolds(h, home)
 }
 
 // ai: The senders' file upload (2026-10-26, LocalSend's geometry; the web's ui.css .tile and .itile): the tiles (File,

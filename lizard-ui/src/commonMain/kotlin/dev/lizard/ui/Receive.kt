@@ -66,18 +66,13 @@ class Access(val act: Act)
 class ReceiveUpload(val tiles: List<Act>, val items: List<UploadItem>, val total: String, val enabled: Boolean,
                     val onRemove: (String) -> Unit, val onClear: () -> Unit)
 
-// ai: What Receive shows and does, the app's: the receive session's state as the app reads it, the camera's settings as
-// ai: the camera offers them, the platform's picture of the camera
-interface ReceiveHost {
-    val folds: Folds
-    val width: ColumnWidth
-    val canPortrait: Boolean           // ai: an upright screen takes the portrait layout (the phone's)
-    val swapInColumn: Boolean          // ai: the swap in the landscape column's bar (the desktop's; the phone's column has room for the collapser alone)
-    fun goHome()
-    fun goSend()
+// ai: What Receive shows and does, the app's: the receive session's state as the app reads it, the platform's picture
+// ai: of the camera; the column, its settings (the camera's as the camera offers them) and full screen are ToolHost's
+// ai: (Tool.kt), as Send's
+interface ReceiveHost : ToolHost {
+    override val kind: ToolKind get() = RECEIVE
     val line: Readout.Line
     val showStats: Boolean
-    val heat: Warn?                    // ai: the heat warning (Throttling, the camera's rate where it fell), null while nothing throttles
     val hint: Warn?                    // ai: the camera's hint (Sender too fast, its most), null for none
     val note: String                   // ai: a filing's or a Save's failure; "" none
     fun clearNote() {}                 // ai: its popup's OK
@@ -97,9 +92,6 @@ interface ReceiveHost {
     val off: String                    // ai: over the preview: "No camera yet", "Camera off", or "" while it shows
     val waiting: Boolean               // ai: "Getting ready" until the receiver first answers
     @Composable fun Picture(modifier: Modifier, portrait: Boolean)
-    val settings: Map<FoldKey, List<Setting>>   // ai: each of RECV_FOLDS' settings; a fold given none is not drawn
-    val experimental: List<Setting>    // ai: the Experimental fold's lab arms; no fold where there are none
-    val tools: List<Setting>
 }
 
 // ai: Receive (the web's recv.html; both apps' since 2026-10-31): the camera's crop, the transfer (the actions: Open and
@@ -115,7 +107,7 @@ fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
     // ai: one preview for both layouts: a turn of the phone moves it rather than making another (a second camera view
     // ai: would end the first one's surface, and the camera with it)
     val preview = remember(h) { movableContentOf<Modifier, Boolean> { m, p -> PreviewBox(h, m, p) } }
-    val swap: @Composable () -> Unit = { SwapBtn("Sender") { h.goSend() } }
+    val swap: @Composable () -> Unit = { ToolSwap(h) }
     // ai: the received file in the camera's place once it is in and the camera is off (2026-11-06, the web's #done)
     val got = h.kept != null && !h.running && !h.starting
     // ai: an error said once, in a popup (errorOf): OK closes it until another comes; the phase keeps its error until
@@ -128,17 +120,19 @@ fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
         // ai: the camera the column's width, up to 55% of the screen's height
         val tall = maxHeight * 0.55f
         val up = h.upload
-        ToolPortrait("Receive", { h.goHome() }, { swap() }) {
+        ToolPortrait(h.kind.title, { h.goHome() }, { swap() }) {
             if (got) ReceivedPanel(h, Modifier.fillMaxWidth(), column = null)
             // ai: the file camera's choice as Send's phone draws it: a row's room, the items one row scrolling sideways
             else if (up != null) Box(Modifier.fillMaxWidth().height(UPLOAD_ONE_ROW)) { Upload(up.tiles, up.items, up.enabled, row = true, onRemove = up.onRemove, onClear = up.onClear, total = up.total) }
             else preview(Modifier.fillMaxWidth().heightIn(max = tall), true)
-            Side(h)
+            ReceiveSide(h)
         }
     } else {
         // ai: the column's floor, Send's too (columnFloor), so the column is the same on both screens
-        ToolLandscape("Receive", h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
-            if (h.swapInColumn) swap else null, h.width, columnFloor(h.width), rail = { RailSquares(h) }, side = { Side(h, home = true) }) {
+        // ai: full screen (`alone`, the desktop's): the main area alone, as Send's code (2026-11-13)
+        ToolLandscape(h.kind.title, h.folds.open(FoldKey.Collapsed), { h.folds.toggle(FoldKey.Collapsed) }, { h.goHome() },
+            if (h.swapInColumn) swap else null, h.width, columnFloor(h.width), bare = h.alone, mainModifier = h.areaModifier,
+            rail = { ReceiveRail(h) }, side = { ReceiveSide(h, home = true) }) {
             val up = h.upload
             if (got) ReceivedPanel(h, Modifier.fillMaxSize(), column = 576.dp)
             // ai: the file camera's choice as Send's desktop draws it: a 576 dp column centred in the area
@@ -186,7 +180,7 @@ private fun ReceivedPanel(h: ReceiveHost, modifier: Modifier, column: Dp?) {
 // ai: pause, the rate and the percent while a file or the test stream is read; once the file is kept a green check (or
 // ai: the heat's triangle) alone: its actions are the camera area's tiles (ReceivedPanel), not the rail's (2026-11-07)
 @Composable
-private fun RailSquares(h: ReceiveHost) {
+fun ReceiveRail(h: ReceiveHost) {
     val kept = h.kept
     val hot = h.heat
     if (hot != null && kept == null) AlertSquare(hot.text)
@@ -204,13 +198,9 @@ private fun RailSquares(h: ReceiveHost) {
 }
 
 @Composable
-private fun Side(h: ReceiveHost, home: Boolean = false) {
+internal fun ReceiveSide(h: ReceiveHost, home: Boolean = false) {
     TransferPanel(h)
-    SettingFolds(h.folds, RECV_FOLDS, h.settings)
-    if (h.experimental.isNotEmpty()) Fold("Experimental", h.folds.open(FoldKey.RecvExperimental), { h.folds.toggle(FoldKey.RecvExperimental) }) { Settings(h.experimental) }
-    Fold("Developer Tools", h.folds.open(FoldKey.RecvTools), { h.folds.toggle(FoldKey.RecvTools) }) { Settings(h.tools) }
-    if (home) HomeRow { h.goHome() }
-    Spacer(Modifier.height(24.dp))
+    ToolFolds(h, home)
 }
 
 // ai: The transfer, the desktop's order and gaps: 12 dp under the bar the actions (once the file is kept, its actions on
@@ -221,16 +211,19 @@ private fun Side(h: ReceiveHost, home: Boolean = false) {
 // ai: preview), 16 dp before the folds. A file in: its block only with Show statistics on.
 @Composable
 private fun TransferPanel(h: ReceiveHost) {
-    Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // ai: the camera's button, Fullscreen beside it where the platform has it (FullscreenBtn, Send's row's, 2026-11-13)
+    val fill = LocalButtonsFill.current
+    Row(Modifier.padding(top = 12.dp).then(if (fill) Modifier.fillMaxWidth() else Modifier), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val access = h.access
         val kept = h.kept
-        val wide = if (LocalButtonsFill.current) Modifier.fillMaxWidth() else Modifier
+        val wide = if (fill) Modifier.weight(1f) else Modifier
         if (access != null) Btn(access.act.label, Kind.Primary, modifier = wide) { access.act.run() }
         else {
             // ai: one solid button at a time: Start while nothing waits, else Open (the camera's area's, ReceivedPanel)
             Btn(if (h.running) "Stop" else "Start", if (!h.running && kept == null) Kind.Primary else Kind.Tonal,
                 enabled = !h.starting && (h.running || h.startable), modifier = wide) { h.toggleCamera() }
         }
+        FullscreenBtn(h)
     }
     val ln = h.line
     // ai: an error is the preview's to say (errorOf), not the column's. The transfer as elements (2026-11-07, Details:

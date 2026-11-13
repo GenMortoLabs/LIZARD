@@ -91,7 +91,7 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override val canPortrait = true
     override val swapInColumn = false
     override fun goHome() = a.go(Screen.Home)
-    override fun goSend() = a.go(Screen.Send)
+    override fun goOther() = a.go(Screen.Send)
     private val on get() = a.phase == RxPhase.On
     override val line: Readout.Line get() =
         if (!a.granted && !r.fileMode) Readout.Line(if (a.denied) "No camera access" else "", Readout.Tone.Bad)
