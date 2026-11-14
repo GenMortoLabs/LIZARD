@@ -6,7 +6,7 @@ carries about 4 MB/s (see [Status](#status)).
 
 - **Demo:** [fosslabs.dev](https://fosslabs.dev)
 - **How it works:** [an example on video](https://www.youtube.com/shorts/pjcAtQ7GcVQ)
-- **Apps:** [0.9.3 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.9.3): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
+- **Apps:** [0.2.3 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.2.3): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
 
 ## The idea
 
@@ -402,7 +402,7 @@ either painter decodes the same; the GPU's picture is within a grey level of the
 
 ## Status
 
-A beta since 0.8 (0.1 to 0.7.1 were alphas), and the format may still change ([Roadmap](#roadmap)). Measured on one phone (Samsung S26 Ultra)
+A beta since 0.1 (0.0.1 and the builds before it were alphas), and the format may still change ([Roadmap](#roadmap)). Measured on one phone (Samsung S26 Ultra)
 and the author's 1080p office monitors, by hand:
 
 | receiver | rate |
@@ -438,7 +438,7 @@ Install USB driver binds.
 
 ## Roadmap
 
-LIZARD leaves beta with the transfer's header version 4, the last format change planned before 1.0:
+LIZARD leaves beta with the transfer's header version 4:
 
 - **zstd out of the transfer.** A chunk's fountain carries the chunk's own bytes, so every block count follows from
   the file's length: the header carries the fountain's two seed attempts (one for every full chunk, one for the last)

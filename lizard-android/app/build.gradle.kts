@@ -18,7 +18,7 @@ android {
         minSdk = 29
         targetSdk = 36
         versionCode = 19
-        versionName = "0.9.3"
+        versionName = "0.2.3"
         // ai: a build beside the installed app (`./gradlew assembleDebug -Plizard.idSuffix=.s3`): its own id, data and
         // ai: launcher label, the installed one untouched; unset, the app itself
         val suffix = providers.gradleProperty("lizard.idSuffix").orNull.orEmpty()
