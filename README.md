@@ -6,7 +6,7 @@ carries about 4 MB/s (see [Status](#status)).
 
 - **Demo:** [fosslabs.dev](https://fosslabs.dev)
 - **How it works:** [an example on video](https://www.youtube.com/shorts/pjcAtQ7GcVQ)
-- **Apps:** [0.2.3 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.2.3): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
+- **Apps:** [0.2.4 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.2.4): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
 
 ## The idea
 
@@ -438,7 +438,7 @@ Install USB driver binds.
 
 ## Roadmap
 
-LIZARD leaves beta with the transfer's header version 4:
+The transfer's header version 4 is in since 0.2.4:
 
 - **zstd out of the transfer.** A chunk's fountain carries the chunk's own bytes, so every block count follows from
   the file's length: the header carries the fountain's two seed attempts (one for every full chunk, one for the last)

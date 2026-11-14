@@ -1,0 +1,4 @@
+- Files go with the transfer's new header (version 4): this release and 0.2.3 or earlier do not read each other's files. The codes and the test stream are unchanged.
+- A file that compresses well is packed before it is sent and unpacked when it arrives.
+- Sending a large file takes far less memory: its pieces wait on disk.
+- Developer Tools: Seed repeats a send's order.
