@@ -1,8 +1,9 @@
-// F8, the format word, in GLSL: the WGSL word.mjs (archived) WORD statement for statement (its comments say what it reads and how
-// the word is found: the band through the final map, each word cell against its track pairs' grey, ordered statistics
-// decoding at order 3, the side-aware gate, sel and result written). One workgroup of 256 a frame.
-// ai: Bindings, the Word, Lattice and Held uniforms (std140, every member an array of uvec4 or vec4) and the dispatch
-// ai: are the WGSL's; the uniform's layout and tables come from ../plan/word.mjs. No private array is indexed at run
+// F8, the format word, in GLSL: the band read through the final map, each word cell against its track pairs' grey;
+// ordered statistics decoding at order 3 over the ring's code (../wordcode.mjs); the side-aware gate, held to the C's
+// false-word rate; sel written (the word's version, else the batch's held one, else none) with the result. One
+// workgroup of 256 a frame.
+// ai: The Word, Lattice and Held uniforms are std140, every member an array of uvec4 or vec4; the uniform's layout and
+// ai: tables come from ../plan/word.mjs. No private array is indexed at run
 // ai: time (the S26's Adreno returned zeros from one): the code's rows are read from the uniform, the lattice too.
 // ai: WGSL's extractBits clamps its offset and count (naga writes the mins): so does byteOf here.
 import { VERSION, SAMPLERLESS, DIMS, CONVERT, MAP, uniformLoad } from "./common.mjs";

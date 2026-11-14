@@ -1,17 +1,17 @@
-// The sampler's map pieces in GLSL: the WGSL sample.mjs (archived) COONS statement for statement (its comments): the border nodes'
-// residual curves along each side, blended across the picture, less the corners counted twice, with RING and LENS from
-// ./register.mjs (where the WGSL sample.mjs (archived) takes them from the WGSL register.mjs (archived)). Pass 1, the anchors and F8 read the
-// final map through these.
+// The sampler's map pieces in GLSL, COONS: the border nodes' residual curves along each side (REFIT_POST's and
+// ANCH_REFIT's fits), blended across the picture as a Coons patch (each pair of opposite sides' curves mixed by the
+// position across, less the corners counted twice), with RING and LENS from ./register.mjs. Pass 1, the anchors and F8
+// read the final map through these.
 // ai: A shader including COONS binds `resid` (vec4 a node, RESID a frame), defines latAt(i), lattice coordinate i,
-// ai: before it, as the WGSL's do, and includes CONVERT first.
-import { RESID } from "../plan/register.mjs";
+// ai: before it, and includes CONVERT first.
+import { RESID, NODE_PITCH } from "../plan/register.mjs";
 import { RING, LENS } from "./register.mjs";
 
 export const COONS = RING + LENS + /* glsl */ `
 vec2 res(uint f, uint n) { return resid[f * ${RESID}u + n].xy; }
 vec2 curve(uint f, uint side, float t, uint first, uint nn) {
   float x0 = latAt(first);
-  uint k = min(f2u(max(floor((t - x0) / 16.0), 0.0)), nn - 2u);
+  uint k = min(f2u(max(floor((t - x0) / ${NODE_PITCH}.0), 0.0)), nn - 2u);
   float a = latAt(first + k);
   float b = latAt(first + k + 1u);
   float w = clamp((t - a) / (b - a), 0.0, 1.0);

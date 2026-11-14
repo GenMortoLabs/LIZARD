@@ -1,8 +1,10 @@
-// The back half's rate-profile stage in GLSL: the WGSL back_tiers.mjs (archived) talignSource, tsoftSource, tblocksSource and
-// tldpcSource statement for statement (that file's header and comments say what each kernel does; TAB's layout, the
-// shapes and the forms are its tabLayout, tierShape and LDPC_FORMS). The native tree takes these; the WGSL is their
-// twin for a WebGPU device.
-// ai: As the WGSL: the same bindings (set 0, binding k), storage arrays std430 and uniform blocks std140 (vec4 arrays and
+// The back half's rate-profile stage in GLSL: talign (the grid's shift fitted from the pilots, a workgroup a frame),
+// tsoft (a sub-channel's soft values from its moments, whitened by slot, with its part of a pilot reading), tblocks (a
+// block's estimate, its decline and its pilots' r) and tldpc (a code's layered min-sum in int16 with its learned stop
+// and the CRC-32C, in forms differing in workgroup memory alone). TAB's layout, the codes' shapes and the forms:
+// ../plan/back_tiers.mjs (tabLayout, tierShape, LDPC_FORMS); the arithmetic: ../back/DESIGN.md 4 and 6. The native
+// tree runs these; gen makes the WebGPU tree's WGSL from them.
+// ai: As gen's WGSL: the same bindings (set 0, binding k), storage arrays std430 and uniform blocks std140 (vec4 arrays and
 // ai: scalars, WGSL's offsets), the same arithmetic in the same order. Where GLSL differs from WGSL:
 // ai:   WGSL zeroes workgroup and function variables; here every one is written before it is read (the check records
 // ai:     Rr zeroed by the kernel, as the WGSL's `var Rr` is);
@@ -88,12 +90,12 @@ export const talignSource = ({ f16 = false, layout, codes }) => {
     gather += `    z${i} = ${i}u < cnt ? vec2(y${i}.x * x${i}.x + y${i}.y * x${i}.y, y${i}.y * x${i}.x - y${i}.x * x${i}.y) : vec2(0.0);\n`;
     gather += `    u${i} = w${i};\n`;
   }
+  // ai: the block's sign (+-1, its painted bit) needs no reading: every term the fit sums is a product of two of z's
+  // ai: parts, so it cancels exactly, as in the C's pilot_align
   const fit = (z) => {
-    let o = `    float sum = 0.0;\n`;
+    let o = "";
     for (const i of I) o += `    vec2 e${i} = ${z(i)};\n`;
-    for (const i of I) o += `    sum += e${i}.x;\n`;
-    o += `    float sg = sum < 0.0 ? -1.0 : 1.0;\n`;
-    for (const i of I) o += `    { float zr = sg * e${i}.x; float zi = sg * e${i}.y; vec2 uv = uvOf(u${i}); float cu = kk * zr * uv.x; float cv = kk * zr * uv.y; s0 += vec4(cu * cu, cu * cv, cv * cv, cu * zi); s1 += vec4(cv * zi, 0.0, 0.0, 0.0); }\n`;
+    for (const i of I) o += `    { float zr = e${i}.x; float zi = e${i}.y; vec2 uv = uvOf(u${i}); float cu = kk * zr * uv.x; float cv = kk * zr * uv.y; s0 += vec4(cu * cu, cu * cv, cv * cv, cu * zi); s1 += vec4(cv * zi, 0.0, 0.0, 0.0); }\n`;
     return o + `    s1.z = float(cnt);\n`;
   };
   const decls = I.map((i) => `  vec2 z${i} = vec2(0.0);\n  uint u${i} = 0u;\n`).join("");

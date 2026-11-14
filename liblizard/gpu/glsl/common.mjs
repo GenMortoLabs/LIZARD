@@ -1,7 +1,6 @@
-// GLSL shared by the native decoder's GLSL stages (../../gen/gen.mjs compiles them with glslang to SPIR-V 1.3; the
-// host loads them as it loads naga's). A stage given here in GLSL kept its WGSL in ../wgsl/ as a twin, read only
-// by a WebGPU device, until 2026-10-31 (archived). GLSL here has no includes either, so a stage's source is these pieces joined in JS, as the
-// WGSL's are.
+// GLSL shared by the decoder's stages (../../gen/gen.mjs compiles them with glslang to SPIR-V 1.3, and makes the
+// WebGPU tree's WGSL from that SPIR-V with naga). GLSL has no includes, so a stage's source is these pieces joined in
+// JS.
 // ai: Every source begins with VERSION, then its extensions, then its pieces. Bindings are set 0, binding k as the
 // ai: WGSL's @group(0) @binding(k), against the host's bind group layout (the JS host's createBindGroupLayout):
 // ai: storage arrays std430 (WGSL's storage layout), uniform blocks std140 (WGSL's uniform layout: arrays of vec4
@@ -29,9 +28,10 @@ export const SHUFFLE = "#extension GL_KHR_shader_subgroup_shuffle : require\n";
 // ai: [[unroll]] and [[dont_unroll]] on a loop (GL_EXT_control_flow_attributes)
 export const UNROLL = "#extension GL_EXT_control_flow_attributes : require\n";
 
-// ai: A frame of a batch, the WGSL's Frame (the WGSL common.mjs (archived) DIMS): (w, h, axis, valid), 16 B.
+// ai: A frame of a batch: (w, h, axis, valid), 16 B; axis the camera's optical axis in the frame (plan/common.mjs
+// ai: axisWord), 0 the frame's centre.
 export const DIMS = /* glsl */ `
-struct Frame { uint w; uint h; uint size; uint valid; };
+struct Frame { uint w; uint h; uint axis; uint valid; };
 `;
 
 // ai: WGSL's float-to-integer conversions saturate (naga clamps in f32 before each OpConvertFTo*: to
@@ -46,7 +46,7 @@ uint f2u(float x) { return uint(clamp(x, 0.0, 4294967040.0)); }
 uvec2 f2u(vec2 x) { return uvec2(clamp(x, vec2(0.0), vec2(4294967040.0))); }
 `;
 
-// ai: Level 0's bilinear read (the WGSL common.mjs (archived) LUM0, its arithmetic and clamps): pixel centres at i + 0.5,
+// ai: Level 0's bilinear read (LUM0): pixel centres at i + 0.5,
 // ai: clamped to the frame's own edge. A stage including it binds the frame texture as `img` (texture2DArray,
 // ai: SAMPLERLESS) and includes CONVERT.
 export const LUM0 = /* glsl */ `
@@ -83,8 +83,7 @@ export const lumhHead = (w, h) => `  vec2 hhi = vec2(float(${w}), float(${h})) -
   vec2 hinv = vec2(1.0) / vec2(textureSize(img, 0).xy);
 `;
 
-// ai: A frame's map from module coordinates to image pixels (the WGSL common.mjs (archived) MAP, statement for statement): 16
-// ai: floats, the homography, then the radial term about a centre (k1 = 0 a plain homography). A buffer of maps is
+// ai: A frame's map from module coordinates to image pixels (MAP): 16 floats, the homography, then the radial term about a centre (k1 = 0 a plain homography). A buffer of maps is
 // ai: `float maps[][16]` (the WGSL's array<array<f32, 16>>, 64 B a map in std430).
 export const MAP = /* glsl */ `
 vec2 toImage(float M[16], vec2 m) {
@@ -100,9 +99,8 @@ vec2 toImage(float M[16], vec2 m) {
 }
 `;
 
-// ai: The pyramid's levels and the frames, bindings 0 to 6 (the WGSL finder.mjs (archived) LEVEL_BINDINGS; register.mjs's level
-// ai: reader binds them too). LEVELS reads every level by level-0 coordinates (the WGSL finder.mjs (archived) LEVELS, which the
-// ai: classifier copies); a stage including LEVELS includes CONVERT, DIMS and SAMPLERLESS.
+// ai: The pyramid's levels and the frames, bindings 0 to 6 (LEVEL_BINDINGS; register.mjs's level reader binds them
+// ai: too). LEVELS reads every level by level-0 coordinates (the classifier copies it); a stage including LEVELS includes CONVERT, DIMS and SAMPLERLESS.
 export const LEVEL_BINDINGS = /* glsl */ `
 layout(set = 0, binding = 0) uniform texture2DArray img;
 layout(set = 0, binding = 1, std430) readonly buffer Level1 { float lv1[]; };

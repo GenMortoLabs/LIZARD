@@ -47,15 +47,16 @@ static constexpr double MiB = 1 << 20;
 // ai: features its module asks beyond the variant's: "int16", the LDPC's "reg+i16" forms). 7 since 2026-11-02: the
 // ai: front's `trace` (TRACE, each quad's bend, in both rounds' grids) and HYP doubled (SCORE's bend bit).
 // ai: 8 since 2026-11-06: REFIT's and REFIT_POST's layouts seven bindings (the eighth, REFIT's debug words, gone).
-// ai: 9 since 2026-11-09: the anchors by ring (gen.mjs TREE_VERSION).
-static constexpr int TREE_VERSION = 9;
+// ai: 9 since 2026-11-09: the anchors by ring; 10 since 2026-11-14: the proposer's and the transform's uniforms without
+// ai: their unread words (gen.mjs TREE_VERSION).
+static constexpr int TREE_VERSION = 10;
 
 Consts Consts::of(const json& c) {
   Consts k;
   k.LEVELS = c["LEVELS"]; k.COUNTERS = c["COUNTERS"]; k.RESULT = c["RESULT"]; k.SEL_WORDS = c["SEL_WORDS"]; k.TS_MAX = c["TS_MAX"]; k.TS_PLAIN = c["TS_PLAIN"];
   k.VOTE_READS = c["VOTE_READS"]; k.PEAK_LIST = c["PEAK_LIST"]; k.R2_N = c["R2_N"]; k.RING_SLACK = c["RING_SLACK"]; k.K = c["K"]; k.CELL = c["CELL"]; k.HYP = c["HYP"]; k.RING_COUNT = c["RING_COUNT"];
   k.NODES_MAX = c["NODES_MAX"]; k.RESID = c["RESID"]; k.PYRAMID_BLOCK = c["PYRAMID_BLOCK"];
-  k.TAU = c["TAU"]; k.EPS = c["EPS"];
+  k.TAU = c["TAU"];
   k.TILE = c["TILE"]; k.B_CEIL = c["B_CEIL"]; k.CAP_MS = c["CAP_MS"];
   k.TWIN_FRAMES = c["TWIN_FRAMES"]; k.TWIN_ROUNDS = c["TWIN_ROUNDS"]; k.VERSION_MIN = c["VERSION_MIN"]; k.VERSION_MAX = c["VERSION_MAX"]; k.SLOTS = c["SLOTS"];
   k.ARGS_WORDS = c["ARGS_WORDS"]; k.argsWords = c["argsWords"]; k.COUNTS = c["COUNTS"]; k.REC_BYTES = c["REC_BYTES"]; k.PAYLOAD = c["PAYLOAD"];
@@ -281,12 +282,12 @@ void FrontHalf::backLane(Lane& ln) {
     const int s = sj;
     const json& tb = T["sizes"][s];
     auto p = mk(48, UNIFORM | COPY_DST);
-    uint32_t u[12] = {};
+    uint32_t u[7] = {};
     float* f = (float*)u;
-    // ai: the transform's Params (back_transform.mjs): words 0 and 4 (once the grid's stride and n) read by no pass, 0
-    u[0] = 0; u[1] = T["yStride"]; u[2] = T["partStride"]; u[3] = (uint32_t)s; u[4] = 0; u[5] = 0;
-    f[6] = tb["m2"].get<float>(); f[7] = tb["sx2"].get<float>(); f[8] = tb["sq2"].get<float>(); u[9] = T["sStride"];
-    dev.writeBuffer(*p, 0, u, 48);
+    // ai: the transform's Params (glsl/back_transform.mjs PARAMS)
+    u[0] = T["yStride"]; u[1] = T["partStride"]; u[2] = (uint32_t)s;
+    f[3] = tb["m2"].get<float>(); f[4] = tb["sx2"].get<float>(); f[5] = tb["sq2"].get<float>(); u[6] = T["sStride"];
+    dev.writeBuffer(*p, 0, u, sizeof u);
     b->params[s] = p;
     b->red[s] = dev.createBindGroup(S->bgl(T["redBgl"]), {b->lists, b->part, b->coef, p});
     b->p2[s] = dev.createBindGroup(S->bgl(T["p2Bgl"]), {b->lists, S->bufPtr(T["twBufs"][s]), b->part, b->y, b->coef, S->bufPtr(T["x12Bufs"][s]), S->bufPtr(T["rowsBufs"][s]), b->s, b->counts, p});
@@ -379,10 +380,8 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
     for (uint32_t l = 1; l < C.LEVELS; l++) {
       auto [w, h] = dimsAt(l);
       auto uni = mk(32, UNIFORM | COPY_DST);
-      uint32_t u[8] = {l, w, h, slots, 0, 0, bases[l], ceilDiv(w, C.TILE)};
-      memcpy(&u[4], &C.TAU, 4);
-      memcpy(&u[5], &C.EPS, 4);
-      dev.writeBuffer(*uni, 0, u, 32);
+      const uint32_t u[6] = {l, w, h, slots, bases[l], ceilDiv(w, C.TILE)};   // ai: glsl/bank_fcn2.mjs Bank
+      dev.writeBuffer(*uni, 0, u, sizeof u);
       BufP plane;
       if (xplane) plane = mk(int8 ? (uint64_t)((w + 3) & ~3u) * h * B : (uint64_t)(store == "f32" ? 4 : 2) * (w + (w & 1)) * h * B, STORAGE);
       auto group = [&](const BufP& frames) { return dev.createBindGroup(fcn2.bgl, {plane ? plane : ln.level[l - 1].buf, frames, ln.rawBuf, ln.countsBuf, uni}); };
@@ -884,10 +883,10 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   step(P("vote"), ln.voteGroup, ceilDiv((uint32_t)cap, C.VOTE_READS), n);
   step(P("peaks"), ln.peaksGroup, ceilDiv(ln.gx * ln.gy, 256u), n);
   step(P("gather"), ln.gatherGroup, n);
-  // ai: F5d (glsl/finder.mjs COMPLETE) in the first round too (2026-11-09), a workgroup a (frame, quad): a quad of three
-  // ai: corners on a frame with no quad of four gets its fourth from the ring's two sides, so such a frame is found here
-  // ai: and skips the second round's level-1 bank; and its three corners are completed before the second round's one
-  // ai: cap over levels 1 to 4 can crowd them out (research/STATUS.md "The second round measured")
+  // ai: F5d (glsl/finder.mjs COMPLETE) in the first round too (2026-11-09), a workgroup a (frame, quad): a quad of two
+  // ai: or three corners on a frame with no quad of four is completed by one fitted homography, so such a frame is found
+  // ai: here and skips the second round's level-1 bank; and its corners are completed before the second round's one cap
+  // ai: over levels 1 to 4 can crowd them out (research/STATUS.md "The second round measured")
   step(P("complete"), ln.completeGroup, C.K * n);
   step(P("trace"), ln.traceGroup, C.K * n);   // ai: each quad's bend (glsl/finder.mjs TRACE) before SCORE reads through it
   begin("score");
@@ -1145,8 +1144,8 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
 }
 
 // ai: The LDPC kernel's forms timed on this batch's nb frames, still on its lane (its soft values, blocks and lists as
-// ai: the batch left them): every code's dispatch in each form in turn, the codes side by side as encodeBack runs them,
-// ai: in timestamp pairs, three rounds in alternating order, the first untimed; the fastest kept (the earlier on a tie).
+// ai: the batch left them): every code's dispatch in each form in turn, the codes side by side as encodeBack runs them
+// ai: (timeArms); the fastest kept (the earlier on a tie).
 // ai: Their writes (V, ITS, REC, the counters) are the batch's own again, already read back, and the next batch's gate
 // ai: clears them.
 void FrontHalf::measureLdpc(Lane& ln, int nb) {
@@ -1154,35 +1153,21 @@ void FrontHalf::measureLdpc(Lane& ln, int nb) {
   if (!dev.features.timestamps) { log("LDPC forms not timed (no timestamps): the first"); return; }
   const json& st = S->back()["rule"];
   auto& b = *ln.back;
-  const uint32_t R = C.TWIN_ROUNDS, A = 1 + (uint32_t)st["ldpcAlts"].size();
-  auto qs = dev.createQuerySet(2 * A * R);
-  auto res = dev.createBuffer(16ull * A * R, wg::QUERY_RESOLVE | wg::COPY_SRC);
-  auto rd = dev.createBuffer(res->size, wg::MAP_READ | wg::COPY_DST);
-  auto e = dev.encoder();
-  for (uint32_t r = 0; r < R; r++) {
-    for (uint32_t j = 0; j < A; j++) {
-      const uint32_t i = r % 2 ? A - 1 - j : j, k = r * A + i;
-      const json& steps = i ? st["ldpcAlts"][i - 1] : st["ldpc"];
-      e.beginComputePass(qs.get(), (int)(2 * k), (int)(2 * k + 1));   // ai: a form left out an empty pass (its queries written)
-      for (size_t q = 0; ldpcBuilt[i] && q < b.rldpc.size(); q++) {
-        const json& step = steps[q];
-        e.setPipeline(*S->pipe(step["pipeline"]));
-        e.setBindGroup(*b.rldpc[q]);
-        dispatchRule(e, *b.args, step, q != 0);
-      }
-      e.endPass();
-    }
-  }
-  e.resolveQuerySet(*qs, 0, qs->count, *res, 0);
-  e.copyBufferToBuffer(*res, 0, *rd, 0, res->size);
+  const uint32_t A = 1 + (uint32_t)st["ldpcAlts"].size();
   const json& names = st["ldpcForms"];
-  timing.clear();
-  for (uint32_t i = 0; i < A; i++) if (ldpcBuilt[i] && (int)i != ldpcBase) timing.push_back("ldpc:" + names[i].get<std::string>());
-  dev.submit(e)->wait();
-  timing.clear();
-  const uint64_t* t = (const uint64_t*)dev.read(*rd, 0, rd->size);
-  std::vector<double> best(A, 1e30);
-  for (uint32_t r = 1; r < R; r++) for (uint32_t i = 0; i < A; i++) { const uint32_t k = r * A + i; if (ldpcBuilt[i]) best[i] = std::min(best[i], (double)((t[2 * k + 1] - t[2 * k]) & dev.timestampMask) * dev.timestampPeriod / 1e6 / nb); }
+  std::vector<std::string> labels;
+  for (uint32_t i = 0; i < A; i++) if (ldpcBuilt[i] && (int)i != ldpcBase) labels.push_back("ldpc:" + names[i].get<std::string>());
+  // ai: a form left out records an empty pass (its queries written) and times 1e30
+  const std::vector<double> best = timeArms(A, nb, labels, [&](wg::Encoder& e, uint32_t i) {
+    const json& steps = i ? st["ldpcAlts"][i - 1] : st["ldpc"];
+    for (size_t q = 0; ldpcBuilt[i] && q < b.rldpc.size(); q++) {
+      const json& step = steps[q];
+      e.setPipeline(*S->pipe(step["pipeline"]));
+      e.setBindGroup(*b.rldpc[q]);
+      dispatchRule(e, *b.args, step, q != 0);
+    }
+    return (bool)ldpcBuilt[i];
+  });
   ldpcForm = 0;
   for (uint32_t i = 1; i < A; i++) if (best[i] < best[ldpcForm]) ldpcForm = (int)i;
   const json& forms = st["ldpcForms"];
@@ -1251,67 +1236,57 @@ void FrontHalf::crossCheckLdpc(Lane& ln, int nb) {
   }
 }
 
-// ai: decoder.mjs measureTwins and timeArms: the classifier, where it has an int8 twin, timed in both forms on this batch's
-// ai: first nb frames (still on its lane), by timestamp pairs, three rounds in alternating order, the first untimed;
-// ai: the faster kept, the lanes' groups remade. A device without timestamps keeps the float forms (the web times
-// ai: submits there; every device this runs on has timestamps).
-void FrontHalf::measureTwins(Lane& ln, int nb) {
-  json tf = twinForms;
-  twinForms = nullptr;
-  if (!dev.features.timestamps) { log("int8 twins not measured (no timestamps): the float files"); return; }
-  struct Arm { std::string net, precision; Pipe pipe; BufP buf; GroupP group; uint32_t x; std::vector<double> ms; };
-  std::vector<Arm> arms;
-  if (tf["large"].is_null()) return;
-  {
-    const uint32_t slots = (uint32_t)cap;
-    Arm now{"large", S->tree["weightsPrecision"].get<std::string>(), classify, weightsBuf, nullptr, 0, {}};
-    now.group = netGroup(ln, now.pipe, *now.buf);
-    now.x = ceilDiv(slots, now.pipe.P);
-    Arm twin{"large", "int8", S->pair(tf["large"]["pipe"]), S->bufPtr(tf["large"]["buf"]), nullptr, 0, {}};
-    twin.group = netGroup(ln, twin.pipe, *twin.buf);
-    twin.x = ceilDiv(slots, twin.pipe.P);
-    arms.push_back(now);
-    arms.push_back(twin);
-  }
-  const uint32_t R = C.TWIN_ROUNDS, A = (uint32_t)arms.size();
+std::vector<double> FrontHalf::timeArms(uint32_t A, int nb, std::vector<std::string> labels, const std::function<bool(wg::Encoder&, uint32_t)>& record) {
+  const uint32_t R = C.TWIN_ROUNDS;
   auto qs = dev.createQuerySet(2 * A * R);
   auto res = dev.createBuffer(16ull * A * R, wg::QUERY_RESOLVE | wg::COPY_SRC);
   auto rd = dev.createBuffer(res->size, wg::MAP_READ | wg::COPY_DST);
+  std::vector<char> used(A, 0);
   auto e = dev.encoder();
   for (uint32_t r = 0; r < R; r++) {
     for (uint32_t j = 0; j < A; j++) {
       const uint32_t i = r % 2 ? A - 1 - j : j, k = r * A + i;
       e.beginComputePass(qs.get(), (int)(2 * k), (int)(2 * k + 1));
-      e.setPipeline(*arms[i].pipe.p);
-      e.setBindGroup(*arms[i].group);
-      e.dispatch(arms[i].x, (uint32_t)nb);
+      if (record(e, i)) used[i] = 1;
       e.endPass();
     }
   }
   e.resolveQuerySet(*qs, 0, qs->count, *res, 0);
   e.copyBufferToBuffer(*res, 0, *rd, 0, res->size);
-  timing = {"classifier:int8"};
+  timing = std::move(labels);
   dev.submit(e)->wait();
   timing.clear();
   const uint64_t* t = (const uint64_t*)dev.read(*rd, 0, rd->size);
-  for (uint32_t r = 1; r < R; r++) for (uint32_t i = 0; i < A; i++) { const uint32_t k = r * A + i; arms[i].ms.push_back((double)((t[2 * k + 1] - t[2 * k]) & dev.timestampMask) * dev.timestampPeriod / 1e6); }
-  auto best = [&](const std::vector<double>& v) { return *std::min_element(v.begin(), v.end()) / nb; };
-  json out = {{"frames", nb}, {"by", "timestamps"}};
-  for (const char* net : {"large"}) {
-    // ai: the form in use first, then its twins: the fastest is kept (the one in use on a tie)
-    Arm* fl = nullptr; Arm* keep = nullptr;
-    json row = json::object();
-    for (auto& a : arms) if (a.net == net) {
-      if (!fl) fl = keep = &a;
-      else if (best(a.ms) < best(keep->ms)) keep = &a;
-      row[a.precision] = best(a.ms);
-    }
-    if (!fl) continue;
-    row["kept"] = keep->precision;
-    out[net] = row;
-    if (keep != fl) { classify = keep->pipe; weightsBuf = keep->buf; S->tree["weightsPrecision"] = "int8"; }
-    nets[net] = keep->precision;
+  std::vector<double> best(A, 1e30);
+  for (uint32_t r = 1; r < R; r++) for (uint32_t i = 0; i < A; i++) {
+    const uint32_t k = r * A + i;
+    if (used[i]) best[i] = std::min(best[i], (double)((t[2 * k + 1] - t[2 * k]) & dev.timestampMask) * dev.timestampPeriod / 1e6 / nb);
   }
+  return best;
+}
+
+// ai: The classifier, where it has an int8 twin, timed in both forms on this batch's first nb frames (still on its
+// ai: lane, timeArms); the faster kept, the lanes' groups remade. A device without timestamps keeps the float forms.
+void FrontHalf::measureTwins(Lane& ln, int nb) {
+  json tf = twinForms;
+  twinForms = nullptr;
+  if (!dev.features.timestamps) { log("int8 twins not measured (no timestamps): the float files"); return; }
+  if (tf["large"].is_null()) return;
+  // ai: arm 0 the form in use, arm 1 its int8 twin: the faster is kept (the one in use on a tie)
+  struct Arm { std::string precision; Pipe pipe; BufP buf; GroupP group; uint32_t x = 0; };
+  Arm arms[2] = {{S->tree["weightsPrecision"].get<std::string>(), classify, weightsBuf, nullptr},
+                 {"int8", S->pair(tf["large"]["pipe"]), S->bufPtr(tf["large"]["buf"]), nullptr}};
+  for (auto& a : arms) { a.group = netGroup(ln, a.pipe, *a.buf); a.x = ceilDiv((uint32_t)cap, a.pipe.P); }
+  const std::vector<double> best = timeArms(2, nb, {"classifier:int8"}, [&](wg::Encoder& e, uint32_t i) {
+    e.setPipeline(*arms[i].pipe.p);
+    e.setBindGroup(*arms[i].group);
+    e.dispatch(arms[i].x, (uint32_t)nb);
+    return true;
+  });
+  const Arm& keep = best[1] < best[0] ? arms[1] : arms[0];
+  json out = {{"frames", nb}, {"by", "timestamps"}, {"large", {{arms[0].precision, best[0]}, {"int8", best[1]}, {"kept", keep.precision}}}};
+  if (&keep != &arms[0]) { classify = keep.pipe; weightsBuf = keep.buf; S->tree["weightsPrecision"] = "int8"; }
+  nets["large"] = keep.precision;
   for (auto& l : lanes) bindNets(*l);
   log("int8 twins measured on " + std::to_string(nb) + " frames: " + out.dump());
   log("nets: bank " + nets["bank"].dump() + ", classifier " + nets["large"].dump());

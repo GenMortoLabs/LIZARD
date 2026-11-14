@@ -29,7 +29,7 @@ typedef struct {
 // ai: receiver since 2026-09-29; 1024 before). Returns the block bytes (476), or -1.
 int lizard_any_init(lizard_any_t *a, int nmax);
 void lizard_any_free(lizard_any_t *a);
-// ai: One frame. blocks and ok hold lizard_any_top(a) blocks. held: the sub-channel count / 8 of the last word the
+// ai: One frame. blocks and ok hold lizard_any_top(a) blocks. held: the sub-channel count / 16 of the last word the
 // ai: caller read (its version field), 0 for none; a held version no format has (outside OB_FMT_VERSION_MIN ..
 // ai: OB_FMT_VERSION_MAX) decodes nothing and is not reported as held. Returns the blocks decoded; a->which, a->n and
 // ai: a->held say what happened, res what the registration found.

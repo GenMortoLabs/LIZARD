@@ -20,7 +20,7 @@ import { ANCH_FIND, ANCH_PREDICT, ANCH_REFIT, ANCH_FIT } from "./glsl/anchors.mj
 import { classifySource } from "./glsl/classify.mjs";
 import { SLOTS } from "./plan/common.mjs";
 import { RING_COUNT } from "./plan/finder.mjs";
-import { ROUND, NODES_MAX, LIGHT_MAX, WINDOW, SUB, ringOrder } from "./plan/register.mjs";
+import { ROUND, ANCH_ROUND, NODES_MAX, LIGHT_MAX, WINDOW, SUB, ringOrder } from "./plan/register.mjs";
 import { wordUniform, wordPoints, wordLattice } from "./plan/word.mjs";
 import { anchUniform } from "./plan/anchors.mjs";
 // The classifier's plan and its weight packers come from one module: plan/classify_gemm.mjs lays the weights out for
@@ -32,11 +32,10 @@ import { BackHalf } from "./back/back.mjs";
 import { computePipeline } from "./pipeline.mjs";
 
 export const COUNTERS = 16;     // u32 counters a frame, read back with every batch
-// The bank's floor on the normalised response, and the deviation added under it so a flat patch does not
-// divide by nothing (luma is 0..1). ai: In constants.mjs since 2026-10-01 (the kernels' plans that need them may not
+// ai: SELECT's histogram origin (constants.mjs TAU), there since 2026-10-01 (the kernels' plans that need it may not
 // ai: import this module, which imports them), re-exported here.
-import { LEVELS, TAU, EPS } from "./constants.mjs";
-export { LEVELS, TAU, EPS };
+import { LEVELS, TAU } from "./constants.mjs";
+export { LEVELS, TAU };
 // F6: the track score a frame's best hypothesis must reach (src/acquire.c accepts a mark quad at 0.15).
 export const TAU_TRACK = 0.15;
 // ai: The host's constants the native port (core/dec/front.cpp) reads from the generated setup (../gen/gen.mjs).
@@ -378,13 +377,9 @@ export class FrontHalf {
       P(ANCH_REFIT, ["ro", "ro", "ro", "rw", "rw", "rw", "uniform", "rw", "uniform", "uniform"]),
     ]);
     const on = async (glsl, bgl) => ({ p: await computePipeline(this.device, { code: { glsl }, layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }) }), bgl });
-    // ai: the border's second search's own round: +-0.5 module at a quarter, every template sample, so the samples (half
-    // ai: a module apart) and the offsets share a lattice, 51 points a side read once each (+-0.4 at a fifth until
-    // ai: 2026-10-31, each position read directly; +-0.6, the fine round F7 had until 2026-10-28: 0.07% more blocks over
-    // ai: the published lenses for 0.06 to 0.08 ms more of the S26's half; +-0.2 no cheaper there and 0.22% fewer; one
-    // ai: sample a module 4.2% fewer); its kernel built for it, a quarter of the template a pass and 256 (offset,
-    // ai: group) pairs, 15.0 KB of workgroup memory
-    const ANCH_ROUND = [2, 1, 0.25], nodesCOpts = { centred: true, round: ANCH_ROUND, chunk: 144, items: 256 };
+    // ai: the border's second search (plan/register.mjs ANCH_ROUND), its kernel built for its round: a quarter of the
+    // ai: template a pass and 256 (offset, group) pairs, 15.0 KB of workgroup memory
+    const nodesCOpts = { centred: true, round: ANCH_ROUND, chunk: 144, items: 256 };
     const [anchPredict, nodesC] = await Promise.all([on(ANCH_PREDICT, anchRefit.bgl), on(nodesSource(nodesCOpts), this.nodesP.bgl)]);
     const au = anchUniform(this.tables.rings);
     this.anchUni = this.device.createBuffer({ size: au.byteLength, usage: U.UNIFORM | U.COPY_DST });

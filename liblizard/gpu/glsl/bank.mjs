@@ -1,6 +1,8 @@
-// F3 SELECT in GLSL, the WGSL bank.mjs (archived) SELECT statement for statement (that file says what it keeps, and why the list's
-// order is the lanes' appends): the strongest cap peaks of a frame from its tiles' slots, one workgroup a frame.
-// ai: Bindings as the WGSL's: 0 frames, 1 raw, 2 peaks, 3 counts, 4 the uniform (slots, cap, tau, p0). hist, used and
+// F3 SELECT in GLSL: the strongest cap peaks of a frame from its tiles' slots, one workgroup a frame, by one cut: a
+// histogram of the peaks' scores, the bin where the count above reaches cap, then one append pass (above the cut bin
+// into the first places, the cut bin's after them by a count of their own). The list's order is the lanes' appends,
+// which nothing reads.
+// ai: Bindings: 0 frames, 1 raw, 2 peaks, 3 counts, 4 the uniform (slots, cap, tau, p0). hist, used and
 // ai: used2 are read before any lane writes them (the histogram's counts, the appends' places), so they are zeroed by
 // ai: their initializers (GL_EXT_null_initializer, the same OpConstantNull naga gives every workgroup variable); cut and
 // ai: above are written by lane 0 before the barriers that precede their reads.

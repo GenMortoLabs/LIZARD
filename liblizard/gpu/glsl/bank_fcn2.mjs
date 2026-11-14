@@ -1,11 +1,10 @@
-// F2, the trained proposer (version 2), in GLSL: the WGSL bank_fcn2.mjs (archived) fcn2Source statement for statement, the plane
-// forms (that file's header says what the kernels compute, how the pools are laid out and why): the X pass (stage
-// "x") and the network reading the plane (stage "net"), f32, f16, f32 with halves stored (packed) and int8, at every
-// region, X block and walk fcn2Forms gives. The plan, the layout and the literals are that file's.
-// ai: Natively these are the proposer's modules (gen's 32 KB device takes a plane form in every precision); the fused
-// ai: kernel (stage "all"), the dump build and the timing probes stay the WGSL twin's alone (the browser lab's,
-// ai: scripts/gpu/cnn/proposer/check2.mjs) and are refused here.
-// ai: Bindings as the WGSL's: x: 0 lev, 1 frames, 2 the plane, 3 P; net: 0 the plane, 1 frames, 2 raw, 3 counts, 4 P.
+// F2, the trained proposer (version 2), in GLSL: the X pass (stage "x": each pixel of a pyramid level standardised over
+// its own 15 x 15 box into the plane) and the network reading the plane (stage "net": the mark score and size a pixel,
+// a peak where a pixel beats its eight neighbours and the file's floor, each tile's strongest into the raw slots), in
+// f32, f16, f32 with halves stored (packed) and int8, at every region, X block and walk fcn2Forms gives. The plan, the
+// layout and the literals: ../plan/bank_fcn2.mjs; the weights: ../cnn/proposer/.
+// ai: These are the proposer's modules (gen's 32 KB device takes a plane form in every precision).
+// ai: Bindings: x: 0 lev, 1 frames, 2 the plane, 3 P; net: 0 the plane, 1 frames, 2 raw, 3 counts, 4 P.
 // ai: The port's rules beyond glsl/common.mjs: no workgroup variable is zeroed (each pool element, cst and nfound is
 // ai: written before a barrier that precedes its reads; nfound by its atomicStore at a region's start), where naga
 // ai: zeroes every one; round is roundEven (WGSL's round, half to even); pack4xI8 is the low bytes shifted together
@@ -32,11 +31,9 @@ uvec2 h2u(f16vec4 h) { return uvec2(packFloat2x16(h.xy), packFloat2x16(h.zw)); }
 const PACKED_FNS = `uvec2 pk(vec4 v) { return uvec2(packHalf2x16(v.xy), packHalf2x16(v.zw)); }
 vec4 upk(uvec2 p) { return vec4(unpackHalf2x16(p.x), unpackHalf2x16(p.y)); }`;
 
-// The GLSL of one stage: "x" the X pass, "net" the network reading the plane (the WGSL's options; dump, probe and
-// stage "all" refused).
-export function fcn2Source(json, { f16 = false, packed = false, int8 = false, TX = 2, TY = 2, stage = "net", dump = false, probe = "", colrun = 0, XB = XBLOCKS[1], walk = WALK } = {}) {
-  if (stage !== "x" && stage !== "net") throw new Error(`fcn2 GLSL: stage ${stage}: the plane forms alone (x, net); the fused kernel is the WGSL twin's`);
-  if (dump || probe) throw new Error("fcn2 GLSL: the dump build and the probes are the WGSL twin's (the browser checks)");
+// The GLSL of one stage: "x" the X pass, "net" the network reading the plane.
+export function fcn2Source(json, { f16 = false, packed = false, int8 = false, TX = 2, TY = 2, stage = "net", colrun = 0, XB = XBLOCKS[1], walk = WALK } = {}) {
+  if (stage !== "x" && stage !== "net") throw new Error(`fcn2 GLSL: stage ${stage}: x or net`);
   if (f16 && packed) throw new Error("fcn2 bank: f16 already stores halves; packed is for f32");
   if (int8 && (f16 || packed)) throw new Error("fcn2 bank: int8 is a store of its own with the plane form only (stage x, then net)");
   const Q = quantOf(json, int8);
@@ -394,7 +391,7 @@ ${body}    barrier();
   const planeElem = halves || int8 ? "uint" : "float";
   // ai: The pools' element: 16 bytes, or 8 in the int8 network (fcn2Layout).
   const EL = int8 && net ? "uvec2" : "uvec4";
-  const bankU = "layout(std140) uniform Bank { uint level; uint stride; uint rows; uint slots; float tau; float eps; uint slotBase; uint tilesX; } P;";
+  const bankU = "layout(std140) uniform Bank { uint level; uint stride; uint rows; uint slots; uint slotBase; uint tilesX; } P;";
   const bind = !net
     ? `layout(set = 0, binding = 0, std430) readonly buffer Lev { float lev[]; };
 layout(set = 0, binding = 1, std430) readonly buffer Frames { Frame frames[]; };
@@ -421,7 +418,7 @@ ${Array.from({ length: Math.ceil((Lz.XH * Lz.XE) / WG) }, (_, r) => `    if (li 
   }`;
   return VERSION + (net ? UNROLL + ATOMICS : "") + (f16 && net ? F16 : "") + (int8 && net ? DOT : "") + DIMS + /* glsl */ `
 // slotBase: where this level's tiles start in the frame's slots; tilesX: tiles a row at this level; slots: a frame's
-// slots over every level. The bank contract's uniform (the WGSL bank.mjs (archived)); eps and the floor are baked in.
+// slots over every level. The standardisation's eps and the peaks' floor are the weights file's, baked in.
 layout(local_size_x = ${WG}, local_size_y = 1, local_size_z = 1) in;
 ${bind}
 const int HALO = ${HALO};
@@ -452,7 +449,7 @@ ${statsCode}${netCode}}
 }
 
 // ai: The int8 network's GLSL for fcn2Source (stage net; Q the file's codes from readQuant, Lz fcn2Layout's int8
-// ai: layout), the WGSL bank_fcn2.mjs (archived) int8Net's: { layers (the convolutions and the fused head, inside the walk loop),
+// ai: layout): { layers (the convolutions and the fused head, inside the walk loop),
 // ai: fns (the X words, the peak list, rq), map (one element a pixel), xfetch, xPut (Xq words) }.
 function int8Net(Q, Lz) {
   const { HALO, G1, convs } = Lz;

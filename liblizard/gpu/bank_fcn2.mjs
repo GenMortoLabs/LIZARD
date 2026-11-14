@@ -43,7 +43,7 @@ export async function build(fh) {
   const f16 = !int8 && fh.floatPrecision === "f16";
   const limit = fh.device.limits.maxComputeWorkgroupStorageSize;
   let forms;
-  try { forms = fcn2Forms(json, { f16, int8 }).filter((t) => t.xplane); } catch (e) { throw new Error(`fcn2 bank ${fh.precision}, ${file}: ${e.message}`); }
+  try { forms = fcn2Forms(json, { f16, int8 }); } catch (e) { throw new Error(`fcn2 bank ${fh.precision}, ${file}: ${e.message}`); }
   const form = forms.find((t) => t.bytes <= limit);
   // ai: int8 too big for the device is a failed int8 build, not a small device: the caller's precision chain then
   // ai: tries f16 or f32, whose halves-stored forms are smaller.

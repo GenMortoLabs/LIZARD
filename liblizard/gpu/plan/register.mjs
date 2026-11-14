@@ -15,9 +15,17 @@ export const LENS_SLOTS = 5, RESID = NODES_MAX + LENS_SLOTS;
 
 // ai: F7's round ([steps, stride, step], the host's Round): +-3 modules at half a module, one template sample a module
 export const ROUND = [6, SUB * SUB, 0.5];
+// ai: The border's second search's own round (about ANCH_PREDICT's places): +-0.5 module at a quarter, every template
+// ai: sample, so the samples (half a module apart) and the offsets share a lattice, 51 points a side read once each
+// ai: (+-0.4 at a fifth until 2026-10-31, each position read directly; +-0.6, the fine round F7 had until 2026-10-28:
+// ai: 0.07% more blocks over the published lenses for 0.06 to 0.08 ms more of the S26's half; +-0.2 no cheaper there and
+// ai: 0.22% fewer; one sample a module 4.2% fewer)
+export const ANCH_ROUND = [2, 1, 0.25];
+// ai: The border nodes' pitch along a side, modules (src/layout.h OB_THIN_PITCH): COONS finds a position's node span by it
+export const NODE_PITCH = 16;
 // ai: a round's lattice side: where its samples (one a module at stride SUB^2, every one at stride 1) are a whole
 // ai: number of offset steps apart, the window's WINDOW / spacing - 1 spacings a side in steps and the offsets' reach
-// ai: each way (F7's round 35); else 0, each position measured directly
+// ai: each way (F7's round 35, ANCH_ROUND's 51); else 0, a round nodesSource refuses
 export const latticeSide = ([steps, stride, step]) => {
   const spacing = stride === SUB * SUB ? 1 : stride === 1 ? 1 / SUB : 0, ratio = spacing / step;
   return spacing > 0 && Math.abs(ratio - Math.round(ratio)) < 1e-6 ? (WINDOW / spacing - 1) * Math.round(ratio) + 2 * steps + 1 : 0;

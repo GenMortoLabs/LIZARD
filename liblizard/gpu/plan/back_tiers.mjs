@@ -34,14 +34,13 @@ export const WHITE_SLOTS = 1024 * 640;
 // ai: same decisions and iterations) and differ by workgroup memory alone, so the one a device runs faster is the
 // ai: faster on any batch: a generated tree carries every form and the native host times them on its first batch and
 // ai: keeps the faster ("reg+i16" on the iGPU and the S26, at one and two frames a launch and batched: research STATUS
-// ai: "The LDPC's posteriors as int16_t"; "reg" and "reg+i32" before); a browser (the lab's harness in Chrome) builds
-// ai: "reg" alone. The pair form (a check on two lanes, the 1/2 code's rows side by side) went 2026-10-31: in GLSL with
+// ai: "The LDPC's posteriors as int16_t"; "reg" and "reg+i32" before). The pair form (a check on two lanes, the 1/2 code's rows side by side) went 2026-10-31: in GLSL with
 // ai: the slot loops unrolled "reg+i32" beat it on the S26's iterating captures at every launch, and its lower cost on
 // ai: clean batches at one and two frames a launch turned the first-batch pick wrong (research STATUS "GLSL as the GPU
 // ai: decoder's native source"). The lab's other forms (records in workgroup memory, a parity bit array; LIZ_TLDPC)
 // ai: went 2026-10-22; the check's own values in 16-bit registers ("reg+i16+r16") was slower on both devices
 // ai: (2026-10-31).
-export const LDPC_FORMS = typeof process !== "undefined" ? ["reg", "reg+i32", "reg+i16"] : ["reg"];
+export const LDPC_FORMS = ["reg", "reg+i32", "reg+i16"];
 // ai: the codes TT names, in order: src/lizard_phy.c lizard_tiers_for's four rates (ldpc.h index, slots a block: the code's
 // ai: sent bits and its pilots, src/lizard_phy.c lizard_block_slots). Every block's slots are a multiple of 16, so every
 // ai: block's first slot is too (the blocks are packed from the frame's first slot, the remainder padded).

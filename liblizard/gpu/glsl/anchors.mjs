@@ -1,18 +1,19 @@
-// The anchors in GLSL: the WGSL anchors.mjs (archived) statement for statement (its comments say what each stage does, SPEC 6.13):
-// ANCH_FIND (a workgroup of 128 an (anchor, frame): the squares found by normalised correlation from integral images,
-// coarse then fine), ANCH_FIT (the knots, the fill, the squares' shading, the record), and anchRefitSource: ANCH_REFIT
-// (the lens about the axis over the border and the anchors, robust over the border, the sides' curves) and
-// ANCH_PREDICT (the fit over the anchors alone, the border's places for its second search).
-// ai: Bindings, workgroup sizes and layouts are the WGSL's. Workgroup memory is not zeroed but where the WGSL reads it
-// ai: before writing it: ANCH_REFIT's three counters (wcnt, wnba, wchg), whose atomics start from WGSL's zero, are
-// ai: null-initialised (GL_EXT_null_initializer: the same OpConstantNull initializer naga writes for every workgroup
-// ai: variable).
+// The anchors (SPEC 6.13) in GLSL: ANCH_FIND (a workgroup of 128 an (anchor, frame): the ring's squares found by
+// normalised correlation from integral images, coarse then fine, through REFIT's homography and the sides' curves),
+// ANCH_FIT (the mesh's knots, a missing one the mean of its found neighbours; the squares' fill, the least-squares
+// shading surface outside them; the picture's gain from the signal's swing, SPEC 6.10; the record pass 1 reads), and
+// anchRefitSource: ANCH_REFIT (the lens about the axis over the border and the anchors, robust over the border, the
+// sides' curves of what it leaves) and ANCH_PREDICT (the fit over the anchors alone, the border's places for its
+// second search). Their constants and the uniform's layout: ../plan/anchors.mjs.
+// ai: Workgroup memory is not zeroed but where a kernel reads it before writing it: ANCH_REFIT's three counters (wcnt,
+// ai: wnba, wchg), whose atomics start from zero, are null-initialised (GL_EXT_null_initializer: the same OpConstantNull
+// ai: initializer naga writes for every workgroup variable).
 import { VERSION, SAMPLERLESS, NULL_INIT, ATOMICS, DIMS, CONVERT, MAP, LUM0, lit, zeros, uniformLoad, STORAGE_BARRIER, wgAdd, wgLoad, wgStore } from "./common.mjs";
 import { COONS } from "./sample.mjs";
 import { LATTICE_MAX, ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF, ANCH_GAIN } from "../plan/back_transform.mjs";
 import { RING_COUNT } from "../plan/finder.mjs";
 import { NODES_MAX, RESID, WMIN, LENS_P } from "../plan/register.mjs";
-import { ANCH_TS, ANCH_PEAK, ANCH_ROUNDS, ANCH_FILL, ANCH_BAND2, SW_T, SW_R, SW_LAG, SW_MIN, SW_BINS } from "../plan/anchors.mjs";
+import { ANCH_TS, ANCH_PEAK, ANCH_KNOT_ROUNDS, ANCH_FILL, ANCH_BAND2, SW_T, SW_R, SW_LAG, SW_MIN, SW_BINS } from "../plan/anchors.mjs";
 import { lensNode, lensAccumulate, lensModel, lensNormalSolve, SIDE_FITS, SIDE_DECL, gaussJordan } from "./register.mjs";
 
 const RR = ANCH_TS, TC = ANCH_TS / 2, RC = RR / 2, WC = TC + 2 * RC, W1C = WC + 1, OC = 2 * RC + 1;
@@ -26,7 +27,7 @@ const pattern = (ts) => {
   return { ts, i25, j25, i6, j6, tm, tn: Math.fround(Math.sqrt(light * (1 - tm) ** 2 + dark * (1 + tm) ** 2)) };
 };
 
-// ai: What both kernels bind first, 0 to 6 (the WGSL anchors.mjs (archived) HEAD), and the final map at a module point.
+// ai: What both kernels bind first, 0 to 6, and the final map at a module point.
 const HEAD = DIMS + CONVERT + MAP + /* glsl */ `
 layout(set = 0, binding = 0) uniform texture2DArray img;
 layout(set = 0, binding = 1, std430) readonly buffer Frames { Frame frames[]; };
@@ -303,7 +304,7 @@ void main() {
   ${uniformLoad("uint found", "wfound")}
   if (li == 0u) { result[f].r[31] = float(found); }
   if (found < gridMin(rgi) && li < NK) { kv[li] = vec2(0.0); kn[li] = 1u; }
-  for (uint rd = 0u; rd < ${ANCH_ROUNDS}u; rd++) {
+  for (uint rd = 0u; rd < ${ANCH_KNOT_ROUNDS}u; rd++) {
     barrier();
     if (li < NK) {
       uint now = kn[li];
@@ -622,9 +623,9 @@ void main() {
 }
 `;
 
-// ai: ANCH_REFIT and ANCH_PREDICT (the WGSL anchors.mjs (archived) anchRefitSource, its comments).
+// ai: ANCH_REFIT and ANCH_PREDICT (anchRefitSource; the header says what each does).
 const NPTS = NODES_MAX + ANCH_K;
-const TAU_SPREAD = String(Math.fround(3.0 * 1.4826));   // ai: the WGSL's 3.0 * 1.4826, folded in abstract precision then rounded to f32
+const TAU_SPREAD = String(Math.fround(3.0 * 1.4826));   // ai: three robust spreads, 3.0 * 1.4826 folded in double precision then rounded to f32
 export const anchRefitSource = ({ predict = false } = {}) => VERSION + NULL_INIT + DIMS + CONVERT + MAP + /* glsl */ `
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0, std430) readonly buffer Frames { Frame frames[]; };
@@ -713,7 +714,7 @@ ${predict ? `  for (uint n = li; n < count; n += 64u) { pp[n] = vec4(toImage(M, 
   ${STORAGE_BARRIER}
   barrier();
   uint npts = count + NK;
-  uint aw = F.size;
+  uint aw = F.axis;
   vec2 LA = vec2(0.5 * float(F.w), 0.5 * float(F.h));
   if (aw != 0u) { LA = vec2(0.5 * float(aw & 0xffffu) - 16384.0, 0.5 * float(aw >> 16u) - 16384.0); }
   vec2 fwh = vec2(float(F.w), float(F.h));

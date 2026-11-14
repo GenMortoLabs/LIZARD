@@ -30,7 +30,7 @@ void lizard_set_axis(float x, float y) { ob_axis[0] = x; ob_axis[1] = y; }
 // ai: in every ring before: 2, 4, 8), square (i, j) on the modules from round(OB_MARGIN + span (i + 0.5) / k - a / 2)
 // ai: on, each a light middle (Chebyshev distance under a quarter of the half-side), a dark ring (to 0.6 of it) and a
 // ai: light rim. lizard_encode paints them over the picture. acquire_core finds them through the corners' homography
-// ai: first, three modules wide, in rounds through the lens model the ones found so far give (anchor_grow), starts
+// ai: first, three modules wide, in rounds through the lens model the ones found so far give (anchor_register), starts
 // ai: every border node's search from that model plus its measured neighbours' residuals from it, and fills the
 // ai: interior from the border and the anchors (border_fill_anchors) where it found ob_anchor_min or more (12; 8 of the
 // ai: 64 ring's 9); lizard_finish erases them always.
@@ -1602,8 +1602,7 @@ static int lensm_fit(int np, const double *qx, const double *qy, const double *d
   return ok;
 }
 
-// ai: where module point (X, Y) is in the image: through H and the node mesh when given (ob_map_point), else H and the
-// ai: lens model when given, else H alone
+// ai: where module point (X, Y) is in the image: through H, and the lens model about it when given
 typedef struct { float X, Y, dx, dy, peak, u, v; int ok; } anchor_t;
 static void anchor_map(const homo_t *H, const lensm_t *lm, float X, float Y, float *u, float *v) {
   project(H, X, Y, u, v);
@@ -1622,7 +1621,8 @@ static void anchor_map(const homo_t *H, const lensm_t *lm, float X, float Y, flo
 // ai: ANCH_CORNER: how far, in modules, the finder's corner may sit from where the anchors' map puts it before it is
 // ai: searched again (the corners the finder lost on the published lenses sat 4 to 63 modules off, the ones it held
 // ai: within 1.2; the anchors' map, extrapolated past the last anchor to a corner, is a module or two off on a strong lens)
-enum { ANCH_ROUNDS = 6, ANCH_CORNER = 3, ANCH_REACH = 3 };
+// ai: ANCH_KNOT_ROUNDS: the rounds a missing anchor's mesh knot is filled in from its found neighbours (border_fill_anchors)
+enum { ANCH_ROUNDS = 6, ANCH_CORNER = 3, ANCH_REACH = 3, ANCH_KNOT_ROUNDS = 6 };
 static const float ANCH_PEAK = 0.6f;
 #ifdef OB_NEON
 // ai: lensm_at's displacement added to four points (u, v), in floats: with x, y the point about the axis over R and s
@@ -2034,7 +2034,7 @@ static int anchor_model_free(const homo_t *H, int iw, int ih, anchor_t *A, lensm
 // ai: and H made again from the four. (Judging the corners by that joint model instead, dropping outliers round by
 // ai: round, kept 82.4% of the exact map's blocks on the hard cells against this rule's 85.6%: a misplaced corner bends
 // ai: it.) Then the anchors' model about H (anchor_model) for the border's search. 0 where fewer than OB_ANCH_MIN
-// ai: anchors were found (the rounds grow from four).
+// ai: anchors were found (a round's homography takes four, its lens model five: lensm_fit's 2 n - 9 > 0).
 static int anchor_register(const ob_layout_t *L, const image_t *im, const image_t *rim, homo_t *H, int iw, int ih, float mpx, float *quad, node_t *nodes, anchor_t *A, lensm_t *m) {
   enum { NA = OB_ANCH_K * OB_ANCH_K };
   homo_t Ha = *H;
@@ -2345,7 +2345,8 @@ static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, i
     // ai: The mesh (2026-10-26; a thin-plate spline before it, the same blocks over the published lenses for 2.6 to 8.2%
     // ai: less of a frame): knots on both axes at the lattice's ends, where the border holds the map (0), and the ring's
     // ai: k anchors' centres between; an inner knot is its anchor's reading, a missing one the mean of its found
-    // ai: 4-neighbours (rounds until none is left, at most 6; none near: 0). The arrays hold the 7 x 7 grid's 9 knots.
+    // ai: 4-neighbours (rounds until none is left, at most ANCH_KNOT_ROUNDS; none near: 0). The arrays hold the 7 x 7
+    // ai: grid's 9 knots.
     enum { KM = OB_ANCH_K + 2 };
     const int KN = K + 2;
     double kx[KM], ky[KM], kv[KM][KM][2];
@@ -2358,7 +2359,7 @@ static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, i
       const int i = gi[q] % OB_ANCH_K + 1, j = gi[q] / OB_ANCH_K + 1;
       kv[j][i][0] = tv[q][0]; kv[j][i][1] = tv[q][1]; kn[j][i] = 1;
     }
-    for (int round = 0; round < 6; round++) {
+    for (int round = 0; round < ANCH_KNOT_ROUNDS; round++) {
       unsigned char now[KM][KM];
       memcpy(now, kn, sizeof now);
       int left = 0;
@@ -3822,7 +3823,7 @@ static void meet(const fline_t *v, const fline_t *hz, float *x, float *y) {
 
 // The depth the fitted curves run at. They follow the inner edge of the FIRST DARK RUN a scan meets, and which run
 // that is depends on the blur: the solid line alone (depth 1 + OB_THIN_LINE) while the one-module light gap inside
-// it survives, or line, track and word merged into one (depth OB_THIN_FMT + 1) once it does not. binarize
+// it survives, or line, track and ring merged into one (depth OB_THIN, the picture's edge) once it does not. binarize
 // marks a pixel dark when it is under its 40 px neighbourhood's mean, so a gap blurred to mid grey closes as soon
 // as that neighbourhood is bright, which a border wider than six modules makes it (traced at 1.5 px of defocus:
 // every fitted side 2.5 to 3.1 modules inside the truth, track score 0.01). find_frame tries both and
@@ -3961,7 +3962,7 @@ static inline __attribute__((always_inline)) void trk_row(const trk_side_t *s, c
 static inline float trk_sum4(__m128 a) { const __m128 t = _mm_add_ps(a, _mm_shuffle_ps(a, a, _MM_SHUFFLE(2, 3, 0, 1))); return _mm_cvtss_f32(_mm_add_ss(t, _mm_movehl_ps(t, t))); }
 #endif
 // ai: the track's signs (ob_thin_track) as the sign bit a cell's -q takes, 0 where the cell is dark, side by side,
-// ai: made once a thread; TRK_SIGNS cells a side reach the 512 ring (the 256, the largest, has 128)
+// ai: made once a thread; room for TRK_SIGNS cells a side, where the largest ring (the 256) has 128
 enum { TRK_SIGNS = 256 };
 static OB_TLS uint32_t trk_sign_tab[4][TRK_SIGNS];
 static OB_TLS int trk_sign_made;
@@ -4596,7 +4597,6 @@ int ob_thin_read_fmt(const ob_layout_t *L, const image_t *im, const ob_reg_t *re
   return 1;
 }
 
-// Finds the frame and its rotation. quad: the four lattice corners in layout order, as image points.
 // The image halved, each pixel the mean of four.
 // ai: fb, slot: frame_buf's (OB_FB_HALF or OB_FB_QUARTER)
 static uint8_t *shrink2(const uint8_t *src, int w, int h, ob_fbufs_t *fb, int slot) {
@@ -4658,6 +4658,7 @@ static int mark_levels(const ob_layout_t *const *Ls, int nL, int w, int h, int *
   return k;
 }
 
+// Finds the frame and its rotation. quad: the four lattice corners in layout order, as image points.
 // Ls: the layouts the symbol may be, which differ only in how many modules a side (lizard_phy.h LIZARD_RING); *which
 // comes back as the one that registered. The mark path scores every one before a hold settles it; the line path tries
 // the first (the 64 ring) first and the others only when it does not register.
@@ -4673,22 +4674,22 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
   double tp = ob_now_ms();
   // The corner a layout side runs between, in the direction its modules count. Shared with the combination loop.
   static const int ENDS[4][2] = { { 0, 1 }, { 1, 2 }, { 3, 2 }, { 0, 3 } };
-  // The corner marks' quads, scored on the same scale as the line quads and tried FIRST. Measured with the line
-  // fit switched off altogether: the mark quad alone equals the full pipeline in every cell and beats it at 480 px
-  // (3957 B against 3635). So once one has settled there is nothing for the 81 line combinations to add, only a
-  // chance for a wrong line quad (a bar, a merged run's ragged inner edge) to outscore a right one, and most of
-  // the finder's time to spend doing it.
+  // The corner marks' quads, scored on the same scale as the line quads and tried FIRST. Once one has settled there
+  // is nothing for the 81 line combinations to add, only a chance for a wrong line quad (a bar, a merged run's
+  // ragged inner edge) to outscore a right one, and most of the finder's time to spend doing it. The line fit reads
+  // the frames no mark quad holds, most of them far off: without it the simulated lens set's roots read 10.95% fewer
+  // blocks, the far cells at 0.3 of the crop 94% fewer (2026-11-07).
   //
   // The gapped form, then the merged one only if that settled nothing, and within a form every quad, the TRACK
   // choosing between them. Spacing cannot choose: a noisy background holds four grains at any spacing asked for, and
   // only the symbol has a track between them. The best reading of the set wins, not the first to reach 0.15: taking
-  // the first lost 2 of 32 clean LIZARD-16 simulator frames (scripts/exp/fmt_word.mjs DAMAGE) to a mirror image of a wrong
+  // the first lost 2 of 32 clean simulator frames of LIZARD-16, a format since removed (scripts/exp/fmt_word.mjs DAMAGE), to a mirror image of a wrong
   // quad at 0.16, ahead of the true quad at 0.49 the right way round. A set is MARK_QUADS quads, so this is at most
   // 32 hypotheses, what a set that settled nothing always cost, and thin_score stops reading one that cannot win.
   //
   // Then the same again on the image halved and quartered. binarize calls a pixel dark against the mean of its
   // 40 px neighbourhood, so a mark whose core outgrows that window is light in the middle and fails its solidity
-  // probes: a 94-module symbol at 1080 fill 0.7 is 8 px a module and its cores are 48 px, and at 30 degrees the
+  // probes: a 94-module symbol (the 32 ring, since removed) at 1080 fill 0.7 is 8 px a module and its cores are 48 px, and at 30 degrees the
   // near marks were not found at all. A full-scale scan alone had sufficed for the 286-module side, where a core
   // only reaches the window at very close range.
   float msrc[8];
@@ -4732,7 +4733,7 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
     // 0.6 of the truth and its middle two modules off, and mark_quads refuses the real quad on spacing. The gapped
     // form cannot stand in: its row cross-section, line then gap then core, and its solidity probes assume the
     // mark nearly square to the rows, and past about 25 degrees of in-plane turn it stops finding marks at all
-    // (traced on LIZARD-16: 8 to 12 rows a mark at 20 degrees, 1 or 2 at 30, a mark missing outright at 30 and
+    // (traced on LIZARD-16, since removed: 8 to 12 rows a mark at 20 degrees, 1 or 2 at 30, a mark missing outright at 30 and
     // 35), where the merged scan still finds all four, 15 to 17 rows each, within half a pixel. The square test is
     // a run and a column and four probes near the middle, none of which cares how the square is turned. No new
     // scan: the candidates are the merged form's, their module size rescaled.
@@ -4756,9 +4757,9 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
       homo_t H;
       for (int k = 0; k < 4; k++) { int from = (rot + (mir ? 4 - k : k)) & 3; d2[2 * k] = mq[qi].q[from].x; d2[2 * k + 1] = mq[qi].q[from].y; }
       if (!homography(msrc, d2, &H)) continue;
-      int lv;
-      PROF(PROF_FF_TRACK, lv = thin_levels(L, im, &H, &ref, &con));
-      if (!lv) continue;
+      int lev;
+      PROF(PROF_FF_TRACK, lev = thin_levels(L, im, &H, &ref, &con));
+      if (!lev) continue;
       float sc;
       PROF(PROF_FF_TRACK, sc = thin_score(L, im, &H, ref, con, best));
       if (sc <= best) continue;
@@ -4852,8 +4853,8 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
   // Every combination is scored under every rotation, and the best of them all wins. Until 2026-09-24 the first
   // combination to reach 0.15 fixed the rotation and the rest were scored under it alone, so a wrong combination
   // read passably one way round shut the true one out. One read serves all eight ways round, so this costs reading
-  // each side both ways, not eight reads: on the line path a decode went from 2.7 to 2.9 ms at n = 256 and from
-  // 15.5 to 15.8 at 1024 (an ideal image, mark cores painted out).
+  // each side both ways, not eight reads: on the line path a decode at n = 1024 went from 15.5 to 15.8 ms (an ideal
+  // image, mark cores painted out).
   for (int pass = 0; pass < 2 && !(pass && rotation_holds(best, *orient)); pass++) {
   const float de = pass ? OB_THIN : 1 + OB_THIN_LINE;   // OB_THIN: the picture's edge, which is what line, track and ring merge to
   { const float e = de, se[8] = { e, e, L->w - e, e, L->w - e, L->h - e, e, L->h - e }; memcpy(src, se, sizeof src); }
@@ -5038,7 +5039,7 @@ static int acquire_core(const ob_layout_t *const *Ls, int nL, const image_t *pim
   // The thin frame's finder has already settled rotation: it scores the coded track under every hypothesis.
   if (!homography(src, thin_quad, &H)) { frame_buf_done(fb, bin); return 0; }
   memcpy(res->quad, thin_quad, sizeof thin_quad);
-  if (thin_orient < 0 || 2.0f + thin_sc < 2.0f) { frame_buf_done(fb, bin); return 0; }
+  if (thin_orient < 0 || thin_sc < 0.0f) { frame_buf_done(fb, bin); return 0; }
   res->orient = thin_orient;
 
   // The node templates read the image under a box a module wide once a module is several pixels (border_blur). The

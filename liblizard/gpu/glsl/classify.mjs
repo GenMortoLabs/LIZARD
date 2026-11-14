@@ -1,12 +1,13 @@
-// F4, the classifier, in GLSL: the WGSL classify_gemm.mjs (archived) classifySource statement for statement (its comments say
-// how the convolutions are tiled, what the int8 form computes and why each piece is as it is), its float forms (f16 and
-// f32) and its int8 form, with the same plan, weight layout, bindings and dispatch (ceil(cap / P) workgroups a frame).
-// ai: The plan is the WGSL module's (classifyPlan): patches a workgroup, tiles, buffers and scratch. WGSL's select is
+// F4, the classifier, in GLSL: each kept peak's 32 x 32 patch through the net (cnn-v3) as convolutions tiled as GEMMs,
+// a register tile a lane and several patches a workgroup: is it a corner mark, which way is out, how big a module. Its
+// float forms (f16 and f32) and its int8 form (int8-v1: per-channel weights, per-layer activation scales, requantised
+// by one f32 multiply, so its codes are the trainer's integer forward's), dispatched ceil(cap / P) workgroups a frame.
+// ai: The plan (classifyPlan: patches a workgroup, tiles, buffers and scratch) and the weights' packing are
+// ai: ../plan/classify_gemm.mjs's. WGSL's select is
 // ai: GLSL's mix with a bool selector (both operands made, one OpSelect); a bitcast of u32 words to f16 is
 // ai: unpackFloat2x16, to f32 uintBitsToFloat; dot4I8Packed is dotPacked4x8EXT (GL_EXT_integer_dot_product, the
 // ai: OpSDot naga writes); pack4xI8 is the low bytes shifted together, as gen/gen.mjs rewrites it for naga (the Adreno
-// ai: 840 got naga's 8-bit vector form wrong); round is roundEven. The measurement knobs the lab's WebGPU pages use
-// ai: (stop, dump) are the WGSL's alone. Every workgroup variable is written before the barrier that precedes its
+// ai: 840 got naga's 8-bit vector form wrong); round is roundEven. Every workgroup variable is written before the barrier that precedes its
 // ai: reads, so none is zeroed.
 import { VERSION, SAMPLERLESS, F16, DOT, SHUFFLE, DIMS, CONVERT, LEVEL_BINDINGS, LEVELS, PACK4X_I8 } from "./common.mjs";
 import { KAPPA, PATCH } from "../cnn/patch.mjs";

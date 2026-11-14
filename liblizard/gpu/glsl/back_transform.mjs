@@ -1,8 +1,8 @@
-// The back half's transform in GLSL, the WGSL back_transform.mjs (archived) statement for statement (that file's comments say
-// what each pass does, its LISTS and ARGS layout, and gpu/back/DESIGN.md sections 1 to 3 and 10 the arithmetic):
-// the gate, the fused pass 1 (the map on a node grid, the anchors' mesh and erase, the column FFT of four columns),
-// reduce (the five surface coefficients) and pass 2 (the row FFT and the detrend). Built a batch size and a picture
-// size each, as the WGSL is.
+// The back half's transform in GLSL: the gate (a batch's frames listed by picture slot, every later dispatch sized),
+// the fused pass 1 (each frame sampled through its map on a node grid with the anchors' mesh, the squares filled with
+// the shading, the gain applied, then the column FFT of four columns), reduce (the five surface coefficients) and pass
+// 2 (the row FFT and the detrend). Built a batch size and a picture size each. The LISTS and ARGS layouts:
+// ../plan/back_transform.mjs; the arithmetic: ../back/DESIGN.md 1 to 3 and 10.
 // ai: The gate: a batch of B frames listed by picture slot, each listed frame's version,
 // ai: rows and ring, the passes' indirect dispatches, and the chain's counters, verdicts, iteration counts and record
 // ai: count zeroed. One workgroup of 64.
@@ -248,9 +248,9 @@ function firstStage(prec, lanes = [["v", "buf"]]) {
 
 const V8 = "vec2[8](vec2(0.0), vec2(0.0), vec2(0.0), vec2(0.0), vec2(0.0), vec2(0.0), vec2(0.0), vec2(0.0))";
 
-// ai: The per size uniform pass 1, reduce and pass 2 share (the WGSL's Params, 48 B, std140 at the same offsets).
+// ai: The per size uniform pass 1, reduce and pass 2 share (std140, 28 B).
 const PARAMS = (binding) => /* glsl */ `
-layout(set = 0, binding = ${binding}, std140) uniform Params { uint p0; uint yStride; uint partStride; uint size; uint p4; uint p5; float m2; float sx2; float sq2; uint sStride; uint p10; uint p11; } P;
+layout(set = 0, binding = ${binding}, std140) uniform Params { uint yStride; uint partStride; uint size; float m2; float sx2; float sq2; uint sStride; } P;
 `;
 
 // ai: PIC (the WGSL's PICTURE): per ring (g0, step, nodes a side, first lattice coordinate), then every ring's lattice.
@@ -310,7 +310,7 @@ vec2 anchMesh(AnchHerm h, uint col) {
 }
 `;
 // ai: the squares' fill (ANCH_FIT's surface, plan/back_transform.mjs ANCH_SURF): u = m sk + so of a module coordinate m
-const anchHead = () => `  uint ab = f * ${ANCH_REC}u;\n  vec4 ahd = arec[ab];\n  bool aon = ahd.x > 0.5;\n  uint aS = f2u(ahd.y);\n  vec4 sfa = arec[ab + ${ANCH_SURF}u];\n  vec2 sfb = arec[ab + ${ANCH_SURF + 1}u].xy;\n  vec4 sga = arec[ab + ${ANCH_GAIN}u];\n  vec2 sgb = arec[ab + ${ANCH_GAIN + 1}u].xy;\n  float gm = sga.x + (sga.z + sgb.x) / 3.0;\n  float gfl = 0.1 * gm;\n  vec4 sgeo = arec[ab + 3u];\n  float sk = 2.0 / sgeo.z;\n  float so = -2.0 * sgeo.w / sgeo.z - 1.0;\n`;
+const anchHead = () => `  uint ab = f * ${ANCH_REC}u;\n  vec4 ahd = arec[ab];\n  uint aS = f2u(ahd.y);\n  vec4 sfa = arec[ab + ${ANCH_SURF}u];\n  vec2 sfb = arec[ab + ${ANCH_SURF + 1}u].xy;\n  vec4 sga = arec[ab + ${ANCH_GAIN}u];\n  vec2 sgb = arec[ab + ${ANCH_GAIN + 1}u].xy;\n  float gm = sga.x + (sga.z + sgb.x) / 3.0;\n  float gfl = 0.1 * gm;\n  vec4 sgeo = arec[ab + 3u];\n  float sk = 2.0 / sgeo.z;\n  float so = -2.0 * sgeo.w / sgeo.z - 1.0;\n`;
 // ai: the squares' samples as the C erases them (src/lizard_phy.c, SPEC 6.13): floor((m0 - margin) n / span) - E to
 // ai: ceil((m0 + a - margin) n / span) - 1 + E on either axis, E = ANCH_ERASE; n (m0 + a - margin) stays under 2^20
 const anchErase = (n) => `      if (tid < aS) {
@@ -324,9 +324,9 @@ const anchErase = (n) => `      if (tid < aS) {
       }
 `;
 
-// ai: Pass 1 (the WGSL's pass1Source): n the picture's size, prec, B. Every workgroup variable is written before the
-// ai: barrier that precedes its reads (the anchors' only where the record is on, and read only there), so none is
-// ai: zeroed.
+// ai: Pass 1: n the picture's size, prec, B. Every workgroup variable is written before the barrier that precedes its
+// ai: reads, so none is zeroed. Every listed frame's anchors record is on (ANCH_FIT writes it for every frame it finds),
+// ai: so the anchors' mesh, erase and gain are read on every one.
 export function pass1Source({ n, prec, B }) {
   const cpw = CPW, { ty, ld } = store(prec);
   const T = n / 8, quads = cpw / 4, f16 = prec === "f16";
@@ -338,13 +338,12 @@ export function pass1Source({ n, prec, B }) {
     // ai: the fill along this quad's columns: fa its terms in u alone, fb the coefficient of w (b4 w^2 apart); the gain's
     // ai: surface (ANCH_GAIN) at the quad's middle, ga and gb alike: it moves under 0.2% across four neighbouring samples
     body += `    vec4 sux = vec4(mx0, mx1, mx2, mx3) * sk + so;\n    vec4 fa = sfa.x + sux * (sfa.y + sux * sfa.z);\n    vec4 fb = sfa.w + sfb.y * sux;\n    float gx = 0.5 * (sux.y + sux.z);\n    float ga = sga.x + gx * (sga.y + gx * sga.z);\n    float gb = sga.w + sgb.y * gx;\n`;
-    body += `    bvec4 aix = bvec4(false);\n    if (aon) {\n`;
     body += `      if (tid < ${ANCH_SIDE + 2}u) { anK[tid] = aknot(ab, tid); }\n` + anchErase(n) + `      barrier();\n      if (tid < 4u) { anCol[tid] = anchIn(int(xq + tid), aS) ? 1u : 0u; }\n`;
     body += `      for (uint ai = tid; ai < ${4 * ANCH_ROWS}u; ai += T) {\n        uint arow = ai % ${ANCH_ROWS}u;\n        vec2 aev = vec2(0.0);\n`;
     body += `        if (arow >= 2u && arow <= aS + 1u) { aev = anchE(ab, g0 + float(xq + ai / ${ANCH_ROWS}u) * gstep, arow - 1u, aS); }\n        anE[ai] = aev;\n      }\n      barrier();\n`;
-    body += `      aix = bvec4(${[0, 1, 2, 3].map((k) => `anCol[${k}] != 0u`).join(", ")});\n    }\n`;
+    body += `      bvec4 aix = bvec4(${[0, 1, 2, 3].map((k) => `anCol[${k}] != 0u`).join(", ")});\n`;
     body += `    for (uint j = tid; j <= T; j += T) {\n      float my = g0 + float(8u * j) * gstep;\n      float v = coonsT(my, first, nn);\n      vec2 lf = curve(f, 3u, my, first, nn);\n      vec2 rg = curve(f, 1u, my, first, nn);\n`;
-    body += `      vec2 m0 = vec2(0.0);\n      vec2 m3 = vec2(0.0);\n      if (aon) { AnchHerm ah = anchHerm(my, aS); m0 = anchMesh(ah, 0u); m3 = anchMesh(ah, 3u); }\n`;
+    body += `      AnchHerm ah = anchHerm(my, aS);\n      vec2 m0 = anchMesh(ah, 0u);\n      vec2 m3 = anchMesh(ah, 3u);\n`;
     body += `      vec2 p0 = toImage(M, vec2(mx0, my));\n      vec2 p3 = toImage(M, vec2(mx3, my));\n`;
     body += `      nodeP[j] = vec4(p0 + lensAt(lz, p0) + coonsMix(u0, v, tp0, bt0, lf, rg, cn) + m0, p3 + lensAt(lz, p3) + coonsMix(u3, v, tp3, bt3, lf, rg, cn) + m3);\n    }\n    barrier();\n`;
     body += `    vec4 z[8] = vec4[8](vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0), vec4(0.0));\n`;
@@ -352,9 +351,8 @@ export function pass1Source({ n, prec, B }) {
     for (let r = 0; r < 8; r++) {
       body += `    {\n      uint y = tid + ${r * T}u;\n`;
       body += `      vec4 nA = nodeP[y / 8u];\n      vec4 nB = nodeP[y / 8u + 1u];\n      float fy = float(y % 8u) * 0.125;\n      vec2 pL = mix(nA.xy, nB.xy, fy);\n      vec2 pR = mix(nA.zw, nB.zw, fy);\n`;
-      body += `      vec4 zz = vec4(0.0);\n      if (aon) {\n`;
-      body += `        zz = vec4(bilinH(f, pL, hhi, hinv), bilinH(f, mix(pL, pR, 1.0 / 3.0), hhi, hinv), bilinH(f, mix(pL, pR, 2.0 / 3.0), hhi, hinv), bilinH(f, pR, hhi, hinv));\n`;
-      body += `        bool ay = anchIn(int(y), aS);\n        float suy = (g0 + float(y) * gstep) * sk + so;\n        float gG = gm / max(ga + suy * (gb + suy * sgb.x), gfl);\n        zz = mix(zz, fa + suy * (fb + suy * sfb.x), bvec4(aix.x && ay, aix.y && ay, aix.z && ay, aix.w && ay)) * gG;\n      }\n`;
+      body += `      vec4 zz = vec4(bilinH(f, pL, hhi, hinv), bilinH(f, mix(pL, pR, 1.0 / 3.0), hhi, hinv), bilinH(f, mix(pL, pR, 2.0 / 3.0), hhi, hinv), bilinH(f, pR, hhi, hinv));\n`;
+      body += `        bool ay = anchIn(int(y), aS);\n        float suy = (g0 + float(y) * gstep) * sk + so;\n        float gG = gm / max(ga + suy * (gb + suy * sgb.x), gfl);\n        zz = mix(zz, fa + suy * (fb + suy * sfb.x), bvec4(aix.x && ay, aix.y && ay, aix.z && ay, aix.w && ay)) * gG;\n`;
       body += `      z[${r}] = zz;\n`;
       body += `      float c = float(2 * int(y) + 1 - int(N)) / float(N);\n      s1 += zz;\n      sc += zz * c;\n      sq += zz * (c * c - P.m2);\n    }\n`;
     }

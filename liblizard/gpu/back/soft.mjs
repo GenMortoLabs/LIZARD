@@ -2,7 +2,6 @@
 // (transform.mjs discLayout) with each coefficient's (u, v) behind it, the per-size params (glsl/back_tiers.mjs
 // PARAMS), and the sizes of a lane's L (int8 slot order, 4 a u32, lStride words a frame), BLK (a block: bitcast f32
 // estimate, u32 declined) and PILOT, which the native host makes. Every stride comes from dims.mjs derived().
-// ai: Its own soft and align kernels, which decoded one code rate, went 2026-10-22 (the profile's since 2026-10-07).
 import { derived } from "./dims.mjs";
 
 const U = globalThis.GPUBufferUsage;   // undefined under node

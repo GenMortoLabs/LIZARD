@@ -18,6 +18,7 @@ extern "C" {
 #include <cmath>
 #include <array>
 #include <chrono>
+#include <functional>
 #include <mutex>
 #include <optional>
 
@@ -28,7 +29,7 @@ namespace lizard {
 // ai: The constants the web host states (gen.mjs exports them with the setup).
 struct Consts {
   uint32_t VOTE_READS, PEAK_LIST, R2_N, LEVELS, COUNTERS, RESULT, SEL_WORDS, TS_MAX, TS_PLAIN, RING_SLACK, K, CELL, HYP, RING_COUNT, NODES_MAX, RESID, PYRAMID_BLOCK;
-  float TAU, EPS;
+  float TAU;
   uint32_t TILE, B_CEIL;
   double CAP_MS;
   uint32_t TWIN_FRAMES, TWIN_ROUNDS, VERSION_MIN, VERSION_MAX, SLOTS, ARGS_WORDS, argsWords, COUNTS, REC_BYTES, PAYLOAD;
@@ -326,6 +327,11 @@ class FrontHalf {
   void destroyRing();
   int takeSlot();   // ai: under ringMu: a free slot whose last copy is done, from the head on; -1 none
   void buildBack(int B);
+  // ai: A forms of a stage timed on nb frames (measureTwins, measureLdpc): arm i's passes recorded by record(e, i) inside
+  // ai: its own timestamp pair, C.TWIN_ROUNDS rounds in alternating order, the first untimed; labels name the forms being
+  // ai: timed while the submit runs (timing); record says whether it recorded anything. Each arm's best ms a frame, 1e30
+  // ai: for an arm that recorded nothing.
+  std::vector<double> timeArms(uint32_t A, int nb, std::vector<std::string> labels, const std::function<bool(wg::Encoder&, uint32_t)>& record);
   void measureTwins(Lane& ln, int nb);
   void measureLdpc(Lane& ln, int nb);
   void crossCheckLdpc(Lane& ln, int nb);

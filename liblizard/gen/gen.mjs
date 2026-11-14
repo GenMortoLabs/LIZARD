@@ -55,7 +55,9 @@ const MAIN = (() => { try { return fileURLToPath(import.meta.url) === realpathSy
 // ai: 8 since 2026-11-06: REFIT's and REFIT_POST's layouts seven bindings (the eighth, REFIT's debug words, gone).
 // ai: 9 since 2026-11-09: the anchors by ring (3 x 3 of 4 modules, 5 x 5 of 6, 7 x 7 of 8; the anchors' uniform a vec4f
 // ai: a ring longer): a tree of the old anchors would read the 64 and 128 rings' squares where the codec no longer paints them.
-export const TREE_VERSION = 9;
+// ai: 10 since 2026-11-14: the proposer's uniform without the old bank's tau and eps, the transform's Params without its
+// ai: five unread words (both written by the host, so every later word moved).
+export const TREE_VERSION = 10;
 
 const NDK = process.env.ANDROID_NDK_HOME || `${process.env.ANDROID_HOME || `${homedir()}/Android/Sdk`}/ndk/27.1.12297006`;
 // ai: SPIRV-Tools' spirv-val and shaderc's glslc: the Android NDK's shader-tools where there is an NDK, else the
@@ -100,7 +102,7 @@ if (MAIN) {
   if (v !== GLSLANG) { console.error(`${TOOLS.glslang} is glslang ${v ?? "of no version it states"}; the tree's modules are glslang ${GLSLANG}'s (lizard-android/build.sh tools)`); process.exit(1); }
 }
 
-const { FrontHalf, CAP_MS, B_CEIL, LEVELS, COUNTERS, TAU, EPS, INSTALLED, receiverOptions, RESULT, SEL_WORDS, TS_MAX, TS_PLAIN, RING_SLACK, TWIN_FRAMES, TWIN_ROUNDS } =
+const { FrontHalf, CAP_MS, B_CEIL, LEVELS, COUNTERS, TAU, INSTALLED, receiverOptions, RESULT, SEL_WORDS, TS_MAX, TS_PLAIN, RING_SLACK, TWIN_FRAMES, TWIN_ROUNDS } =
   await imp("gpu/decoder.mjs");
 const { formatTables, PICTURES } = await imp("gpu/tables.mjs");
 const { loadNet } = await imp("gpu/cnn/netfile.mjs");
@@ -212,7 +214,7 @@ function exportTree(fh, v) {
   const f = fh.fcn2Form;
   return {
     treeVersion: TREE_VERSION, variant: v.name, precision: fh.precision, floatPrecision: fh.floatPrecision, subgroups: v.subgroups, features: fh.features, nets: fh.nets,
-    consts: { LEVELS, COUNTERS, RESULT, SEL_WORDS, TS_MAX, TS_PLAIN, RING_SLACK, K, CELL, HYP, RING_COUNT, VOTE_READS, PEAK_LIST, R2_N, NODES_MAX, RESID, PYRAMID_BLOCK, TAU, EPS,
+    consts: { LEVELS, COUNTERS, RESULT, SEL_WORDS, TS_MAX, TS_PLAIN, RING_SLACK, K, CELL, HYP, RING_COUNT, VOTE_READS, PEAK_LIST, R2_N, NODES_MAX, RESID, PYRAMID_BLOCK, TAU,
       TILE, B_CEIL, CAP_MS, TWIN_FRAMES, TWIN_ROUNDS, VERSION_MIN, VERSION_MAX, SLOTS, ARGS_WORDS, ARGS_SLOT, argsWords, COUNTS, REC_BYTES, PAYLOAD, ANCH_K, ANCH_REC },
     cap: fh.cap, nodesMax: fh.nodesMax, modules: Array.from(fh.modules), bankKeep: fh.bank.KEEP,
     weightsPrecision: fh.weights.precision,

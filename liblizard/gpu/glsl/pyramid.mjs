@@ -1,7 +1,6 @@
-// The pyramid in GLSL, the WGSL pyramid.mjs (archived) PYRAMID's arithmetic and layout statement for statement (its header says
-// what the kernel does): level l + 1 the 2 x 2 mean of level l, levels 1 to 4 from one 64 x 64 block of a frame's
-// layer a workgroup, each mean summed from 0 in the same order, so the levels are the WGSL's bit for bit.
-// ai: Bindings as the WGSL's: 0 the frame texture (r8unorm 2D array, read by texelFetch without a sampler,
+// F1, the pyramid, in GLSL: level l + 1 the 2 x 2 mean of level l, levels 1 to 4 from one 64 x 64 block of a frame's
+// layer a workgroup, each mean summed from 0 in one order, so every device's levels are the same bit for bit.
+// ai: Bindings: 0 the frame texture (r8unorm 2D array, read by texelFetch without a sampler,
 // ai: GL_EXT_samplerless_texture_functions: SPIR-V's OpImageFetch on a sampled image, as naga writes textureLoad),
 // ai: 1 the frames, 2 to 5 levels 1 to 4 (f32), 6 the levels' (stride, rows). Every workgroup variable is written
 // ai: before the barrier that precedes its reads, so none is zeroed. Dispatched (ceil(W / 64), ceil(H / 64), frames).

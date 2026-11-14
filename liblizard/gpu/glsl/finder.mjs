@@ -1,7 +1,10 @@
-// F5 to F6 and the second round's REDO in GLSL, the WGSL finder.mjs (archived) statement for statement (its comments say what
-// each kernel does and why, and its constants are the ones used here): VOTE, PEAKS, GATHER, COMPLETE, SCORE, PICK and
-// REDO, with the bindings, workgroup sizes and dispatches of the WGSL kernels; TRACE (each quad's bend, before SCORE) is
-// GLSL alone.
+// F5 to F6 and the second round's REDO in GLSL: VOTE (each classified reading votes along its inward diagonal for the
+// symbol's centre, a ray a ring), PEAKS (the accumulators' local maxima, the frame's list), GATHER (the strongest
+// centres' quads from the readings that support them), COMPLETE (a quad of two or three corners, on a frame with none
+// of four, completed by one fitted homography), TRACE (each quad's bend, traced along its ring), SCORE (every quad,
+// orientation, ring and bend read against the known timing track near the corners), PICK (the argmax, the ring and
+// the map) and REDO (the frames the first round missed, sent round again from level 1). The constants:
+// ../plan/finder.mjs.
 // ai: WGSL's workgroupUniformLoad is common.mjs uniformLoad; its atomicLoad and atomicStore are common.mjs wgLoad and
 // ai: wgStore on a workgroup variable, devLoad and devStore on a storage buffer. Workgroup memory is not zeroed but
 // ai: GATHER's keys, which atomicMax builds on from 0 (NULL_INIT); every other workgroup variable is written before the
@@ -11,15 +14,11 @@ import {
   CENTRE, K, CELL, ORIENT, RING_COUNT, HYP, SMIN, VOTE_READS, RAY_LO, RAY_HI, RAY_SPREAD, NEAR, SUPPRESS, PEAK_LIST, STATIONS, R2_N,
 } from "../plan/finder.mjs";
 
-// ai: The constants the WGSL inlines that are not exported there (its PROFILE, NCC_MIN, PASSES, GROUP).
-// ai: COMPLETE's PASSES are [extent, reach]: the extent in modules of the corner's own module size from the first
-// ai: station (Infinity the whole run), the reach in modules either way. The first pass lays its stations along a
-// ai: guessed direction (a few degrees off under perspective) at an offset in a module size that runs short across a
-// ai: foreshortened side, so its window holds the ring for a stretch fixed in modules, not a share of the side: past
-// ai: it the window holds only the band 4 modules in (the same profile where a cell is dark) and the side's fit tilts
-// ai: (2026-11-09, STATUS "COMPLETE's misplaced corner found": 12% of the side was 31 modules in the 128 ring and 62 in
-// ai: the 256). Each later pass about the fitted line, three times the last.
-const PROFILE = 13, NCC_MIN = 0.6, PASSES = [[12, 3.0], [36, 1.5], [108, 1.5], [Infinity, 1.5]], GROUP = 256 / K;
+// ai: COMPLETE's side reads: pass 0 reads the stretch ALONG0 or ALONG1 (below) at a reach of REACH0 modules either way
+// ai: of its guessed line; the later PASSES, [extent, reach], each about the line the pass before fitted, its extent in
+// ai: modules of the corner's own module size from the first station (Infinity the whole run), three times the last.
+const PROFILE = 13, NCC_MIN = 0.6, REACH0 = 3.0, PASSES = [[36, 1.5], [108, 1.5], [Infinity, 1.5]], GROUP = 256 / K;
+const REACH_MAX = Math.max(REACH0, ...PASSES.map((p) => p[1]));
 // ai: a pass's extent along the side, from t0: m modules of u0, at most the run
 const ext = (m) => (m === Infinity ? "(t1 - t0)" : `min(${lit(m)} * u0, t1 - t0)`);
 
@@ -181,7 +180,7 @@ bool ahead(vec4 a, vec4 b) {
 uvec4 keyOf(uint f, uint i) {
   uint o = 3u * (f * P.cap + i);
   vec4 r0 = readings[o];
-  uint w = f2u(floor(clamp(readings[o + 1u].x, 0.0, 1.0) * 1000.0)) * 300u;
+  uint w = f2u(floor(clamp(readings[o + 1u].x, 0.0, 1.0) * 1000.0));
   uint rb = floatBitsToUint(readings[o + 2u].y) & 0x7fffffffu;
   uint yb = floatBitsToUint(max(r0.y, 0.0)) & 0x7fffffffu;
   uint xb = floatBitsToUint(max(r0.x, 0.0)) & 0x7fffffffu;
@@ -368,7 +367,7 @@ const RULER_DEPTHS = [2.5, 6.5], RULER_NDEP = 9;
 // ai: counted by half its stations), a found mark's centre (the classifier's), a ruled cell (by the ruler's correlation,
 // ai: at most 32 a side, each weighted for the 4 cells of the cell lattice's quarter it stands for)
 const FIT_LINE = 1 / (0.15 * 0.15), FIT_MARK = 1, FIT_RULER = 1 / (0.3 * 0.3), FIT_PIVOT = 1e-6, FIT_ROWS = 16 + 4 * STATIONS;
-if (10 * FIT_ROWS > 2 * STATIONS * (2 * Math.round(4 * Math.max(...PASSES.map((p) => p[1]))) + 2 * PROFILE + 1)) throw new Error("COMPLETE's fit rows past prof");
+if (10 * FIT_ROWS > 2 * STATIONS * (2 * Math.round(4 * REACH_MAX) + 2 * PROFILE + 1)) throw new Error("COMPLETE's fit rows past prof");
 // ai: a later pass about the side's fitted line: m modules (Infinity the whole run) at reach
 const passAfter = ([mods, reach]) => /* glsl */ `{
     vec3 hit = vec3(0.0);
@@ -423,7 +422,7 @@ float tmpl(uint s) { float r = -3.25 + 0.5 * float(s); return (r >= -1.0 && r < 
 // ai: from -(steps + 1) to steps + 1) share one lattice of quarter modules, X + m u n / 4 for m from -steps - 12 to
 // ai: steps + 14, so each point is read once into the lane's own slice (PROF_MAX points; off the frame -1, as no
 // ai: bilinear read of the levels is) and every window reads its samples there.
-const int PROF_MAX = ${2 * Math.round(4 * Math.max(...PASSES.map((p) => p[1]))) + 2 * PROFILE + 1};
+const int PROF_MAX = ${2 * Math.round(4 * REACH_MAX) + 2 * PROFILE + 1};
 shared float prof[${2 * STATIONS} * PROF_MAX];
 shared float bprof[${2 * RULER_NP}];
 float ringNcc(uint at) {
@@ -751,14 +750,14 @@ void main() {
       if (span) {
         float t = (a0 - c + (a1 - a0) * (float(j) + 0.5) / ${STATIONS}.0) * u0;
         float uu = mix(u0, um, max(t, 0.0) / L);
-        hit = ringAt(f, P0 + t * dd + (c - 2.0) * uu * n, n, uu, ${lit(PASSES[0][1])});
+        hit = ringAt(f, P0 + t * dd + (c - 2.0) * uu * n, n, uu, ${lit(REACH0)});
       }
       st[li] = vec4(hit.xy, hit.z, 0.0);
       barrier();
       if (j == 0u) { fitSide(side, job, 0.5 * (u0 + um), (a1 - a0) * u0, kept[job] + 1u); }
       barrier();
     }
-    ${PASSES.slice(1).map(passAfter).join("\n    ")}
+    ${PASSES.map(passAfter).join("\n    ")}
   }
   if (li == 0u) {
     uint k = kase;
@@ -1162,7 +1161,7 @@ float[9] hypH(vec4 quad[4], uint o, float M) {
 const BEND = /* glsl */ `
 vec3 bendAxis(Frame F) {
   vec2 LA = vec2(0.5 * float(F.w), 0.5 * float(F.h));
-  if (F.size != 0u) { LA = vec2(0.5 * float(F.size & 0xffffu) - 16384.0, 0.5 * float(F.size >> 16u) - 16384.0); }
+  if (F.axis != 0u) { LA = vec2(0.5 * float(F.axis & 0xffffu) - 16384.0, 0.5 * float(F.axis >> 16u) - 16384.0); }
   vec2 fwh = vec2(float(F.w), float(F.h));
   float R = max(max(length(LA), length(vec2(fwh.x, 0.0) - LA)), max(length(vec2(0.0, fwh.y) - LA), length(fwh - LA)));
   return vec3(LA, 1.0 / max(R * R, 1.0));
@@ -1184,7 +1183,7 @@ vec2 bend(vec2 u, vec3 ax, float k) {
 // ai: mark, a station every TR_STEP modules, each
 // ai: predicted from those found (quadratic in the station index), located across by the light (gap), dark (ring), light
 // ai: (rim and margin) profile within three modules, accepted at a correlation of 0.6 off the window's edge; to the
-// ai: chord's middle, or two misses. A station's 49 samples are fetched across its 32 lanes and its 25 offsets
+// ai: chord's middle, or three misses in a row. A station's 49 samples are fetched across its 32 lanes and its 25 offsets
 // ai: correlated at once; every lane of a side then takes the same decision from shared memory, so the stations' barriers
 // ai: stay in uniform control flow. Then the bend: k scanned -0.3 to 1.0 by 0.02 (a lane each) and refined by 0.002 about
 // ai: the best, the traced sides unbent and each scored by its scatter's smaller over larger eigenvalue (the plumb line);
@@ -1518,7 +1517,7 @@ void main() {
   uint f = wg.x;
   Frame F = frames[f];
   bool again = F.valid == 1u && sel[f].y == 0u;
-  if (li == 0u) { frames2[f] = Frame(F.w, F.h, F.size, again ? 1u : (F.valid != 0u ? 2u : 0u)); }
+  if (li == 0u) { frames2[f] = Frame(F.w, F.h, F.axis, again ? 1u : (F.valid != 0u ? 2u : 0u)); }
   if (!again) { return; }
   if (li < ${R2_N}u) {
     uvec4 t = R2.d[li];

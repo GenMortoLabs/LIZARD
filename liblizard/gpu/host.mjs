@@ -7,7 +7,7 @@
 // ai: its own), the kept frames (run's keep, LIZ_DUMP, LIZ_DUMP_S), the int8 twins (the WebGPU tree is f32, which has
 // ai: none), the LDPC forms' cross-check and the trial (a WebGPU device validates every module before it runs).
 
-export const TREE_VERSION = 9;   // ai: front.cpp TREE_VERSION
+export const TREE_VERSION = 10;   // ai: front.cpp TREE_VERSION
 export const WEBGPU_VARIANT = "f32";   // ai: gen.mjs WEBGPU_VARIANT: the variant gen translates to WGSL
 
 // ai: front.cpp STAGES, the profile's stage groups, a timestamp pair each.
@@ -361,9 +361,9 @@ export class FrontHalf {
     for (const s of T.built) {
       const tb = T.sizes[s];
       const p = mk(48, U.UNIFORM | U.COPY_DST);
-      const u = new Uint32Array(12), f = new Float32Array(u.buffer);
-      u[0] = 0; u[1] = T.yStride; u[2] = T.partStride; u[3] = s; u[4] = 0; u[5] = 0;
-      f[6] = tb.m2; f[7] = tb.sx2; f[8] = tb.sq2; u[9] = T.sStride;
+      const u = new Uint32Array(7), f = new Float32Array(u.buffer);   // ai: glsl/back_transform.mjs PARAMS
+      u[0] = T.yStride; u[1] = T.partStride; u[2] = s;
+      f[3] = tb.m2; f[4] = tb.sx2; f[5] = tb.sq2; u[6] = T.sStride;
       d.write(p, 0, u);
       b.params[s] = p;
       b.red[s] = d.group(S.bgl(T.redBgl), [b.lists, b.part, b.coef, p]);
@@ -430,9 +430,7 @@ export class FrontHalf {
       for (let l = 1; l < C.LEVELS; l++) {
         const [w, h] = dimsAt(l);
         const uni = mk(32, U.UNIFORM | U.COPY_DST);
-        const u = new Uint32Array([l, w, h, slots, 0, 0, bases[l], ceilDiv(w, C.TILE)]), f = new Float32Array(u.buffer);
-        f[4] = C.TAU; f[5] = C.EPS;
-        d.write(uni, 0, u);
+        d.write(uni, 0, new Uint32Array([l, w, h, slots, bases[l], ceilDiv(w, C.TILE)]));   // ai: glsl/bank_fcn2.mjs Bank
         const plane = xplane ? mk(int8 ? ((w + 3) & ~3) * h * B : (store === "f32" ? 4 : 2) * (w + (w & 1)) * h * B, U.STORAGE) : null;
         const group = (frames) => d.group(fcn2.bgl, [plane ?? ln.level[l - 1].buf, frames, ln.rawBuf, ln.countsBuf, uni]);
         const xgroup = (frames) => (plane ? d.group(fcn2X.bgl, [ln.level[l - 1].buf, frames, plane, uni]) : null);

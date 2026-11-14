@@ -5,10 +5,11 @@ import { ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF } from "./back_transform.mjs";
 export { ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF };
 // ai: The C's constants (src/acquire.c): template points across a square (OB_ANCH_TS), the peak an anchor is found at
 // ai: (ANCH_PEAK), the anchors the geometry takes (src/internal.h OB_ANCH_MIN, the lens model's terms: 8 until
-// ai: 2026-10-27), the fill's rounds. The grid is the ring's (3, 5, 7 a side in the 64, 128, 256 rings since
+// ai: 2026-10-27), the rounds a missing anchor's mesh knot is filled in from its found neighbours (the C's
+// ai: ANCH_KNOT_ROUNDS; its ANCH_ROUNDS are the registration's). The grid is the ring's (3, 5, 7 a side in the 64, 128, 256 rings since
 // ai: 2026-11-09, ANCH_SIDE the most; an anchor's index j ANCH_SIDE + i in every ring), and the anchors the geometry
 // ai: takes the ring's, anchMin(k) (the C's ob_anchor_min: 8 of the 3 x 3 grid's 9, else ANCH_MIN).
-export const ANCH_TS = 16, ANCH_PEAK = 0.6, ANCH_MIN = 12, ANCH_ROUNDS = 6;
+export const ANCH_TS = 16, ANCH_PEAK = 0.6, ANCH_MIN = 12, ANCH_KNOT_ROUNDS = 6;
 export const anchMin = (k) => Math.min(ANCH_MIN, k * k - 1);
 // ai: The squares' fill (SPEC 6.13; the C's hole_value): the least-squares surface in 1, u, u^2, w, w^2, u w (the
 // ai: detrend's functions, 6.10, in u = 2 (m - margin) / span - 1 of a module coordinate m, w the same of y) over
@@ -24,8 +25,9 @@ export const ANCH_FILL = 16, ANCH_BAND2 = 3;   // ai: ANCH_BAND2 = 2 ANCH_BAND
 // ai: size is the word's, after this stage), SW_R rows a tile, on each a run of SW_LAG / SW_T points span / SW_LAG modules
 // ai: apart (eight samples at n 1024) and the pairs of neighbours along it, as the C's runs on its lattice of every eighth
 // ai: sample; a run's points through the map at its ends and middle, quadratic between; pairs outside the squares' bands
-// ai: as the fill's points; a tile kept from SW_MIN pairs; the fit robust as the C's (three rounds, three robust
-// ai: spreads), the median from two histograms of SW_BINS bins (the bin, then within it: to the largest residual / SW_BINS^2)
+// ai: as the fill's points; a tile kept from SW_MIN pairs; the fit robust as the C's (four fits, a tile past three robust
+// ai: spreads dropped between them), the median from two histograms of SW_BINS bins (the bin, then within it: to the
+// ai: largest residual / SW_BINS^2)
 export const SW_T = 16, SW_R = 4, SW_LAG = 128, SW_MIN = 8, SW_BINS = 64;
 
 // ai: A, the anchors' uniform (every anchors kernel's), from gpu/tables.mjs formatTables() rings: three vec4f a

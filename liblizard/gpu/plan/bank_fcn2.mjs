@@ -88,7 +88,7 @@ function statsLayout(P, XW, XH, colrun) {
 // Sizes of a stage's planes, in 16-byte elements, and the workgroup memory they need.
 // ai: int8 (net stage, staged only): in 8-byte elements (vec2<u32>), a pixel's codes one, a map pixel one, a peak two,
 // ai: the X window RS Xq words a row, two an element.
-export function fcn2Layout(P, { TX = 1, TY = 1, halves = false, int8 = false, stage = "all", colrun = 0, XB = XBLOCKS[1] } = {}) {
+export function fcn2Layout(P, { TX = 1, TY = 1, halves = false, int8 = false, stage = "net", colrun = 0, XB = XBLOCKS[1] } = {}) {
   if (stage === "x") {
     const S = statsLayout(P, XB[0], XB[1], colrun || 2);
     return { ...S, stage, HALO: 0, R: P.R, nA: S.nA, nB: S.nB, bytes: 16 * (S.nA + S.nB) + 4 * 16 };
@@ -111,31 +111,25 @@ export function fcn2Layout(P, { TX = 1, TY = 1, halves = false, int8 = false, st
   // output they read), so conv1's and conv2's outputs never coexist; the map (two pixels an element) goes in B over X,
   // the peaks in A.
   const act = convs.slice(0, -1).map((L) => L.outW * L.outH * epp(L.outC));
-  const S = stage === "all" ? statsLayout(P, XW, XH, colrun) : { nA: 0, nB: 0 };
-  const mapPool = "B", nA = Math.max(S.nA, ...act, NT * LOCAL), nB = Math.max(S.nB, XH * RS, Math.ceil((MW * MH) / 2));
-  const bytes = 16 * (nA + nB) + (stage === "all" ? 4 * 16 : 0) + 4 * NT;
-  return { ...(stage === "all" ? S : {}), stage, RW, RH, HALO, R, XW, XH, XE, G1, RS, NT, MW, MH, convs, epp, nA, nB, mapPool, bytes };
+  const mapPool = "B", nA = Math.max(...act, NT * LOCAL), nB = Math.max(XH * RS, Math.ceil((MW * MH) / 2));
+  const bytes = 16 * (nA + nB) + 4 * NT;
+  return { stage, RW, RH, HALO, R, XW, XH, XE, G1, RS, NT, MW, MH, convs, epp, nA, nB, mapPool, bytes };
 }
 
 // The forms a device can be given, best first: f16 when the decoder runs f16; else f32 storage, then halves stored.
-// Within a storage, the largest region first; the X plane before the fused kernel, its larger X block first. A form's
-// bytes are its larger kernel's. `force`: { packed, f32, region: "32x16", fused, xblock: "32x32" } narrows it (the
-// forms a smaller device would be given, run on one where a larger fits).
-// ai: int8 (a q8 file, which no float form runs): store "int8", the plane form only; force.packed, f32 or fused
-// ai: leave it no form.
-export function fcn2Forms(json, { f16 = false, int8 = false, force = {} } = {}) {
+// Within a storage, the largest region first, then the larger X block. Every form is a plane form: the X pass writes
+// the standardised plane, the network reads it. A form's bytes are its larger kernel's.
+// ai: int8 (a q8 file, which no float form runs): store "int8".
+export function fcn2Forms(json, { f16 = false, int8 = false } = {}) {
   if (f16 && int8) throw new Error("fcn2 bank: f16 or int8, not both");
   quantOf(json, int8);
   const P = fcn2Plan(json);
-  const regions = REGIONS.filter(([tx, ty]) => !force.region || force.region === `${TILE * tx}x${TILE * ty}`);
-  const stores = int8 ? (force.packed || force.f32 ? [] : ["int8"]) : f16 ? ["f16"] : force.packed ? ["packed"] : force.f32 ? ["f32"] : ["f32", "packed"];
-  const planes = int8 ? (force.fused ? [] : [true]) : force.fused ? [false] : [true, false];
+  const stores = int8 ? ["int8"] : f16 ? ["f16"] : ["f32", "packed"];
   const out = [];
-  const xblocks = XBLOCKS.filter((b) => !force.xblock || force.xblock === `${b[0]}x${b[1]}`);
-  for (const store of stores) for (const [TX, TY] of regions) for (const xplane of planes) for (const XB of xplane ? xblocks : [null]) {
-    const halves = store === "f16" || store === "packed", net = fcn2Layout(P, { TX, TY, halves, int8, stage: xplane ? "net" : "all" });
-    const bytes = Math.max(net.bytes, xplane ? fcn2Layout(P, { stage: "x", XB }).bytes : 0);
-    out.push({ store, TX, TY, xplane, XB, walk: xplane ? WALK : 1, f16: store === "f16", packed: store === "packed", int8, bytes, name: `${store} ${TILE * TX}x${TILE * TY}${xplane ? ` plane ${XB[0]}x${XB[1]}` : ""}` });
+  for (const store of stores) for (const [TX, TY] of REGIONS) for (const XB of XBLOCKS) {
+    const halves = store === "f16" || store === "packed", net = fcn2Layout(P, { TX, TY, halves, int8, stage: "net" });
+    const bytes = Math.max(net.bytes, fcn2Layout(P, { stage: "x", XB }).bytes);
+    out.push({ store, TX, TY, xplane: true, XB, walk: WALK, f16: store === "f16", packed: store === "packed", int8, bytes, name: `${store} ${TILE * TX}x${TILE * TY} plane ${XB[0]}x${XB[1]}` });
   }
   return out;
 }

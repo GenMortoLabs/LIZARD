@@ -1,10 +1,10 @@
-// F7, registration, in GLSL: the WGSL register.mjs (archived) statement for statement (its comments say what each stage does and
-// why): NODES (nodesSource, the border nodes measured by normalised cross-correlation), REFIT (the homography by
-// Gauss-Newton), REFIT_POST (the nodes' residuals, each side's curve), and the pieces
-// the anchors' stages share (LENS, the lens fit's rows, SIDE_FITS, SIDE_DECL, RING; LENS and RING sample.mjs's COONS too).
-// ai: Bindings, workgroup sizes, dispatches and every buffer's layout are the WGSL's (the host's bind group layouts are
-// ai: unchanged): storage arrays std430, uniforms std140. Every solve is straight-line with literal indices, generated
-// ai: in JS as the WGSL's is (the S26's Adreno returned zeros from a private array indexed at run time). A WGSL select
+// F7, registration, in GLSL: NODES (nodesSource: each border node found by normalised cross-correlation of the border
+// as painted, over offsets about the finder's map on one lattice of samples and offsets), REFIT (the homography over
+// the nodes by Gauss-Newton, weighted by each node's correlation), REFIT_POST (the nodes' residuals, each side's curve
+// a polynomial of 1 to SIDE_MAX coefficients by AICc), and the pieces the anchors' stages share (LENS, the lens fit's
+// rows, SIDE_FITS, SIDE_DECL, RING; LENS and RING sample.mjs's COONS too). The constants: ../plan/register.mjs.
+// ai: Storage arrays std430, uniforms std140. Every solve is straight-line with literal indices, generated
+// ai: in JS (the S26's Adreno returned zeros from a private array indexed at run time). A WGSL select
 // ai: of arms that are not plain values is written with its arms in temporaries, so both are evaluated as WGSL's are
 // ai: and the choice stays a select. Workgroup memory is not zeroed: every workgroup variable here is written before
 // ai: it is read. WGSL's storageBarrier() is common.mjs STORAGE_BARRIER.
@@ -18,8 +18,8 @@ const WG = 256;
 const ITEMS = 512;
 const unroll = (n, f) => Array.from({ length: n }, (_, i) => f(i)).join("\n");
 
-// ai: The pyramid's levels and the frames, bindings 0 to 6, and registration's own level reader (the WGSL register.mjs (archived)
-// ai: LEVELS: a level's four taps in one switch).
+// ai: The pyramid's levels and the frames, bindings 0 to 6, and registration's own level reader (LEVELS: a
+// ai: level's four taps in one switch).
 const LEVELS = LEVEL_BINDINGS + /* glsl */ `struct Lvl { uint l; int w; int h; uint base; uint stride; float scale; };
 Lvl lvlOf(uint l, uint f) {
   Frame F = frames[f];
@@ -54,9 +54,11 @@ float bilinear(Lvl L, uint f, vec2 p) {
 uint levelFor(float u) { return f2u(clamp(floor(log2(max(u, 1.0) / 1.5)), 0.0, 4.0)); }
 `;
 
-// ai: NODES and its centred form (the WGSL register.mjs (archived) nodesSource: the same options, the same kernel for a round).
+// ai: NODES and its centred form, a kernel a round. Every round's template samples and offsets lie on one lattice
+// ai: (latticeSide), whose values are read once a node and gathered by each offset.
 export const nodesSource = ({ centred = false, round = ROUND, chunk = TMPL_MAX / 2, items = ITEMS } = {}) => {
-  const grid = latticeSide(round), lattice = grid > 0;
+  const grid = latticeSide(round);
+  if (!(grid > 0)) throw new Error(`round ${round}: its samples and offsets share no lattice`);
   return VERSION + SAMPLERLESS + DIMS + CONVERT + LEVELS + MAP + /* glsl */ `
 layout(local_size_x = ${WG}, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 7, std430) readonly buffer Nodes { vec4 nodes[]; };
@@ -68,10 +70,9 @@ layout(set = 0, binding = 12, std140) uniform Round { uint steps; uint stride; u
 const uint CHUNK = ${chunk}u;
 const uint ITEMS = ${items}u;
 const uint WG = ${WG}u;
-${lattice ? `const uint GRID = ${grid}u;
+const uint GRID = ${grid}u;
 shared uint sp[CHUNK];
-shared float gv[${grid * grid}];` : `shared vec4 sp[CHUNK];
-shared vec4 sj[CHUNK];`}
+shared float gv[${grid * grid}];
 shared float psv[ITEMS];
 shared float psv2[ITEMS];
 shared float psev[ITEMS];
@@ -109,32 +110,24 @@ ${centred ? `  if (li == 0u) { wm0 = meas[f * ${NODES_MAX}u + n]; }
   uint O = gridW * gridW;
   uint G = max(1u, ITEMS / O);
   uint items = O * G;
-${lattice ? `  float spacing = ${round[1] === SUB * SUB ? "1.0" : `1.0 / ${SUB}.0`};
+  float spacing = ${round[1] === SUB * SUB ? "1.0" : `1.0 / ${SUB}.0`};
   uint ratioN = ${Math.round((round[1] === SUB * SUB ? 1 : 1 / SUB) / round[2])}u;
-  vec2 origin = floor(node.xy - ${WINDOW / 2}.0) + vec2(0.5 / ${SUB}.0);` : ""}
+  vec2 origin = floor(node.xy - ${WINDOW / 2}.0) + vec2(0.5 / ${SUB}.0);
   if (li == 0u) { best = 0u; }
   uint nq = R.base[pick.x] + n;
   float tse = float(R.light[nq >> 2u][nq & 3u]);
   float tse2 = tse;
-${lattice ? `  for (uint q = li; q < GRID * GRID; q += WG) {
+  for (uint q = li; q < GRID * GRID; q += WG) {
     vec2 g = vec2(float(q % GRID), float(q / GRID));
     gv[q] = bilinear(L, f, toImage(M, origin + (g - float(side)) * R.step)${centred ? " + sh" : ""});
-  }` : ""}
+  }
   for (uint item = li; item < items; item += WG) { psv[item] = 0.0; psv2[item] = 0.0; psev[item] = 0.0; }
   for (uint c0 = 0u; c0 < P; c0 += CHUNK) {
     uint c1 = min(P, c0 + CHUNK);
     for (uint j = c0 + li; j < c1; j += WG) {
       vec4 t = tmpl[first + j * R.stride];
-${lattice ? `      uvec2 g = f2u(roundEven((t.xy - origin) / spacing)) * ratioN;
-      sp[j - c0] = g.x | (g.y << 8u) | (f2u(t.z) << 16u);` : `      {
-        vec2 p = toImage(M, t.xy)${centred ? " + sh" : ""};
-        float w = M[6] * t.x + M[7] * t.y + M[8];
-        vec2 uu = vec2(M[0] * t.x + M[1] * t.y + M[2], M[3] * t.x + M[4] * t.y + M[5]) / w;
-        vec2 jx = vec2(M[0] - uu.x * M[6], M[3] - uu.y * M[6]) / w;
-        vec2 jy = vec2(M[1] - uu.x * M[7], M[4] - uu.y * M[7]) / w;
-        sp[j - c0] = vec4(p, t.z, 0.0);
-        sj[j - c0] = vec4(jx.x, jy.x, jx.y, jy.y);
-      }`}
+      uvec2 g = f2u(roundEven((t.xy - origin) / spacing)) * ratioN;
+      sp[j - c0] = g.x | (g.y << 8u) | (f2u(t.z) << 16u);
     }
     barrier();
     for (uint item = li; item < items; item += WG) {
@@ -145,31 +138,12 @@ ${lattice ? `      uvec2 g = f2u(roundEven((t.xy - origin) / spacing)) * ratioN;
       float sv = 0.0;
       float sv2 = 0.0;
       float sev = 0.0;
-${lattice ? `
         uint d = (o % gridW) + (o / gridW) * GRID;
         for (; j < c1; j += G) {
           uint s = sp[j - c0];
           float v = gv[(s & 255u) + ((s >> 8u) & 255u) * GRID + d];
           sv += v; sv2 += v * v; sev += ((s >> 16u) & 1u) != 0u ? v : 0.0;
         }
-` : `
-        vec2 off = R.step * vec2(float(int(o % gridW) - side), float(int(o / gridW) - side));
-        for (; j + G < c1; j += 2u * G) {
-          vec4 s0 = sp[j - c0];
-          vec4 s1 = sp[j - c0 + G];
-          vec4 J0 = sj[j - c0];
-          vec4 J1 = sj[j - c0 + G];
-          float v0 = bilinear(L, f, s0.xy + vec2(J0.x * off.x + J0.y * off.y, J0.z * off.x + J0.w * off.y));
-          float v1 = bilinear(L, f, s1.xy + vec2(J1.x * off.x + J1.y * off.y, J1.z * off.x + J1.w * off.y));
-          sv += v0 + v1; sv2 += v0 * v0 + v1 * v1; sev += s0.z * v0 + s1.z * v1;
-        }
-        if (j < c1) {
-          vec4 s = sp[j - c0];
-          vec4 J = sj[j - c0];
-          float v = bilinear(L, f, s.xy + vec2(J.x * off.x + J.y * off.y, J.z * off.x + J.w * off.y));
-          sv += v; sv2 += v * v; sev += s.z * v;
-        }
-`}
       psv[item] += sv;
       psv2[item] += sv2;
       psev[item] += sev;
@@ -215,7 +189,7 @@ ${lattice ? `
 };
 export const NODES = nodesSource();
 
-// ai: Gauss-Jordan with partial pivoting as straight-line GLSL (the WGSL register.mjs (archived) gaussJordan): the pivot chosen and
+// ai: Gauss-Jordan with partial pivoting as straight-line GLSL (gaussJordan): the pivot chosen and
 // ai: swapped in by selects, every index a literal.
 export function gaussJordan(N, rows, cols, eps, ok) {
   const s = [];
@@ -258,7 +232,7 @@ const normal = (() => {
   return s.join("\n");
 })();
 const SP_N = 2 * SIDE_MAX - 1, SIDE_SUMS = SP_N + 2 * SIDE_MAX;
-// ai: SIDE_FITS's workgroup memory (the WGSL register.mjs (archived) SIDE_DECL).
+// ai: SIDE_FITS's workgroup memory (SIDE_DECL).
 export const SIDE_DECL = /* glsl */ `
 shared float sfP[${SIDE_NODES}][${SP_N}];
 shared vec4 sfW[${SIDE_NODES}];
@@ -268,7 +242,7 @@ shared float sfR[${SIDE_NODES}][${SIDE_MAX}];
 shared float sfA[${SIDE_MAX}];
 shared uint sfN;
 `;
-// ai: the WGSL register.mjs (archived) gaussJordanIn: the masked elimination, a lane's count D, in gaussJordan's order.
+// ai: gaussJordanIn: the masked elimination, a lane's count D, in gaussJordan's order.
 function gaussJordanIn(N, D, eps, ok) {
   const R = SIDE_MAX, C = SIDE_MAX + 2, s = [];
   for (let col = 0; col < R; col++) {
@@ -291,7 +265,7 @@ function gaussJordanIn(N, D, eps, ok) {
   return s.join("\n");
 }
 
-// ai: The lens about the camera's axis (the WGSL register.mjs (archived) LENS): a stage including it binds `resid` first.
+// ai: The lens about the camera's axis (LENS): a stage including it binds `resid` first.
 export const LENS = /* glsl */ `
 struct Lens { vec4 c; vec4 a; vec4 t0; vec4 t1; vec4 t2; };
 Lens lensOf(uint f) {
@@ -384,7 +358,7 @@ const lensNormalSolveTo = (kTop) => /* glsl */ `      float Ns[${LENS_P}][${LENS
       ${lensSolveTo(kTop)}
 `;
 export const lensNormalSolve = lensNormalSolveTo(3);
-// ai: REFIT (the WGSL register.mjs (archived) REFIT): a workgroup of 64 a frame.
+// ai: REFIT: a workgroup of 64 a frame.
 export const REFIT = VERSION + DIMS + CONVERT + MAP + /* glsl */ `
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0, std430) readonly buffer Frames { Frame frames[]; };
@@ -416,7 +390,6 @@ void main() {
   float Mod = P.modules[pick.x];
   vec2 c = vec2(0.5 * float(F.w), 0.5 * float(F.h));
   float S = length(c);
-  float inv = 1.0 / (S * S);
   float m0[16] = maps[f];
   if (li == 0u) {
     float h[9] = ${zeros(9)};
@@ -471,16 +444,14 @@ void main() {
     float mo[16] = ${zeros(16)};
     float t[9] = float[9](th[0], th[1], th[2], th[3], th[4], th[5], th[6], th[7], 1.0);
     ${unroll(3, (j) => `{ float s = ${j < 2 ? "1.0 / Mod" : "1.0"}; mo[${j}] = (S * t[${j}] + c.x * t[${6 + j}]) * s; mo[${3 + j}] = (S * t[${3 + j}] + c.y * t[${6 + j}]) * s; mo[${6 + j}] = t[${6 + j}] * s; }`)}
-    mo[9] = 0.0;
-    mo[10] = c.x;
-    mo[11] = c.y;
-    mo[12] = inv;
+    // ai: the radial slot, mo[9] to mo[12], stays 0: the map past REFIT is its homography (toImage reads no axis at k 0;
+    // ai: ANCH_REFIT fits the lens again over the border and the anchors)
     maps[f] = mo;
   }
 }
 `;
 
-// ai: Each side's residual curve (the WGSL register.mjs (archived) SIDE_FITS): lane 0 of the sides' fits, every lane in each.
+// ai: Each side's residual curve (SIDE_FITS): lane 0 of the sides' fits, every lane in each.
 export const SIDE_FITS = /* glsl */ `
   {
     uint nn = (count + 4u) / 4u;
@@ -572,7 +543,7 @@ export const SIDE_FITS = /* glsl */ `
   }
 `;
 
-// ai: REFIT_POST (the WGSL register.mjs (archived) REFIT_POST, less its lens fit at K 0): a workgroup of 64 a frame,
+// ai: REFIT_POST: a workgroup of 64 a frame,
 // ai: REFIT's bindings. The residuals of REFIT's homography go straight to the sides' curves, the lens record none
 // ai: (ANCH_REFIT's where the anchors are found). The fit at K 0, a first-order change of the homography fitted to the
 // ai: same residuals without REFIT's weights, went 2026-11-06: 4090 blocks +0.008% over the eleven replays and the
@@ -613,7 +584,7 @@ ${SIDE_DECL}void main() {
 ` + SIDE_FITS + /* glsl */ `}
 `;
 
-// ai: the WGSL register.mjs (archived) RING: where lattice node (i, j) of an nx x ny border ring sits in ring order.
+// ai: RING: where lattice node (i, j) of an nx x ny border ring sits in ring order.
 export const RING = /* glsl */ `
 uint ring(uint i, uint j, uint nx, uint ny) {
   if (j == 0u) { return i; }
