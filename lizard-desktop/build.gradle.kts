@@ -278,7 +278,9 @@ compose.desktop {
             macOS {
                 bundleID = "dev.lizard.sender"
                 iconFile.set(project.file("packaging/lizard.icns"))
-                fileAssociation(replayMime, "lizard", replayType, project.file("packaging/lizard.icns"))
+                // ai: the replay's icon is the same picture under a name of its own: the bundle takes each icon into
+                // ai: Contents/Resources by its file name, and one file for both stopped the .app's build there
+                fileAssociation(replayMime, "lizard", replayType, project.file("packaging/lizard-replay.icns"))
                 dockName = "LIZARD"
                 appCategory = "public.app-category.utilities"
                 minimumSystemVersion = "12.0"
