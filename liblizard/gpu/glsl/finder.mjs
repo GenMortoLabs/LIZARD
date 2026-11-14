@@ -325,21 +325,67 @@ void main() {
 }
 `;
 
-// ai: F5d: a quad of three corners completed from the ring (the WGSL's COMPLETE). A workgroup a (frame, quad).
+// ai: F5d, COMPLETE: a quad of two or three corners on a frame with no quad of four, completed from the border along the
+// ai: sides its corners hold. A workgroup a (frame, quad), 64 lanes: two sides traced at once, 32 stations each, in one
+// ai: round or two (2026-11-13, research/11-corner-completion.md, research/build/complete2-2026-11-13):
+// ai: - three corners a, o, b about the missing m: the sides a -> m and b -> m;
+// ai: - two adjacent corners: the sides leaving them;
+// ai: - two diagonal corners: the two sides from each (round 0 from a, round 1 from o).
+// ai: A side's pass 0 reads the ring beside its mark, modules ALONG0 along from the corner (the mark's own ring and the
+// ai: band's reserve: the ring is the only line with its profile there; past it the band 4 modules in has the same
+// ai: profile and takes the stations from a first direction a few degrees off), or ALONG1 where the frame cuts that
+// ai: stretch, decided from the stations' places before any is read; the later passes about the fitted line.
+// ai: The ruler (SPEC 4.6, 4.7): from a corner the band's cells lie at modules 15 + 2k, whichever end the side is read
+// ai: from, and its track cells are a hash of the side. Along the traced side the 1D projective map t = s d / (1 + s d / D)
+// ai: (d modules from the mark's centre, s px a module there, D the distance to the vanishing point; 0 parallel): s and
+// ai: the reading's offset along by the correlation of the cells' values with the track over its 8 readings (side 0 to
+// ai: 3, from its start or its end), first over RULER_CELLS0 cells at scale steps of half a module at the last cell,
+// ai: then about the best over every cell on the frame. The band's depth from the traced line: the darkest row of the
+// ai: band's region (RULER_DEPTHS), averaged along it. The band read once into workgroup memory (bprof). A side is ruled
+// ai: where the model needs it to place its far side: both of two adjacent corners' sides (their crossing the vanishing
+// ai: point), the one traced side of three corners whose other side the frame does not show (its crossing with the side
+// ai: parallel to it). Three corners with both sides traced and two diagonal ones with four are held by their marks and
+// ai: lines (a ruler there only added its own scale error under strong perspective, 2026-11-13).
+// ai: The quad is one model fitted to every measurement: the inverse homography G, image to modules (8 parameters, G33
+// ai: 1), by weighted linear least squares over each traced ring's line (its stations' fit, at its ends: the ring's
+// ai: centre 2 modules in from its side), each found mark's centre (c modules in from its corner) and each ruled
+// ai: side's band cells (cell k at 16 + 2k along from its corner). The corners measured stay as the classifier placed
+// ai: them, the missing ones are the model's (the model's own estimate at a found corner read fewer blocks than the
+// ai: classifier's place there, 2026-11-13). A system that leaves a direction free (its least pivot under FIT_PIVOT of
+// ai: its largest diagonal: no ruler where the far side needs one) completes nothing; a completed quad is kept when
+// ai: convex, and SCORE judges it as every quad. A quad the same as one before it in its frame is left: that one is
+// ai: completed.
+const ALONG0 = [4, 15], ALONG1 = [13, 25];
+const RULER_LO = 0.6, RULER_HI = 1.6, RULER_CELLS0 = 64, RULER_NP = 1024, RULER_DMAX = 2.0;
+const RULER_STEP0 = 0.5 / (16 + 2 * RULER_CELLS0);
+// ai: stage 0's scale step, RULER_COARSE times RULER_STEP0: stage 1 searches 3 of RULER_STEP0 either side of its best
+const RULER_COARSE = 3, RULER_STEP0C = RULER_COARSE * RULER_STEP0;
+const RULER_N0 = Math.ceil(Math.log(RULER_HI / RULER_LO) / RULER_STEP0C);
+const RULER_ND = Math.round((2 * RULER_DMAX) / 0.5) + 1;
+const RULER_STEP1 = 0.0005, RULER_N1 = Math.ceil((6 * RULER_STEP0) / RULER_STEP1) + 1;
+const RULER_DEPTHS = [2.5, 6.5], RULER_NDEP = 9;
+// ai: the fit's weights, one over each measurement's spread squared in modules: a ring line's end (its stations' fit,
+// ai: counted by half its stations), a found mark's centre (the classifier's), a ruled cell (by the ruler's correlation,
+// ai: at most 32 a side, each weighted for the 4 cells of the cell lattice's quarter it stands for)
+const FIT_LINE = 1 / (0.15 * 0.15), FIT_MARK = 1, FIT_RULER = 1 / (0.3 * 0.3), FIT_PIVOT = 1e-6, FIT_ROWS = 16 + 4 * STATIONS;
+if (10 * FIT_ROWS > 2 * STATIONS * (2 * Math.round(4 * Math.max(...PASSES.map((p) => p[1]))) + 2 * PROFILE + 1)) throw new Error("COMPLETE's fit rows past prof");
+// ai: a later pass about the side's fitted line: m modules (Infinity the whole run) at reach
 const passAfter = ([mods, reach]) => /* glsl */ `{
     vec3 hit = vec3(0.0);
-    if (span) {
+    bool has = kept[job] > 0u;
+    if (span && has) {
       float t = t0 + ${ext(mods)} * (float(j) + 0.5) / ${STATIONS}.0;
       float uu = mix(u0, um, t / L);
-      vec4 ln = line[side];
+      vec4 ln = line[job];
       vec2 nn = vec2(-ln.w, ln.z);
       if (dot(nn, n0) < 0.0) { nn = -nn; }
-      vec2 B = P0 + t * normalize(Pm0 - P0);
-      hit = ringAt(f, ln.xy + dot(B - ln.xy, ln.zw) * ln.zw, nn, uu, ${lit(reach)});
+      vec2 dl = (dot(ln.zw, ja.zw) < 0.0) ? -ln.zw : ln.zw;
+      vec2 Bp = ln.xy + dot(P0 - ln.xy, ln.zw) * ln.zw + t * dl;
+      hit = ringAt(f, Bp, nn, uu, ${lit(reach)});
     }
     st[li] = vec4(hit.xy, hit.z, 0.0);
     barrier();
-    if (j == 0u) { fitSide(side, 0.5 * (u0 + um), ${ext(mods)}, 6u); }
+    if (j == 0u && has) { fitSide(side, job, 0.5 * (u0 + um), ${ext(mods)}, 6u); }
     barrier();
   }`;
 if (STATIONS > 32) throw new Error(`COMPLETE keeps a side's stations in one word: ${STATIONS} past 32`);
@@ -350,10 +396,28 @@ layout(set = 0, binding = 8, std430) buffer Quads { vec4 quads[]; };
 ` + P5(9) + /* glsl */ `
 shared uint go;
 shared uint ri[4];
-shared vec4 G[6];
+shared uint kase;
+shared uint nround;
+shared uint far[4];
+shared vec4 JA[4];
+shared vec4 JB[4];
+shared vec4 JC[4];
+shared uint JD[4];
 shared vec4 st[${2 * STATIONS}];
-shared vec4 line[2];
-shared uint kept[2];
+shared vec4 line[4];
+shared uint kept[4];
+shared uint rjob[2];
+shared vec4 RA[2];
+shared vec4 RB[2];
+shared vec4 RC[2];
+shared vec4 RS[2];
+shared float dm[${2 * RULER_NDEP}];
+shared uint pk[${RULER_CELLS0}];
+shared vec4 rbest[${2 * STATIONS}];
+shared vec4 RT[2];
+shared vec2 lext[4];
+shared uint src[4];
+shared float NE[72];
 float tmpl(uint s) { float r = -3.25 + 0.5 * float(s); return (r >= -1.0 && r < 1.0) ? -1.0 : 1.0; }
 // ai: A search's profile read once: its windows (PROFILE samples half a module apart, centred a quarter module a step
 // ai: from -(steps + 1) to steps + 1) share one lattice of quarter modules, X + m u n / 4 for m from -steps - 12 to
@@ -361,6 +425,7 @@ float tmpl(uint s) { float r = -3.25 + 0.5 * float(s); return (r >= -1.0 && r < 
 // ai: bilinear read of the levels is) and every window reads its samples there.
 const int PROF_MAX = ${2 * Math.round(4 * Math.max(...PASSES.map((p) => p[1]))) + 2 * PROFILE + 1};
 shared float prof[${2 * STATIONS} * PROF_MAX];
+shared float bprof[${2 * RULER_NP}];
 float ringNcc(uint at) {
   float k = 0.0;
   float sv = 0.0;
@@ -411,8 +476,8 @@ vec3 ringAt(uint f, vec2 X, vec2 n, float u, float reach) {
   return vec3(X + at * u * n, (best >= ${NCC_MIN}) ? best : 0.0);
 }
 // ai: the stations kept, a bit each of one word (STATIONS 32): on the Adreno 16 registers and 4,495 instructions
-// ai: against a private array's 24 and 5,648
-bool fitSide(uint side, float u, float span, uint need) {
+// ai: against a private array's 24 and 5,648. A side's stations st[side 32 + j], its line and count line[job], kept[job].
+bool fitSide(uint side, uint job, float u, float span, uint need) {
   uint ok = 0u;
   for (uint j = 0u; j < ${STATIONS}u; j++) { ok |= (st[side * ${STATIONS}u + j].z > 0.0) ? (1u << j) : 0u; }
   vec2 o = vec2(0.0);
@@ -450,20 +515,126 @@ bool fitSide(uint side, float u, float span, uint need) {
     tmin = min(tmin, t); tmax = max(tmax, t);
   }
   if (n < max(need, 6u) || tmax - tmin < 0.25 * span) { return false; }
-  line[side] = vec4(o, d);
-  kept[side] = n;
+  line[job] = vec4(o, d);
+  lext[job] = vec2(tmin, tmax);
+  kept[job] = n;
   return true;
+}
+vec2 rot(vec2 v, float a) { float c = cos(a); float s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+float turn(vec2 a, vec2 b, vec2 c) { vec2 e = b - a; vec2 g = c - b; return e.x * g.y - e.y * g.x; }
+bool convex(vec2 c0, vec2 c1, vec2 c2, vec2 c3) {
+  vec4 tn = vec4(turn(c0, c1, c2), turn(c1, c2, c3), turn(c2, c3, c0), turn(c3, c0, c1));
+  return all(greaterThan(tn, vec4(0.0))) || all(lessThan(tn, vec4(0.0)));
+}
+// ai: two lines' crossing for a vanishing point: w 0 only where they are parallel to a part in 10^4
+vec3 vanish(vec4 A, vec4 B) {
+  float den = A.z * B.w - A.w * B.z;
+  if (abs(den) < 1e-4) { return vec3(0.0); }
+  float s = ((B.x - A.x) * B.w - (B.y - A.y) * B.z) / den;
+  return vec3(A.xy + s * A.zw, 1.0);
+}
+// ai: a side's job: from the mark at P0 (its reading r), the direction guesses g0 and g1, the outward reference nref
+// ai: (a normal of the side points outward where it has a positive part along it), its module size u0, the far
+// ai: corner's um, the run's length L, the mark's form c; pass 0's place from the stations' places before any is read
+void job(uint k, vec2 P0, vec2 g0, vec2 g1, vec2 nref, float u0, float um, float L, float c, uint f, uint fs, uint ss) {
+  JA[k] = vec4(P0, g0);
+  JB[k] = vec4(g1, nref);
+  JC[k] = vec4(u0, um, L, c);
+  vec2 n = vec2(-g0.y, g0.x);
+  if (dot(n, nref) < 0.0) { n = -n; }
+  uint on = 0u;
+  for (uint i = 0u; i < 8u; i++) {
+    float t = (${lit(ALONG0[0])} - c + ${lit(ALONG0[1] - ALONG0[0])} * (float(i) + 0.5) / 8.0) * u0;
+    vec2 X = P0 + t * g0 + (c - 2.0) * u0 * n;
+    on += (onFrame(f, X + 3.0 * u0 * n) && onFrame(f, X - 4.0 * u0 * n)) ? 1u : 0u;
+  }
+  JD[k] = (on < 4u) ? 1u : 0u;
+  far[k] = fs;
+  src[k] = ss;
+  kept[k] = 0u;
+}
+bool trackDark(uint sd, uint j) {
+  uint v = (sd * 4099u + (j >> 1u)) * 2654435761u + 40503u;
+  v = v ^ (v >> 15u);
+  v = v * 2246822519u;
+  v = v ^ (v >> 13u);
+  return ((v ^ j) & 1u) == 1u;
+}
+// ai: band cell k from a corner, read from the side's start (rev 0) or its end (rev 1): a track cell, and dark
+bvec2 cellOf(uint k, uint B, uint sd, uint rev) {
+  uint b = (rev == 1u) ? B - 1u - k : k;
+  if (((b >> 2u) & 1u) == 1u) { return bvec2(false); }
+  return bvec2(true, trackDark(sd, 4u * (b >> 3u) + (b & 3u)));
+}
+// ai: the band's value at t px along the ruler's line (bprof, half h's): -1 where it was off the frame
+float bandAt(uint h, float t, float step) {
+  float x = t / step;
+  if (x < 0.0 || x >= ${RULER_NP - 1}.0) { return -1.0; }
+  uint i0 = uint(x);
+  float a = bprof[h * ${RULER_NP}u + i0];
+  float b = bprof[h * ${RULER_NP}u + i0 + 1u];
+  if (a < 0.0 || b < 0.0) { return -1.0; }
+  return mix(a, b, x - float(i0));
+}
+// ai: t px along the line for d modules from the mark's centre (D 0: no vanishing point); -1 past it
+float tOf(float s, float d, float D) {
+  float den = (D == 0.0) ? 1.0 : 1.0 + s * d / D;
+  return (den > 0.2) ? s * d / den : -1.0;
+}
+// ai: the fit's module frame: slot q's outer corner (0, 0), (S, 0), (S, S), (0, S) in the quad's cyclic order (a
+// ai: homography holds either winding), its mark's centre c in on both axes, the ring's line of the side from q to its
+// ai: neighbour qn (x: the axis, 0 X = y or 1 Y = y; 2 modules in), the side's inward unit normal
+vec2 outerMod(uint q, float S) { return vec2((q == 1u || q == 2u) ? S : 0.0, (q >= 2u) ? S : 0.0); }
+vec2 markMod(uint q, float S, float c) { vec2 o = outerMod(q, S); return vec2((o.x == 0.0) ? c : S - c, (o.y == 0.0) ? c : S - c); }
+vec2 ringMod(uint q, uint qn, float S) {
+  vec2 a = outerMod(q, S);
+  vec2 b = outerMod(qn, S);
+  return (a.y == b.y) ? vec2(1.0, (a.y == 0.0) ? 2.0 : S - 2.0) : vec2(0.0, (a.x == 0.0) ? 2.0 : S - 2.0);
+}
+vec2 inMod(vec2 a, vec2 b) { return (a.y == b.y) ? vec2(0.0, (a.y == 0.0) ? 1.0 : -1.0) : vec2((a.x == 0.0) ? 1.0 : -1.0, 0.0); }
+// ai: the fit's rows in prof (free once the passes are done): row r at 10 r, its 8 coefficients of G (G11 G12 G13 G21
+// ai: G22 G23 G31 G32; G33 1), its right side and its weight; FIT_ROWS rows, a row of weight 0 adds nothing: marks 0 to
+// ai: 7 (two a slot), line ends 8 to 15 (two a job), a ruled cell's two from 16 + 2 li (lane li, half li / 32)
+void putRow(uint r, vec4 r0, vec4 r1, float rhs, float w) {
+  uint b = 10u * r;
+  prof[b] = r0.x; prof[b + 1u] = r0.y; prof[b + 2u] = r0.z; prof[b + 3u] = r0.w;
+  prof[b + 4u] = r1.x; prof[b + 5u] = r1.y; prof[b + 6u] = r1.z; prof[b + 7u] = r1.w;
+  prof[b + 8u] = rhs; prof[b + 9u] = w;
+}
+void noRows(uint r, uint n) { for (uint i = 0u; i < n; i++) { putRow(r + i, vec4(0.0), vec4(0.0), 0.0, 0.0); } }
+// ai: an image point p at module point u (both normalised): G1 p = u.x G3 p, G2 p = u.y G3 p
+void rowPoint(uint r, vec2 p, vec2 u, float w) {
+  putRow(r, vec4(p, 1.0, 0.0), vec4(0.0, 0.0, -u.x * p.x, -u.x * p.y), u.x, w);
+  putRow(r + 1u, vec4(0.0, 0.0, 0.0, p.x), vec4(p.y, 1.0, -u.y * p.x, -u.y * p.y), u.y, w);
+}
+// ai: an image point p on a module line (axis 0: X = v, 1: Y = v; normalised)
+void rowLine(uint r, vec2 p, float axis, float v, float w) {
+  if (axis == 0.0) { putRow(r, vec4(p, 1.0, 0.0), vec4(0.0, 0.0, -v * p.x, -v * p.y), v, w); }
+  else { putRow(r, vec4(0.0, 0.0, 0.0, p.x), vec4(p.y, 1.0, -v * p.x, -v * p.y), v, w); }
 }
 void main() {
   uvec3 wg = gl_WorkGroupID;
   uint li = gl_LocalInvocationIndex;
   uint f = wg.x / ${K}u;
+  uint qk = wg.x % ${K}u;
   uint base = 5u * wg.x;
   if (li == 0u) {
     bool four = false;
     for (uint q = 0u; q < ${K}u; q++) { four = four || quads[5u * (f * ${K}u + q) + 4u].w == 4.0; }
-    go = (frames[f].valid == 1u && quads[base + 4u].w == 3.0 && !four) ? 1u : 0u;
+    float nq = quads[base + 4u].w;
+    bool dup = false;
+    for (uint q = 0u; q < qk; q++) {
+      uint b2 = 5u * (f * ${K}u + q);
+      bool same = quads[b2 + 4u].w == nq;
+      for (uint c = 0u; c < 4u; c++) { same = same && all(equal(quads[b2 + c].xy, quads[base + c].xy)) && ((quads[b2 + c].w > 0.0) == (quads[base + c].w > 0.0)); }
+      dup = dup || same;
+    }
+    go = (frames[f].valid == 1u && !four && !dup && (nq == 3.0 || nq == 2.0)) ? 1u : 0u;
     for (uint q = 0u; q < 4u; q++) { ${wgStore("ri[q]", "0u")}; }
+    rjob[0] = 4u;
+    rjob[1] = 4u;
+    RT[0] = vec4(-2.0);
+    RT[1] = vec4(-2.0);
   }
   ${uniformLoad("uint go0", "go")}
   if (go0 == 0u) { return; }
@@ -476,94 +647,442 @@ void main() {
   }
   barrier();
   if (li == 0u) {
-    uint m = 0u;
-    for (uint q = 0u; q < 4u; q++) { if (quads[base + q].w == 0.0) { m = q; } }
-    uint a = (m + 1u) % 4u;
-    uint b = (m + 3u) % 4u;
-    uint o = (m + 2u) % 4u;
-    uint ia = ${wgLoad("ri[a]")};
-    uint ib = ${wgLoad("ri[b]")};
-    uint io = ${wgLoad("ri[o]")};
-    if (ia == 0u || ib == 0u || io == 0u) { go = 0u; }
-    else {
-      vec4 ra = readings[3u * (f * P.cap + ia - 1u)];
-      vec4 rb = readings[3u * (f * P.cap + ib - 1u)];
-      vec4 ro = readings[3u * (f * P.cap + io - 1u)];
-      vec2 Pa = ra.xy;
-      vec2 Pb = rb.xy;
-      vec2 Po = ro.xy;
-      G[0] = vec4(Pa, Pb);
-      G[1] = vec4(Po, Pa + Pb - Po);
-      G[2] = vec4(ra.z, rb.z, ro.z, clamp(ra.z + rb.z - ro.z, 0.5 * min(ra.z, rb.z), 2.0 * max(ra.z, rb.z)));
-      G[3] = vec4(float(m), quads[base + a].z, 0.0, 0.0);
-      for (uint sd = 0u; sd < 2u; sd++) {
-        vec2 P0 = (sd == 1u) ? Pb : Pa;
-        float al = (sd == 1u) ? rb.w : ra.w;
-        vec2 k = normalize(Po - P0);
-        vec2 e = -dir(al + 0.25 * 3.14159265);
-        G[4u + sd] = vec4(2.0 * dot(k, e) * e - k, normalize(Pa + Pb - Po - P0));
-      }
-      kept[0] = 0u;
-      kept[1] = 0u;
+    uint pm = 0u;
+    bool okr = true;
+    for (uint q = 0u; q < 4u; q++) {
+      if (quads[base + q].w > 0.0) { pm |= 1u << q; okr = okr && ${wgLoad("ri[q]")} != 0u; }
     }
+    uint n = uint(bitCount(pm));
+    if (!okr) { go = 0u; }
+    else if (n == 3u) {
+      uint m = uint(findLSB(~pm & 15u));
+      uint a = (m + 1u) % 4u;
+      uint b = (m + 3u) % 4u;
+      uint o = (m + 2u) % 4u;
+      vec4 ra = readings[3u * (f * P.cap + ${wgLoad("ri[a]")} - 1u)];
+      vec4 rb = readings[3u * (f * P.cap + ${wgLoad("ri[b]")} - 1u)];
+      vec4 ro = readings[3u * (f * P.cap + ${wgLoad("ri[o]")} - 1u)];
+      vec2 Pm0 = ra.xy + rb.xy - ro.xy;
+      float um = clamp(ra.z + rb.z - ro.z, 0.5 * min(ra.z, rb.z), 2.0 * max(ra.z, rb.z));
+      float c = quads[base + a].z;
+      vec2 Q = 0.25 * (ra.xy + rb.xy + ro.xy + Pm0);
+      for (uint sd = 0u; sd < 2u; sd++) {
+        vec4 r0 = (sd == 1u) ? rb : ra;
+        vec2 k = normalize(ro.xy - r0.xy);
+        vec2 e = -dir(r0.w + 0.25 * 3.14159265);
+        job(sd, r0.xy, 2.0 * dot(k, e) * e - k, normalize(Pm0 - r0.xy), r0.xy - Q, r0.z, um, distance(r0.xy, Pm0), c, f, m, (sd == 1u) ? b : a);
+      }
+      kase = 3u; nround = 1u;
+    } else if (n == 2u) {
+      uint s0 = uint(findLSB(pm));
+      uint s1 = uint(findMSB(pm));
+      if (s1 - s0 == 2u) {
+        // ai: diagonal: a and o; from each, the sides toward a + 1 and a + 3 (a + 1 lies where the turn from a to o to it
+        // ai: is negative, GATHER's slots running with the angle about the centre): first guesses the mark's diagonal
+        // ai: and the quad's, each turned 45 degrees
+        uint a = s0;
+        uint o = s1;
+        vec4 ra = readings[3u * (f * P.cap + ${wgLoad("ri[a]")} - 1u)];
+        vec4 ro = readings[3u * (f * P.cap + ${wgLoad("ri[o]")} - 1u)];
+        float c = quads[base + a].z;
+        vec2 Q = 0.5 * (ra.xy + ro.xy);
+        float L = distance(ra.xy, ro.xy) * 0.70710678;
+        float um = 0.5 * (ra.z + ro.z);
+        vec2 ka = normalize(ro.xy - ra.xy);
+        vec2 ko = -ka;
+        vec2 ea = -dir(ra.w + 0.25 * 3.14159265);
+        vec2 eo = -dir(ro.w + 0.25 * 3.14159265);
+        float q4 = 0.25 * 3.14159265;
+        job(0u, ra.xy, rot(ea, -q4), rot(ka, -q4), ra.xy - Q, ra.z, um, L, c, f, (a + 1u) % 4u, a);
+        job(1u, ra.xy, rot(ea, q4), rot(ka, q4), ra.xy - Q, ra.z, um, L, c, f, (a + 3u) % 4u, a);
+        job(2u, ro.xy, rot(eo, q4), rot(ko, q4), ro.xy - Q, ro.z, um, L, c, f, (a + 1u) % 4u, o);
+        job(3u, ro.xy, rot(eo, -q4), rot(ko, -q4), ro.xy - Q, ro.z, um, L, c, f, (a + 3u) % 4u, o);
+        kase = 4u; nround = 2u;
+      } else {
+        // ai: adjacent: a then b = a + 1; the sides leaving a (toward a + 3) and b (toward b + 1), first guesses the known
+        // ai: side reflected across the mark's diagonal, and its normal on the mark's side
+        uint a = (s1 - s0 == 1u) ? s0 : s1;
+        uint b = (a + 1u) % 4u;
+        vec4 ra = readings[3u * (f * P.cap + ${wgLoad("ri[a]")} - 1u)];
+        vec4 rb = readings[3u * (f * P.cap + ${wgLoad("ri[b]")} - 1u)];
+        float c = quads[base + a].z;
+        float L = distance(ra.xy, rb.xy) * ${lit(RULER_HI)};
+        for (uint sd = 0u; sd < 2u; sd++) {
+          vec4 r0 = (sd == 1u) ? rb : ra;
+          vec4 r1 = (sd == 1u) ? ra : rb;
+          vec2 k = normalize(r1.xy - r0.xy);
+          vec2 e = -dir(r0.w + 0.25 * 3.14159265);
+          vec2 pp = vec2(-k.y, k.x);
+          if (dot(pp, e) < 0.0) { pp = -pp; }
+          job(sd, r0.xy, 2.0 * dot(k, e) * e - k, pp, r0.xy - r1.xy, r0.z, r0.z, L, c, f, (sd == 1u) ? (b + 1u) % 4u : (a + 3u) % 4u, (sd == 1u) ? b : a);
+        }
+        kase = 2u; nround = 1u;
+      }
+    } else { go = 0u; }
   }
   ${uniformLoad("uint go1", "go")}
   if (go1 == 0u) { return; }
+  ${uniformLoad("uint nr", "nround")}
   uint side = li / ${STATIONS}u;
   uint j = li % ${STATIONS}u;
-  vec2 P0 = (side == 1u) ? G[0].zw : G[0].xy;
-  vec2 Pm0 = G[1].zw;
-  float u0 = (side == 1u) ? G[2].y : G[2].x;
-  float um = G[2].w;
-  float c = G[3].y;
-  vec2 Q = 0.25 * (G[0].xy + G[0].zw + G[1].xy + Pm0);
-  float L = distance(P0, Pm0);
-  float t0 = (13.0 - c) * u0;
-  float t1 = L - (13.0 - c) * um;
-  bool span = t1 > t0 + 8.0 * u0;
-  vec2 n0 = vec2(-G[4u + side].y, G[4u + side].x);
-  if (dot(n0, P0 - Q) < 0.0) { n0 = -n0; }
-  for (uint g = 0u; g < 2u; g++) {
-    vec2 dd = (g == 1u) ? G[4u + side].zw : G[4u + side].xy;
-    vec2 n = vec2(-dd.y, dd.x);
-    if (dot(n, n0) < 0.0) { n = -n; }
-    vec3 hit = vec3(0.0);
-    if (span) {
-      float t = t0 + ${ext(PASSES[0][0])} * (float(j) + 0.5) / ${STATIONS}.0;
-      float uu = mix(u0, um, t / L);
-      hit = ringAt(f, P0 + t * dd + (c - 2.0) * uu * n, n, uu, ${lit(PASSES[0][1])});
+  for (uint r = 0u; r < nr; r++) {
+    uint job = 2u * r + side;
+    vec4 ja = JA[job];
+    vec4 jb = JB[job];
+    vec4 jc = JC[job];
+    bool past = JD[job] == 1u;
+    vec2 P0 = ja.xy;
+    float u0 = jc.x;
+    float um = jc.y;
+    float L = jc.z;
+    float c = jc.w;
+    vec2 n0 = vec2(-ja.w, ja.z);
+    if (dot(n0, jb.zw) < 0.0) { n0 = -n0; }
+    float t0 = (13.0 - c) * u0;
+    float t1 = L - (13.0 - c) * um;
+    bool span = t1 > t0 + 8.0 * u0;
+    float a0 = past ? ${lit(ALONG1[0])} : ${lit(ALONG0[0])};
+    float a1 = past ? ${lit(ALONG1[1])} : ${lit(ALONG0[1])};
+    for (uint g = 0u; g < 2u; g++) {
+      vec2 dd = (g == 1u) ? jb.xy : ja.zw;
+      vec2 n = vec2(-dd.y, dd.x);
+      if (dot(n, n0) < 0.0) { n = -n; }
+      vec3 hit = vec3(0.0);
+      if (span) {
+        float t = (a0 - c + (a1 - a0) * (float(j) + 0.5) / ${STATIONS}.0) * u0;
+        float uu = mix(u0, um, max(t, 0.0) / L);
+        hit = ringAt(f, P0 + t * dd + (c - 2.0) * uu * n, n, uu, ${lit(PASSES[0][1])});
+      }
+      st[li] = vec4(hit.xy, hit.z, 0.0);
+      barrier();
+      if (j == 0u) { fitSide(side, job, 0.5 * (u0 + um), (a1 - a0) * u0, kept[job] + 1u); }
+      barrier();
     }
-    st[li] = vec4(hit.xy, hit.z, 0.0);
+    ${PASSES.slice(1).map(passAfter).join("\n    ")}
+  }
+  if (li == 0u) {
+    uint k = kase;
+    float ring = quads[base + 4u].x;
+    float S = P.modules[f2u(ring)];
+    if (k == 3u) {
+      // ai: a side traced alone ruled, its vanishing point its crossing with the side parallel to it (o to the other mark)
+      uint m = far[0];
+      uint a = (m + 1u) % 4u;
+      uint b = (m + 3u) % 4u;
+      uint o = (m + 2u) % 4u;
+      vec2 Pa = quads[base + a].xy;
+      vec2 Pb = quads[base + b].xy;
+      vec2 Po = quads[base + o].xy;
+      float c = JC[0].w;
+      if ((kept[0] > 0u) != (kept[1] > 0u)) {
+        uint jb0 = (kept[0] > 0u) ? 0u : 1u;
+        vec2 Pn = (jb0 == 0u) ? Pb : Pa;
+        vec2 Pk = (jb0 == 0u) ? Pa : Pb;
+        rjob[0] = jb0;
+        vec3 V = vanish(line[jb0], vec4(Po, normalize(Pn - Po)));
+        RB[0] = vec4(V.xy, V.z, distance(Pk, Po) / (S - 2.0 * c));
+      }
+    } else if (k == 2u) {
+      if (kept[0] > 0u && kept[1] > 0u) {
+        rjob[0] = 0u;
+        rjob[1] = 1u;
+        vec3 V = vanish(line[0], line[1]);
+        float w = distance(JA[0].xy, JA[1].xy) / (S - 2.0 * JC[0].w);
+        RB[0] = vec4(V.xy, V.z, w);
+        RB[1] = vec4(V.xy, V.z, w);
+      }
+    }
+    // ai: each ruler half's line: Ra the mark's centre on the line, d toward the far corner, ni inward; D the vanishing
+    // ai: point's distance along d (0 where none)
+    for (uint h = 0u; h < 2u; h++) {
+      uint jj = rjob[h];
+      if (jj == 4u) { continue; }
+      vec4 ln = line[jj];
+      vec2 P0 = JA[jj].xy;
+      vec2 Ra = ln.xy + dot(P0 - ln.xy, ln.zw) * ln.zw;
+      vec2 d = (dot(ln.zw, JA[jj].zw) < 0.0) ? -ln.zw : ln.zw;
+      vec2 ni = vec2(-d.y, d.x);
+      if (dot(ni, JB[jj].zw) > 0.0) { ni = -ni; }
+      vec4 rb = RB[h];
+      float D = (rb.z > 0.0) ? dot(rb.xy - Ra, d) : 0.0;
+      if (abs(D) > 1e6) { D = 0.0; }
+      float w = rb.w;
+      float c = JC[jj].w;
+      float tmax = (S - c) * w * ${lit(RULER_HI)} * 1.5;
+      RA[h] = vec4(Ra, d);
+      RB[h] = vec4(ni, w, D);
+      RC[h] = vec4(c, S, max(1.0, tmax / ${RULER_NP}.0), 0.0);
+    }
+  }
+  ${uniformLoad("uint rj0", "rjob[0]")}
+  ${uniformLoad("uint rj1", "rjob[1]")}
+  if (rj0 != 4u || rj1 != 4u) {
+    uint h = side;
+    bool on = (h == 0u) ? rj0 != 4u : rj1 != 4u;
+    vec4 ra = RA[h];
+    vec4 rb = RB[h];
+    vec4 rc = RC[h];
+    vec2 Ra = ra.xy;
+    vec2 d = ra.zw;
+    vec2 ni = rb.xy;
+    float w = rb.z;
+    float D = rb.w;
+    float c = rc.x;
+    float S = rc.y;
+    float step = rc.z;
+    uint B = f2u((S - 30.0) * 0.5);
+    uint l = levelFor(w);
+    // ai: the band's depth: the darkest of RULER_NDEP rows across the line, each averaged over the first 64 cells' run
+    if (on && j < ${RULER_NDEP}u) {
+      float o = ${lit(RULER_DEPTHS[0])} + float(j) * ${lit((RULER_DEPTHS[1] - RULER_DEPTHS[0]) / (RULER_NDEP - 1))};
+      float acc = 0.0;
+      float cnt = 0.0;
+      for (uint i = 0u; i < 64u; i++) {
+        float t = w * (16.0 + 2.0 * float(i) - c);
+        float fall = (D == 0.0) ? 1.0 : 1.0 - t / D;
+        vec2 p = Ra + t * d + o * w * fall * ni;
+        if (fall > 0.2 && onFrame(f, p)) { acc += look(l, f, p); cnt += 1.0; }
+      }
+      dm[h * ${RULER_NDEP}u + j] = (cnt >= 16.0) ? acc / cnt : 2.0;
+    }
     barrier();
-    if (j == 0u) { fitSide(side, 0.5 * (u0 + um), ${ext(PASSES[0][0])}, kept[side] + 1u); }
+    if (on && j == 0u) {
+      uint jm = 0u;
+      for (uint i = 1u; i < ${RULER_NDEP}u; i++) { if (dm[h * ${RULER_NDEP}u + i] < dm[h * ${RULER_NDEP}u + jm]) { jm = i; } }
+      float dt = 0.0;
+      if (jm > 0u && jm < ${RULER_NDEP - 1}u) {
+        float a = dm[h * ${RULER_NDEP}u + jm - 1u];
+        float b = dm[h * ${RULER_NDEP}u + jm];
+        float cc = dm[h * ${RULER_NDEP}u + jm + 1u];
+        float e = a + cc - 2.0 * b;
+        if (e > 0.0) { dt = clamp(0.5 * (a - cc) / e, -0.5, 0.5); }
+      }
+      RC[h].w = (dm[h * ${RULER_NDEP}u + jm] < 2.0) ? ${lit(RULER_DEPTHS[0])} + (float(jm) + dt) * ${lit((RULER_DEPTHS[1] - RULER_DEPTHS[0]) / (RULER_NDEP - 1))} : -1.0;
+    }
+    // ai: the first RULER_CELLS0 cells' track bits for the 8 readings (bit h: dark; 256 a track cell read from the
+    // ai: start, 512 from the end); the same for both halves (one ring)
+    if (li < ${RULER_CELLS0}u) {
+      uint bits = 0u;
+      for (uint sd = 0u; sd < 4u; sd++) {
+        bvec2 cf = cellOf(li, B, sd, 0u);
+        bvec2 cr = cellOf(li, B, sd, 1u);
+        bits |= (cf.y ? (1u << (2u * sd)) : 0u) | (cr.y ? (1u << (2u * sd + 1u)) : 0u);
+        if (sd == 0u) { bits |= (cf.x ? 256u : 0u) | (cr.x ? 512u : 0u); }
+      }
+      pk[li] = bits;
+    }
+    barrier();
+    float depth = RC[h].w;
+    bool go2 = on && depth > 0.0;
+    // ai: the band read once along the line at its depth, the depth's scale falling as 1 - t / D toward the vanishing point
+    for (uint i = j; i < ${RULER_NP}u; i += ${STATIONS}u) {
+      float t = float(i) * step;
+      float fall = (D == 0.0) ? 1.0 : 1.0 - t / D;
+      vec2 p = Ra + t * d + depth * w * fall * ni;
+      bprof[h * ${RULER_NP}u + i] = (go2 && fall > 0.2 && onFrame(f, p)) ? look(l, f, p) : -1.0;
+    }
+    barrier();
+    // ai: stage 0: scale and offset over the first RULER_CELLS0 cells at RULER_STEP0C, the 4 readings h = 2 side + (read
+    // ai: from the end) the side's direction allows: a capture is never mirrored, so the quad's slots run clockwise as
+    // ai: the symbol's corners (SPEC 4.1: sides 0 top, 1 right, 2 bottom, 3 left, each counted left to right or top to
+    // ai: bottom); a side traced toward the next slot is read from its start on sides 0 and 1 and from its end on 2 and 3,
+    // ai: toward the slot before the other way round
+    uint jr = (h == 0u) ? rj0 : rj1;
+    uvec4 hs4 = (on && far[jr] == (src[jr] + 1u) % 4u) ? uvec4(0u, 2u, 5u, 7u) : uvec4(1u, 3u, 4u, 6u);
+    bvec4 odd = equal(hs4 & uvec4(1u), uvec4(1u));
+    vec4 best = vec4(-2.0, 0.0, 0.0, 0.0);
+    for (uint p = j; go2 && p < ${RULER_N0 * RULER_ND}u; p += ${STATIONS}u) {
+      float s = w * exp(${lit(Math.log(RULER_LO))} + float(p / ${RULER_ND}u) * ${lit(RULER_STEP0C)});
+      float delta = -${lit(RULER_DMAX)} + 0.5 * float(p % ${RULER_ND}u);
+      float nF = 0.0; float sF = 0.0; float qF = 0.0; float nR = 0.0; float sR = 0.0; float qR = 0.0;
+      vec4 sxy = vec4(0.0);
+      vec4 sy = vec4(0.0);
+      for (uint k = 0u; k < ${RULER_CELLS0}u; k++) {
+        float t = tOf(s, 16.0 + 2.0 * float(k) + delta - c, D);
+        if (t < 0.0) { continue; }
+        float g = bandAt(h, t, step);
+        if (g < 0.0) { continue; }
+        float x = -g;
+        uint bits = pk[k];
+        bool tF = (bits & 256u) != 0u;
+        bool tR = (bits & 512u) != 0u;
+        if (tF) { nF += 1.0; sF += x; qF += x * x; }
+        if (tR) { nR += 1.0; sR += x; qR += x * x; }
+        vec4 trk = mix(vec4(tF ? 1.0 : 0.0), vec4(tR ? 1.0 : 0.0), odd);
+        vec4 y = mix(vec4(-1.0), vec4(1.0), notEqual((uvec4(bits) >> hs4) & uvec4(1u), uvec4(0u)));
+        sxy += trk * y * x;
+        sy += trk * y;
+      }
+      vec4 N = mix(vec4(nF), vec4(nR), odd);
+      vec4 SX = mix(vec4(sF), vec4(sR), odd);
+      vec4 QX = mix(vec4(qF), vec4(qR), odd);
+      vec4 Nq = max(N, vec4(1.0));
+      vec4 vx = QX - SX * SX / Nq;
+      vec4 vy = N - sy * sy / Nq;
+      vec4 r = (sxy - SX * sy / Nq) / sqrt(max(vx * vy, vec4(1e-12)));
+      for (uint i = 0u; i < 4u; i++) {
+        if (N[i] >= 12.0 && r[i] > best.x) { best = vec4(r[i], s, delta, float(hs4[i])); }
+      }
+    }
+    rbest[li] = best;
+    barrier();
+    if (j == 0u) {
+      vec4 bb = rbest[h * ${STATIONS}u];
+      for (uint i = 1u; i < ${STATIONS}u; i++) { vec4 v = rbest[h * ${STATIONS}u + i]; if (v.x > bb.x) { bb = v; } }
+      RS[h] = bb;
+    }
+    barrier();
+    // ai: stage 1: about stage 0's best, its reading alone, over every cell on the frame
+    vec4 s0b = RS[h];
+    bool go3 = go2 && s0b.x > -1.0;
+    uint hb = f2u(s0b.w);
+    uint sdb = hb >> 1u;
+    uint revb = hb & 1u;
+    best = vec4(-2.0, 0.0, 0.0, 0.0);
+    for (uint p = j; go3 && p < ${RULER_N1 * 5}u; p += ${STATIONS}u) {
+      float s = s0b.y * exp(-3.0 * ${lit(RULER_STEP0)} + float(p / 5u) * ${lit(RULER_STEP1)});
+      float delta = s0b.z - 0.5 + 0.25 * float(p % 5u);
+      float n = 0.0; float sx = 0.0; float qx = 0.0; float sxy = 0.0; float sy = 0.0;
+      for (uint k = 0u; k < B; k++) {
+        bvec2 cl = cellOf(k, B, sdb, revb);
+        if (!cl.x) { continue; }
+        float t = tOf(s, 16.0 + 2.0 * float(k) + delta - c, D);
+        if (t < 0.0) { continue; }
+        float g = bandAt(h, t, step);
+        if (g < 0.0) { continue; }
+        float x = -g;
+        float y = cl.y ? 1.0 : -1.0;
+        n += 1.0; sx += x; qx += x * x; sxy += y * x; sy += y;
+      }
+      if (n >= 12.0) {
+        float r = (sxy - sx * sy / n) / sqrt(max((qx - sx * sx / n) * (n - sy * sy / n), 1e-12));
+        if (r > best.x) { best = vec4(r, s, delta, 0.0); }
+      }
+    }
+    rbest[li] = best;
+    barrier();
+    if (j == 0u && go3) {
+      vec4 bb = rbest[h * ${STATIONS}u];
+      for (uint i = 1u; i < ${STATIONS}u; i++) { vec4 v = rbest[h * ${STATIONS}u + i]; if (v.x > bb.x) { bb = v; } }
+      // ai: the ruler's map for the fit: its correlation, scale, offset and vanishing distance
+      if (bb.x > -1.0) { RT[h] = vec4(bb.x, bb.y, bb.z, D); }
+    }
     barrier();
   }
-  ${uniformLoad("uint k0", "kept[0]")}
-  ${uniformLoad("uint k1", "kept[1]")}
-  if (k0 == 0u || k1 == 0u) { return; }
-  ${PASSES.slice(1).map(passAfter).join("\n  ")}
+  barrier();
+  // ai: the fit: every lane its rows, then 44 lanes an entry each of the normal equations (36 of the symmetric 8 x 8,
+  // ai: 8 of the right side), then one lane the solve
+  float ring = quads[base + 4u].x;
+  float S = P.modules[f2u(ring)];
+  float c = JC[0].w;
+  float um = JC[0].y;
+  float hs = 0.5 * S;
+  // ai: image coordinates about the found marks' mean in half the symbol's side; modules about the centre in half it
+  vec2 ci = vec2(0.0);
+  float nm = 0.0;
+  for (uint q = 0u; q < 4u; q++) { if (quads[base + q].w > 0.0) { ci += quads[base + q].xy; nm += 1.0; } }
+  ci /= nm;
+  float si = hs * um;
+  if (li < 4u) {
+    vec4 mk = quads[base + li];
+    if (mk.w > 0.0) { rowPoint(2u * li, (mk.xy - ci) / si, (markMod(li, S, c) - hs) / hs, ${lit(FIT_MARK)}); } else { noRows(2u * li, 2u); }
+  } else if (li < 12u) {
+    uint jb = (li - 4u) / 2u;
+    if (jb < 2u * nround && kept[jb] > 0u) {
+      vec4 ln = line[jb];
+      vec2 ml = ringMod(src[jb], far[jb], S);
+      float te = ((li & 1u) == 0u) ? lext[jb].x : lext[jb].y;
+      rowLine(li + 4u, (ln.xy + te * ln.zw - ci) / si, ml.x, (ml.y - hs) / hs, ${lit(FIT_LINE)} * 0.5 * float(kept[jb]));
+    } else { noRows(li + 4u, 1u); }
+  }
+  {
+    uint hh = li / ${STATIONS}u;
+    uint jj = rjob[hh];
+    vec4 rt = RT[hh];
+    bool none = true;
+    if (jj != 4u && rt.x > 0.0) {
+      uint B = f2u((S - 30.0) * 0.5);
+      uint stepR = max(1u, (B + ${STATIONS - 1}u) / ${STATIONS}u);
+      uint kk = (li % ${STATIONS}u) * stepR;
+      if (kk < B) {
+        float t = tOf(rt.y, 16.0 + 2.0 * float(kk) + rt.z - c, rt.w);
+        if (t >= 0.0 && bandAt(hh, t, RC[hh].z) >= 0.0) {
+          vec2 O1 = outerMod(src[jj], S);
+          vec2 O2 = outerMod(far[jj], S);
+          vec2 X = RA[hh].xy + t * RA[hh].zw;
+          vec2 U = O1 + (16.0 + 2.0 * float(kk)) * (O2 - O1) / S + 2.0 * inMod(O1, O2);
+          rowPoint(16u + 2u * li, (X - ci) / si, (U - hs) / hs, ${lit(FIT_RULER / 4)} * rt.x * float(stepR));
+          none = false;
+        }
+      }
+    }
+    if (none) { noRows(16u + 2u * li, 2u); }
+  }
+  barrier();
+  if (li < 44u) {
+    uint i = 0u;
+    uint jc = 8u;
+    if (li < 36u) {
+      uint rem = li;
+      while (rem >= 8u - i) { rem -= 8u - i; i++; }
+      jc = i + rem;
+    } else { i = li - 36u; }
+    float acc = 0.0;
+    for (uint r = 0u; r < ${FIT_ROWS}u; r++) { uint b = 10u * r; acc += prof[b + 9u] * prof[b + i] * prof[b + jc]; }
+    if (jc == 8u) { NE[64u + i] = acc; } else { NE[8u * i + jc] = acc; NE[8u * jc + i] = acc; }
+  }
+  barrier();
   if (li == 0u) {
-    vec4 A = line[0];
-    vec4 Bl = line[1];
-    float den = A.z * Bl.w - A.w * Bl.z;
-    if (abs(den) < 0.2) { return; }
-    float s = ((Bl.x - A.x) * Bl.w - (Bl.y - A.y) * Bl.z) / den;
-    vec2 R = A.xy + s * A.zw;
-    vec2 ta = A.zw;
-    if (dot(ta, G[0].xy - R) < 0.0) { ta = -ta; }
-    vec2 tb = Bl.zw;
-    if (dot(tb, G[0].zw - R) < 0.0) { tb = -tb; }
-    vec2 Pm = R + (c - 2.0) * um * (ta + tb);
-    if (distance(Pm, Pm0) > 0.25 * distance(G[0].xy, G[0].zw)) { return; }
-    uint m = f2u(G[3].x);
-    quads[base + m] = vec4(Pm, c, um);
-    vec4 qm = quads[base + 4u];
-    vec2 p0 = quads[base].xy;
-    vec2 p1 = quads[base + 1u].xy;
-    vec2 p2 = quads[base + 2u].xy;
-    vec2 p3 = quads[base + 3u].xy;
-    float uq = 0.25 * (distance(p0, p1) + distance(p1, p2) + distance(p2, p3) + distance(p3, p0)) / (P.modules[f2u(qm.x)] - 2.0 * quads[base].z);
-    quads[base + 4u] = vec4(qm.x, uq, qm.z, 5.0);
+    // ai: the normal equations solved in place by elimination with partial pivoting; a pivot under FIT_PIVOT of the
+    // ai: largest diagonal leaves the model free in some direction: nothing completed
+    float dmax = 0.0;
+    for (uint i = 0u; i < 8u; i++) { dmax = max(dmax, NE[9u * i]); }
+    bool ok = dmax > 0.0;
+    for (uint col = 0u; ok && col < 8u; col++) {
+      uint pr = col;
+      for (uint r = col + 1u; r < 8u; r++) { if (abs(NE[8u * r + col]) > abs(NE[8u * pr + col])) { pr = r; } }
+      if (abs(NE[8u * pr + col]) < ${lit(FIT_PIVOT)} * dmax) { ok = false; break; }
+      if (pr != col) {
+        for (uint cc = 0u; cc < 8u; cc++) { float t = NE[8u * col + cc]; NE[8u * col + cc] = NE[8u * pr + cc]; NE[8u * pr + cc] = t; }
+        float t = NE[64u + col]; NE[64u + col] = NE[64u + pr]; NE[64u + pr] = t;
+      }
+      float pv = NE[8u * col + col];
+      for (uint r = 0u; r < 8u; r++) {
+        if (r == col) { continue; }
+        float fr = NE[8u * r + col] / pv;
+        for (uint cc = col; cc < 8u; cc++) { NE[8u * r + cc] -= fr * NE[8u * col + cc]; }
+        NE[64u + r] -= fr * NE[64u + col];
+      }
+    }
+    if (ok) {
+      mat3 G = transpose(mat3(NE[64] / NE[0], NE[65] / NE[9], NE[66] / NE[18], NE[67] / NE[27], NE[68] / NE[36], NE[69] / NE[45], NE[70] / NE[54], NE[71] / NE[63], 1.0));
+      mat3 Hm = inverse(G);
+      vec3 v0 = Hm * vec3((markMod(0u, S, c) - hs) / hs, 1.0);
+      vec3 v1 = Hm * vec3((markMod(1u, S, c) - hs) / hs, 1.0);
+      vec3 v2 = Hm * vec3((markMod(2u, S, c) - hs) / hs, 1.0);
+      vec3 v3 = Hm * vec3((markMod(3u, S, c) - hs) / hs, 1.0);
+      ok = abs(v0.z) > 1e-6 && abs(v1.z) > 1e-6 && abs(v2.z) > 1e-6 && abs(v3.z) > 1e-6;
+      if (ok) {
+        vec2 c0 = ci + si * v0.xy / v0.z;
+        vec2 c1 = ci + si * v1.xy / v1.z;
+        vec2 c2 = ci + si * v2.xy / v2.z;
+        vec2 c3 = ci + si * v3.xy / v3.z;
+        if (convex(c0, c1, c2, c3)) {
+          vec4 m0 = quads[base];
+          vec4 m1 = quads[base + 1u];
+          vec4 m2 = quads[base + 2u];
+          vec4 m3 = quads[base + 3u];
+          // ai: the found corners kept, the missing ones the model's
+          quads[base] = (m0.w > 0.0) ? m0 : vec4(c0, c, um);
+          quads[base + 1u] = (m1.w > 0.0) ? m1 : vec4(c1, c, um);
+          quads[base + 2u] = (m2.w > 0.0) ? m2 : vec4(c2, c, um);
+          quads[base + 3u] = (m3.w > 0.0) ? m3 : vec4(c3, c, um);
+          vec4 qm = quads[base + 4u];
+          float uq = 0.25 * (distance(c0, c1) + distance(c1, c2) + distance(c2, c3) + distance(c3, c0)) / (P.modules[f2u(qm.x)] - 2.0 * c);
+          quads[base + 4u] = vec4(qm.x, uq, qm.z, 5.0);
+        }
+      }
+    }
   }
 }
 `;
