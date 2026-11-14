@@ -6,7 +6,7 @@
 // ai: the whole ladder (up to LIZARD-560 until 2026-09-29, APP_TOP). The lab's switches are in the folds (Code, Refresh,
 // ai: Performance, Developer Tools; Layout merged into Code 2026-11-13), their ids the URL presets.
 import { init as initOb } from "../liblizard/sim/ob.mjs";
-import { DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
+import { PAYLOAD } from "../liblizard/sim/xfer.mjs";
 import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
 import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
 import { bundle } from "./tar.mjs";
@@ -20,7 +20,7 @@ for (const sel of document.querySelectorAll("select[data-chips]")) chips(sel);
 // The room a format needs holds the codec's margin (src/lizard_phy.h LIZARD_QUIET), and only the codec knows it.
 await initOb();
 let offeredKBs = 0;
-let fileBytes = 0, sentBytes = 0;   // ai: the file's bytes and its bytes as sent (every chunk's zstd frame or its own; 2026-10-05), the block's Size and Compressed
+let fileBytes = 0, sentBytes = 0;   // ai: the file's bytes and the bytes the transfer carries (packed where that paid, sim/pack.mjs), the block's Size and Compressed
 // ai: the run's test stream or not, its bundle's files, and the last second's pass time (sendDetails)
 let runTest = false, runFiles = 1, passTime = 0;
 // ai: What goes, as elements from Start until Stop (ui.mjs details, 2026-11-07; the apps' lizard-ui SendRows.details;
@@ -273,7 +273,7 @@ function stateFps(force = false) {
 // A LIZARD file goes as a chunked transfer (sim/xfer.mjs): chunks of 2^chunk bytes (?chunk=10..24, 4 MiB unless
 // ai: asked), a fountain each, the header and manifest in the light, and only there: the receiver reads it blind
 // ai: (2026-09-26).
-const URLP = new URLSearchParams(location.search), CHUNK_LOG2 = +URLP.get("chunk") || DEFAULT_LOG2;
+const URLP = new URLSearchParams(location.search), CHUNK_LOG2 = +URLP.get("chunk") || null;   // ai: null: src/xfer.h xfer_chunk_log2_for's
 // ai: The size on screen and the surround, test-only menus until 2026-10-01, URL parameters since: fit=stretch|whole|fit,
 // ai: bg=none|noise|text|photo|checker|squares|mixed.
 const FIT = URLP.get("fit") ?? "stretch", SURROUND = URLP.get("bg") ?? "none";
@@ -529,7 +529,7 @@ async function start() {
   swInit();
   ahead.clear(); inflight = 0; reqSeq = 0; spare = []; respecPending = false; behind = 0;
   const fps = Math.max(0, Math.min(255, Math.round(+$("fps").value) || 0));
-  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, fps, xfer, codes, gap, every: refreshOf() });
+  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, fps, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf() });
   bandFps = fps;
   // ai: The GPU encoder for this run, where the menu asks for it and it builds (WebGPU by name: its failure is the start's).
   // ai: Its configuration is this run's only if the run is still this one when it comes back.
@@ -547,11 +547,11 @@ async function start() {
   }
   // ai: What is painted: the label, the payload, the block's bytes, the blocks a frame, the codes and their gap.
   cfg = { label: made.label, mode: file ? "file" : "test", usefulBytes: made.usefulBytes, blocksPerFrame: made.blocksPerFrame, codes, gap };
-  shown = s; lap = made.xfer?.lap ?? 0; dataSent = 0; dataWin = 0; fileBytes = file?.size ?? 0; sentBytes = made.xfer?.sent ?? 0;
+  shown = s; lap = made.xfer?.lap ?? 0; dataSent = 0; dataWin = 0; fileBytes = file?.size ?? 0; sentBytes = made.xfer?.length ?? 0;
   showEnc();
   showBlocks();
-  // ai: sent: the file's bytes as they go, each chunk zstd-compressed where that is shorter (sim/xfer.mjs, 2026-10-05)
-  const xferLine = made.xfer ? `\nfile ${file.size} B${made.xfer.sent !== file.size ? `, ${made.xfer.sent} B as sent (zstd)` : ""}: ${made.xfer.chunks} chunk${made.xfer.chunks === 1 ? "" : "s"} of 2^${made.xfer.chunkLog2}, ${made.xfer.manifest} manifest block${made.xfer.manifest === 1 ? "" : "s"}, BLAKE3 ${made.xfer.root.slice(0, 16)}..., header in the light` : "";
+  // ai: length: the bytes the transfer carries, the file packed where that paid (sim/pack.mjs)
+  const xferLine = made.xfer ? `\nfile ${file.size} B${made.xfer.length !== file.size ? `, ${made.xfer.length} B packed (zstd)` : ""}: ${made.xfer.chunks} chunk${made.xfer.chunks === 1 ? "" : "s"} of 2^${made.xfer.chunkLog2}, ${made.xfer.manifest} manifest block${made.xfer.manifest === 1 ? "" : "s"}, BLAKE3 ${made.xfer.root.slice(0, 16)}..., seed ${made.xfer.seed}, header in the light` : "";
   // What the window chose, so the guess is visible rather than implied. The capture is an assumption, not a measurement.
   const auto = () => {
     const r = room(), squeezed = SAMPLES(shown.n, ringOf(shown)) > r;
@@ -725,7 +725,7 @@ $("railSend").onclick = playPause;
 // ai: order, each a file or a folder with its entries under its own name (tar.mjs bundle's), so files and folders mix.
 // ai: The payload is their bundle (one file alone is itself, else one tar). An item already listed is not added again
 // ai: (a file by its name, size and time, a folder by its name, files and bytes). Every change stops a run first; its
-// ai: transfer is made at the next Start (prepare: every chunk compressed); a reply for a selection since changed is
+// ai: transfer is made at the next Start (prepare: the file packed where that pays); a reply for a selection since changed is
 // ai: ignored by its pick number.
 let picks = 0, items = [];
 function itemOf(name, entries) {
@@ -762,7 +762,7 @@ async function prepare(p) {
   sw.postMessage({ type: "prepare", pick: p.pick, bytes: b.buffer, xfer: { name: p.name, type: p.type, chunkLog2: CHUNK_LOG2 } }, [b.buffer]);
 }
 // ai: A file's transfer whole in the worker (streaming, 2026-11-06: the pool makes its chunks behind the first frames):
-// ai: its bytes as they go and its lap known only now, the sending line said again with them; a failure ends the run.
+// ai: its lap known only now, the sending line said again with it; a failure ends the run.
 let runPick = null, runName = "";
 function madeAll(m) {
   if (chosen?.pick === m.pick) { if (m.error) chosen.failed = new Error(m.error); else chosen.sent = m.sent; }
@@ -845,6 +845,13 @@ $("addFolder").onclick = (e) => { e.stopPropagation(); $("folder").click(); };
 $("clearPick").onclick = (e) => { e.stopPropagation(); clearPick(); };
 $("pick").addEventListener("click", (e) => e.stopPropagation());   // ai: a tap on the list is not a tap on <main>
 $("payload").onchange = () => { if (running) stop(); showReady(); };
+// ai: Seed (Developer Tools, 2026-11-14): a file's schedule (sim/xfer.mjs XferSender seed: each chunk's first symbol, each
+// ai: round's order of the chunks, each frame's shuffle) drawn from it at each Start, so a send can be repeated; empty, a
+// ai: random one each send. Kept as typed (#settings' persist, ?seed= a preset); a value that is no unsigned 32-bit
+// ai: number is refused, the field back to the last that was (this listener before persist's, so that one is kept).
+const seedOf = (t) => (/^\d{1,10}$/.test(t.trim()) && +t.trim() <= 0xffffffff ? +t.trim() : null);
+let seedKept = "";
+$("seed").addEventListener("change", () => { const t = $("seed").value.trim(); if (t && seedOf(t) == null) $("seed").value = seedKept; else seedKept = $("seed").value = t; });
 // ai: Files and folders dropped anywhere on the page are added, each dropped item one. The counter pairs enter with
 // ai: leave across child elements, so the outline goes only when the drag leaves the page.
 const main = canvas.parentElement, hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes("Files");

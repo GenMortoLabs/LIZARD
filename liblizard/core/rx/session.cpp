@@ -40,6 +40,7 @@
 #include "crops.h"
 #include "json.hpp"
 #include "lizfile.h"
+#include "pack.h"
 #include "phase_host.h"
 #include "receiver.h"
 #include "replay.h"
@@ -1607,8 +1608,10 @@ struct Session::Impl {
   // ai: A finished file out of the store's folder `from` (store.h fileStore: done/<name> beside meta.json, no header)
   // ai: into kept/<root16>-<n>/ (session.h's header): filing.json first, then the file renamed in (else copied, made
   // ai: durable, and the store's removed: a copy whose source will not go is taken all the same), then meta.json
-  // ai: removed from `from`, which leaves it nothing a store's open keeps. A throw leaves the file in the store and no
-  // ai: folder. Its root.
+  // ai: removed from `from`, which leaves it nothing a store's open keeps. A file the default client packed (pack.h:
+  // ai: its type says so) is unpacked into kept/ under its own name and type, made durable, the store's let go; one
+  // ai: that does not unpack is taken as it came, said in the log. A throw leaves the file in the store and no folder.
+  // ai: Its root.
   std::string take(const fs::path& from) {
     std::error_code e;
     fs::path src;
@@ -1632,11 +1635,31 @@ struct Session::Impl {
       if (e) throw std::runtime_error(keptDir.u8string() + ": " + e.message());
     }
     if (dir.empty()) throw std::runtime_error("no free folder in " + keptDir.u8string());
-    const std::string name = src.filename().u8string();
+    std::string name = src.filename().u8string(), fileType = type, original;
+    bool unpacked = false;
     try {
       std::string w;
-      if (!writeWhole(dir / "filing.json", dump({{"name", name}, {"type", type}, {"root", root}}), w)) throw std::runtime_error(w);
       fs::create_directories(dir / "file");
+      if (packedType(type, original)) {
+        const std::string plain = unpackedName(name);
+        const fs::path to = dir / "file" / fs::u8path(plain);
+        const std::string why = unpack(src.u8string(), to.u8string());
+        unpacked = why.empty() && syncPath(to);
+        if (unpacked) {
+          name = plain;
+          fileType = original;
+        } else {
+          fs::remove(to, e);
+          say("kept: " + name + " not unpacked (" + (why.empty() ? "not written to the disk" : why) + "), taken as it came");
+        }
+      }
+      if (!writeWhole(dir / "filing.json", dump({{"name", name}, {"type", fileType}, {"root", root}}), w)) throw std::runtime_error(w);
+      if (unpacked) {
+        fs::remove(from / "meta.json", e);
+        fs::remove(src, e);
+        say("kept: " + name + " unpacked in " + dir.u8string());
+        return root;
+      }
       const fs::path to = dir / "file" / src.filename();
       fs::rename(src, to, e);
       if (e) {

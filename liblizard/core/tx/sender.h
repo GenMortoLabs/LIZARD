@@ -48,7 +48,8 @@ struct TxFormat {
 class Sender {
  public:
   // ai: A file (data alive as long as this: the app maps it) or, with data null, the test stream.
-  Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type);
+  // ai: spillDir: where the transfer's spill goes (xfer_tx.h: no encoder kept, symbols in segments on disk); "" none
+  Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir = "");
   ~Sender();
   Sender(const Sender&) = delete;
   Sender& operator=(const Sender&) = delete;
@@ -102,6 +103,9 @@ class Sender {
   // ai: is one it has. From the next frame made (frames already made ahead keep theirs); kept across configures.
   void setRefresh(const int every[4]);
   static constexpr int REFRESH_MAX = 4;   // ai: two bits a rate; 4 at 60 is 15 a second
+  // ai: A file's schedule drawn from seed in place of its random one (xfer_tx.h reseed): before its first frame only;
+  // ai: false after, or for the test stream
+  bool seed(uint32_t seed);
 
  private:
   struct Job { uint64_t seq; std::vector<uint8_t> blocks; int data; };

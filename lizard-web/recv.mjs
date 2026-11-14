@@ -199,12 +199,11 @@ function showState() {
   else if (testing) d = { name: "Test stream", test: true, rows: [["Speed", speedNow()]] };
   else if (on && h && !offered) {
     frac = fractionDone(xferNow);
-    // ai: the bytes as sent where the manifest has said them (2026-10-05): what the light carries, which the rate and
-    // ai: the time left are of; Received is that share of the file's own size; the speed the last second's new bytes
+    // ai: the transfer's bytes in (each chunk's blocks in hand to its length); the speed the last second's new bytes
     // ai: (recentKBs)
-    const now = recentKBs(), total = h.sent ?? h.length, got = h.sent ? xferNow.sentIn : frac * h.length;
-    d = { name: h.name || "a file", end: `${Math.floor(100 * frac)}%`, frac, rows: [["Received", nb(bytes(frac * h.length))], ["Size", nb(bytes(h.length))],
-      ["Time left", now > 0 ? nb(left((total - got) / (now * 1000))) : ""], ["Speed", now > 0 ? nb(rate(now)) : ""]] };
+    const now = recentKBs(), got = xferNow.bytesIn ?? frac * h.length;
+    d = { name: h.name || "a file", end: `${Math.floor(100 * frac)}%`, frac, rows: [["Received", nb(bytes(got))], ["Size", nb(bytes(h.length))],
+      ["Time left", now > 0 ? nb(left((h.length - got) / (now * 1000))) : ""], ["Speed", now > 0 ? nb(rate(now)) : ""]] };
   } else if (ui.received && !on && $("stats").value === "1") {
     // ai: the speed the transfer ran at (2026-10-10, the apps' Readout.received): the bytes the light carried over its
     // ai: time, none where the time reads 0.0 s
@@ -507,7 +506,7 @@ function showFile(name, data, how = "checksum ok", type = "", sent = 0) {
   let shares = false;
   try { shares = !!navigator.canShare?.({ files: [fileOut] }); } catch {}
   $("share").hidden = !shares;
-  ui.received = { name, n, secs: seconds, root: xferRoot, sent };   // ai: sent: the bytes the light carried, the file's where nothing shrank
+  ui.received = { name, n, secs: seconds, root: xferRoot, sent };   // ai: sent: the bytes the light carried (the packed file's where the sender packed it)
   ui.err = "";   // ai: a fountain error is not fatal (fountain-worker.mjs goes on), so a file can still finish after one
   // ai: The camera off once the file is in (2026-10-01):
   // ai: nothing is left to read, and the phone cools. Once a file (the fountain offers it once), so Start after

@@ -16,14 +16,18 @@ import java.io.File
 object Native {
     // ai: the process's priority raised as far as a user's may (native/priority.cpp): what was done, "" nothing
     @JvmStatic external fun raisePriority(): String
-    // ai: path: the file to send ("" for the test stream); name and type as its header carries them; 0, why in txError()
-    @JvmStatic external fun txCreate(path: String, name: String, type: String): Long
+    // ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
+    // ai: form goes where packing pays (liblizard/core/tx/pack.h; removed at txDestroy); 0, why in txError()
+    @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String): Long
     @JvmStatic external fun txError(): String
+    // ai: the bytes the transfer carries: the packed file's where it was packed, else the file's
+    @JvmStatic external fun txBytes(h: Long): Long
     @JvmStatic external fun txPrepare(h: Long, assets: String): String
     // ai: painter: 0 the CPU, 1 the GPU, 2 auto; gap: modules between two codes; "" or the refusal
     @JvmStatic external fun txConfigure(h: Long, subch: Int, span: Int, fps: Int, codes: Int, gap: Int, threads: Int, painter: Int, assets: String): String
     // ai: Rate refresh: a new block of the rates 7/8, 3/4, 2/3, 1/2 every a, b, c, d frames (1 to 10), from the next frame
     @JvmStatic external fun txRefresh(h: Long, a: Int, b: Int, c: Int, d: Int)
+    @JvmStatic external fun txSeed(h: Long, seed: Int): Boolean
     // ai: the blocks a frame of subch sub-channels carries (the format's rate profile, src/lizard_phy.h lizard_blocks_for)
     @JvmStatic external fun blocksFor(subch: Int): Int
     @JvmStatic external fun txStats(h: Long): String

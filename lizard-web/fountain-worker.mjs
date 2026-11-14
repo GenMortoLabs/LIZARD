@@ -15,6 +15,7 @@ import { init as initWh, Decoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { XferReceiver, MemoryStore, PAYLOAD, ID_BYTES, ID_HEADER, isControlId } from "../liblizard/sim/xfer.mjs";
+import { packedType, unpackedName, unpack, unpackWith } from "../liblizard/sim/pack.mjs";
 
 let rx = null, store = null, chain = Promise.resolve(), lastPost = 0, posted = null;
 const REC = ID_BYTES + PAYLOAD, DIR = "lizard-xfer", LIVE_BLOCKS = 4096, HOLD_BLOCKS = 1024;
@@ -133,7 +134,7 @@ async function chunked(c) {
   const [M] = await Promise.all([initOb(), initWh(), initZstd()]);
   if (c.store === "memory" && store?.kind !== "memory") { store = new MemoryStore(); store.why = "asked for (?store=memory)"; rx = null; }
   if (!store) try { store = await OpfsStore.open(); } catch (e) { store = new MemoryStore(); store.why = String(e?.message ?? e); }
-  rx ??= new XferReceiver({ M, Decoder, store, Z });   // ai: Z decompresses a chunk sent as a zstd frame (2026-10-05)
+  rx ??= new XferReceiver({ M, Decoder, store });
   await rx.reset(true);   // ai: a transfer in hand parked, as a header of another file would (2026-10-22; let go before)
   sinceHeader = Infinity; held = []; heldAt = 0;
 }
@@ -168,20 +169,30 @@ async function report(force) {
 // Once a transfer, the moment its last chunk verifies. A finished receiver still reads control blocks: a header with
 // other bytes is the next transfer.
 // ai: On disk, the finished file is filed into the received files first (fileAway), and the page told where it is.
+// ai: A file the sender's client packed (sim/pack.mjs: its type says so) is unpacked as it is filed (fileAway), or here
+// ai: in memory, under its own name and type; one that does not unpack is offered as it came. `sent` the bytes the
+// ai: light carried, the transfer's.
 async function offer() {
   await report(rx.done);
   if (rx.done && posted !== rx.result) {
     posted = rx.result;
+    let r = { ...rx.result, sent: rx.result.length };
+    const original = packedType(r.mediaType);
+    if (r.bytes && original != null)
+      try { const bytes = await unpack(r.bytes, Z); r = { ...r, bytes, name: unpackedName(r.name), mediaType: original, length: bytes.length }; }
+      catch (e) { console.warn("fountain: the packed file did not unpack:", e); }
     // ai: a filing that fails (a full disk) leaves the file where it was, offered from there as before 2026-10-01
-    const lib = rx.result.opfs ? await fileAway(rx.result).catch((e) => { console.warn("fountain: the file was not kept:", e); return null; }) : null;
-    postMessage({ ...rx.result, ...(lib ? { opfs: null, lib } : {}), type: "file", ok: true, chunked: true });
+    const lib = r.opfs ? await fileAway(r).catch((e) => { console.warn("fountain: the file was not kept:", e); return null; }) : null;
+    if (lib) r = { ...r, opfs: null, lib, name: lib.name, mediaType: lib.type, length: lib.size };
+    postMessage({ ...r, type: "file", ok: true, chunked: true });
   }
 }
 
 // ai: The received files (2026-10-01, lizard-web/library.mjs, which reads them): lizard-files/<id>/data and its meta.json, the
 // ai: id the root's first 16 hex digits, so the same file received again replaces its entry. The finished file leaves
 // ai: its transfer's folder under lizard-xfer (OpfsStore) by a move where the browser has one, else a copy through sync
-// ai: access handles, and the folder goes after it: nothing of the transfer is left behind.
+// ai: access handles, and the folder goes after it: nothing of the transfer is left behind. A packed file (sim/pack.mjs)
+// ai: is unpacked into data instead, under its own name and type (one that does not unpack is moved as it came).
 const LIB = "lizard-files", ENC = new TextEncoder();
 async function fileAway(r) {
   const path = r.opfs, name = path.at(-1), root = await navigator.storage.getDirectory();
@@ -190,8 +201,21 @@ async function fileAway(r) {
   const lib = await root.getDirectoryHandle(LIB, { create: true }), id = r.root.slice(0, 16);
   await lib.removeEntry(id, { recursive: true }).catch(() => {});
   const d = await lib.getDirectoryHandle(id, { create: true }), src = await from.getFileHandle(name);
-  let moved = false;
-  if (typeof src.move === "function") try { await src.move(d, "data"); moved = true; } catch {}
+  let moved = false, fileName = r.name || "received.bin", fileType = r.mediaType || "", size = r.length;
+  const original = packedType(r.mediaType);
+  if (original != null) {
+    const a = await src.createSyncAccessHandle(), b = await (await d.getFileHandle("data", { create: true })).createSyncAccessHandle();
+    let out = 0;
+    try {
+      b.truncate(0);
+      await unpackWith(a.getSize(), (at, n) => { const buf = new Uint8Array(n); a.read(buf, { at }); return buf; }, (p) => { b.write(p, { at: out }); out += p.length; }, Z);
+      b.flush();
+      moved = true; fileName = unpackedName(fileName); fileType = original; size = out;
+    } catch (e) { console.warn("fountain: the packed file did not unpack:", e); b.truncate(0); }
+    a.close(); b.close();
+    if (moved) await from.removeEntry(name);
+  }
+  if (!moved && typeof src.move === "function") try { await src.move(d, "data"); moved = true; } catch {}
   if (!moved) {
     const a = await src.createSyncAccessHandle(), b = await (await d.getFileHandle("data", { create: true })).createSyncAccessHandle(), buf = new Uint8Array(1 << 20);
     b.truncate(0);
@@ -201,7 +225,7 @@ async function fileAway(r) {
   }
   // ai: the transfer's folder, empty now (OpfsStore.finish took the rest)
   if (path.length > 2) { let parent = root; for (const d of path.slice(0, -2)) parent = await parent.getDirectoryHandle(d); await parent.removeEntry(path.at(-2), { recursive: true }).catch(() => {}); }
-  const meta = { name: r.name || "received.bin", type: r.mediaType || "", size: r.length, root: r.root, at: Date.now() };
+  const meta = { name: fileName, type: fileType, size, root: r.root, at: Date.now() };
   const m = await (await d.getFileHandle("meta.json", { create: true })).createSyncAccessHandle(), bytes = ENC.encode(JSON.stringify(meta));
   m.truncate(0); m.write(bytes, { at: 0 }); m.flush(); m.close();
   if (typeof BroadcastChannel === "function") { const bc = new BroadcastChannel(LIB); bc.postMessage("changed"); bc.close(); }

@@ -112,10 +112,9 @@ test("a 5 MB file through two codes, the native library's root", () => {
   const f = r.file, p = r.rx.progress;
   assert.ok(f, `whole after ${frames} frames`);
   assert.equal(f.root, s.info.root);
-  // ai: liz_tx_info's and liz_progress's last fields read where the C writes them
-  assert.ok(s.info.sent > 0 && s.info.sent <= s.info.length + 64, `the bytes as they go, ${s.info.sent}`);
-  assert.equal(p.sent, s.info.sent, "the receiver's bytes as they go, the sender's");
-  assert.equal(p.sentIn, p.sent, "all of them in");
+  // ai: liz_tx_info's and liz_progress's fields read where the C writes them
+  assert.equal(s.info.length, bytes.length, "the sender's length");
+  assert.ok(p.done && p.length === bytes.length && p.bytesIn === bytes.length && p.fraction === 1 && p.solveMs >= 0, "the receiver's progress, whole");
   assert.equal(liz.blocksFor(30), s.geometry.frameBlocks / 2, "the profile's blocks a symbol");
   assert.equal(f.name, "roundtrip.bin");
   assert.deepEqual(Buffer.from(f.bytes), Buffer.from(bytes));

@@ -40,12 +40,14 @@ In signal-processing terms this is OFDM, the modulation used by Wi-Fi and 4G/5G,
 Several files or a folder are first packed into one tar archive and sent as that file; the Android app unpacks a
 received archive into a folder, and the web receiver offers it as the `.tar` it is.
 
-1. **Split the file** into 4 MiB chunks, each compressed with zstd where that makes it smaller.
+1. **Compress where it helps, then split.** A file that compresses well is first packed as a stream of zstd frames
+   and sent as `<name>.zst`, which the receiving app unpacks (any zstd tool reads it too); compression is the app's,
+   not part of the code. The file is then split into 4 MiB chunks (larger only past 64 GiB).
 2. **Fountain-code each chunk** (Wirehair). The encoder can produce as many 472-byte pieces as needed, and any set
    slightly larger than the chunk rebuilds it, whichever pieces they are. A missed frame costs only time, and nothing
    ever has to go back to the sender.
-3. **Describe the file** in a header block (name, size, BLAKE3 hash) and manifest blocks (each chunk's hash and
-   size), sent in the same stream as the data.
+3. **Describe the file** in a header block (name, size, BLAKE3 hash) and manifest blocks (each chunk's hash), sent
+   in the same stream as the data.
 4. **Make blocks.** A block is a 4-byte id (which chunk, which piece), 472 bytes of payload and a CRC-32.
 5. **Add error correction.** Each block becomes one LDPC codeword. How much protection it gets depends on where it
    will sit in the spectrum:
@@ -87,7 +89,7 @@ received archive into a folder, and the web receiver offers it as the `.tar` it 
 7. **Decode.** Undo the scrambling and the interleaving, run the LDPC decoder, and keep a block only if every parity
    check holds and its CRC matches.
 8. **Rebuild the file.** Blocks go to their chunk's fountain decoder, in any order and from any frames. Each rebuilt
-   chunk is decompressed and checked against its hash; the file is handed over only when every chunk checks.
+   chunk is checked against its hash; the file is handed over only when every chunk checks, unpacked if it was packed.
 9. **Stay in step with the screen** (Android app). The camera and the screen both run near 60 Hz but drift apart, and
    a capture taken across a change of picture sees two pictures blended. The pilots show how much of the previous and
    of the next picture leaked into each capture, and the app delays one camera frame now and then to keep its
@@ -385,7 +387,8 @@ Both decoders count a block only when every parity check holds and its CRC passe
 
 ### Sending
 
-A sender turns a file into each frame's blocks: chunks, zstd, the fountain, the header and the manifest. It then
+A sender turns a file (packed first where that helps) into each frame's blocks: chunks, the fountain, the header and
+the manifest. It then
 paints each frame:
 - Encode each block with LDPC and spread its bits over its slots, with whitening and pilots.
 - Place them as QPSK on the picture's coefficients and take the inverse transform.
@@ -435,16 +438,15 @@ Install USB driver binds.
 
 ## Roadmap
 
-LIZARD leaves beta when the transfer's header version 4 is in, the last format change planned before
-1.0:
+LIZARD leaves beta with the transfer's header version 4, the last format change planned before 1.0:
 
-- **zstd out of the transfer.** A file compressed before it enters LIZARD leaves the code and the transfer untouched,
-  so compression is not the format's: the transfer's codec field and its per-chunk zstd frames go, and a chunk's
-  fountain carries the bytes the transfer is handed. The error correction (the LDPC codes, the fountain) and the
-  transfer's layouts stay sealed into the format.
+- **zstd out of the transfer.** A chunk's fountain carries the chunk's own bytes, so every block count follows from
+  the file's length: the header carries the fountain's two seed attempts (one for every full chunk, one for the last)
+  and the manifest the chunks' hashes alone. A file compressed before it enters LIZARD leaves the code and the transfer
+  untouched. The error correction (the LDPC codes, the fountain) and the transfer's layouts stay sealed into the format.
 
-Compression, encryption and signing are not part of LIZARD, as they are not part of QR: the default client compresses
-with zstd for convenience, and an application that carries files over it may add its own.
+Compression, encryption and signing are not part of LIZARD, as they are not part of QR: the apps and the web page pack
+a file that compresses as zstd frames before it enters, and an application that carries files over it may add its own.
 
 ## Layout
 

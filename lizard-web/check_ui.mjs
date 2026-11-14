@@ -35,7 +35,6 @@ import { tabs, open, evaluate, navigate, screenshot } from "./phone.mjs";
 import { makePhy } from "../liblizard/sim/phy.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initWh, Encoder } from "../liblizard/sim/fountain.mjs";
-import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { XferSender, DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
 import { N_FOR } from "../liblizard/sim/lizard_pick.mjs";
 
@@ -152,7 +151,7 @@ const SIZES = [
     if (k === 0) check(idle.dev.every((o) => !o), `send ${z.name}: every settings fold closed on a fresh profile (${idle.dev.join()})`);
     if (k === 0) {
       const at = await evaluate(s, FOLDS_AT);
-      check(at === "foldCode Code: blocks subch ring codes size spacing margin | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
+      check(at === "foldCode Code: blocks subch ring codes size spacing margin | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload seed", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
     }
     check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles and the empty card ("0 items", Clear dimmed) shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);
@@ -541,7 +540,7 @@ const SIZES = [
 // ai: sample, as check_rates.mjs builds them. First the test stream (2.5 s, looped), then a file (a lap and 8%).
 {
   const CW = 1920, CH = 1080, FD = 24, FC = 30, SUBCH = 96, LEN = 300000, NAME = "holiday-photo.jpg";
-  await initWh(); await initZstd();
+  await initWh();
   const M = await initOb(), bytes = new Uint8Array(LEN);
   for (let i = 0, v = 7; i < LEN; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bytes[i] = v >>> 16; }
   const phy = await makePhy({ phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] }), B = phy.blocksPerFrame;
@@ -563,7 +562,7 @@ const SIZES = [
   }
   const testPath = join(scratch, "test.y4m");
   await clip(testPath, (seq) => phy.frame(seq), 75);
-  const xs = new XferSender(bytes, { name: NAME, type: "image/jpeg", chunkLog2: DEFAULT_LOG2, M, Encoder, Z });
+  const xs = new XferSender(bytes, { name: NAME, type: "image/jpeg", chunkLog2: DEFAULT_LOG2, M, Encoder });
   phy.setSource((id, out) => xs.block(id, out));
   const frames = Math.ceil((xs.sched.lap * 1.08) / (B - 1)) + 24, clipFrames = Math.ceil((frames * FC) / FD), path = join(scratch, "file.y4m");
   await clip(path, (seq) => phy.frame(seq, xs.frameIds(B)), clipFrames);
@@ -825,7 +824,7 @@ const SIZES = [
   // ai: leaves one (its header and meta.json), listed under Unfinished with its share and size, Continue and Delete;
   // ai: Delete asks on itself, then removes the folder.
   const MAKE_PART = `(async () => { const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("lizard-xfer", { create: true })).getDirectoryHandle("00112233aabbccdd", { create: true });
-    for (const [n, b] of [["header", new Uint8Array(${PAYLOAD})], ["meta.json", new TextEncoder().encode(JSON.stringify({ name: "half.bin", type: "", length: 3133383, chunks: 3, verified: 1, root: "00112233aabbccdd", fraction: 0.37, sent: 3133383, sentIn: 1159352 }))]]) {
+    for (const [n, b] of [["header", new Uint8Array(${PAYLOAD})], ["meta.json", new TextEncoder().encode(JSON.stringify({ name: "half.bin", type: "", length: 3133383, chunks: 3, verified: 1, root: "00112233aabbccdd", fraction: 0.37, bytesIn: 1159352 }))]]) {
       const w = await (await d.getFileHandle(n, { create: true })).createWritable(); await w.write(b); await w.close(); } return true; })()`;
   await evaluate(s, MAKE_PART);
   await navigate(s, HOME);

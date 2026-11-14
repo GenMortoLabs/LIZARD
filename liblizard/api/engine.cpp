@@ -188,6 +188,14 @@ LIZ_API int liz_sender_take(liz_sender* s, uint8_t* dst, int stride, liz_pixfmt 
   });
 }
 
+LIZ_API int liz_sender_seed(liz_sender* s, uint32_t seed) {
+  return guard([&] {
+    need(s, "a sender");
+    if (!s->s->seed(seed)) throw Error(LIZ_E_STATE, "a seed before a file's first frame");
+    return LIZ_OK;
+  });
+}
+
 static_assert(LIZ_REFRESH_MAX == lizard::Sender::REFRESH_MAX, "lizard.h's refresh bound is the sender's");
 LIZ_API int liz_sender_refresh(liz_sender* s, const int every[4]) {
   return guard([&] {

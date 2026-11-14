@@ -23,12 +23,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "jni_util.h"
+#include "pack.h"
 #include "portal.h"
 #include "presenter.h"
 #include "sender.h"
@@ -51,6 +53,13 @@ struct Tx {
   std::mutex mu;
   const uint8_t* map = nullptr;
   size_t mapLen = 0;
+  std::string packed;   // ai: the packed file it maps (pack.h), removed with it; "" none
+  uint64_t bytes = 0;   // ai: the bytes the transfer carries: the packed file's, else the file's
+  ~Tx() {
+    if (packed.empty()) return;
+    std::error_code e;
+    std::filesystem::remove(std::filesystem::u8path(packed), e);
+  }
 };
 Tx* tx(jlong h) { return reinterpret_cast<Tx*>(h); }
 
@@ -120,18 +129,24 @@ lizard::mac::Place placeOf(JNIEnv* e, jfloatArray a) {
 #endif
 }  // namespace
 
-// ai: path: the file to send ("" for the test stream); name and type as its header carries them. 0, with the reason in
+// ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
+// ai: form goes where packing pays (pack.h, the default client's compression; removed at txDestroy), and the transfer's
+// ai: spill (xfer_tx.h: its symbols on disk, no encoder kept; its file unlinked as it is made). 0, with the reason in
 // ai: txError(), where it cannot go.
-FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type) {
+FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir) {
   auto t = std::make_unique<Tx>();
-  const std::string p = str(e, path);
+  std::string p = str(e, path), n = str(e, name), ty = str(e, type);
+  const std::string d = str(e, dir);
   try {
     if (!p.empty()) {
+      const lizard::Packed k = lizard::pack(p, n, ty, d);
+      if (k.packed) { t->packed = k.path; p = k.path; n = k.name; ty = k.type; }
+      t->bytes = k.size;
       const std::string why = mapFile(p, t->map, t->mapLen);
       if (!why.empty()) { setError(why); return 0; }
     }
     static const uint8_t empty = 0;
-    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, str(e, name), str(e, type));
+    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, ty, p.empty() ? "" : d);
   } catch (const std::exception& x) {
     unmapFile(t->map, t->mapLen);
     setError(x.what());
@@ -141,6 +156,9 @@ FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type)
 }
 
 FN(jstring, txError)(JNIEnv* e, jclass) { return jstr(e, lizard::jni::lastError()); }
+
+// ai: the bytes the transfer carries (the packed file's where it was packed, else the file's; 0 the test stream)
+FN(jlong, txBytes)(JNIEnv*, jclass, jlong h) { return static_cast<jlong>(tx(h)->bytes); }
 
 // ai: The device and the GPU painter made ahead, off the UI thread: "" or why there is none. The device carries what the
 // ai: presenter needs of it (the window's surface, the swapchain, present_wait): the code is shown from it (2026-10-07).
@@ -187,6 +205,13 @@ FN(void, txRefresh)(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   tx(h)->s->setRefresh(every);
 }
 
+// ai: Developer Tools' Seed (Sender::seed, 2026-11-14): a file's schedule from seed (an unsigned 32-bit value in an int),
+// ai: before its first frame; false after, or for the test stream
+FN(jboolean, txSeed)(JNIEnv*, jclass, jlong h, jint seed) {
+  std::lock_guard<std::mutex> l(tx(h)->mu);
+  return tx(h)->s->seed(static_cast<uint32_t>(seed)) ? JNI_TRUE : JNI_FALSE;
+}
+
 // ai: The blocks a frame of subch sub-channels carries under the format's rate profile (src/lizard_phy.h lizard_blocks_for),
 // ai: for the Blocks slider's figures before a configure
 FN(jint, blocksFor)(JNIEnv*, jclass, jint subch) { return lizard_blocks_for(subch); }
@@ -206,7 +231,7 @@ FN(void, txDestroy)(JNIEnv*, jclass, jlong h) {
   if (!t) return;
   t->s.reset();
   unmapFile(t->map, t->mapLen);
-  delete t;
+  delete t;   // ai: its packed file with it
 }
 
 // ai: a heavyweight canvas's native window (X11's drawable, Windows' HWND), JAWT locked only to read it; false, with

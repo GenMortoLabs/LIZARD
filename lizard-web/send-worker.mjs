@@ -26,13 +26,14 @@ import { makePhy } from "../liblizard/sim/phy.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initFountain, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
+import { pack } from "../liblizard/sim/pack.mjs";
 import { isControlId } from "../liblizard/sim/xfer.mjs";
 import { makeXfer } from "./xfer-pool.mjs";
 import { Refresh, batchIds } from "./refresh.mjs";
 
 let phy = null, xs = null, fps = 0, codes = 1, chain = Promise.resolve();
 // ai: The transfer made at a pick's first Start ("prepare", sent just before "start"; at the pick from 2026-10-19 to
-// ai: 2026-11-01): every chunk compressed and its fountain set up. made: { pick, xs } while no run sends it; a run takes
+// ai: 2026-11-01): the file packed where that pays (sim/pack.mjs, the default client's compression) and its root hashed. made: { pick, xs } while no run sends it; a run takes
 // ai: it (xsPick its pick) and a stop gives it back, so the next Start sends the same transfer on, with nothing made again.
 let made = null, xsPick = null;
 const refresh = new Refresh();
@@ -48,12 +49,19 @@ function dropRun() {
 let fetched = null;
 const source = () => (id, out) => { const b = fetched?.get(id); if (b) out.set(b); else xs.block(id, out); };
 async function fetchFor(ids) { fetched = ids && xs?.remote ? await xs.remote.fetch(ids) : null; }
-// ai: a pool's transfer made whole behind its first frames (xfer-pool.mjs, streaming): its bytes as they go and its lap
+// ai: a pool's transfer made whole behind its first frames (xfer-pool.mjs, streaming): the bytes it carries and its lap
 // ai: then said to the page ("made", by pick), or the failure; nothing for one let go first
 function whenMade(x, said) {
   x.remote?.made?.then(
-    () => postMessage({ type: "made", ...said, sent: x.sentBytes, lap: x.sched?.lap ?? 0 }),
+    () => postMessage({ type: "made", ...said, sent: x.length, lap: x.sched?.lap ?? 0 }),
     (e) => { if (x.remote) postMessage({ type: "made", ...said, error: String(e?.message ?? e) }); });
+}
+// ai: The file's transfer: packed where that pays (sim/pack.mjs; the bytes the transfer carries are `sent`), made by
+// ai: the pool (xfer-pool.mjs)
+async function transferOf(bytes, xfer) {
+  await Promise.all([initFountain(), initZstd()]);
+  const p = pack(bytes, xfer.name, xfer.type, Z);
+  return makeXfer(p.bytes, { ...xfer, name: p.name, type: p.type }, { M: await initOb(), Encoder });
 }
 // ai: the gap between two codes, in modules (the page's slider, start and respec's gap), and in the paint's pixels for
 // ai: this codec (phy.cell samples a module)
@@ -65,10 +73,9 @@ async function handle(m) {
     // ai: its own reply ("prepared", by pick, outside the runs' gen), a failure in it too
     made?.xs.free(); made = null;
     try {
-      await Promise.all([initFountain(), initZstd()]);
-      const x = await makeXfer(new Uint8Array(m.bytes), m.xfer, { M: await initOb(), Encoder, Z });
+      const x = await transferOf(new Uint8Array(m.bytes), m.xfer);
       made = { pick: m.pick, xs: x };
-      postMessage({ type: "prepared", pick: m.pick, sent: x.sentBytes });
+      postMessage({ type: "prepared", pick: m.pick, sent: x.length });
       whenMade(x, { pick: m.pick });
     } catch (e) { postMessage({ type: "prepared", pick: m.pick, error: String(e?.message ?? e) }); }
   } else if (m.type === "start") {
@@ -79,12 +86,13 @@ async function handle(m) {
       xs = made.xs; xsPick = m.pick; made = null;
       phy.setSource(source());
     } else if (m.bytes) {
-      await Promise.all([initFountain(), initZstd()]);
-      // ai: every chunk zstd-compressed where that is shorter (sim/xfer.mjs, 2026-10-05), before the first frame
-      xs = await makeXfer(new Uint8Array(m.bytes), m.xfer, { M: await initOb(), Encoder, Z });
+      xs = await transferOf(new Uint8Array(m.bytes), m.xfer);
       whenMade(xs, { pick: null });
       phy.setSource(source());
     }
+    // ai: Developer Tools' Seed (2026-11-14): the schedule drawn from it before the first frame (a transfer made at the pick
+    // ai: drew a random one); none given, the random one stands
+    if (xs && m.seed != null) xs.reseed(m.seed);
     fps = m.fps; phy.setFps?.(fps); codes = m.codes ?? 1; gapModules = m.gap;
     if (m.every) refresh.setEvery(m.every);
     refresh.setFormat(m.spec.subch, phy.blocksPerFrame);

@@ -113,7 +113,7 @@ LIZ_API int liz_tx_info_get(const liz_tx* t, liz_tx_info* out) {
     liz_tx_info i{};
     i.test = !t->x;
     if (t->x) {
-      i.length = t->length; i.chunks = t->x->chunks(); i.lap = t->x->lap(); i.sent = t->x->sentBytes();
+      i.length = t->length; i.chunks = t->x->chunks(); i.lap = t->x->lap();
       std::memcpy(i.root, t->x->root(), sizeof i.root);
     }
     *out = i;
@@ -152,7 +152,7 @@ LIZ_API int liz_rx_progress(liz_rx* r, liz_progress* out) {
     r->core->progress(r->p);
     const auto& p = r->p;
     liz_progress o{};
-    o.header = p.header; o.done = p.done; o.length = p.length; o.bytes_in = p.bytesIn; o.fraction = p.fraction; o.sent = p.sent; o.sent_in = p.sentIn;
+    o.header = p.header; o.done = p.done; o.length = p.length; o.bytes_in = p.bytesIn; o.fraction = p.fraction;
     o.chunks = p.chunks; o.verified = p.verified; o.rejected = p.rejected; o.solve_ms = p.solveMs;
     *out = o;
     return LIZ_OK;

@@ -85,6 +85,14 @@ fun replayMb(v: Int): Int = (v.coerceIn(REPLAY_MB_MIN, REPLAY_MB_MAX) + REPLAY_M
 fun replaySizeText(mb: Int): String = if (mb < 1024) "$mb MB"
     else "${mb / 1024}" + when (mb % 1024) { 256 -> ".25"; 512 -> ".5"; 768 -> ".75"; else -> "" } + " GB"
 
+// ai: Send's Seed (Developer Tools, both apps, 2026-11-14): a file's schedule drawn from it (lizard.h liz_sender_seed:
+// ai: each chunk's first symbol, each round's order of the chunks, each frame's shuffle), so a send can be repeated;
+// ai: empty, a random one each send. Kept as typed: seedText takes what is a seed or empty and refuses the rest (null);
+// ai: seedOf reads it, an unsigned 32-bit value carried in an Int, null for none.
+fun seedSetting(text: String, choose: (String) -> Unit): Setting = Typed("Seed", text, "Random") { t -> seedText(t)?.let(choose) }
+fun seedText(t: String): String? = t.trim().let { v -> if (v.isEmpty() || v.toUIntOrNull() != null) v else null }
+fun seedOf(text: String): Int? = text.trim().toUIntOrNull()?.toInt()
+
 fun replaySizeSetting(mb: Int, choose: (Int) -> Unit): Setting =
     Slide("Replay size", replaySizeText(mb), mb.toFloat(), REPLAY_MB_MIN.toFloat()..REPLAY_MB_MAX.toFloat(),
         (REPLAY_MB_MAX - REPLAY_MB_MIN) / REPLAY_MB_STEP - 1) { v -> val m = replayMb(v.roundToInt()); if (m != mb) choose(m) }

@@ -80,8 +80,6 @@ export declare function streamFill(id: number): Uint8Array;
 
 export interface TxInfo {
   test: boolean; length: number; chunks: number; lap: number; root: string;
-  /** The file's bytes as they go: every chunk's zstd frame, or its own bytes. */
-  sent: number;
 }
 export declare class Tx {
   static file(bytes: Uint8Array, name?: string, type?: string): Tx;
@@ -95,8 +93,6 @@ export interface Verdict { seen: number; bad: number; judged: number; fresh: num
 export interface Progress {
   header: boolean; done: boolean; length: number; bytesIn: number; fraction: number;
   chunks: number; verified: number; rejected: number; solveMs: number;
-  /** The file's bytes as they go (0 until the manifest has said them), and how many of them are in. */
-  sent: number; sentIn: number;
 }
 export declare class Rx {
   constructor(options?: { maxBytes?: number });

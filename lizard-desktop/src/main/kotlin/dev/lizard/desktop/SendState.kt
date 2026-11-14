@@ -164,12 +164,11 @@ class SendState(val full: FullScreen) {
         return true
     }
     var fileSize by mutableStateOf(0L)
-    // ai: the file's bytes as they go, every chunk's zstd frame or its own (the sender's stats, 2026-10-05); 0 before a send
-    val sentBytes: Long get() = sender?.num("sentBytes")?.toLong() ?: 0L
     // ai: The transfer made at Start (2026-11-01; at the pick and again at each stop from 2026-10-19, every chunk
-    // ai: compressed for picks never sent): the bundle's tar written and every chunk compressed (txCreate) on a thread of
-    // ai: its own, the line "Preparing" meanwhile. compressed: its bytes as they go, 0 until a run makes it, kept through
-    // ai: the run and after it until the choice changes. A new pick or the window's close lets a made one go.
+    // ai: compressed for picks never sent): the bundle's tar written and the file packed where that pays (txCreate,
+    // ai: liblizard/core/tx/pack.h) on a thread of its own, the line "Preparing" meanwhile. compressed: the bytes the transfer
+    // ai: carries (the packed file's, else the file's), 0 until a run makes it, kept through the run and after it until
+    // ai: the choice changes. A new pick or the window's close lets a made one go.
     var compressed by mutableStateOf(0L)
     private var made = 0L                 // ai: the transfer made for the choice, not yet sending (0: none)
     private var madeTar: File? = null     // ai: its tar, where the choice is a bundle
@@ -198,6 +197,9 @@ class SendState(val full: FullScreen) {
     // ai: Rate refresh (2026-11-12, lizard-ui rateRefreshSettings): each code rate's blocks new every n-th frame, 7/8,
     // ai: 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change (refreshNow), kept
     var refresh by mutableStateOf(refreshOf(Prefs.refresh))
+    // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): a file's schedule drawn from it at each Start (txSeed,
+    // ai: before the first frame), so a send can be repeated; "" a random one each send; kept
+    var seed by mutableStateOf(Prefs.seed)
     var toolsOpen by mutableStateOf(Prefs.toolsOpen)
     var experimentalOpen by mutableStateOf(Prefs.experimentalOpen)
     var collapsed by mutableStateOf(Prefs.collapsed)
@@ -326,8 +328,9 @@ class SendState(val full: FullScreen) {
     private var tarFile: File? = null
     private fun dropTar() { tarFile?.delete(); tarFile = null }
 
-    // ai: The choice's transfer made off the UI thread: its tar written where it is a bundle, txCreate (each chunk
-    // ai: compressed, its fountain set up), its bytes as sent read from the stats. A failure is the state line's at once.
+    // ai: The choice's transfer made off the UI thread: its tar written where it is a bundle, txCreate (the file packed
+    // ai: where that pays into the cache's send-pack, the files an earlier make left there let go first; its root hashed),
+    // ai: the bytes it carries (txBytes). A failure is the state line's at once.
     private fun make() {
         val b = choice ?: return
         dropMade()
@@ -342,9 +345,12 @@ class SendState(val full: FullScreen) {
                 tar.parentFile.mkdirs(); tar.deleteOnExit()
                 tar.outputStream().buffered(1 shl 20).use { b.write(it) }
             }.exceptionOrNull()
-            val hnd = if (wrote != null) 0L else Native.txCreate(path, b.name, type)
+            // ai: a packed file still mapped by a transfer goes on being read after its name is removed (POSIX); Windows
+            // ai: refuses the remove, and the transfer's own release takes it
+            val packDir = File(Native.cache, "send-pack").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+            val hnd = if (wrote != null) 0L else Native.txCreate(path, b.name, type, packDir.path)
             val err = if (wrote != null) "Files unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
-            val sent = if (hnd != 0L) parse(Native.txStats(hnd))?.num("sentBytes")?.toLong() ?: 0L else 0L
+            val sent = if (hnd != 0L) Native.txBytes(hnd) else 0L
             EventQueue.invokeLater {
                 if (my != making || closing) { if (hnd != 0L) Native.txDestroy(hnd); tar?.delete(); return@invokeLater }   // ai: let go meanwhile
                 makingNow = false
@@ -379,8 +385,10 @@ class SendState(val full: FullScreen) {
         val pre = if (runTest) 0L else made
         if (!runTest) { made = 0L; tarFile = madeTar; madeTar = null }
         val my = ++gen
+        val sd = if (runTest) null else seedOf(seed)
         thread(name = "lizard-send-prep", isDaemon = true) {
-            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "")
+            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "")
+            if (hnd != 0L && sd != null) Native.txSeed(hnd, sd)   // ai: before the first frame, which the configure makes
             val err = if (hnd == 0L) Native.txError() else ""
             // ai: the GPU painter's device and pipelines made here, off the UI thread that configures
             val why = if (hnd != 0L) Native.txPrepare(hnd, Native.assets) else ""
@@ -462,6 +470,7 @@ class SendState(val full: FullScreen) {
 
     // ai: the settings: each kept as it moves; a slider's committed on release (commit), a chip's at once
     fun chooseTest(on: Boolean) { test = on; Prefs.payload = if (on) "test" else "file" }
+    fun chooseSeed(t: String) { seed = t; Prefs.seed = t }
     // ai: The encoder moved while sending: to the CPU, or to the GPU or auto once its painter is made, configured at once;
     // ai: else the GPU painter made first on a thread of its own (txPrepare), then configured. Made inside configure, on
     // ai: the UI thread, it froze the window for the driver's compile and held the sender's lock (2026-10-04).
@@ -583,9 +592,6 @@ class SendState(val full: FullScreen) {
     fun poll() {
         if (h == 0L) return
         senderRaw = Native.txStats(h); sender = parse(senderRaw)
-        // ai: the bytes as they go, known once every chunk is made (the core streams: its first frames go while the
-        // ai: chunks are made, 2026-11-06), so the state line takes them from here
-        if (compressed == 0L) sender?.num("sentBytes")?.toLong()?.takeIf { it > 0 }?.let { compressed = it }
         if (p != 0L) { presentRaw = Native.presentStats(p); present = parse(presentRaw) }
         val e = sender?.str("error").orEmpty().ifEmpty { if (p != 0L) present?.str("error").orEmpty() else "" }
         if (e.isNotEmpty()) fail(e)
@@ -619,8 +625,8 @@ class SendState(val full: FullScreen) {
         val b = sentBlocks
         val l = mutableListOf<String>()
         l += "LIZARD-${f.subch} ($b blocks${if (tiers.isNotEmpty()) ": $tiers" else ""}), picture ${sd.num("n").toInt()} samples in the ${f.span / 2}-cell ring"
-        if (!runTest) l += "file $fileSize B${sd.num("sentBytes").toLong().let { if (it in 1 until fileSize) ", $it B as sent (zstd)" else "" }}: ${sd.num("chunks").toInt()} chunk${if (sd.num("chunks").toInt() == 1) "" else "s"}, " +
-            "${sd.num("lap").toInt()} data blocks a pass, BLAKE3 ${sd.str("root").take(16)}..." +
+        if (!runTest) l += "file $fileSize B${if (compressed in 1 until fileSize) ", $compressed B packed (zstd)" else ""}: ${sd.num("chunks").toInt()} chunk${if (sd.num("chunks").toInt() == 1) "" else "s"}, " +
+            "${sd.num("lap").toInt()} data blocks a pass, BLAKE3 ${sd.str("root").take(16)}..., seed ${sd.num("seed").toLong()}" +
             (sd.num("pass").let { p -> if (p >= 1) "\npass ${floor(p).toInt()}" + (sd.num("offeredKBs").let { k -> if (k > 0 && sd.num("lap") > 0) ", ${Fmt.f1(sd.num("lap") / (k * 1000 / Pick.PAYLOAD))} s a pass" else "" }) else "" })
         l += "frame ${sd.num("width").toInt()} x ${sd.num("side").toInt()} px" + (if (f.codes > 1) ", ${f.codes} side by side $spacing modules apart" else "") + ", margin $margin modules" +
             (pr?.let { " on a ${it.str("surface").replace("x", " x ")} px surface" } ?: "")

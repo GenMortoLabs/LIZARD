@@ -183,10 +183,9 @@ LIZ_API int liz_tx_next(liz_tx *t, int n, uint8_t *blocks);
 typedef struct {
   int test;              /* ai: the test stream */
   uint64_t length;       /* ai: the file's bytes */
-  uint32_t chunks;       /* ai: its 4 MiB chunks */
+  uint32_t chunks;       /* ai: its chunks (4 MiB up to a file of 64 GiB, xfer_chunk_log2_for) */
   uint32_t lap;          /* ai: data blocks a lap of the schedule (0 until every chunk is made, behind liz_tx_new) */
   uint8_t root[32];      /* ai: BLAKE3 of the file (b3sum's) */
-  uint64_t sent;         /* ai: the file's bytes as they go: every chunk's zstd frame, or its own bytes (2026-10-05); 0 until every chunk is made */
 } liz_tx_info;
 LIZ_API int liz_tx_info_get(const liz_tx *t, liz_tx_info *out);
 
@@ -220,12 +219,10 @@ typedef struct {
   int header;            /* ai: the file's header read */
   int done;              /* ai: the file whole and verified by its root, and kept whole by the store */
   uint64_t length;       /* ai: its bytes */
-  uint64_t bytes_in;     /* ai: about how many are in */
+  uint64_t bytes_in;     /* ai: how many are in: a verified chunk's all, another's blocks in hand to its length */
   double fraction;       /* ai: bytes_in over length */
   uint32_t chunks, verified, rejected;
   double solve_ms;       /* ai: the fountain's and the hash's time so far */
-  uint64_t sent;         /* ai: the file's bytes as they go (every chunk's zstd frame or its own); 0 until the manifest has said them */
-  uint64_t sent_in;      /* ai: how many of them are in: what a rate and a time left should count */
 } liz_progress;
 LIZ_API int liz_rx_progress(liz_rx *r, liz_progress *out);
 /* ai: each chunk's state into per (at most cap): 0 to 99 the share in (a floor until the manifest is in), 255
@@ -313,6 +310,10 @@ LIZ_API const char *liz_sender_stats(liz_sender *s);
  * ai: reads each frame as ever. From the next frame made, kept across configures. */
 enum { LIZ_REFRESH_MAX = 4 };
 LIZ_API int liz_sender_refresh(liz_sender *s, const int every[4]);
+/* ai: A file's schedule drawn from seed in place of the random one liz_sender_new draws (each chunk's first symbol, each
+ * ai: round's order of the chunks, each frame's shuffle), so a run can be repeated: before the first frame is made
+ * ai: (LIZ_E_STATE after, and for the test stream). The seed in use is the stats' "seed". */
+LIZ_API int liz_sender_seed(liz_sender *s, uint32_t seed);
 
 /* ---- 5. the receive session: a camera into a receiver, with what a receiving app does around it ---------------- */
 /* ai: What every app's receive screen runs (core/rx/session.h): a camera of the system's (UVC through V4L2, Media

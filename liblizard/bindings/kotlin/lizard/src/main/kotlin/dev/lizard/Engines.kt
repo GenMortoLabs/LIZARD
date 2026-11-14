@@ -79,5 +79,8 @@ class Sender(bytes: ByteArray? = null, name: String = "", type: String = "") : H
     require(every.size == 4 && every.all { it in 1..REFRESH_MAX }) { "four refreshes of 1 to $REFRESH_MAX" }
     Native.senderRefresh(live(), every[0], every[1], every[2], every[3])
   }
+  // ai: A file's schedule from seed (lizard.h liz_sender_seed, an unsigned 32-bit value carried in an Int), before its
+  // ai: first frame; throws after it, or for the test stream
+  fun seed(seed: Int) = Native.senderSeed(live(), seed)
   companion object { const val REFRESH_MAX = 4 }
 }

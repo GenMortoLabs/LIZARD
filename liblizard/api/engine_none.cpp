@@ -26,4 +26,5 @@ LIZ_API int liz_sender_ready(liz_sender*) { return none(); }
 LIZ_API int liz_sender_take(liz_sender*, uint8_t*, int, liz_pixfmt) { return none(); }
 LIZ_API const char* liz_sender_stats(liz_sender*) { none(); return ""; }
 LIZ_API int liz_sender_refresh(liz_sender*, const int*) { return none(); }
+LIZ_API int liz_sender_seed(liz_sender*, uint32_t) { return none(); }
 }

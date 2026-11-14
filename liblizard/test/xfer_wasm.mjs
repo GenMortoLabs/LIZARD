@@ -1,9 +1,9 @@
-// The transfer's exports in the wasm (src/xfer.h, src/wasm.c): BLAKE3 against the official test vectors, then files of
-// 3 chunks and of 1, random and compressible, end to end through the exports, Wirehair and zstd (in the same module,
-// sim/fountain.mjs and sim/zstd.mjs): each chunk compressed where that is shorter, the header and manifest blocks written and read back,
-// each chunk's fountain rebuilt from the manifest's sent bytes and seed alone (one chunk: the header's) and fed repair
-// blocks only, each recovered chunk decompressed and verified, a corrupted chunk, a corrupted manifest and a manifest
-// entry no chunk could have caught. Also the block size the layout assumes, and what hashing costs here. About 5 s.
+// The transfer's exports in the wasm (src/xfer.h, src/wasm.c; header version 4): BLAKE3 against the official test
+// vectors, then files of 41 chunks, 3, 1 and a block, random and prose, end to end through the exports and Wirehair (in
+// the same module, sim/fountain.mjs): the header and manifest blocks written and read back, each chunk's fountain
+// rebuilt from the header's seed attempts alone and fed repair blocks only, each recovered chunk verified, a corrupted
+// chunk, a corrupted manifest, another transfer's manifest block and a header with a reserved byte set caught. Also the
+// block size the layout assumes, and what hashing and the pack's zstd cost here. About 5 s.
 //   node test/xfer_wasm.mjs [path/to/ob.mjs]      default build/ob.mjs
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -21,9 +21,9 @@ const take = (p, n) => M.HEAPU8.slice(p, p + n);
 const L = new Int32Array(14);
 { const p = M._malloc(4 * 14); M._xfer_layout(p); L.set(new Int32Array(M.HEAPU8.buffer, p, 14)); M._free(p); }
 const [ID_BYTES, PAYLOAD, SYM_BITS, CHUNK_BITS, ID_HEADER, ID_MANIFEST, PER_BLOCK, NAME_MAX, TYPE_MAX, , , , VERSION] = L;
-check(ID_BYTES === 4 && PAYLOAD === 472 && SYM_BITS === 18 && CHUNK_BITS === 14 && ID_HEADER >>> 0 === 0xfffc0000 && ID_MANIFEST >>> 0 === 0xfffc0001 && PER_BLOCK === 12 && TYPE_MAX === 158 && VERSION === 3, "layout");
+check(ID_BYTES === 4 && PAYLOAD === 472 && SYM_BITS === 18 && CHUNK_BITS === 14 && ID_HEADER >>> 0 === 0xfffc0000 && ID_MANIFEST >>> 0 === 0xfffc0001 && PER_BLOCK === 14 && TYPE_MAX === 158 && VERSION === 4, "layout");
 check(M._lizard_setup(512, 128, 0) === ID_BYTES + PAYLOAD, "a LIZARD block is the id and the payload");
-check(M._xfer_id_of(3, 7) >>> 0 === 3 * 2 ** 18 + 7 && M._xfer_kind_of(0xfffc0000) === 1 && M._xfer_kind_of(0xfffc0005) === 2 && M._xfer_kind_of(0xfffc0000 + 1366) === 2 && M._xfer_kind_of(0xfffc0000 + 1367) === -1 && M._xfer_kind_of(5) === 0, "ids");
+check(M._xfer_id_of(3, 7) >>> 0 === 3 * 2 ** 18 + 7 && M._xfer_kind_of(0xfffc0000) === 1 && M._xfer_kind_of(0xfffc0005) === 2 && M._xfer_kind_of(0xfffc0000 + 1171) === 2 && M._xfer_kind_of(0xfffc0000 + 1172) === -1 && M._xfer_kind_of(5) === 0, "ids");
 
 const b3 = (bytes) => { const p = put(bytes), o = M._malloc(32); M._xfer_b3_hash(p, bytes.length, o); const h = take(o, 32); M._free(p); M._free(o); return h; };
 const cvsOf = (file, log2) => {
@@ -37,6 +37,9 @@ const cvsOf = (file, log2) => {
   return out;
 };
 const rootOf = (cvs) => { const p = put(cvs), o = M._malloc(32); check(M._xfer_root(p, cvs.length / 32, o) === 0, "root"); const r = take(o, 32); M._free(p); M._free(o); return r; };
+
+// The chunk size a sender picks (xfer_chunk_log2_for): 4 MiB to 64 GiB, then the least that holds the file, to 256 GiB.
+check(M._xfer_log2_for(0) === 22 && M._xfer_log2_for(16383 * 2 ** 22) === 22 && M._xfer_log2_for(16383 * 2 ** 22 + 1) === 23 && M._xfer_log2_for(16383 * 2 ** 24) === 24 && M._xfer_log2_for(16383 * 2 ** 24 + 1) === -1, "the chunk size by length");
 
 // The official vectors: whole, as the root subtree, and split at 2^10 .. 2^17.
 const vec = JSON.parse(readFileSync(new URL("../vendor/blake3/test_vectors/test_vectors.json", import.meta.url), "utf8"));
@@ -54,90 +57,87 @@ console.log(`official vectors: ${vec.cases.length} cases through the wasm, ${spl
 
 let s = 99;
 const rand = (n) => Uint8Array.from({ length: n }, () => ((s = (Math.imul(s, 1103515245) + 12345) >>> 0) >>> 16) & 255);
-// Text-like bytes: words from a small vocabulary, so zstd shrinks them by about half, and no two chunks alike.
+// Text-like bytes: words from a small vocabulary, no two chunks alike (the seed attempts must not move with them).
 const prose = (n) => { const w = ["lizard ", "frame ", "block ", "ring ", "pilot ", "camera ", "screen ", "the ", "a ", "of ", "and ", "reads ", "paints ", "\n"]; const out = new Uint8Array(n); let k = 0; while (k < n) { const t = w[((s = (Math.imul(s, 1103515245) + 12345) >>> 0) >>> 16) % w.length]; for (let i = 0; i < t.length && k < n; i++) out[k++] = t.charCodeAt(i); } return out; };
 const enc = new TextEncoder();
 
 function transfer(label, file, log2, name, type) {
-  const length = file.length, C = 2 ** log2, chunks = Math.ceil(length / C);
-  // Sender: each chunk's bytes as sent (its zstd frame where that is shorter), its blocks and Wirehair's seed attempt
-  // for it; the chaining values and root of the file's own bytes; the header and manifest payloads.
-  const sentOf = [], K = new Uint32Array(chunks), seeds = new Uint8Array(chunks), sent = new Uint32Array(chunks);
-  let shrunk = 0;
-  for (let i = 0; i < chunks; i++) {
-    const plain = file.subarray(i * C, Math.min(length, (i + 1) * C)), f = compress(plain), out = f && f.length < plain.length ? f : plain;
-    shrunk += out !== plain;
-    sentOf.push(out); sent[i] = out.length; K[i] = Math.ceil(out.length / PAYLOAD);
-    if (K[i] > 1) { const e = new Encoder(out, PAYLOAD); seeds[i] = e.seed; e.free(); }
-  }
+  const length = file.length, C = 2 ** log2, chunks = Math.ceil(length / C), lenOf = (i) => Math.min(C, length - i * C);
+  // Sender: Wirehair's seed attempts, every chunk's but the last and the last's (src/xfer.h, header version 4: picked
+  // from a block count alone, so an encoder over zeros of the length gives it); the chaining values and root; the
+  // header and manifest payloads.
+  const seedOf = (n) => { if (Math.ceil(n / PAYLOAD) < 2) return 0; const e = new Encoder(new Uint8Array(n), PAYLOAD), v = e.seed; e.free(); return v; };
+  const seedFull = chunks >= 2 ? seedOf(C) : 0, seedLast = chunks ? seedOf(lenOf(chunks - 1)) : 0;
   const cvs = cvsOf(file, log2), root = chunks > 1 ? rootOf(cvs) : b3(file);
   check(hex(root) === hex(b3(file)), `${label}: the root is the file's b3sum`);
   const nm = enc.encode(name), ty = enc.encode(type), pr = put(root), pn = put(nm), pt = put(ty), ph = M._malloc(PAYLOAD);
-  check(M._xfer_hdr_write(ph, length, log2, 1, chunks === 1 ? seeds[0] : 0, chunks === 1 ? sent[0] : 0, pr, pn, nm.length, pt, ty.length) === 0, `${label}: header write`);
+  check(M._xfer_hdr_write(ph, length, log2, seedFull, seedLast, pr, pn, nm.length, pt, ty.length) === 0, `${label}: header write`);
   const header = take(ph, PAYLOAD);
-  const mcount = M._xfer_manifest_blocks(chunks), pc = put(cvs), ps = put(new Uint8Array(sent.buffer)), pz = put(seeds), manifest = [];
-  for (let m = 0; m < mcount; m++) { check(M._xfer_manifest_write(pc, ps, pz, chunks, pr, m, ph) === 0, `${label}: manifest ${m}`); manifest.push(take(ph, PAYLOAD)); }
+  const mcount = M._xfer_manifest_blocks(chunks), pc = put(cvs), manifest = [];
+  for (let m = 0; m < mcount; m++) { check(M._xfer_manifest_write(pc, chunks, pr, m, ph) === 0, `${label}: manifest ${m}`); manifest.push(take(ph, PAYLOAD)); }
 
   // Receiver: nothing but the payloads.
-  const sc = M._malloc(52), rr = M._malloc(32), rn = M._malloc(NAME_MAX), rt = M._malloc(TYPE_MAX), hp = M._malloc(PAYLOAD);
+  const sc = M._malloc(48), rr = M._malloc(32), rn = M._malloc(NAME_MAX), rt = M._malloc(TYPE_MAX), hp = M._malloc(PAYLOAD);
   M.HEAPU8.set(header, hp);
   check(M._xfer_hdr_parse(hp, sc, rr, rn, rt) === 0, `${label}: header parse`);
-  const f = new Int32Array(M.HEAPU8.buffer, sc, 13).slice();
-  const got = { log2: f[2], codec: f[3], seed: f[4], length: (f[7] >>> 0) + (f[8] >>> 0) * 2 ** 32, chunks: f[9], mcount: f[10], sent: f[12] >>> 0, name: new TextDecoder().decode(take(rn, f[5])), type: new TextDecoder().decode(take(rt, f[6])) };
-  check(got.log2 === log2 && got.codec === 1 && got.length === length && got.chunks === chunks && got.mcount === mcount && got.name === name && got.type === type && hex(take(rr, 32)) === hex(root), `${label}: header fields`);
-  check(chunks === 1 ? got.sent === sent[0] && got.seed === seeds[0] : got.sent === 0 && got.seed === 0, `${label}: the one chunk's sent and seed in the header`);
-  const list = M._malloc(32 * Math.max(1, chunks)), rsent = M._malloc(4 * Math.max(1, chunks)), rseed = M._malloc(Math.max(1, chunks));
-  for (let m = mcount - 1; m >= 0; m--) { M.HEAPU8.set(manifest[m], ph); check(M._xfer_mf_parse(ph, hp, m, list, rsent, rseed) === 0, `${label}: manifest ${m} parse`); }
+  const f = new Int32Array(M.HEAPU8.buffer, sc, 12).slice();
+  const got = { version: f[0], log2: f[2], seed: f[3], seedLast: f[4], length: (f[7] >>> 0) + (f[8] >>> 0) * 2 ** 32, chunks: f[9], mcount: f[10], name: new TextDecoder().decode(take(rn, f[5])), type: new TextDecoder().decode(take(rt, f[6])) };
+  check(got.version === 4 && got.log2 === log2 && got.length === length && got.chunks === chunks && got.mcount === mcount && got.name === name && got.type === type && hex(take(rr, 32)) === hex(root), `${label}: header fields`);
+  check(got.seed === seedFull && got.seedLast === seedLast, `${label}: the two seed attempts in the header`);
+  // ai: the reserved bytes (465 to 471) zero, or the header is refused
+  const odd = header.slice(); odd[466] = 1; M.HEAPU8.set(odd, ph);
+  check(M._xfer_hdr_parse(ph, sc, 0, 0, 0) !== 0, `${label}: a header with a reserved byte set refused`);
+  const list = M._malloc(32 * Math.max(1, chunks));
+  for (let m = mcount - 1; m >= 0; m--) { M.HEAPU8.set(manifest[m], ph); check(M._xfer_mf_parse(ph, hp, m, list) === 0, `${label}: manifest ${m} parse`); }
   if (mcount) check(M._xfer_manifest_check(list, chunks, rr) === 0, `${label}: list against the root`);
-  const gsent = chunks === 1 ? Uint32Array.of(got.sent) : new Uint32Array(M.HEAPU8.buffer, rsent, chunks).slice(), gseed = chunks === 1 ? Uint8Array.of(got.seed) : take(rseed, chunks);
-  check(gsent.every((v, i) => v === sent[i]) && gseed.every((v, i) => v === seeds[i]), `${label}: sent and seeds read back`);
-  let rebuilt = 0, inflated = 0;
+  let rebuilt = 0;
   for (let i = 0; i < chunks; i++) {
-    const bytes = Math.min(C, length - i * C), blocks = Math.ceil(gsent[i] / PAYLOAD);
-    let raw = sentOf[i];
+    const bytes = lenOf(i), blocks = Math.ceil(bytes / PAYLOAD), seed = i === chunks - 1 ? got.seedLast : got.seed;
+    const plain = file.subarray(i * C, i * C + bytes);
+    let out = plain;
     if (blocks > 1) {
-      // The fountain from the manifest alone, fed repair blocks only (ids from the source count up), so a seed attempt
-      // that is not the sender's cannot pass by the systematic blocks.
-      const e = new Encoder(sentOf[i], PAYLOAD), d = new Decoder(gsent[i], PAYLOAD, gseed[i]);
-      check(e.seed === gseed[i], `${label}: chunk ${i} seed ${gseed[i]}, Wirehair picked ${e.seed}`);
+      // The fountain from the header alone, fed repair blocks only (ids from the source count up), so a seed attempt
+      // that is not the sender's cannot pass by the systematic blocks; the sender's encoder over the chunk's own bytes
+      // takes the attempt the header says (the data does not move it).
+      const e = new Encoder(plain, PAYLOAD), d = new Decoder(bytes, PAYLOAD, seed);
+      check(e.seed === seed, `${label}: chunk ${i} seed ${seed}, Wirehair picked ${e.seed} on its bytes`);
       let id = blocks, done = false;
       while (!done && id < blocks * 2 + 20) done = d.add(id, e.block(id++));
-      raw = done ? d.recover() : new Uint8Array(0);
+      out = done ? d.recover() : new Uint8Array(0);
       e.free(); d.free();
       rebuilt++;
     }
-    let out = raw;
-    if (gsent[i] < bytes) { out = decompress(raw, bytes) ?? new Uint8Array(0); inflated++; }
     check(out.length === bytes, `${label}: chunk ${i} came back ${out.length} of ${bytes} bytes`);
     const pd = put(out);
     check(M._xfer_chunk_ok(hp, i, pd, out.length, mcount ? list : 0) === 0, `${label}: chunk ${i} verified`);
     if (i === Math.floor(chunks / 2)) {
       M.HEAPU8[pd + (out.length >> 1)] ^= 4;
       check(M._xfer_chunk_ok(hp, i, pd, out.length, mcount ? list : 0) !== 0, `${label}: corrupt chunk ${i} caught`);
-      if (gsent[i] < bytes) { const bad = raw.slice(); bad[bad.length >> 1] ^= 4; check(decompress(bad, bytes) === null || M._xfer_chunk_ok(hp, i, put(decompress(bad, bytes)), bytes, mcount ? list : 0) !== 0, `${label}: a corrupt frame of chunk ${i} caught`); }
     }
     M._free(pd);
   }
   if (mcount) {
     M.HEAPU8[list + 32 * (chunks - 1)] ^= 1;
     check(M._xfer_manifest_check(list, chunks, rr) !== 0, `${label}: corrupt manifest caught`);
-    // An entry that says a chunk was sent as more bytes than it has: no chunk could have it, so the block is refused.
-    const bad = manifest[0].slice(), at = 8 + 32;
-    bad[at] = 0xff; bad[at + 1] = 0xff; bad[at + 2] = 0xff; bad[at + 3] = 0x7f;
+    // A manifest block of another transfer (its tag, the root's first 8 bytes, another): refused.
+    const bad = manifest[0].slice();
+    bad[0] ^= 0xff;
     M.HEAPU8.set(bad, ph);
-    check(M._xfer_mf_parse(ph, hp, 0, list, rsent, rseed) !== 0, `${label}: a manifest entry past the chunk's bytes refused`);
+    check(M._xfer_mf_parse(ph, hp, 0, list) !== 0, `${label}: another transfer's manifest block refused`);
   }
-  [pr, pn, pt, ph, pc, ps, pz, sc, rr, rn, rt, list, rsent, rseed, hp].forEach((p) => M._free(p));
-  console.log(`${label}: ${length} B in ${chunks} chunk${chunks > 1 ? "s" : ""} of 2^${log2}, ${mcount} manifest block${mcount === 1 ? "" : "s"}, ${shrunk} compressed to ${sent.reduce((a, b) => a + b, 0)} B, ${rebuilt} fountain${rebuilt === 1 ? "" : "s"} rebuilt from the manifest, ${inflated} decompressed`);
+  [pr, pn, pt, ph, pc, sc, rr, rn, rt, list, hp].forEach((p) => M._free(p));
+  console.log(`${label}: ${length} B in ${chunks} chunk${chunks > 1 ? "s" : ""} of 2^${log2}, ${mcount} manifest block${mcount === 1 ? "" : "s"}, seeds ${seedFull} and ${seedLast}, ${rebuilt} fountain${rebuilt === 1 ? "" : "s"} rebuilt from the header`);
 }
 transfer("3 chunks", rand(2 * 2 ** 20 + 304000), 20, "IMG_2041.jpg", "image/jpeg");
 transfer("1 chunk", rand(700001), 20, "notes.txt", "text/plain");
 transfer("41 chunks", rand(40 * 1024 + 100), 10, "", "");
 transfer("3 chunks, prose", prose(2 * 2 ** 20 + 304000), 20, "notes.txt", "text/plain");
 transfer("1 chunk, prose", prose(700001), 20, "notes.txt", "text/plain");
-transfer("1 block, prose", prose(900), 20, "tiny.txt", "text/plain");   // 900 bytes of prose go as one block once compressed
+transfer("1 block", rand(400), 20, "tiny.bin", "");
+transfer("1 chunk of 2 blocks", rand(PAYLOAD + 1), 20, "two.bin", "");
+transfer("a last chunk of one block", rand(2 ** 16 + 100), 16, "end.bin", "");
 
-// What a chunk's chaining value and its compression cost here, for the pages to budget (a phone is slower).
+// What a chunk's chaining value and the pack's zstd (a 4 MiB frame) cost here, for the pages to budget (a phone is slower).
 {
   const n = 4 * 2 ** 20, p = put(rand(n)), o = M._malloc(32);
   const t = performance.now();

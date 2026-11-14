@@ -47,11 +47,8 @@ struct XferProgress {
   uint64_t length = 0;        // ai: the file's bytes
   uint32_t chunks = 0, verified = 0, manifest = 0, manifestHave = 0;
   std::vector<uint8_t> per;   // ai: each chunk's share in hand, 0 to 99 (a floor until the manifest says its blocks), 255 verified
-  double fraction = 0;        // ai: sim/xfer.mjs fractionDone: the share of the file in, 0 to 1 (by the bytes as sent once known)
-  uint64_t bytesIn = 0;       // ai: fraction x length
-  // ai: the file's bytes as they go, every chunk's zstd frame or its own (0 until the manifest has said them), and how
-  // ai: many are in: a verified chunk's all, another's blocks in hand (2026-10-05, what a time left should count)
-  uint64_t sent = 0, sentIn = 0;
+  double fraction = 0;        // ai: sim/xfer.mjs fractionDone: bytesIn over length, 0 to 1
+  uint64_t bytesIn = 0;       // ai: the file's bytes in: a verified chunk's all, another's blocks in hand to its length
   bool done = false;
   std::string path;           // ai: the verified file, once done (a file store's; "" for memory)
   std::string error;          // ai: the store's failure in this transfer (store.h), "" none

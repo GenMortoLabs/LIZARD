@@ -64,10 +64,8 @@ object Readout {
     data class Rx(
         val state: String = "", val error: String = "", val goodputKBs: Double = 0.0, val foundShare: Double = 0.0,
         val bandVersion: Int = 0, val fps: Int = 0, val hasFile: Boolean = false, val name: String = "a file",
+        // ai: received: the file's bytes in (a verified chunk's all, another's blocks in hand to its length)
         val size: Long = 0, val received: Long = 0, val verified: Boolean = false,
-        // ai: the file's bytes as sent (every chunk's zstd frame or its own; 0 until the manifest has said them) and
-        // ai: how many are in: what the light carries, which the rate and the time left count (2026-10-05)
-        val sent: Long = 0, val sentIn: Long = 0,
         // ai: the transfer's own seconds, its first data block to its last chunk verified (the receiver's clock,
         // ai: XferProgress.secs, 2026-10-10; the screen's poll clock until then carried one file's start into the next)
         val secs: Double = 0.0,
@@ -80,13 +78,8 @@ object Readout {
     // ai: no answer from the receiver yet: the line's "Getting ready", and the preview's cover with its spinner (Receive.kt)
     fun gettingReady(on: Boolean, starting: Boolean, loading: Boolean, rx: Rx) =
         starting || loading || (on && (rx.state.isEmpty() || rx.state == "starting" || rx.state == "loading"))
-    // ai: how much of the file is in: the bytes as sent where the manifest has said them, the file's own until then; the
-    // ai: meter, the figures' percentage and the rail's (Parts.kt PctSquare)
-    fun fraction(rx: Rx): Double {
-        val total = if (rx.sent > 0) rx.sent else rx.size
-        val got = if (rx.sent > 0) rx.sentIn else rx.received
-        return if (total > 0) (got.toDouble() / total).coerceIn(0.0, 1.0) else 0.0
-    }
+    // ai: how much of the file is in: the meter, the figures' percentage and the rail's (Parts.kt PctSquare)
+    fun fraction(rx: Rx): Double = if (rx.size > 0) (rx.received.toDouble() / rx.size).coerceIn(0.0, 1.0) else 0.0
     // ai: files: a received bundle's count once it is unpacked (2026-10-16), named in the received line
     fun line(on: Boolean, starting: Boolean, loading: Boolean, error: String?, rx: Rx, files: Int = 0): Line = when {
         error != null -> Line(error, Tone.Bad)
@@ -98,15 +91,11 @@ object Readout {
         // ai: progress, which shows again once the camera is back on its frames (receiver.cpp's state the same)
         on && rx.state == "test" -> Line("Test stream", test = true, rows = listOf("Speed" to rate(rx.goodputKBs)))
         rx.hasFile && !rx.verified && on -> {
-            // ai: the bytes as sent where the manifest has said them, the file's own until then (recv.mjs the same): the
-            // ai: share in and the time left are of them; Received is that share of the file's own size
-            val total = if (rx.sent > 0) rx.sent else rx.size
-            val got = if (rx.sent > 0) rx.sentIn else rx.received
             val frac = fraction(rx)
             val now = rx.goodputKBs
             Line(rx.name, frac = frac, pct = "${floor(100 * frac).toInt()}%", name = rx.name, rows = listOf(
-                "Received" to bytes((frac * rx.size).toLong()), "Size" to bytes(rx.size),
-                "Time left" to (if (now > 0) left((total - got) / (now * 1000)) else ""), "Speed" to (if (now > 0) rate(now) else "")))
+                "Received" to bytes(rx.received), "Size" to bytes(rx.size),
+                "Time left" to (if (now > 0) left((rx.size - rx.received) / (now * 1000)) else ""), "Speed" to (if (now > 0) rate(now) else "")))
         }
         rx.hasFile && rx.verified -> {
             // ai: the file's facts once in: its size, a bundle's files, the transfer's own time and speed (the column's
@@ -125,13 +114,11 @@ object Readout {
         else -> Line("")
     }
 
-    // ai: A received file's speed (2026-10-10): the bytes the light carried (as sent where the manifest said them, the
-    // ai: file's own until then) over the transfer's own time, "3.17 MB/s". A file in under a second ends before the
+    // ai: A received file's speed (2026-10-10): the bytes the light carried over the transfer's own time, "3.17 MB/s". A file in under a second ends before the
     // ai: receiver's one-second window closes, so the live rate never showed it. None where the time reads 0.0 s (a file
     // ai: inside a frame or two).
     private fun received(rx: Rx): String {
-        val bytes = if (rx.sent > 0) rx.sent else rx.size
-        return if (rx.secs >= 0.05 && bytes > 0) rate(bytes / rx.secs / 1000) else ""
+        return if (rx.secs >= 0.05 && rx.size > 0) rate(rx.size / rx.secs / 1000) else ""
     }
 
     // ai: The lab line (Developer Tools): the last second's rate, the registered share and, while a word is read, the format,

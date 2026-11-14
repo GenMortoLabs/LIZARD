@@ -17,6 +17,7 @@
 
 #include "android_env.h"
 #include "jni_session.h"
+#include "pack.h"
 #include "sender.h"
 
 #include <android/native_window_jni.h>
@@ -31,6 +32,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <thread>
 #include <linux/sync_file.h>
@@ -270,6 +272,8 @@ struct Tx {
   std::unique_ptr<lizard::Sender> s;
   const uint8_t* map = nullptr;
   size_t mapLen = 0;
+  std::string packed;          // ai: the packed file it maps (pack.h), removed with it; "" none
+  uint64_t bytes = 0;          // ai: the bytes the transfer carries: the packed file's, else the file's
   ANativeWindow* win = nullptr;
   jobject surface = nullptr;   // ai: the global ref win was made from
   int geom = 0, geomW = 0;     // ai: the frame size the window's buffers were set to (height, width)
@@ -283,6 +287,11 @@ struct Tx {
   uint64_t ahbUsage = 0;
   std::string assets;
   std::string error;           // ai: why the vsync present was refused (txPostStats' error)
+  ~Tx() {
+    if (packed.empty()) return;
+    std::error_code e;
+    std::filesystem::remove(packed, e);
+  }
 };
 Tx* tx(jlong h) { return reinterpret_cast<Tx*>(h); }
 // ai: A GPU ring's filler stopped and joined. The filler holds the ring itself (fillRing's shared_ptr), so dropping
@@ -703,15 +712,21 @@ bool presentVsynced(Tx* t, int side, int width, int64_t vsync, int w, int h) {
 }
 }  // namespace
 
-// ai: path: the file to send ("" for the test stream); name and type as its header carries them. 0 with the reason in
+// ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
+// ai: form goes where packing pays (pack.h, the default client's compression; removed at txDestroy), and the transfer's
+// ai: spill (xfer_tx.h: its symbols on disk, no encoder kept; its file unlinked as it is made). 0 with the reason in
 // ai: txError(0) where it cannot go.
 static std::string gTxError;
-extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIEnv* e, jclass, jstring path, jstring name, jstring type) {
+extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir) {
   applyDebugEnv();
   auto t = std::make_unique<Tx>();
-  const std::string p = str(e, path);
+  std::string p = str(e, path), n = str(e, name), ty = str(e, type);
+  const std::string d = str(e, dir);
   try {
     if (!p.empty()) {
+      const lizard::Packed k = lizard::pack(p, n, ty, d);
+      if (k.packed) { t->packed = k.path; p = k.path; n = k.name; ty = k.type; }
+      t->bytes = k.size;
       const int fd = open(p.c_str(), O_RDONLY);
       struct stat st{};
       if (fd < 0 || fstat(fd, &st)) { if (fd >= 0) close(fd); gTxError = "the file could not be read"; return 0; }
@@ -724,7 +739,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIE
       close(fd);
     }
     static const uint8_t empty = 0;
-    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, str(e, name), str(e, type));
+    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, ty, p.empty() ? "" : d);
   } catch (const std::exception& x) {
     if (t->map) munmap(const_cast<uint8_t*>(t->map), t->mapLen);
     gTxError = x.what();
@@ -734,6 +749,9 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIE
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txError(JNIEnv* e, jclass) { return e->NewStringUTF(gTxError.c_str()); }
+
+// ai: the bytes the transfer carries (the packed file's where it was packed, else the file's; 0 the test stream)
+extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txBytes(JNIEnv*, jclass, jlong h) { return static_cast<jlong>(tx(h)->bytes); }
 
 // ai: The format to paint (sub-channels, span, the rate the word states, painters; the picture is the format's) and where (painter: 0 the CPU, 1
 // ai: the GPU, 2 auto; assets: the app's generated tree, the GPU's kernels and tables): "" or the codec's refusal.
@@ -771,6 +789,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txConfigure
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txRefresh(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   const int every[4] = {a, b, c, d};
   if (h) tx(h)->s->setRefresh(every);
+}
+// ai: Developer Tools' Seed (Sender::seed, 2026-11-14): a file's schedule from seed (an unsigned 32-bit value in an int),
+// ai: before its first frame; false after, or for the test stream
+extern "C" JNIEXPORT jboolean JNICALL Java_dev_lizard_receiver_Native_txSeed(JNIEnv*, jclass, jlong h, jint seed) {
+  return h && tx(h)->s->seed(static_cast<uint32_t>(seed)) ? JNI_TRUE : JNI_FALSE;
 }
 
 // ai: The device and the GPU painter made ahead, off the main thread: "" or why there is none. Then the probe: whether
@@ -881,5 +904,5 @@ extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txDestroy(JNIE
   dropWindow(e, t);
   t->s.reset();
   if (t->map) munmap(const_cast<uint8_t*>(t->map), t->mapLen);
-  delete t;
+  delete t;   // ai: its packed file with it
 }

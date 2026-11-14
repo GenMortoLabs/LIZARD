@@ -150,6 +150,8 @@
         <!-- ai: Show statistics, the receiver's setting (recv:stats) shown here too, one switch for both pages -->
         <label>Show statistics <select id="stats" data-shared="recv:stats" data-chips><option value="1">On</option><option value="0" selected>Off</option></select></label>
         <label>Payload <select id="payload" data-chips><option value="file" selected>File</option><option value="test">Test stream</option></select></label>
+        <!-- ai: Seed (2026-11-14): a file's schedule drawn from it at each Start, so a send can be repeated; empty, a random one -->
+        <label>Seed <input id="seed" inputmode="numeric" placeholder="Random" autocomplete="off" spellcheck="false"></label>
       </div>
       <pre id="tx" class="readout"></pre>
     </details>

@@ -132,6 +132,8 @@ object Prefs {
     var codes: Int get() = int("codes", 1); set(v) { p?.putInt("codes", v) }
     // ai: Rate refresh (2026-11-12): "a,b,c,d", lizard-ui refreshText; "1,1,1,1" unless set
     var refresh: String get() = str("refresh", "1,1,1,1"); set(v) { p?.put("refresh", v) }
+    // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): as typed, "" a random one each send
+    var seed: String get() = str("seed", ""); set(v) { p?.put("seed", v) }
     var experimentalOpen: Boolean get() = bool("experimental", false); set(v) { p?.putBoolean("experimental", v) }
     var vsync: Boolean get() = bool("vsync", true); set(v) { p?.putBoolean("vsync", v) }   // ai: on unless turned off
     var toolsOpen: Boolean get() = bool("logs", false); set(v) { p?.putBoolean("logs", v) }

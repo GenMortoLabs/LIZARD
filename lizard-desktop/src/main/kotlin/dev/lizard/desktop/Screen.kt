@@ -99,7 +99,8 @@ class DesktopSend(private val app: App) : SendHost {
     private val stats get() = app.recv.showStats
     override val tools: List<Setting> get() = listOf(
         ChipChoice("Show statistics", app.recv.showStats, listOf(true to "On", false to "Off")) { app.recv.chooseStats(it) },
-        ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = !s.sending) { s.chooseTest(it) })
+        ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = !s.sending) { s.chooseTest(it) },
+        seedSetting(s.seed) { s.chooseSeed(it) })
     override val readout get() = s.readout.takeIf { it.isNotEmpty() }?.let { Code(it, 12) }
     // ai: full screen: the code alone (2026-10-23, as the web's and the app's; FullScreen.kt, Receive's too since
     // ai: 2026-11-13), the edge strip's collapser opening the column over it (FullScreen.sideOver)

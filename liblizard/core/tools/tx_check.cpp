@@ -1,6 +1,7 @@
 // ai: The app's sender off the phone (2026-10-01):
-// ai:   tx_check ids <file> <frames> <blocks a frame> <out>   the sending end's ids and blocks, frame after frame (the
-// ai:       ids little-endian, then each block's 472 bytes), for gen/xfer_tx_ref.mjs to hold against the JS sender's
+// ai:   tx_check ids <file> <frames> <blocks a frame> <out> [seed]   the sending end's ids and blocks, frame after frame
+// ai:       (the ids little-endian, then each block's 472 bytes) under the schedule's seed (1 unless given), for
+// ai:       gen/xfer_tx_ref.mjs to hold against the JS sender's
 // ai:   tx_check paint <file | -> <subch> [frames] [threads] [store dir]   frames painted by the Sender (core/tx), each
 // ai:       decoded blind by the C (cpu/codec.h) from its luma: the word, every block verified; the test stream's ("-")
 // ai:       blocks held to SHAKE256 of their ids, a file's through the receiving end (rx/xfer_rx.h) until it is whole and
@@ -22,6 +23,8 @@
 // ai:       W x W luma, a code a frame, and its meta.json), which lizard_gpu_check replay reads (2026-10-07)
 // ai:   LIZ_SPAN=<2 B> tx_check paint ...   the symbols in ring B (2026-10-10; 128, the 64 ring's, unset): 512 the 256 ring
 // ai:   LIZ_TYPE=<media type> tx_check paint <file> ...   the header carries that type, as the apps' files do (2026-10-10)
+// ai:   LIZ_SPILL=<dir> tx_check ids|paint <file> ...   the transfer's spill there (2026-11-14, xfer_tx.h: no encoder kept,
+// ai:   its symbols in segments on disk), the apps' path: the ids and bytes the same
 // ai:   LIZ_REFRESH=<7/8>,<3/4>,<2/3>,<1/2> tx_check paint ...   Rate refresh (2026-11-12, Sender::setRefresh) set before the
 // ai:       first frame: every read block's id held against the frame before's at its place, the same exactly where its
 // ai:       rate holds (the frame's count not a multiple of its refresh), a fault otherwise; the repeats a rate counted
@@ -36,6 +39,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
@@ -74,6 +78,8 @@ struct Mapped {
 };
 double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 std::string assets() { const char* a = getenv("LIZ_ASSETS"); return a ? a : "out"; }
+// ai: LIZ_SPILL=<dir>: the transfer's spill there (xfer_tx.h: its symbols on disk, no encoder kept), the apps' path
+std::string spill() { const char* a = getenv("LIZ_SPILL"); return a ? a : ""; }
 std::vector<uint8_t> slurp(const std::string& path) {
   FILE* f = fopen(path.c_str(), "rb");
   if (!f) { perror(path.c_str()); exit(2); }
@@ -99,7 +105,8 @@ int main(int argc, char** argv) {
   const std::string mode = argc > 1 ? argv[1] : "";
   if (mode == "ids" && argc >= 6) {
     Mapped m(argv[2]);
-    XferTx x(m.p, m.n, std::filesystem::path(argv[2]).filename().string(), "");
+    XferTx x(m.p, m.n, std::filesystem::path(argv[2]).filename().string(), "", -1, spill());
+    x.reseed(argc >= 7 ? static_cast<uint32_t>(std::strtoul(argv[6], nullptr, 10)) : 1u);   // ai: the schedule's seed, gen/xfer_tx_ref.mjs's
     x.waitMade();   // ai: every chunk made before the first frame, so the frames are the serial JS sender's (no warm frames)
     const int frames = atoi(argv[3]), T = atoi(argv[4]);
     FILE* out = fopen(argv[5], "wb");
@@ -111,7 +118,7 @@ int main(int argc, char** argv) {
       for (uint32_t id : ids) { x.block(id, b); fwrite(b, 1, XFER_PAYLOAD, out); }
     }
     fclose(out);
-    printf("ids: %d frames of %d, chunks %u, lap %u, root %s\n", frames, T, x.chunks(), x.lap(), x.rootHex().c_str());
+    printf("ids: %d frames of %d, chunks %u, lap %u, root %s, seed %u\n", frames, T, x.chunks(), x.lap(), x.rootHex().c_str(), x.seed());
     return 0;
   }
   // ai: repick <subch A> <subch B> [painter 0|1|2] [codes] (2026-10-04, the desktop sender's stall at a re-pick): the
@@ -148,7 +155,7 @@ int main(int argc, char** argv) {
     const int subch = atoi(argv[3]), frames = argc > 4 ? atoi(argv[4]) : 64, threads = argc > 5 ? atoi(argv[5]) : 3;
     const std::string store = argc > 6 ? argv[6] : "/tmp/tx_check_store";
     // ai: LIZ_TYPE=<media type>: the header's type, as the apps send a file's (2026-10-10; "" before, so no check painted one)
-    Sender s(test ? nullptr : m->p, test ? 0 : m->n, test ? "" : std::filesystem::path(argv[2]).filename().string(), getenv("LIZ_TYPE") ? getenv("LIZ_TYPE") : "");
+    Sender s(test ? nullptr : m->p, test ? 0 : m->n, test ? "" : std::filesystem::path(argv[2]).filename().string(), getenv("LIZ_TYPE") ? getenv("LIZ_TYPE") : "", test ? "" : spill());
     TxFormat f;
     f.subch = subch; f.span = getenv("LIZ_SPAN") ? atoi(getenv("LIZ_SPAN")) : 128; f.fps = 60; f.threads = threads;
     // ai: LIZ_CODES=2: two codes a frame, each read blind on its own (the desktop sender's 2:1, 2026-10-03)

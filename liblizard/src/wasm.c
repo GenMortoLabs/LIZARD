@@ -255,44 +255,46 @@ void xfer_layout(int32_t *out) {
 uint32_t xfer_id_of(uint32_t chunk, uint32_t symbol) { return xfer_id(chunk, symbol); }
 int xfer_kind_of(uint32_t id) { return xfer_id_kind(id); }
 
-// The header's 472 bytes from its fields: length in bytes, the chunk size's log2, the codec, the one chunk's seed
-// attempt and bytes as sent (0 and 0 unless the file is one chunk), the root's 32 bytes, and name and media type as
-// bytes with their lengths (0 for none). 0, or -1 for fields the layout refuses.
-int xfer_hdr_write(uint8_t *payload, double length, int chunk_log2, int codec, int seed, double sent, const uint8_t *root,
+// The header's 472 bytes from its fields: length in bytes, the chunk size's log2, the seed attempts of every chunk but
+// the last and of the last (0 where none takes it), the root's 32 bytes, and name and media type as bytes with their
+// lengths (0 for none). 0, or -1 for fields the layout refuses.
+int xfer_hdr_write(uint8_t *payload, double length, int chunk_log2, int seed, int seed_last, const uint8_t *root,
                    const uint8_t *name, int name_len, const uint8_t *type, int type_len) {
   xfer_header_t h;
   if (!(length >= 0 && length <= 9007199254740992.0) || (double)(uint64_t)length != length) return -1;
-  if (!(sent >= 0 && sent <= 4294967295.0) || (double)(uint32_t)sent != sent) return -1;
-  if (codec < 0 || codec > 255 || seed < 0 || seed > 255 || name_len < 0 || name_len > XFER_NAME_MAX || type_len < 0 || type_len > XFER_TYPE_MAX) return -1;
+  if (seed < 0 || seed > 255 || seed_last < 0 || seed_last > 255 || name_len < 0 || name_len > XFER_NAME_MAX || type_len < 0 || type_len > XFER_TYPE_MAX) return -1;
   if (xfer_header_init(&h, (uint64_t)length, chunk_log2)) return -1;
-  h.codec = (uint8_t)codec; h.seed = (uint8_t)seed; h.sent = (uint32_t)sent;
+  h.seed = (uint8_t)seed; h.seed_last = (uint8_t)seed_last;
   memcpy(h.root, root, XFER_CV);
   h.name_len = (uint8_t)name_len; if (name_len) memcpy(h.name, name, (size_t)name_len);
   h.type_len = (uint8_t)type_len; if (type_len) memcpy(h.type, type, (size_t)type_len);
   return xfer_header_write(&h, payload);
 }
-// A header block's payload read back. scalars, 13 int32: version, hash, chunk_log2, codec, the one chunk's seed,
-// name_len, type_len, length's low 32 bits, its high 32 bits, chunks, manifest blocks, the chunk size in bytes, the one
-// chunk's bytes as sent. root (32), name (255) and type (158) take the bytes, or may be 0. 0, or XFER_ERR (-1),
-// XFER_ERR_VERSION (-2), XFER_ERR_HASH (-3), XFER_ERR_CODEC (-4), and nothing is written then.
+// A header block's payload read back. scalars, 12 int32: version, hash, chunk_log2, seed, seed_last, name_len,
+// type_len, length's low 32 bits, its high 32 bits, chunks, manifest blocks, the chunk size in bytes. root (32), name
+// (255) and type (158) take the bytes, or may be 0. 0, or XFER_ERR (-1), XFER_ERR_VERSION (-2), XFER_ERR_HASH (-3),
+// and nothing is written then.
 int xfer_hdr_parse(const uint8_t *payload, int32_t *scalars, uint8_t *root, uint8_t *name, uint8_t *type) {
   xfer_header_t h;
   const int rc = xfer_header_parse(payload, &h);
   if (rc) return rc;
-  const int32_t v[] = { h.version, h.hash, h.chunk_log2, h.codec, h.seed, h.name_len, h.type_len, (int32_t)(uint32_t)h.length,
-                        (int32_t)(uint32_t)(h.length >> 32), (int32_t)h.chunks, xfer_manifest_blocks(h.chunks), 1 << h.chunk_log2, (int32_t)h.sent };
+  const int32_t v[] = { h.version, h.hash, h.chunk_log2, h.seed, h.seed_last, h.name_len, h.type_len, (int32_t)(uint32_t)h.length,
+                        (int32_t)(uint32_t)(h.length >> 32), (int32_t)h.chunks, xfer_manifest_blocks(h.chunks), 1 << h.chunk_log2 };
   for (unsigned i = 0; i < sizeof v / sizeof *v; i++) scalars[i] = v[i];
   if (root) memcpy(root, h.root, XFER_CV);
   if (name) memcpy(name, h.name, XFER_NAME_MAX);
   if (type) memcpy(type, h.type, XFER_TYPE_MAX);
   return 0;
 }
-// Manifest block m's payload read under the header payload `hdr` (xfer_manifest_parse): its entries into cvs (32 a
-// chunk), sent (uint32 a chunk) and seeds (a byte a chunk) at 12 m. -1 for a block that is not this transfer's
-// manifest block m, or a header that does not parse.
-int xfer_mf_parse(const uint8_t *payload, const uint8_t *hdr, uint32_t m, uint8_t *cvs, uint32_t *sent, uint8_t *seeds) {
+// Manifest block m's payload read under the header payload `hdr` (xfer_manifest_parse): its chaining values into cvs
+// (32 a chunk) at 14 m. -1 for a block that is not this transfer's manifest block m, or a header that does not parse.
+int xfer_mf_parse(const uint8_t *payload, const uint8_t *hdr, uint32_t m, uint8_t *cvs) {
   xfer_header_t h;
-  return xfer_header_parse(hdr, &h) ? -1 : xfer_manifest_parse(payload, &h, m, cvs, sent, seeds);
+  return xfer_header_parse(hdr, &h) ? -1 : xfer_manifest_parse(payload, &h, m, cvs);
+}
+// The chunk size's log2 a sender picks for a file of `length` bytes (xfer_chunk_log2_for), -1 past what the layout holds.
+int xfer_log2_for(double length) {
+  return length >= 0 && length <= 9007199254740992.0 ? xfer_chunk_log2_for((uint64_t)length) : -1;
 }
 // 0 where chunk `index`'s bytes are right for the file the header payload describes (xfer_chunk_check): cvs is the
 // chaining-value list once xfer_manifest_check has passed it, or 0 for a file of one chunk.

@@ -30,7 +30,9 @@ static int send(const char *assets, const char *painter, const char *device) {
   for (size_t i = 0; i < bytes; i++) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; data[i] = (uint8_t)(s >> 32); }
   liz_sender *snd = liz_sender_new(data, bytes, "engine.bin", "", 0);
   liz_format f = {30, LIZ_RING_DEFAULT, 60, 2};
-  if (!snd || liz_sender_configure(snd, &f, painter_of(painter), 4, assets, device) != LIZ_OK) {
+  /* ai: the schedule's seed taken before the first frame (refused after it, below) */
+  if (!snd || liz_sender_seed(snd, 12345u) != LIZ_OK) { printf("FAIL seed: %s\n", liz_last_error()); return 1; }
+  if (liz_sender_configure(snd, &f, painter_of(painter), 4, assets, device) != LIZ_OK) {
     printf("FAIL sender: %s\n", liz_last_error()); return 1;
   }
   /* ai: Rate refresh's bounds: 11 refused, all 1 (every frame new, the default) taken */
@@ -64,6 +66,7 @@ static int send(const char *assets, const char *painter, const char *device) {
   const int same = p.done && liz_rx_data(rx, &out, &len) == LIZ_OK && len == bytes && !memcmp(out, data, bytes);
   printf("send (%s): %d frames in %.1f s, %d blocks missed, %s; root %s\n  stats: %.300s\n", painter, frames, (now_ms() - t0) / 1e3,
          missed, same ? "the file whole" : "NOT whole", liz_rx_meta(rx, LIZ_META_ROOT), stats);
+  if (liz_sender_seed(snd, 1u) != LIZ_E_STATE) { printf("FAIL seed after the first frame\n"); return 1; }
   liz_rx_free(rx); liz_decoder_free(d); liz_sender_free(snd);
   free(frame); free(verified); free(data);
   printf(same ? "send ok\n" : "send FAILED\n");

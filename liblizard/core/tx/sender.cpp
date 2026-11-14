@@ -33,8 +33,8 @@ std::string esc(const std::string& s) {
 }
 }  // namespace
 
-Sender::Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type) {
-  if (data) xfer_ = std::make_unique<XferTx>(data, length, name, type);
+Sender::Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir) {
+  if (data) xfer_ = std::make_unique<XferTx>(data, length, name, type, -1, spillDir);
   // ai: the test stream starts at a random id each start, as the page's (lizard-web/send.mjs), so a receiver takes a restarted
   // ai: one as new with no signal
   std::random_device rd;
@@ -427,14 +427,18 @@ void Sender::setRefresh(const int every[4]) {
   for (int r = 0; r < 4; r++) refresh_[r] = std::clamp(every[r], 1, REFRESH_MAX);
 }
 
+bool Sender::seed(uint32_t seed) {
+  std::lock_guard<std::mutex> x(xferMu_);
+  return xfer_ && xfer_->reseed(seed);
+}
+
 // ai: The stats a second (the app asks): label, n, subch, fps (asked), shownFps (frames on the screen a second over the
 // ai: window), offeredKBs (data blocks shown a second x 472 B, 1000 B a KB, as the page's), paintMs (a frame's encode
 // ai: and paint on one painter; on the GPU its ms a frame, an encode's timestamps over its frames), paintBatch (the GPU's
 // ai: frames an encode over the window, 0 none), painters (the
 // ai: GPU's: frames an encode), painter ("gpu" or "cpu"), device (the GPU's), gpuWhy (why not the GPU where it was
 // ai: asked for), ahead (painted, not shown), side, test, and for a file chunks, lap (data blocks a lap), pass (laps
-// ai: shown, 1 the first), root, sentBytes (the file's bytes as they go, every chunk's zstd frame or its own;
-// ai: 2026-10-05); refresh (Rate refresh's four, 7/8 to 1/2; offeredKBs counts new data blocks alone, a repeat none);
+// ai: shown, 1 the first), root, seed (the schedule's, 2026-11-14); refresh (Rate refresh's four, 7/8 to 1/2; offeredKBs counts new data blocks alone, a repeat none);
 // ai: fresh (the share of a frame's blocks new in each frame under Rate refresh, by the format's blocks of each rate: the
 // ai: sum of 1/every over them, over their count; 1 with none held), so a rate figured from blocks a frame counts new ones;
 // ai: error, the last failure.
@@ -470,7 +474,7 @@ std::string Sender::stats() {
     const uint32_t lap = xfer_->lap();
     o.precision(2);
     o << ",\"chunks\":" << xfer_->chunks() << ",\"lap\":" << lap << ",\"pass\":" << (lap ? 1.0 + static_cast<double>(dataAll_) / lap : 1.0)
-      << ",\"root\":\"" << xfer_->rootHex() << "\",\"sentBytes\":" << xfer_->sentBytes();
+      << ",\"root\":\"" << xfer_->rootHex() << "\",\"seed\":" << xfer_->seed();
   }
   // ai: a transfer's worker that failed (xfer_tx.h fault: its chunks cannot all be made) is the error where none other is
   std::string err = error_;

@@ -11,7 +11,6 @@
 
 extern "C" {
 #include "shake.h"
-#include "shim.h"   // ai: liblizard/zstd/shim.h: a chunk sent as a zstd frame decompressed (2026-10-05)
 #include "xfer.h"
 // ai: liblizard/wirehair/shim.cpp, the web's own ABI to Wirehair (the profile pinned there), compiled natively
 int lizard_wh_init(void);
@@ -52,16 +51,31 @@ static std::string jstr(const std::string& v) {
   return o + "\"";
 }
 
-// ai: sim/xfer.mjs Bits: a set of symbols grown to the highest one seen
 struct Bits {
-  std::vector<uint8_t> a = std::vector<uint8_t>(64);
+  // ai: a chunk's symbols in dense runs of bits, each from its own first symbol (sim/xfer.mjs Bits, 2026-11-14): a send
+  // ai: counts a chunk's symbols on from a random start, so a send's are one run and a resumed transfer's sends a run
+  // ai: each; a symbol within NEAR of a run joins it (a frame's slots come shuffled)
+  static constexpr uint32_t NEAR = 4096;
+  struct Run { uint32_t base; std::vector<uint8_t> a; };
+  std::vector<Run> runs;
   uint32_t n = 0;
-  bool has(uint32_t i) const { return (i >> 3) < a.size() && ((a[i >> 3] >> (i & 7)) & 1); }
-  void add(uint32_t i) {
-    if ((i >> 3) >= a.size()) a.resize(std::max(2 * a.size(), size_t(i >> 3) + 1));
-    if (!has(i)) { a[i >> 3] |= uint8_t(1 << (i & 7)); n++; }
+  bool has(uint32_t i) const {
+    for (const auto& r : runs) { const uint32_t d = i - r.base; if (i >= r.base && d < 8 * r.a.size() && ((r.a[d >> 3] >> (d & 7)) & 1)) return true; }
+    return false;
   }
-  void orWith(const Bits& o) { for (size_t i = 0; i < o.a.size(); i++) if (o.a[i]) for (int b = 0; b < 8; b++) if ((o.a[i] >> b) & 1) add(uint32_t(8 * i + b)); }
+  void add(uint32_t i) {
+    if (has(i)) return;
+    Run* r = nullptr;
+    for (auto& q : runs) if (i + NEAR >= q.base && i < q.base + 8 * q.a.size() + NEAR) { r = &q; break; }
+    if (!r) { runs.push_back({i & ~7u, std::vector<uint8_t>(64)}); r = &runs.back(); }
+    if (i < r->base) { const uint32_t nb = i & ~7u; r->a.insert(r->a.begin(), (r->base - nb) / 8, uint8_t(0)); r->base = nb; }
+    const uint32_t d = i - r->base;
+    if ((d >> 3) >= r->a.size()) r->a.resize(std::max(2 * r->a.size(), size_t(d >> 3) + 1));
+    r->a[d >> 3] |= uint8_t(1 << (d & 7)); n++;
+  }
+  void orWith(const Bits& o) {
+    for (const auto& r : o.runs) for (size_t i = 0; i < r.a.size(); i++) if (r.a[i]) for (int b = 0; b < 8; b++) if ((r.a[i] >> b) & 1) add(r.base + uint32_t(8 * i + b));
+  }
 };
 
 // ai: sim/fountain.mjs Decoder over the shim
@@ -96,11 +110,12 @@ struct XferRxCore::Rx {
     std::string name, type, root;
     uint64_t size = 0;
     uint32_t mcount = 0, mhave = 0;
-    // ai: len: each chunk's own bytes (the header's); sent, seed and K: its bytes as sent, its seed attempt and its
-    // ai: blocks, from the header for one chunk and from the manifest for more (known once the list checks)
-    std::vector<uint32_t> K, len, sent;
-    std::vector<uint8_t> seed, mgot, list;
-    bool listOk = false, known = false;
+    // ai: len and K: each chunk's bytes and blocks, the header's (version 4: a chunk goes as its own bytes, its seed
+    // ai: attempt the header's, xfer_chunk_seed); a chunk is solved once the list checks (one chunk: at once)
+    std::vector<uint32_t> K, len;
+    std::vector<uint8_t> mgot, list;
+    bool listOk = false;
+    bool ready() const { return h.chunks == 1 || listOk; }
   };
   std::unique_ptr<Store> store;
   std::function<void(const std::string&)> log;
@@ -200,7 +215,7 @@ struct XferRxCore::Rx {
     snprintf(f, sizeof f, "%.4f", p.fraction);
     store->noteMeta("{\"name\":" + jstr(p.name) + ",\"type\":" + jstr(p.type) + ",\"length\":" + std::to_string(p.length) +
                     ",\"chunks\":" + std::to_string(p.chunks) + ",\"verified\":" + std::to_string(p.verified) + ",\"root\":\"" + p.root +
-                    "\",\"fraction\":" + f + ",\"sent\":" + std::to_string(p.sent) + ",\"sentIn\":" + std::to_string(p.sentIn) + "}");
+                    "\",\"fraction\":" + f + ",\"bytesIn\":" + std::to_string(p.bytesIn) + "}");
   }
 
   Ch& state(uint32_t c) { return ch[c]; }
@@ -232,7 +247,7 @@ struct XferRxCore::Rx {
     if (!store->append(c, sym, p)) return stop();
     s.recs++;
     if (++sinceMeta >= META_EVERY || nowMs() - metaMs >= META_MS) saveMeta();
-    if (hdr && hdr->known && s.have.n >= hdr->K[c]) solve(c);   // ai: K known once the manifest is in (one chunk: from the header)
+    if (hdr && hdr->ready() && s.have.n >= hdr->K[c]) solve(c);   // ai: once the list checks (one chunk: at once)
   }
 
   // ai: XferReceiver.header, the light's only: a different header is a new transfer, and everything held is let go
@@ -250,9 +265,8 @@ struct XferRxCore::Rx {
     h->mcount = uint32_t(xfer_manifest_blocks(chunks));
     h->mgot.assign(h->mcount, 0);
     h->list.assign(std::max<size_t>(1, size_t(XFER_CV) * chunks), 0);
-    h->K.assign(chunks, 0); h->len.resize(chunks); h->sent.assign(chunks, 0); h->seed.assign(chunks, 0);
-    for (uint32_t c = 0; c < chunks; c++) h->len[c] = uint32_t(xfer_chunk_len(&h->h, c));
-    if (chunks == 1) { h->sent[0] = h->h.sent; h->seed[0] = h->h.seed; h->K[0] = xfer_blocks(h->h.sent); h->known = true; }
+    h->K.resize(chunks); h->len.resize(chunks);
+    for (uint32_t c = 0; c < chunks; c++) { h->len[c] = uint32_t(xfer_chunk_len(&h->h, c)); h->K[c] = xfer_blocks(h->len[c]); }
     // ai: lizard-web/recv.mjs: a header of another root clears the page's dedupe (the producer's, told by the generation)
     if (!lastRoot.empty() && lastRoot != h->root) gen.fetch_add(1);
     lastRoot = h->root;
@@ -274,7 +288,7 @@ struct XferRxCore::Rx {
     raw.clear();
     for (auto& [m, b] : pending) manifestBlock(m, b.data());
     saveMeta();
-    if (hdr && hdr->known) solveReady();
+    if (hdr && hdr->ready()) solveReady();
   }
   // ai: A folder of this transfer from before (store.h): its manifest blocks replayed, its verified chunks taken as
   // ai: verified, and each collecting chunk's symbols marked had from its stored blocks; true when that finished it
@@ -298,7 +312,7 @@ struct XferRxCore::Rx {
     if (verified == chunks) { finish(); return true; }
     return false;
   }
-  // ai: XferReceiver.solveReady: every chunk with its blocks in hand, now that their counts are known
+  // ai: XferReceiver.solveReady: every chunk with its blocks in hand, now that the list checks
   void solveReady() {
     std::vector<uint32_t> ready;
     for (auto& [c, s] : ch) if (s.state == COLLECTING && s.have.n >= hdr->K[c]) ready.push_back(c);
@@ -310,7 +324,7 @@ struct XferRxCore::Rx {
     if (!hdr) { if (raw.size() < 4096) memcpy(raw[m].data(), p, PAYLOAD); return; }   // ai: kept until there is a root to check it by
     Hdr& h = *hdr;
     if (failed || h.listOk || m >= h.mcount || h.mgot[m]) return;
-    if (xfer_manifest_parse(p, &h.h, m, h.list.data(), h.sent.data(), h.seed.data())) return;   // ai: another transfer's (its tag), not a manifest block, or entries no chunk could have
+    if (xfer_manifest_parse(p, &h.h, m, h.list.data())) return;   // ai: another transfer's (its tag), or not a manifest block
     h.mgot[m] = 1;
     if (!replaying) store->noteManifest(m, p);
     if (++h.mhave < h.mcount) return;
@@ -322,8 +336,6 @@ struct XferRxCore::Rx {
       return;
     }
     h.listOk = true;
-    for (uint32_t c = 0; c < h.h.chunks; c++) h.K[c] = xfer_blocks(h.sent[c]);
-    h.known = true;
     solveReady();
   }
 
@@ -339,12 +351,12 @@ struct XferRxCore::Rx {
     auto recs = store->read(c);
     if (h.K[c] == 1) {
       std::vector<uint8_t> out;
-      if (recs.size() >= REC) out.assign(recs.begin() + XFER_ID_BYTES, recs.begin() + XFER_ID_BYTES + h.sent[c]);
+      if (recs.size() >= REC) out.assign(recs.begin() + XFER_ID_BYTES, recs.begin() + XFER_ID_BYTES + h.len[c]);
       store->drop(c); s.recs = s.mark = 0;
-      return unpack(c, out);
+      return check(c, out);
     }
     auto d = std::make_unique<Wh>();
-    if (int rc = d->create(h.sent[c], h.seed[c]); rc < 0) {
+    if (int rc = d->create(h.len[c], uint32_t(xfer_chunk_seed(&h.h, c))); rc < 0) {
       // ai: the JS throws here; a header that passed its CRC wrongly is the only way, and its chunk is collected afresh
       say("xfer: wirehair decoder " + std::to_string(rc) + " for chunk " + std::to_string(c));
       store->drop(c);
@@ -367,16 +379,6 @@ struct XferRxCore::Rx {
     Ch& s = ch[c];
     auto out = s.dec->recover();
     s.dec.reset();
-    unpack(c, out);
-  }
-  // ai: XferReceiver.unpack: the chunk's bytes from what was sent, its zstd frame decompressed where it was sent
-  // ai: shorter than it is (a frame that does not give exactly the chunk's bytes is a wrong chunk, rejected as a
-  // ai: wrong hash is), else as they came
-  void unpack(uint32_t c, const std::vector<uint8_t>& raw) {
-    Hdr& h = *hdr;
-    if (h.sent[c] >= h.len[c]) return check(c, raw);
-    std::vector<uint8_t> out(h.len[c]);
-    if (lizard_zstd_decompress(raw.data(), uint32_t(raw.size()), out.data(), h.len[c])) return reject(c, ch[c]);
     check(c, out);
   }
   void check(uint32_t c, const std::vector<uint8_t>& out) {
@@ -430,20 +432,15 @@ struct XferRxCore::Rx {
     p.done = done; p.failed = failed; p.path = path;
     p.secs = firstMs ? ((done ? doneMs : nowMs()) - firstMs) / 1000 : 0;
     p.per.resize(h.h.chunks);
-    double got = 0;
     for (uint32_t c = 0; c < h.h.chunks; c++) {
       auto it = ch.find(c);
       const Ch* s = it == ch.end() ? nullptr : &it->second;
-      // ai: until the manifest says a chunk's blocks, its share is over the blocks its bytes would take as they are, a floor
-      const uint32_t k = h.known ? h.K[c] : xfer_blocks(h.len[c]);
-      const uint8_t v = !s ? 0 : s->state == VERIFIED ? 255 : uint8_t(std::min<uint64_t>(99, 100ull * s->have.n / std::max<uint32_t>(1, k)));
-      p.per[c] = v;
-      got += h.len[c] * (v >= 254 ? 1.0 : v / 100.0);
-      if (h.known) { p.sent += h.sent[c]; if (s) p.sentIn += s->state == VERIFIED ? h.sent[c] : std::min<uint64_t>(h.sent[c], uint64_t(s->have.n) * PAYLOAD); }
+      p.per[c] = !s ? 0 : s->state == VERIFIED ? 255 : uint8_t(std::min<uint64_t>(99, 100ull * s->have.n / std::max<uint32_t>(1, h.K[c])));
+      if (s) p.bytesIn += s->state == VERIFIED ? h.len[c] : std::min<uint64_t>(h.len[c], uint64_t(s->have.n) * PAYLOAD);
     }
-    // ai: XferReceiver.progress and fractionDone: by the bytes as sent once the manifest has said them, the file's own until then
-    p.fraction = done ? 1 : p.sent ? double(p.sentIn) / double(p.sent) : h.h.length ? got / double(h.h.length) : 0;
-    p.bytesIn = uint64_t(p.fraction * double(h.h.length));
+    // ai: XferReceiver.bytesIn and fractionDone
+    if (done) p.bytesIn = h.h.length;
+    p.fraction = done ? 1 : h.h.length ? std::min(1.0, double(p.bytesIn) / double(h.h.length)) : 0;
   }
 };
 

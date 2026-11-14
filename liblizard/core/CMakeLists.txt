@@ -113,9 +113,10 @@ set(XFER_VENDOR ${B3_SRC}
   ${WH}/codec/WirehairV2Profile.cpp ${WH}/codec/WirehairV2Seeds.cpp ${WH}/codec/WirehairV2Solve.cpp ${LZ}/wirehair/shim.cpp)
 # ai: lizard_xfer_core (2026-10-03): both ends of the transfer with no thread of their own (rx/xfer_rx_core.h, the
 # ai: stores, tx/xfer_tx.h; the sender alone runs workers of its own, a physical core each, that make its chunks while
-# ai: frames go and are joined when it goes, none under emscripten), what the library and a wasm build take;
+# ai: frames go and are joined when it goes, none under emscripten), the default client's pack (tx/pack.h, 2026-11-14),
+# ai: what the library and a wasm build take;
 # ai: lizard_xfer adds the app's threaded receiving end.
-add_library(lizard_xfer_core STATIC rx/xfer_rx_core.cpp rx/store.cpp tx/xfer_tx.cpp ${LZ}/src/xfer.c ${LZ}/src/shake.c ${XFER_VENDOR})
+add_library(lizard_xfer_core STATIC rx/xfer_rx_core.cpp rx/store.cpp tx/xfer_tx.cpp tx/pack.cpp ${LZ}/src/xfer.c ${LZ}/src/shake.c ${XFER_VENDOR})
 set_source_files_properties(${XFER_VENDOR} PROPERTIES COMPILE_OPTIONS "${LIZ_NOWARN}")
 if(EMSCRIPTEN AND B3_NEON)
   set_property(SOURCE ${B3_NEON} APPEND PROPERTY COMPILE_OPTIONS -mfpu=neon)   # ai: emscripten's arm_neon.h, on wasm SIMD

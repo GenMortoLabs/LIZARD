@@ -1,4 +1,4 @@
-// zstd as the transfer uses it (shim.h): one frame a chunk, parameters pinned.
+// zstd as the default client's pack uses it (shim.h): frames of a file's slices, parameters pinned.
 #define ZSTD_STATIC_LINKING_ONLY   // ZSTD_c_useRowMatchFinder and ZSTD_paramSwitch_e, static link only
 #include "shim.h"
 #include "zstd.h"
@@ -15,8 +15,8 @@ uint32_t lizard_zstd_bound(uint32_t n) { return (uint32_t)ZSTD_compressBound(n);
 // Level 9 (shim.h). The row match finder on: zstd's automatic choice turns it on by the window size, with a threshold
 // that depends on whether the build has SSE2 or NEON, and the two match finders find different matches, so a chunk
 // under 128 KB would compress differently in wasm and natively; forced on, every build uses it where its strategy
-// allows (the SIMD and scalar paths of the finder itself agree). No checksum: BLAKE3 verifies the chunk. The content
-// size in the frame, so a receiver refuses a frame of the wrong size before decompressing it. One thread.
+// allows (the SIMD and scalar paths of the finder itself agree). No checksum: the transfer's BLAKE3 verifies the packed
+// file. The content size in the frame, so a receiver knows a frame's bytes before decompressing it. One thread.
 EMSCRIPTEN_KEEPALIVE
 int32_t lizard_zstd_compress(const uint8_t *src, uint32_t n, uint8_t *dst, uint32_t cap) {
   ZSTD_CCtx *c = ZSTD_createCCtx();
@@ -36,4 +36,16 @@ int32_t lizard_zstd_decompress(const uint8_t *src, uint32_t n, uint8_t *dst, uin
   if (ZSTD_getFrameContentSize(src, n) != (unsigned long long)len) return -1;
   const size_t r = ZSTD_decompress(dst, len, src, n);
   return !ZSTD_isError(r) && r == len ? 0 : -1;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int32_t lizard_zstd_frame_content(const uint8_t *src, uint32_t n) {
+  const unsigned long long c = ZSTD_getFrameContentSize(src, n);
+  return c == ZSTD_CONTENTSIZE_UNKNOWN || c == ZSTD_CONTENTSIZE_ERROR || c > 0x7fffffffull ? -1 : (int32_t)c;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int32_t lizard_zstd_frame_bytes(const uint8_t *src, uint32_t n) {
+  const size_t r = ZSTD_findFrameCompressedSize(src, n);
+  return ZSTD_isError(r) || r > 0x7fffffffu ? -1 : (int32_t)r;
 }

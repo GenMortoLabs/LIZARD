@@ -1,7 +1,6 @@
-// zstd, the transfer's compression (src/xfer.h: a chunk goes as one zstd frame where that is shorter than its bytes),
-// through liblizard/zstd/shim.c, which pins the parameters so every sender writes the same frame; inside the codec's
-// module (liblizard/build.sh), the instance sim/ob.mjs's default build shares. Handed to XferSender and XferReceiver
-// (sim/xfer.mjs) as `Z`, the way Wirehair's classes are, so a module that only needs the id test loads neither.
+// zstd for the default client's pack (sim/pack.mjs; core/tx/pack.h natively) through liblizard/zstd/shim.c, which pins
+// the parameters so every client writes the same frames; inside the codec's module (liblizard/build.sh), the instance
+// sim/ob.mjs's default build shares. Handed to pack and unpack as `Z`, so a module that never packs loads none of it.
 import { baseModule } from "./ob.mjs";
 
 let M;
@@ -10,7 +9,7 @@ export async function init() {
   return M;
 }
 
-// The frame of `bytes`, or null where the shim refuses (it does not, for a chunk the transfer allows).
+// The frame of `bytes`, or null where the shim refuses (it does not, for a frame the pack makes).
 export function compress(bytes) {
   const cap = M._lizard_zstd_bound(bytes.length), p = M._malloc(Math.max(1, bytes.length)), o = M._malloc(cap);
   M.HEAPU8.set(bytes, p);
@@ -30,5 +29,17 @@ export function decompress(bytes, len) {
   return out;
 }
 
-// What the transfer takes: `Z` for sim/xfer.mjs.
-export const Z = { compress, decompress };
+// What a frame says it holds (its header is enough), or -1; the bytes the frame at the start of `bytes` takes, or -1.
+function frameCall(fn, bytes) {
+  const p = M._malloc(Math.max(1, bytes.length));
+  M.HEAPU8.set(bytes, p);
+  const r = fn(p, bytes.length);
+  M._free(p);
+  return r;
+}
+export const frameContent = (bytes) => frameCall(M._lizard_zstd_frame_content, bytes);
+export const frameBytes = (bytes) => frameCall(M._lizard_zstd_frame_bytes, bytes);
+export const bound = (n) => M._lizard_zstd_bound(n);
+
+// What the pack takes: `Z` for sim/pack.mjs.
+export const Z = { compress, decompress, frameContent, frameBytes, bound };

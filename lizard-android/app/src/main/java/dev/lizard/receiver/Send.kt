@@ -66,13 +66,14 @@ import androidx.compose.ui.unit.DpSize
 class SendState(private val a: MainActivity) {
     sealed interface Phase { data object Idle : Phase; data object Preparing : Phase; data object On : Phase; data class Error(val why: String) : Phase }
     data class Stats(val label: String = "", val shownFps: Double = 0.0, val offeredKBs: Double = 0.0, val paintMs: Double = 0.0, val pass: Double = 0.0,
-                     val painter: String = "", val gpuWhy: String = "", val sentBytes: Long = 0,   // ai: sentBytes: the file's bytes as they go (2026-10-05)
+                     val painter: String = "", val gpuWhy: String = "",
                      // ai: the GPU ring's tally over the last second (2026-10-07, jni.cpp txPostStats): posted, held by
                      // ai: vsyncs, late, behind, buffers filled of the ring's
                      val gpuRing: Boolean = false, val posted: Long = 0, val held: String = "", val late: Long = 0, val behind: Long = 0, val filled: Int = 0, val slots: Int = 0,
                      // ai: the blocks a code carries (2026-10-07); lap: a pass's data blocks (Pass time, 2026-11-07);
                      // ai: fresh: the share of a frame's blocks new in each frame under Rate refresh (2026-11-12)
-                     val blocks: Int = 0, val lap: Double = 0.0, val fresh: Double = 1.0)
+                     val blocks: Int = 0, val lap: Double = 0.0, val fresh: Double = 1.0,
+                     val seed: Long = -1)   // ai: the file's schedule's seed (2026-11-14), -1 none (the test stream)
 
     private val prefs = a.getSharedPreferences("lizard", Context.MODE_PRIVATE)
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
@@ -84,9 +85,10 @@ class SendState(private val a: MainActivity) {
     var type by mutableStateOf("")
     val ready get() = choice != null && !reading
     // ai: The transfer made at Start (2026-11-01; at the pick and again at each stop from 2026-10-19, every chunk
-    // ai: compressed for picks never sent): the file copied (or the bundle's tar written) into the cache and every chunk
-    // ai: compressed (txCreate) on a thread of its own, the line "Preparing" meanwhile. compressed: its bytes as they go,
-    // ai: 0 until a run makes it, kept through the run and after it until the choice changes.
+    // ai: compressed for picks never sent): the file copied (or the bundle's tar written) into the cache and packed where
+    // ai: that pays (txCreate, liblizard/core/tx/pack.h) on a thread of its own, the line "Preparing" meanwhile.
+    // ai: compressed: the bytes the transfer carries (the packed file's, else the file's), 0 until a run makes it, kept
+    // ai: through the run and after it until the choice changes.
     var compressed by mutableStateOf(0L)
     private var made = 0L                 // ai: the transfer made for the choice, not yet sending (0: none)
     private var madeFile: File? = null    // ai: the cache file it maps
@@ -136,6 +138,10 @@ class SendState(private val a: MainActivity) {
     // ai: frame, 7/8, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change, kept
     // ai: (sendRefresh, "a,b,c,d")
     var refresh by mutableStateOf(refreshOf(prefs.getString("sendRefresh", null)))
+    // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): a file's schedule drawn from it at each Start (txSeed,
+    // ai: before the first frame), so a send can be repeated; "" a random one each send; kept (sendSeed)
+    var seed by mutableStateOf(prefs.getString("sendSeed", null) ?: "")
+    fun chooseSeed(t: String) { seed = t; prefs.edit().putString("sendSeed", t).apply() }
     private val sideModules get() = Pick.modules(ringIndex) + 2.0 * Pick.QUIET   // ai: a painted symbol's side, its quiet zone in
     private val past get() = (margin - Pick.QUIET).toDouble()           // ai: the margin past that quiet zone, modules
     // ai: the painted frame's width over its height: the codes and the gaps between them, each code as tall as the frame
@@ -305,8 +311,9 @@ class SendState(private val a: MainActivity) {
     fun resized() { if (phase == Phase.On && roomOf() != configured) reconfigure() }
 
     // ai: The choice's transfer made off the main thread: the file into the cache (a document is a stream; the sender maps
-    // ai: a file), or the bundle's tar written there from each document in turn, then txCreate (each chunk compressed,
-    // ai: its fountain set up) and its bytes as sent from the stats. The cache keeps the made one's file and the run's.
+    // ai: a file), or the bundle's tar written there from each document in turn, then txCreate (the file packed there
+    // ai: where that pays, its root hashed) and the bytes it carries (txBytes). The cache keeps the made one's file and the
+    // ai: run's (a packed file the run maps goes on being read after its name is removed).
     private fun make() {
         val b = choice ?: return
         dropMade()
@@ -324,9 +331,9 @@ class SendState(private val a: MainActivity) {
                 else f.outputStream().buffered(1 shl 20).use { o -> b.write(o) }
                 null
             } catch (e: Exception) { e }
-            val hnd = if (wrote != null) 0L else Native.txCreate(f.path, nm, ty)
+            val hnd = if (wrote != null) 0L else Native.txCreate(f.path, nm, ty, dir.path)
             val err = if (wrote != null) "File unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
-            val sent = if (hnd != 0L) runCatching { JSONObject(Native.txStats(hnd)).optLong("sentBytes", 0) }.getOrDefault(0L) else 0L
+            val sent = if (hnd != 0L) Native.txBytes(hnd) else 0L
             a.runOnUiThread {
                 if (my != making) { if (hnd != 0L) Native.txDestroy(hnd); f.delete(); return@runOnUiThread }   // ai: let go meanwhile
                 makingNow = false
@@ -359,8 +366,10 @@ class SendState(private val a: MainActivity) {
         val pre = if (test) 0L else made
         if (!test) { made = 0L; runFile = madeFile; madeFile = null }
         val my = making
+        val sd = if (test) null else seedOf(seed)
         thread(name = "lizard-send-prep") {
-            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "")
+            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "")
+            if (hnd != 0L && sd != null) Native.txSeed(hnd, sd)   // ai: before the first frame, which the configure makes
             val err = if (hnd == 0L) Native.txError() else ""
             // ai: the GPU painter's device and pipelines made here, off the main thread that configures
             if (hnd != 0L && painter != "cpu") {
@@ -490,14 +499,11 @@ class SendState(private val a: MainActivity) {
             val p = if (vsynced) JSONObject(Native.txPostStats(h)) else null
             val held = p?.optJSONObject("held")?.let { o -> o.keys().asSequence().sortedBy { it.toIntOrNull() ?: 0 }.joinToString(", ") { "$it: ${o.opt(it)}" } }.orEmpty()
             stats = Stats(j.optString("label"), j.optDouble("shownFps"), j.optDouble("offeredKBs"), j.optDouble("paintMs"), j.optDouble("pass", 0.0),
-                j.optString("painter"), j.optString("gpuWhy"), j.optLong("sentBytes", 0),
+                j.optString("painter"), j.optString("gpuWhy"),
                 p?.optBoolean("gpu") ?: false, p?.optLong("posted") ?: 0, held, p?.optLong("late") ?: 0, p?.optLong("behind") ?: 0, p?.optInt("filled") ?: 0, p?.optInt("slots") ?: 0,
-                j.optInt("blocks", 0), j.optDouble("lap", 0.0), j.optDouble("fresh", 1.0).takeIf { it > 0 } ?: 1.0)
+                j.optInt("blocks", 0), j.optDouble("lap", 0.0), j.optDouble("fresh", 1.0).takeIf { it > 0 } ?: 1.0, j.optLong("seed", -1))
             if (p?.optBoolean("gpu") == true) Log.i(TAG, "send: posted ${stats.posted}, held {${held}}, late ${stats.late}, behind ${stats.behind}, ${stats.filled} of ${stats.slots} buffers filled, ${j.optInt("ahead")} of ${j.optInt("depth")} frames painted ahead")
             if (j.optString("error").isNotEmpty()) phase = Phase.Error(j.optString("error"))
-            // ai: the bytes as they go, known once every chunk is made (the core streams: its first frames go while the
-            // ai: chunks are made, 2026-11-06), so the size line takes them from here
-            if (compressed == 0L && stats.sentBytes > 0) compressed = stats.sentBytes
         }
     }
     // ai: The vsync present refused for this send (jni.cpp txPost -1; its child surface let go): the frames go into the
@@ -615,7 +621,8 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     private val stats get() = a.settings.stats == "on"
     override val tools: List<Setting> get() = listOf(
         ChipChoice("Show statistics", a.settings.stats, listOf("on" to "On", "off" to "Off")) { a.change(a.settings.copy(stats = it)) },
-        ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = s.phase != SendState.Phase.On && s.phase != SendState.Phase.Preparing) { s.test = it })
+        ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = s.phase != SendState.Phase.On && s.phase != SendState.Phase.Preparing) { s.test = it },
+        seedSetting(s.seed) { s.chooseSeed(it) })
     override val readout get() = sendLab(s).takeIf { it.isNotEmpty() }?.let { Code(it) }
     // ai: While a send runs the code is the whole screen (2026-10-26): the code alone, the bars hidden (SendState.screenFor);
     // ai: the page only while paused; the collapser over it pauses and opens the page with the column
@@ -681,7 +688,7 @@ private fun sendLab(s: SendState): String {
     return "${st.label} on the ${if (st.painter == "gpu") "GPU" else "CPU"}, %.1f frames/s, paint %.1f ms a frame".format(Locale.ROOT, st.shownFps, st.paintMs) +
         (if (st.gpuRing) "\nposted ${st.posted}, held {${st.held}}, late ${st.late}, behind ${st.behind}, ${st.filled} of ${st.slots} buffers filled" else "") +
         (if (s.refused.isNotEmpty()) "\nthe window's queue: the vsync present refused (${s.refused})" else "") +
-        (if (!s.test && s.size > 0) "\nfile ${s.size} B" + (if (st.sentBytes in 1 until s.size) ", ${st.sentBytes} B as sent (zstd)" else "") +
-            (if (st.pass > 0) ", pass ${floor(st.pass).toInt()}" else "") else "") +
+        (if (!s.test && s.size > 0) "\nfile ${s.size} B" + (if (s.compressed in 1 until s.size) ", ${s.compressed} B packed (zstd)" else "") +
+            (if (st.pass > 0) ", pass ${floor(st.pass).toInt()}" else "") + (if (st.seed >= 0) ", seed ${st.seed}" else "") else "") +
         if (st.painter == "cpu" && s.painter != "cpu" && st.gpuWhy.isNotEmpty()) "\nnot the GPU: ${st.gpuWhy}" else ""
 }

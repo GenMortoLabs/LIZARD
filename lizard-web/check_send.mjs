@@ -10,8 +10,9 @@
 // ai: canvas is read at its own pixels, so a format larger than the window reads the same. Each time the page's canvas is
 // ai: read back as luma, padded with white as the page's surround is, and decoded by the C told nothing (sim/phy.mjs
 // ai: makeBlind): the word must name the version painted and the page's 24 fps, the blocks must verify, the state line
-// ai: must say what is sent (for a file "<compressed> (<raw> raw)", 2026-10-19), and for the file one of the frames read must carry its header block, whose name, length and
-// ai: BLAKE3 root (sim/xfer.mjs XferReceiver's parse) are the file's. Then the server's log: no request under /api (the
+// ai: must say what is sent, and for the file one of the frames read must carry its header block, whose name, length and
+// ai: BLAKE3 root (sim/xfer.mjs XferReceiver's parse) are the file's, or its packed stream's where the page packed it
+// ai: (sim/pack.mjs, the default client's compression, held to here). Then the server's log: no request under /api (the
 // ai: sender posts no development log since 2026-10-22). Exit 1 on any failure. About 10 s; 21 s with ENC=gpu (SwiftShader).
 // ai: The encoder (2026-09-29, gpu/encoder.mjs): plain, Chrome has no WebGPU adapter and the page's auto must fall back
 // ai: to the wasm path and say why (#tx "encoder: wasm in the worker (WebGPU off: ...)"); ENC=gpu gives Chrome
@@ -67,6 +68,7 @@ import { makePhy, blindSpec } from "../liblizard/sim/phy.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initWh, Decoder, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
+import { pack } from "../liblizard/sim/pack.mjs";
 import { XferSender, XferReceiver, MemoryStore, ID_HEADER, blake3, hex, isControlId } from "../liblizard/sim/xfer.mjs";
 import { N_FOR, NAME, SPAN, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, subchOf, versionOf } from "../liblizard/sim/lizard_pick.mjs";
 import { tabs, open, evaluate, navigate } from "./phone.mjs";
@@ -102,6 +104,9 @@ writeFileSync(filePath, fileBytes);
 const bigPath = join(scratch, "check-big.bin"), bigBytes = new Uint8Array(3 * 2 ** 22 + 12345);
 for (let i = 0, v = 11; i < bigBytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bigBytes[i] = v >>> 16; }
 writeFileSync(bigPath, bigBytes);
+// ai: prose, which the page packs (sim/pack.mjs, the default client's compression): its header is the packed stream's
+const prosePath = join(scratch, "check-prose.txt"), proseBytes = new TextEncoder().encode(Array.from({ length: 40000 }, (_, i) => ["lizard ", "frame ", "block ", "the ", "ring ", "reads ", "a ", "\n"][(Math.imul(i + 1, 2654435761) >>> 13) % 8]).join(""));
+writeFileSync(prosePath, proseBytes);
 // ai: the bundles' files: a second one beside it, and a folder of the file and a text one level down
 const twoPath = join(scratch, "check-two.txt"), dirPath = join(scratch, "check-folder");
 writeFileSync(twoPath, "the second file\n");
@@ -183,15 +188,15 @@ const pageLine = (g) => `  page: ${g.state} | ${JSON.stringify(g.dt)} | ${g.tx.s
 const faults = [];
 // ai: 496 (version 31, an odd version, 60 blocks under the rate profile): set as the slider sets it (488, version 61 of
 // ai: the 8-sub-channel ladder, from 2026-10-01 to 2026-10-29)
-for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file: true }, { subch: 96, file: true, big: true }, { subch: 96, file: true, bundle: "files" }, { subch: 96, file: true, bundle: "folder" }, { subch: "default" }, { subch: 480, margin: 20 }, { subch: 272, codes: 2 }, { subch: 272, codes: 2, spacing: 4 }, { subch: 272, codes: 2, spacing: 44, respacing: 8 }, { subch: 480, midStream: true }]) {
+for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file: true }, { subch: 96, file: true, big: true }, { subch: 96, file: true, prose: true }, { subch: 96, file: true, bundle: "files" }, { subch: 96, file: true, bundle: "folder" }, { subch: "default" }, { subch: 480, margin: 20 }, { subch: 272, codes: 2 }, { subch: 272, codes: 2, spacing: 4 }, { subch: 272, codes: 2, spacing: 44, respacing: 8 }, { subch: 480, midStream: true }]) {
   const codes = c.codes ?? 1;
   const bun = c.bundle ? BUNDLES[c.bundle] : null;
-  let name = `LIZARD-${c.subch}${bun ? `, ${bun.made.name} (${bun.made.files} files, ${bun.bytes.length} B)` : c.big ? `, a ${bigBytes.length} B file of 4 chunks` : c.file ? `, a ${FILE_BYTES} B file` : ", test stream"}${c.margin !== undefined ? `, margin ${c.margin}` : ""}${c.spacing !== undefined ? `, spacing ${c.spacing}` : ""}`;
+  let name = `LIZARD-${c.subch}${bun ? `, ${bun.made.name} (${bun.made.files} files, ${bun.bytes.length} B)` : c.big ? `, a ${bigBytes.length} B file of 4 chunks` : c.prose ? `, ${proseBytes.length} B of prose, packed` : c.file ? `, a ${FILE_BYTES} B file` : ", test stream"}${c.margin !== undefined ? `, margin ${c.margin}` : ""}${c.spacing !== undefined ? `, spacing ${c.spacing}` : ""}`;
   await navigate(s, `http://127.0.0.1:${HTTP}/lizard-web/${process.env.APP ? "app/" : ""}send.html?${c.subch === "default" ? `fps=${FPS}&payload=test&auto` : `subch=${c.subch}&fps=${FPS}${c.file ? "&payload=file" : "&payload=test&auto"}`}${codes > 1 ? `&codes=${codes}` : ""}${c.margin !== undefined ? `&margin=${c.margin}` : ""}${c.spacing !== undefined ? `&spacing=${c.spacing}` : ""}${GPU ? "&enc=gpu" : ""}`);
   if (c.file) {
     // ai: The file picked as a user picks one: into the file input, then the start button.
     const doc = await s.send("DOM.getDocument"), { nodeId } = await s.send("DOM.querySelector", { nodeId: doc.root.nodeId, selector: bun?.input ?? "#file" });
-    await s.send("DOM.setFileInputFiles", { nodeId, files: bun?.paths ?? [c.big ? bigPath : filePath] });
+    await s.send("DOM.setFileInputFiles", { nodeId, files: bun?.paths ?? [c.big ? bigPath : c.prose ? prosePath : filePath] });
     // ai: the pick's ready line under the upload's card (#choice, 2026-11-06; the column's #state before), a bundle's
     // ai: naming its files (a folder's change event comes once Chrome has listed it)
     // ai: the card's head, the count and the size of what goes (2026-11-07; a line under the card named it before)
@@ -227,14 +232,15 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
     if (h) { const rx = new XferReceiver({ M, Decoder, store: new MemoryStore() }); await rx.add(ID_HEADER, h.bytes); header = rx.progress().header; break; }
   }
   const { g, r } = out, v = versionOf(subch), wordOk = r.fmt?.version === v && r.fmt?.fps === FPS, blocksOk = r.seen > 0 && r.bad === 0;
-  // ai: a file's line carries its size, and what it was compressed to where zstd shrank it (2026-10-05): random bytes do not shrink
+  // ai: a file's header is the file's, or its packed stream's where packing pays (sim/pack.mjs): random bytes do not shrink
   // ai: its figures kept whole by no-break spaces (send.mjs sizeText, 2026-10-23), read as spaces here
   // ai: the block (2026-11-07; "Sending <name>, <sizes>" before): the file's name, its Size, a bundle's Files; the test
   // ai: stream its name and Speed; no spinner once it paints, no error line
-  const rows = g.dt?.rows ?? {}, wantName = bun ? bun.made.name : c.big ? "check-big.bin" : c.file ? "check-send.bin" : "Test stream";
-  const stateOk = g.state === "" && g.dt?.name === wantName && !g.dt.spin && (c.file ? !!rows.Size && (!bun || rows.Files === String(bun.made.files)) && (bun || c.big || /^50\sKB$/.test(rows.Size)) : Object.keys(rows).join() === "Speed");
-  const want = bun ? { name: bun.made.name, type: "application/x-tar", bytes: bun.bytes } : c.big ? { name: "check-big.bin", bytes: bigBytes } : { name: "check-send.bin", bytes: fileBytes };
-  const root = hex(blake3(M, want.bytes)), headerOk = !c.file || (header && header.name === want.name && header.length === want.bytes.length && header.root === root && (!want.type || header.type === want.type));
+  const rows = g.dt?.rows ?? {}, wantName = bun ? bun.made.name : c.big ? "check-big.bin" : c.prose ? "check-prose.txt" : c.file ? "check-send.bin" : "Test stream";
+  const stateOk = g.state === "" && g.dt?.name === wantName && !g.dt.spin && (c.file ? !!rows.Size && (!bun || rows.Files === String(bun.made.files)) && (bun || c.big || c.prose || /^50\sKB$/.test(rows.Size)) : Object.keys(rows).join() === "Speed");
+  const want = bun ? { name: bun.made.name, type: "application/x-tar", bytes: bun.bytes } : c.big ? { name: "check-big.bin", bytes: bigBytes } : c.prose ? { name: "check-prose.txt", type: "text/plain", bytes: proseBytes } : { name: "check-send.bin", bytes: fileBytes };
+  const pk = c.file ? pack(want.bytes, want.name, want.type ?? "", Z) : null, sent = pk?.packed ? { name: pk.name, type: pk.type, bytes: pk.bytes } : want;
+  const root = hex(blake3(M, sent.bytes)), headerOk = !c.file || (header && header.name === sent.name && header.length === sent.bytes.length && header.root === root && (!sent.type || header.type === sent.type));
   console.log(`${name}: canvas ${g.w} x ${g.h}, picture n = ${r.n} (want ${N_FOR(subch)}), word ${r.fmt ? `version ${r.fmt.version} at ${r.fmt.fps} fps` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad${c.file ? `; ${frames} frames read, ${blocks} blocks, header ${header ? `${header.name}, ${header.length} B, root ${header.root.slice(0, 16)}...` : "not read"}` : ""}`);
   const enc = encoderOf(g);
   console.log(pageLine(g));
@@ -244,13 +250,14 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   if (r.n !== N_FOR(subch)) faults.push(`${name}: registered at n = ${r.n}`);
   if (!stateOk) faults.push(`${name}: the block says ${JSON.stringify(g.dt)}${g.state ? `, the state line "${g.state}"` : ""}`);
   if (c.big) {
-    const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder, Z }), x = new Uint8Array(472), data = read.filter((b) => !isControlId(b.id));
+    const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder }), x = new Uint8Array(472), data = read.filter((b) => !isControlId(b.id));
     const chunks = new Set(data.map((b) => b.id >>> 18)), differ = data.filter((b) => { ref.block(b.id, x); return b.bytes.some((v, i) => v !== x[i]); }).length;
     ref.free();
     console.log(`  the pool's blocks: ${data.length} data blocks of ${chunks.size} chunks held to the serial sender's, ${differ} differ`);
     if (!data.length || chunks.size < 2 || differ) faults.push(`${name}: ${data.length} data blocks of ${chunks.size} chunks read, ${differ} not the serial sender's`);
   }
-  if (!headerOk) faults.push(`${name}: the header read is not the file's (want ${want.name}, ${want.bytes.length} B, root ${root.slice(0, 16)}...${want.type ? `, ${want.type}` : ""})`);
+  if (c.prose && !pk?.packed) faults.push(`${name}: the prose did not pack (sim/pack.mjs)`);
+  if (!headerOk) faults.push(`${name}: the header read is not the file's (want ${sent.name}, ${sent.bytes.length} B, root ${root.slice(0, 16)}...${sent.type ? `, ${sent.type}` : ""})`);
   // ai: Two codes: the right half read on its own as well, its word the same, its blocks verified and none of its ids
   // ai: the left's (the page gives the second symbol the frame's next blocksPerFrame ids).
   if (codes > 1) {

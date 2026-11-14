@@ -73,7 +73,8 @@ if(EMSCRIPTEN)
   add_executable(lizard ${LIZ_API_SOURCES} src/wasm.c)
   target_include_directories(lizard PRIVATE src)
   # ai: the C API, then the codec's own exports (src/wasm.c and what it reaches; an in-tree interface, no stability
-  # ai: promise), then the allocator; Wirehair's and zstd's shims export themselves (EMSCRIPTEN_KEEPALIVE)
+  # ai: promise), zstd's shim by name (the default client's pack, sim/pack.mjs: nothing in the library calls it, so its
+  # ai: object is linked only for these), then the allocator; Wirehair's shim exports itself (EMSCRIPTEN_KEEPALIVE)
   set(LIZ_WASM_EXPORTS _liz_version _liz_last_error _liz_last_error_code _liz_simd _liz_ring_cells _liz_geometry_of _liz_room_for
       _liz_pick _liz_blocks_for _liz_encoder_new _liz_encoder_free _liz_encoder_geometry _liz_encoder_paint _liz_decoder_new
       _liz_decoder_free _liz_decoder_max_blocks _liz_decode _liz_layout_rects _liz_stream_fill _liz_tx_new
@@ -91,7 +92,8 @@ if(EMSCRIPTEN)
       _lizard_anchors_found _lizard_anchor_geom_get _lizard_fmt_check_out _lizard_fmt_soft_out _lizard_grid_out _ob_test_crc_hash
       _ob_test_crc_gate_out _ob_dbg_hash _stream_fill _xfer_layout _xfer_id_of _xfer_kind_of _xfer_hdr_write _xfer_hdr_parse
       _xfer_mf_parse _xfer_chunk_ok _xfer_manifest_blocks _xfer_manifest_write _xfer_manifest_check _xfer_root
-      _xfer_chunk_cv _xfer_b3_hash _xfer_b3_sub
+      _xfer_chunk_cv _xfer_b3_hash _xfer_b3_sub _xfer_log2_for
+      _lizard_zstd_bound _lizard_zstd_compress _lizard_zstd_decompress _lizard_zstd_frame_content _lizard_zstd_frame_bytes
       _malloc _free)
   string(REPLACE ";" "," LIZ_WASM_EXPORTS "${LIZ_WASM_EXPORTS}")
   set_target_properties(lizard PROPERTIES SUFFIX ".mjs" RUNTIME_OUTPUT_DIRECTORY ${LIZ_WASM_DIST})

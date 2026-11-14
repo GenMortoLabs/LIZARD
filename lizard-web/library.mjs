@@ -59,7 +59,7 @@ export function watch(cb) {
 
 // ai: Transfers begun and not finished (2026-10-22): the fountain worker's folders under lizard-xfer (fountain-worker.mjs
 // ai: OpfsStore), one a transfer by its root's first 16 hex digits, each with meta.json ({ name, type, length, chunks,
-// ai: verified, root, fraction, sent, sentIn }); a receiver resumes one when its file is in the light again. Newest
+// ai: verified, root, fraction, bytesIn }); a receiver resumes one when its file is in the light again. Newest
 // ai: first: { ...meta, id, at }, at when its meta.json was last written.
 export const XFER = "lizard-xfer";
 const XFER_CHANNEL = "lizard-xfer";
