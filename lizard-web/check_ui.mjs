@@ -151,7 +151,7 @@ const SIZES = [
     if (k === 0) check(idle.dev.every((o) => !o), `send ${z.name}: every settings fold closed on a fresh profile (${idle.dev.join()})`);
     if (k === 0) {
       const at = await evaluate(s, FOLDS_AT);
-      check(at === "foldCode Code: blocks subch ring codes size spacing margin | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload seed", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
+      check(at === "foldCode Code: blocks subch ring codes size spacing margin pickHex ink paper | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload seed", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
     }
     check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles and the empty card ("0 items", Clear dimmed) shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);

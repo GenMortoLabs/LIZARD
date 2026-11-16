@@ -81,6 +81,8 @@ class ReceiveState(private val app: App) {
     var lockOn by mutableStateOf(Prefs.Rx.lock)                // ai: Phase lock (session.h phaseLock)
     var zoom by mutableStateOf<Double?>(null)                  // ai: the camera's settings as Settings shows them (null: its own)
     var exposure by mutableStateOf<Double?>(null)
+    // ai: Focus (2026-11-16, lizard-ui focusSetting): null the camera's own autofocus (the default), else by hand in its units
+    var focus by mutableStateOf<Double?>(null)
     var gain by mutableStateOf<Double?>(null)
     var raw by mutableStateOf("")                              // ai: the newest stats JSON as the session wrote it
     var stats by mutableStateOf<JsonObject?>(null)
@@ -352,7 +354,7 @@ class ReceiveState(private val app: App) {
         camera = id
         if (!id.startsWith("upload:") && !id.startsWith("file:")) Prefs.Rx.camera = id
         layout = phoneLayout(cameras, id) ?: Prefs.Rx.layout   // ai: a phone's crop its own; another camera's the one kept
-        zoom = null; exposure = null; gain = null
+        zoom = null; exposure = null; gain = null; focus = null
         chosenMode = null
         // ai: the file camera: the camera before closed, and nothing played until Start (its choice is the camera area's)
         if (id.startsWith("file:")) { if (running) stop(); session?.closeCamera() }
@@ -417,6 +419,8 @@ class ReceiveState(private val app: App) {
     // ai: null: the camera's own exposure (automatic where it can be)
     fun exposureTo(us: Double?) { exposure = us; session?.set("exposure", us ?: 0.0, us == null) }
     fun gainTo(v: Double?) { gain = v; session?.set("gain", v ?: 0.0, v == null) }
+    // ai: null: the camera's own autofocus
+    fun focusTo(v: Double?) { focus = v; session?.set("focus", v ?: 0.0, v == null) }
     fun chooseBatch(n: Int) { batch = n.coerceIn(1, 32); Prefs.Rx.batch = batch }
     // ai: Phase lock: on, a mode past 60 kept or running goes to 60 (the session's); off, the camera's every rate offered
     fun chooseLock(on: Boolean) {
@@ -586,7 +590,7 @@ class ReceiveState(private val app: App) {
     private var taken = -1L          // ai: the session's takes as last counted (-1: none read yet)
     private var takenRoot = ""
     private var camJson = ""         // ai: the session's camera() as last read
-    private var keptFor = ""         // ai: "<id>/<layout>" the zoom, exposure and gain shown were taken up for
+    private var keptFor = ""         // ai: "<id>/<layout>" the zoom, exposure, gain and focus shown were taken up for
     private fun poll() {
         val s = session ?: return
         val raw0 = runCatching { s.stats }.getOrDefault("")
@@ -644,6 +648,7 @@ class ReceiveState(private val app: App) {
             zoom = kept?.numOrNull("zoom") ?: ci.control("zoom")?.value
             exposure = kept?.numOrNull("exposure")
             gain = kept?.numOrNull("gain")
+            focus = kept?.numOrNull("focus")
         }
     }
     // ai: the session's replays (its stats' "replays"), as Developer Tools lists them

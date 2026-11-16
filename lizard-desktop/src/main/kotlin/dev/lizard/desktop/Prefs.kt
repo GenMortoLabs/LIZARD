@@ -1,6 +1,8 @@
 package dev.lizard.desktop
 
 import dev.lizard.pick.Pick
+import dev.lizard.ui.INK_DEFAULT
+import dev.lizard.ui.PAPER_DEFAULT
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -138,6 +140,9 @@ object Prefs {
     var carousel: Int get() = int("carousel", 0); set(v) { p?.putInt("carousel", v) }
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): as typed, "" a random one each send
     var seed: String get() = str("seed", ""); set(v) { p?.put("seed", v) }
+    // ai: Code's Colours (2026-11-16, lizard-ui Colours): the code's ink and paper, 0xRRGGBB, black and white unless set
+    var ink: Int get() = int("ink", INK_DEFAULT) and 0xFFFFFF; set(v) { p?.putInt("ink", v) }
+    var paper: Int get() = int("paper", PAPER_DEFAULT) and 0xFFFFFF; set(v) { p?.putInt("paper", v) }
     var experimentalOpen: Boolean get() = bool("experimental", false); set(v) { p?.putBoolean("experimental", v) }
     var vsync: Boolean get() = bool("vsync", true); set(v) { p?.putBoolean("vsync", v) }   // ai: on unless turned off
     var toolsOpen: Boolean get() = bool("logs", false); set(v) { p?.putBoolean("logs", v) }

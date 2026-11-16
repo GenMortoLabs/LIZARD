@@ -402,8 +402,9 @@ void fillRing(std::shared_ptr<GpuRing> r, Tx* t) {
     vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &acq);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r->pipe);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r->pl, 0, 1, &x.set, 0, nullptr);
-    const uint32_t pc[4] = {static_cast<uint32_t>(slot) * FS, RW, static_cast<uint32_t>(r->w), static_cast<uint32_t>(r->h)};
-    vkCmdPushConstants(cb, r->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 16, pc);
+    const uint32_t pc[6] = {static_cast<uint32_t>(slot) * FS, RW, static_cast<uint32_t>(r->w), static_cast<uint32_t>(r->h),
+                            t->s->ink(), t->s->paper()};   // ai: the code's colours (Sender::setColours)
+    vkCmdPushConstants(cb, r->pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 24, pc);
     vkCmdDispatch(cb, (static_cast<uint32_t>(r->w) + 15) / 16, (static_cast<uint32_t>(r->h) + 15) / 16, 1);
     VkImageMemoryBarrier rel = acq;
     rel.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT; rel.dstAccessMask = 0;
@@ -506,7 +507,7 @@ bool makeGpuRing(Tx* t, int side, int width) {
     VkDescriptorSetLayoutCreateInfo dli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     dli.bindingCount = 2; dli.pBindings = b;
     wg::check(vkCreateDescriptorSetLayout(dev->dev, &dli, nullptr, &r->dsl), "vkCreateDescriptorSetLayout (expand)");
-    VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+    VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 24};   // ai: base, rw, w, h, the ink and the paper
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pli.setLayoutCount = 1; pli.pSetLayouts = &r->dsl; pli.pushConstantRangeCount = 1; pli.pPushConstantRanges = &pcr;
     wg::check(vkCreatePipelineLayout(dev->dev, &pli, nullptr, &r->pl), "vkCreatePipelineLayout (expand)");
@@ -720,6 +721,11 @@ static std::string gTxError;
 // ai: next piece of work (pack's rounds of frames, the hash's chunks); a make of -1 nothing stops (the test stream's)
 static std::atomic<int64_t> gMakes{0};
 extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCancelMakes(JNIEnv*, jclass) { return ++gMakes; }
+// ai: The code's colours (sender.h setColours, 2026-11-16): its ink and its paper, 0xRRGGBB; the next frame shown takes
+// ai: them, the ring's (expand.comp) and the window's (Sender::take) alike
+extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txColours(JNIEnv*, jclass, jlong h, jint ink, jint paper) {
+  tx(h)->s->setColours(static_cast<uint32_t>(ink), static_cast<uint32_t>(paper));
+}
 extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir,
                                                                              jlong make) {
   applyDebugEnv();

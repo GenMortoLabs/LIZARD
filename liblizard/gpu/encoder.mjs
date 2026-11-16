@@ -423,12 +423,18 @@ export class GpuEncoder {
     ctx.configure({ device: this.device, format: this.format, alphaMode: "opaque" });
     return ctx;
   }
+  // ai: The code's colours the presents paint (2026-11-16, Send's Colours): its ink and its paper, 0xRRGGBB, the grey
+  // ai: along the line between them, the canvas cleared to the paper; black and white the grey. The next present takes them.
+  setColours(ink, paper) { this.ink = ink & 0xffffff; this.paper = paper & 0xffffff; }
   // ai: Slot h batch + f (frame f of half h) onto the canvas: whole canvas pixels a frame pixel (the page's layout).
   present(slot, ctx, whole = 1, c = this.cfg) {
-    const d = this.device;
-    if (c.whole !== whole) { c.whole = whole; const u = c.g.slice(); u[8] = whole; d.queue.writeBuffer(c.PG, 0, u); }
-    const enc = d.createCommandEncoder();
-    const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: { r: 1, g: 1, b: 1, a: 1 } }] });
+    const d = this.device, ink = this.ink ?? 0x000000, paper = this.paper ?? 0xffffff;
+    if (c.whole !== whole || c.ink !== ink || c.paper !== paper) {
+      c.whole = whole; c.ink = ink; c.paper = paper;
+      const u = c.g.slice(); u[8] = whole; u[9] = ink; u[11] = paper; d.queue.writeBuffer(c.PG, 0, u);
+    }
+    const enc = d.createCommandEncoder(), bg = { r: ((paper >> 16) & 255) / 255, g: ((paper >> 8) & 255) / 255, b: (paper & 255) / 255, a: 1 };
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: bg }] });
     pass.setPipeline(this.presentPipe); pass.setBindGroup(0, c.presentGroups[slot]); pass.draw(3); pass.end();
     d.queue.submit([enc.finish()]);
   }

@@ -26,7 +26,7 @@ import dev.lizard.ui.*
 // ai: presenter stats go to stderr as "present: {...}".
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
     companion object {
-        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh", "carousel")
+        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh", "carousel", "colours")
         // ai: how long the presenter may take to start (the canvas shown, the GPU painter made) before the check fails
         private const val START_SECS = 60.0
 
@@ -57,6 +57,8 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         }
     }
 
+    private fun colours(v: String): Pair<Int, Int>? =
+        v.split("/").takeIf { it.size == 2 }?.let { (a, b) -> dev.lizard.ui.colourOf(a)?.let { i -> dev.lizard.ui.colourOf(b)?.let { p -> i to p } } }
     private fun int(k: String, range: IntRange): Int? = kv[k]?.let { v -> v.toIntOrNull()?.takeIf { it in range } ?: fail("LIZ_SENDER_TEST: $k=$v") }
 
     // ai: the settings named
@@ -85,6 +87,8 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         }
         // ai: Refresh's Header, the animated header (2026-11-15): frames a carousel symbol, 0 to CAROUSEL_MAX (0 the static word)
         int("carousel", 0..dev.lizard.ui.CAROUSEL_MAX)?.let { s.carousel = it }
+        // ai: Code's Colours (2026-11-16): <ink>/<paper>, each RRGGBB (a step's commas are the steps'), not saved
+        kv["colours"]?.let { v -> colours(v)?.let { (i, p) -> s.ink = i; s.paper = p } ?: fail("LIZ_SENDER_TEST: colours=$v is not <ink>/<paper>") }
     }
 
     // ai: on the UI thread (Main.kt's LaunchedEffect)
@@ -171,6 +175,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             "remove" -> { (s.items.firstOrNull { it.name == v }?.key ?: s.walking.firstOrNull { it.name == v }?.key)?.let { s.remove(it) }
                 ?: fail("LIZ_SENDER_TEST: no item $v"); return true }
             "clear" -> { s.clearPicks(); return true }
+            "colours" -> colours(v)?.let { (i, p) -> s.chooseColours(i, p) } ?: fail("LIZ_SENDER_TEST: step $act")
             "list" -> System.err.println("list: ${(s.items.map { "${it.name} (${if (it.dir) "${it.files} files, " else ""}${it.size} B${if (it.links > 0) ", ${it.links} links skipped" else ""})" } +
                 s.walking.map { "${it.name} (walking: ${it.files} files, ${it.bytes} B)" } +
                 (s.choice?.takeIf { !s.reading }?.let { "${it.name}, ${it.files} files, ${it.size} B" } ?: if (s.reading) "reading" else "")).joinToString(" | ")}")

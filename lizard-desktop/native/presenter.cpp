@@ -884,7 +884,7 @@ void Presenter::Impl::setup() {
     dli.bindingCount = 2;
     dli.pBindings = b;
     vkCheck(D.vkCreateDescriptorSetLayout(dev, &dli, nullptr, &dsl), "vkCreateDescriptorSetLayout");
-    VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 16};
+    VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 24};   // ai: base, rw, w, h, the ink and the paper
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pli.setLayoutCount = 1;
     pli.pSetLayouts = &dsl;
@@ -1692,8 +1692,9 @@ void Presenter::Impl::presentOnce(bool live) {
             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
     D.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, expandPipe);
     D.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pl, 0, 1, &dsets[fl], 0, nullptr);
-    const uint32_t pc[4] = {static_cast<uint32_t>(ringSlot) * ringFS, ringRW, static_cast<uint32_t>(s.w), static_cast<uint32_t>(s.h)};
-    D.vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 16, pc);
+    const uint32_t pc[6] = {static_cast<uint32_t>(ringSlot) * ringFS, ringRW, static_cast<uint32_t>(s.w), static_cast<uint32_t>(s.h),
+                            sender->ink(), sender->paper()};
+    D.vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 24, pc);
     D.vkCmdDispatch(cb, (static_cast<uint32_t>(s.w) + 15) / 16, (static_cast<uint32_t>(s.h) + 15) / 16, 1);
     barrier(D, cb, s.img, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
             VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -1701,9 +1702,11 @@ void Presenter::Impl::presentOnce(bool live) {
   const VkImage img = c.images[idx];
   barrier(D, cb, img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-  const VkClearColorValue white{{1.f, 1.f, 1.f, 1.f}};
+  // ai: round the picture the code's paper (Sender::paper, white by default; the swapchain UNORM, so its bytes as they are)
+  const uint32_t paper = sender->paper();
+  const VkClearColorValue bg{{((paper >> 16) & 0xff) / 255.f, ((paper >> 8) & 0xff) / 255.f, (paper & 0xff) / 255.f, 1.f}};
   const VkImageSubresourceRange whole1{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-  D.vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &whole1);
+  D.vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &bg, 1, &whole1);
   if (cur >= 0) {
     // ai: where the picture goes: centred, the largest that fits with the edge's light round it, times the size share,
     // ai: stretched (linear) as the page's fit=stretch
@@ -1858,7 +1861,7 @@ void Presenter::Impl::run() {
 }
 
 // ai: The slot on screen copied to a host buffer (it rests in TRANSFER_SRC_OPTIMAL between its expand and its blits),
-// ai: the queue idle first so its expand is written; its red channel the grey (the expand writes g to r, g and b)
+// ai: the queue idle first so its expand is written; RGBA as the expand wrote it, the code's colours in it
 void Presenter::Impl::takeSnapshot() {
   std::vector<unsigned char> px;
   int w = 0, h = 0;
@@ -1908,8 +1911,7 @@ void Presenter::Impl::takeSnapshot() {
       void* m = nullptr;
       vkCheck(D.vkMapMemory(dev, bmem, 0, VK_WHOLE_SIZE, 0, &m), "vkMapMemory");
       const auto* rgba = static_cast<const unsigned char*>(m);
-      px.resize(static_cast<size_t>(s.w) * s.h);
-      for (size_t i = 0; i < px.size(); i++) px[i] = rgba[4 * i];
+      px.assign(rgba, rgba + static_cast<size_t>(s.w) * s.h * 4);
       w = s.w;
       h = s.h;
     }
@@ -2065,7 +2067,7 @@ void Presenter::setPaused(bool on) {
   p_->wake.notify_all();
 }
 
-bool Presenter::snapshot(std::vector<unsigned char>* grey, int* w, int* h) {
+bool Presenter::snapshot(std::vector<unsigned char>* rgba, int* w, int* h) {
   Impl& m = *p_;
   std::unique_lock<std::mutex> l(m.snapMu);
   m.snapDone = false;
@@ -2075,7 +2077,7 @@ bool Presenter::snapshot(std::vector<unsigned char>* grey, int* w, int* h) {
   }
   m.wake.notify_all();
   if (!m.snapCv.wait_for(l, std::chrono::seconds(1), [&] { return m.snapDone; }) || m.snapPx.empty()) return false;
-  *grey = std::move(m.snapPx);
+  *rgba = std::move(m.snapPx);
   *w = m.snapW;
   *h = m.snapH;
   return true;

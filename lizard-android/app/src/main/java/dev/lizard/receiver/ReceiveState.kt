@@ -33,6 +33,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.put
 import dev.lizard.ui.*
@@ -103,6 +104,15 @@ class ReceiveState(private val a: MainActivity) {
     var zoomRange by mutableStateOf<ClosedFloatingPointRange<Float>?>(null)
         private set
     var zoom by mutableStateOf<Float?>(null)          // ai: the zoom as kept for the camera and crop, else its own
+        private set
+    // ai: Focus (2026-11-16, lizard-ui focusSetting): the lens's focus distance in dioptres, 0 (infinity) to its nearest
+    // ai: (the camera's "focus" control; none on a fixed-focus lens), whether it autofocuses, and the focus as kept
+    // ai: (null the camera's continuous autofocus, the default)
+    var focusRange by mutableStateOf<ClosedFloatingPointRange<Double>?>(null)
+        private set
+    var focusAuto by mutableStateOf(false)
+        private set
+    var focus by mutableStateOf<Double?>(null)
         private set
     var stats by mutableStateOf<JsonObject?>(null)    // ai: the newest stats as the session wrote them, read once a poll
         private set
@@ -424,6 +434,8 @@ class ReceiveState(private val a: MainActivity) {
     }
     // ai: Settings' zoom: the camera moved live and the value kept for its crop (session.h set)
     fun zoomTo(z: Float) { zoom = z; use { it.set("zoom", z.toDouble()) } }
+    // ai: Settings' focus: null the camera's autofocus, else dioptres by hand; live and kept for the camera (session.h set)
+    fun focusTo(d: Double?) { focus = d; use { it.set("focus", d ?: 0.0, d == null) } }
     // ai: another decoder or crop: a new receiver on the transfer in hand (the camera started again around it)
     fun reconfigure() { val st = a.settings; use { it.reconfigure(st.decoder, st.layout) } }
     fun batch(n: Int) { use { it.batchCap(n) } }
@@ -580,10 +592,14 @@ class ReceiveState(private val a: MainActivity) {
         mode = ms.getOrNull(if (started >= 0) started else kept?.let { if ("mode" in it) it.num("mode").toInt() else -1 } ?: -1) ?: mode
         val z = j.objs("controls")?.firstOrNull { it.str("id") == "zoom" }
         zoomRange = z?.let { it.num("min").toFloat()..maxOf(it.num("min").toFloat() + 0.1f, it.num("max").toFloat()) }
+        val f = j.objs("controls")?.firstOrNull { it.str("id") == "focus" }
+        focusRange = f?.takeIf { it.num("max") > it.num("min") }?.let { it.num("min")..it.num("max") }
+        focusAuto = (f?.get("canAuto") as? JsonPrimitive)?.booleanOrNull == true
         val key = "$camId/${a.settings.layout}"
         if (key != keptFor) {
             keptFor = key
             zoom = (kept?.get("zoom") as? JsonPrimitive)?.doubleOrNull?.toFloat() ?: z?.num("value")?.toFloat()
+            focus = (kept?.get("focus") as? JsonPrimitive)?.doubleOrNull
         }
     }
 

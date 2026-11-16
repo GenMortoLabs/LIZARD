@@ -461,10 +461,21 @@ bool Sender::take(uint8_t* dst, int stride) {
     // ai: a GPU frame read back is width_ bytes a row; a CPU frame is packed as the ring's rows
     srcRow = buf.size() == static_cast<size_t>(width_) * side_ ? static_cast<size_t>(width_) : 4ull * gpu_->rowWords();
   }
+  // ai: each grey level's RGBA (little-endian R G B A) on the line from the ink to the paper (setColours)
+  uint32_t lut[256];
+  const uint32_t ink = ink_, paper = paper_;
+  for (uint32_t v = 0; v < 256; v++) {
+    uint32_t px = 0xff000000u;
+    for (int k = 0; k < 3; k++) {
+      const uint32_t a = (ink >> (16 - 8 * k)) & 0xffu, b = (paper >> (16 - 8 * k)) & 0xffu;
+      px |= ((a * (255 - v) + b * v + 127) / 255) << (8 * k);
+    }
+    lut[v] = px;
+  }
   for (int y = 0; y < side_; y++) {
     uint32_t* d = reinterpret_cast<uint32_t*>(dst + static_cast<size_t>(y) * stride);
     const uint8_t* g = buf.data() + static_cast<size_t>(y) * srcRow;
-    for (int x = 0; x < width_; x++) d[x] = 0xff000000u | g[x] * 0x010101u;
+    for (int x = 0; x < width_; x++) d[x] = lut[g[x]];
   }
   takenWin_++;
   dataWin_ += data;

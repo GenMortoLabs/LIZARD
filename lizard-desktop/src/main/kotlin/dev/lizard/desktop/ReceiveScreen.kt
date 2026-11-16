@@ -17,6 +17,7 @@ import dev.lizard.readout.Readout
 import dev.lizard.ui.Access
 import dev.lizard.ui.Act
 import dev.lizard.ui.ChipChoice
+import dev.lizard.ui.focusSetting
 import dev.lizard.ui.Choice
 import dev.lizard.ui.Code
 import dev.lizard.ui.ColumnWidth
@@ -184,6 +185,10 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         if (!r.fixed) {
             camera += ChipChoice("Crop", r.layout, listOf("1:1" to "1:1", "2:1" to "2:1")) { r.chooseLayout(it) }
             ci?.control("zoom")?.let { camera += zoom(it) }
+            // ai: Focus (2026-11-16, lizard-ui focusSetting): Auto, the camera's own autofocus, then by hand in its units
+            ci?.control("focus")?.takeIf { it.max > it.min }?.let { c ->
+                camera += focusSetting(c.min, c.max, r.focus, c.canAuto, dioptres = false) { v -> r.focusTo(v?.let { snap(c, it) }) }
+            }
             ci?.control("exposure")?.let { camera += exposure(it) }
             ci?.control("gain")?.let { camera += gain(it) }
         }

@@ -155,6 +155,32 @@ fun carouselSetting(frames: Int, choose: (Int) -> Unit): Setting =
     Slide("Header", if (frames == 0) "Off" else if (frames == 1) "1 frame" else "$frames frames", frames.toFloat(),
         0f..CAROUSEL_MAX.toFloat(), CAROUSEL_MAX - 1) { x -> val n = x.roundToInt().coerceIn(0, CAROUSEL_MAX); if (n != frames) choose(n) }
 
+// ai: Receive's Focus (2026-11-16, both apps' Camera fold, after Zoom; the camera's "focus" control, the session's set
+// ai: and cameras.json): Auto first, the camera's own autofocus and the default (the session turns it on at each open
+// ai: where no focus is kept: the phone's continuous autofocus on the code, a UVC camera's focus_automatic_continuous),
+// ai: then the lens by hand over the camera's range in FOCUS_STEPS steps, low to high: a phone's focus distance in
+// ai: dioptres (0 infinity) shown as a distance, a PC camera's focus in its own units as they are (a UVC camera's
+// ai: focus_absolute; which end is near is the camera's). Moved live. A camera with no automatic focus starts at its low end.
+const val FOCUS_STEPS = 100
+
+fun focusSetting(lo: Double, hi: Double, value: Double?, canAuto: Boolean, dioptres: Boolean, choose: (Double?) -> Unit): Setting {
+    val span = maxOf(hi - lo, 1e-9)
+    val first = if (canAuto) 1 else 0
+    val v = value ?: if (canAuto) null else lo
+    val x = if (v == null) 0 else first + ((v.coerceIn(lo, hi) - lo) / span * (FOCUS_STEPS - first)).roundToInt()
+    val label = when {
+        v == null -> "Auto"
+        !dioptres -> String.format(java.util.Locale.ROOT, "%.0f", v)
+        v <= 0.005 -> "Infinity"
+        v <= 1.0 -> String.format(java.util.Locale.ROOT, "%.1f m", 1 / v)
+        else -> String.format(java.util.Locale.ROOT, "%.0f cm", 100 / v)
+    }
+    return Slide("Focus", label, x.toFloat(), 0f..FOCUS_STEPS.toFloat(), FOCUS_STEPS - 1) { f ->
+        val k = f.roundToInt()
+        choose(if (k < first) null else lo + span * (k - first) / (FOCUS_STEPS - first))
+    }
+}
+
 // ai: the rates Frame rate offers: none past LOCK_FPS while a camera that can lock has the lock on
 fun lockedRates(rates: List<Double>, locks: Boolean): List<Double> = if (locks) rates.filter { it <= LOCK_FPS * 1.005 } else rates
 
@@ -174,6 +200,7 @@ private fun ColumnScope.SettingView(s: Setting) {
         }
         is Code -> CodeBlock(s.text, s.size)
         is Press -> Btn(s.act.label, enabled = s.enabled, modifier = Modifier.fillMaxWidth()) { s.act.run() }
+        is Colours -> ColoursView(s)
     }
 }
 

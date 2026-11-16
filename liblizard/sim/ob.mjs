@@ -170,8 +170,9 @@ export class Lizard {
     this.pDrive = M._malloc(4 * this.side * this.side); this.pImg = 0; this.imgCap = 0;
   }
   // A frame straight to the pixels a page paints (src/lizard_phy.h lizard_paint_rgba): RGBA, the codec's margin round it. The
-  // view is into the wasm heap and good until the next call; a caller that keeps it copies it.
-  encodeRGBA(blocks) {
+  // view is into the wasm heap and good until the next call; a caller that keeps it copies it. ai: ink and paper
+  // (0xRRGGBB, the code's colours; src/wasm.c lizard_tx_rgba): the grey along the line between them; black and white the grey.
+  encodeRGBA(blocks, ink = 0x000000, paper = 0xFFFFFF) {
     this.fits(blocks);
     const W = this.side + 2 * this.quiet * this.cell, bytes = 4 * W * W;
     if (this.rgbaCap !== bytes) {
@@ -180,7 +181,7 @@ export class Lizard {
       if (!this.pRGBA) { this.rgbaCap = 0; throw new Error("frame pixels: out of wasm memory"); }
     }
     M.HEAPU8.set(blocks, this.pBlocks);
-    M._lizard_tx_rgba(this.pBlocks, this.pDrive, this.pRGBA);
+    M._lizard_tx_rgba(this.pBlocks, this.pDrive, this.pRGBA, ink >>> 0, paper >>> 0);
     return { w: W, rgba: M.HEAPU8.subarray(this.pRGBA, this.pRGBA + bytes) };
   }
   // ai: The resampler encodeRGBA paints the picture with (src/lizard_phy.h lizard_resample_geom), for an encoder elsewhere

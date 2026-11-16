@@ -460,7 +460,12 @@ fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let y: u32 = min(u32(pos.y) / whole, P.a.w - 1u);
   let i: u32 = 4u * P.b.z * y + x;
   let g: f32 = f32((FRAME[i >> 2u] >> (8u * (i & 3u))) & 0xffu) / 255.0;
-  return vec4f(g, g, g, 1.0);
+  return vec4f(mix(rgbOf(P.c.y), rgbOf(P.c.w), g), 1.0);
+}
+// ai: the code's colours (2026-11-16, Send's Colours): the present's G.c.y the ink and G.c.w the paper, 0xRRGGBB, the
+// ai: grey painted along the line between them as src/wasm.c lizard_tx_rgba and core/tx/expand.comp do
+fn rgbOf(c: u32) -> vec3f {
+  return vec3f(f32((c >> 16u) & 0xffu), f32((c >> 8u) & 0xffu), f32(c & 0xffu)) / 255.0;
 }
 `;
 }

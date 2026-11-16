@@ -142,7 +142,7 @@ async function makeLizard(spec) {
   // The page's pixels come from the codec's own paint, which has only its margin: an experiment's override has no way there.
   const noRGBA = spec.quiet !== undefined && spec.quiet !== fc.quiet ? `spec.quiet ${spec.quiet} is the simulator's override; the codec paints ${fc.quiet}` : null;
   if (fps) fc.setFps(fps);   // the display rate goes in the band (src/fmt.h); 0 states none, which is the default
-  let source = sourceFor(spec.stream);
+  let source = sourceFor(spec.stream), ink = 0x000000, paper = 0xffffff;
   return {
     label: `lizard ${n} ${tiers ? tiers.map(([r, b]) => `${b}x${RATE[r]}`).join("+") : `${subch}sub`}${span ? " span" + span : ""}`, family: "lizard", variants: variants.map((v) => v.name), usefulBytes: B - ID_BYTES, blocksPerFrame: T, modules: fc.side, bitmap: fc.bitmap,
     // ai: the paint's samples a module and the codec's margin in modules (src/lizard_phy.h LIZARD_QUIET), for a painter
@@ -160,8 +160,10 @@ async function makeLizard(spec) {
     frameRGBA(seq, baseId = seq * T) {
       if (noRGBA) throw new Error(noRGBA);
       fc.setParity(seq & 3);
-      return fc.encodeRGBA(this.frameBlocks(seq, baseId));
+      return fc.encodeRGBA(this.frameBlocks(seq, baseId), ink, paper);
     },
+    // ai: the code's colours frameRGBA paints in (0xRRGGBB; 2026-11-16, Send's Colours): its ink and its paper
+    setColours(i, p) { ink = i & 0xffffff; paper = p & 0xffffff; },
     // ai: The frame's T blocks alone, each its id (little-endian) then its payload, B bytes a block, for an encoder
     // ai: elsewhere (the sender's GPU encoder, gpu/encoder.mjs). A view reused by the next call.
     frameBlocks(seq, baseId = seq * T) {

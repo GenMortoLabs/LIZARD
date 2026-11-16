@@ -187,6 +187,7 @@ async function gpuEncoder() {
     const { GpuEncoder } = await import("../liblizard/gpu/encoder.mjs");
     const e = await GpuEncoder.create({ adapter, powerPreference, profile: URLP.has("encprof"), log: (m) => console.log(`sender: ${m}`) });
     e.software = software;
+    e.setColours(inkOf(), paperOf());
     gctx = e.attach(gcanvas);
     checked.clear();
     return (genc = e);
@@ -531,7 +532,7 @@ async function start() {
   swInit();
   ahead.clear(); inflight = 0; reqSeq = 0; spare = []; respecPending = false; behind = 0;
   const fps = Math.max(0, Math.min(255, Math.round(+$("fps").value) || 0));
-  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, fps, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf() });
+  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, fps, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf(), colours: [inkOf(), paperOf()] });
   bandFps = fps;
   // ai: The GPU encoder for this run, where the menu asks for it and it builds (WebGPU by name: its failure is the start's).
   // ai: Its configuration is this run's only if the run is still this one when it comes back.
@@ -856,6 +857,7 @@ function renderPick() {
 }
 function showChoice(painting) {
   $("pick").hidden = painting || isTest();
+  canvas.parentElement.style.background = painting ? hexOf(paperOf()) : "";   // ai: the code's paper round it (Colours)
   renderPick();
 }
 // ai: An input's files are taken as they are picked and the input emptied, so the same pick again is a new pick. Each
@@ -1088,8 +1090,11 @@ function paintSurround() {
   const kind = SURROUND, box = bgc.parentElement, dpr = devicePixelRatio || 1;
   const W = Math.max(1, Math.round(box.clientWidth * dpr)), H = Math.max(1, Math.round(box.clientHeight * dpr));
   bgc.width = W; bgc.height = H;
-  bgx.filter = "none"; bgx.fillStyle = "#fff"; bgx.fillRect(0, 0, W, H);
-  if (kind === "none") return;
+  // ai: none: the canvas clear, so <main>'s own fill shows (white, the code's paper while it paints: Colours, 2026-11-16;
+  // ai: white drawn here before, which hid the paper)
+  bgx.filter = "none";
+  if (kind === "none") { bgx.clearRect(0, 0, W, H); return; }
+  bgx.fillStyle = "#fff"; bgx.fillRect(0, 0, W, H);
   let s = (+(new URLSearchParams(location.search).get("bgseed")) || 1) >>> 0;
   const rnd = () => ((s = (Math.imul(s, 1103515245) + 12345) >>> 0) >>> 8) / 0x1000000;
   const grey = (v) => `rgb(${Math.round(255 * v)},${Math.round(255 * v)},${Math.round(255 * v)})`;
@@ -1132,6 +1137,97 @@ new ResizeObserver(paintSurround).observe(bgc.parentElement);
 for (const el of document.querySelectorAll("#settings select, #settings input")) if (el.type !== "file" && !("view" in el.dataset)) persist(el, el.dataset.shared || `send:${el.id}`);
 // ai: a menu takes a preset only where it is one of its options (?ring=auto, from before the menu lost its auto, keeps the default)
 for (const [k, v] of URLP) { const el = $(k); if (el && "value" in el && el.type !== "file" && (el.tagName !== "SELECT" || [...el.options].some((o) => o.value === v))) el.value = v; }
+// ai: Code's Colours (2026-11-16, the apps' lizard-ui Colours, two tiles filled with their colours): the code's ink (Primary: the
+// ai: dark modules and the border) and its paper (Secondary: the light, the quiet zone and the area round the code), kept
+// ai: in the hidden #ink and #paper (persisted as the other controls, ?ink= and ?paper= presets as theirs); the worker's
+// ai: paint (src/wasm.c lizard_tx_rgba) and the GPU encoder's present paint the grey along the line between them, <main>
+// ai: round the code the paper while it paints. A tile opens the picker under the tiles (the wheel: hue round it,
+// ai: saturation out from its centre, drawn at the colour's brightness; the bar: brightness; the hex), the code changing as
+// ai: it moves; Done or the tile again closes it. No figure on the row (a contrast label went the same day).
+const hexOf = (c) => "#" + (c & 0xffffff).toString(16).padStart(6, "0").toUpperCase();
+const colourOf = (t) => { let h = String(t ?? "").trim().replace(/^#/, ""); if (h.length === 3) h = [...h].map((c) => c + c).join(""); return /^[0-9a-f]{6}$/i.test(h) ? parseInt(h, 16) : null; };
+const lumaOf = (c) => (77 * ((c >> 16) & 255) + 150 * ((c >> 8) & 255) + 29 * (c & 255)) / 256;
+const inkOf = () => colourOf($("ink").value) ?? 0x000000, paperOf = () => colourOf($("paper").value) ?? 0xffffff;
+function hsvOf(c) {
+  const r = ((c >> 16) & 255) / 255, g = ((c >> 8) & 255) / 255, b = (c & 255) / 255, max = Math.max(r, g, b), d = max - Math.min(r, g, b);
+  const h = d === 0 ? 0 : max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+  return [(h + 360) % 360, max === 0 ? 0 : d / max, max];
+}
+function rgbOfHsv([h, s, v]) {
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c, k = Math.min(5, Math.floor(h / 60));
+  const [r, g, b] = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][k];
+  const byte = (f) => Math.max(0, Math.min(255, Math.round((f + m) * 255)));
+  return (byte(r) << 16) | (byte(g) << 8) | byte(b);
+}
+let picking = null, pickHsv = [0, 0, 0], wheelV = -1;   // ai: the tile whose picker is open ("ink", "paper"), its colour as hue, saturation, brightness
+const wheelBase = document.createElement("canvas");
+function showColours() {
+  for (const k of ["ink", "paper"]) {
+    const c = k === "ink" ? inkOf() : paperOf(), t = $(`${k}Tile`);
+    t.style.background = hexOf(c); t.style.color = lumaOf(c) < 140 ? "#fff" : "var(--fg)"; $(`${k}Hex`).textContent = hexOf(c);
+    t.classList.toggle("open", picking === k);
+  }
+  canvas.parentElement.style.background = live ? hexOf(paperOf()) : "";
+  sw?.postMessage({ type: "colours", ink: inkOf(), paper: paperOf() });
+  genc?.setColours(inkOf(), paperOf());
+}
+function drawPicker() {
+  if (!picking) return;
+  const wc = $("wheel"), W = wc.width, R = W / 2, x = wc.getContext("2d"), [h, s, v] = pickHsv;
+  if (wheelV !== v) {   // ai: the wheel's pixels at this brightness, made again only when it moves
+    wheelV = v; wheelBase.width = wheelBase.height = W;
+    const img = new ImageData(W, W), d = img.data;
+    for (let y = 0; y < W; y++) for (let i = 0; i < W; i++) {
+      const dx = i + 0.5 - R, dy = y + 0.5 - R, r = Math.hypot(dx, dy);
+      if (r > R) continue;
+      const c = rgbOfHsv([((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360, Math.min(1, r / R), v]), o = 4 * (y * W + i);
+      d[o] = (c >> 16) & 255; d[o + 1] = (c >> 8) & 255; d[o + 2] = c & 255; d[o + 3] = r > R - 1 ? Math.round(255 * (R - r)) : 255;
+    }
+    wheelBase.getContext("2d").putImageData(img, 0, 0);
+  }
+  x.clearRect(0, 0, W, W); x.drawImage(wheelBase, 0, 0);
+  const a = (h * Math.PI) / 180, kx = R + Math.cos(a) * s * R, ky = R + Math.sin(a) * s * R, cur = hexOf(rgbOfHsv(pickHsv));
+  x.beginPath(); x.arc(kx, ky, 18, 0, 2 * Math.PI); x.fillStyle = "#fff"; x.fill(); x.lineWidth = 2; x.strokeStyle = "rgba(0,0,0,.4)"; x.stroke();
+  x.beginPath(); x.arc(kx, ky, 12, 0, 2 * Math.PI); x.fillStyle = cur; x.fill();
+  const bc = $("valBar"), bx = bc.getContext("2d"), BW = bc.width, BH = bc.height, th = 32, kr = 20;
+  const grad = bx.createLinearGradient(0, 0, BW, 0); grad.addColorStop(0, "#000"); grad.addColorStop(1, hexOf(rgbOfHsv([h, s, 1])));
+  bx.clearRect(0, 0, BW, BH); bx.fillStyle = grad; bx.beginPath(); bx.roundRect(0, (BH - th) / 2, BW, th, th / 2); bx.fill();
+  const vx = Math.max(kr, Math.min(BW - kr, v * BW));
+  bx.beginPath(); bx.arc(vx, BH / 2, kr, 0, 2 * Math.PI); bx.fillStyle = "#fff"; bx.fill(); bx.lineWidth = 2; bx.strokeStyle = "rgba(0,0,0,.4)"; bx.stroke();
+  if (document.activeElement !== $("pickHex")) $("pickHex").value = cur;
+}
+function setColour(c) {
+  if (!picking) return;
+  $(picking).value = hexOf(c); $(picking).dispatchEvent(new Event("change"));
+  showColours(); drawPicker();
+}
+function openPicker(k) {
+  picking = picking === k ? null : k;
+  $("picker").hidden = !picking;
+  if (picking) { pickHsv = hsvOf(k === "ink" ? inkOf() : paperOf()); $("pickHex").value = hexOf(rgbOfHsv(pickHsv)); drawPicker(); }
+  showColours();
+}
+// ai: a press or a drag on the wheel or the bar picks: pointer capture keeps a drag that leaves it
+function pickDrag(el, at) {
+  el.addEventListener("pointerdown", (e) => { el.setPointerCapture(e.pointerId); at(e); });
+  el.addEventListener("pointermove", (e) => { if (el.hasPointerCapture(e.pointerId)) at(e); });
+}
+pickDrag($("wheel"), (e) => {
+  const r = $("wheel").getBoundingClientRect(), R = r.width / 2, dx = e.clientX - r.left - R, dy = e.clientY - r.top - R;
+  pickHsv = [((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360, Math.min(1, Math.hypot(dx, dy) / R), pickHsv[2]];
+  setColour(rgbOfHsv(pickHsv));
+});
+pickDrag($("valBar"), (e) => {
+  const r = $("valBar").getBoundingClientRect();
+  pickHsv = [pickHsv[0], pickHsv[1], Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))];
+  setColour(rgbOfHsv(pickHsv));
+});
+$("pickHex").addEventListener("change", () => { const c = colourOf($("pickHex").value); if (c == null) { drawPicker(); return; } pickHsv = hsvOf(c); setColour(c); });
+$("pickHex").addEventListener("keydown", (e) => { if (e.key === "Enter") $("pickHex").blur(); });
+$("pickDone").onclick = () => openPicker(picking);
+$("inkTile").onclick = () => openPicker("ink");
+$("paperTile").onclick = () => openPicker("paper");
+showColours();
 // ai: A preset that is no format (?subch=16, ?subch=24, ?subch=auto) is no symbol: back to the page's default,
 // ai: LIZARD-480 (#subch's own), and say so, rather than paint it; a kept "auto" (the slider's first step until
 // ai: 2026-11-07) goes back to it quietly.

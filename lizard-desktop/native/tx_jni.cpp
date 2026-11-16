@@ -167,6 +167,9 @@ FN(jstring, txError)(JNIEnv* e, jclass) { return jstr(e, lizard::jni::lastError(
 // ai: every make under way stopped at its next piece of work; the epoch a new make takes
 FN(jlong, txCancelMakes)(JNIEnv*, jclass) { return ++makes; }
 
+// ai: The code's colours (sender.h setColours, 2026-11-16): its ink and its paper, 0xRRGGBB; the next frame shown takes them
+FN(void, txColours)(JNIEnv*, jclass, jlong h, jint ink, jint paper) { tx(h)->s->setColours(static_cast<uint32_t>(ink), static_cast<uint32_t>(paper)); }
+
 // ai: the bytes the transfer carries (the packed file's where it was packed, else the file's; 0 the test stream)
 FN(jlong, txBytes)(JNIEnv*, jclass, jlong h) { return static_cast<jlong>(tx(h)->bytes); }
 
@@ -355,7 +358,7 @@ FN(void, presentPause)(JNIEnv*, jclass, jlong p, jboolean on) { if (p) pr(p)->se
 // ai: presenter.h stats(): the last second's window as JSON
 FN(jstring, presentStats)(JNIEnv* e, jclass, jlong p) { return jstr(e, p ? pr(p)->stats() : std::string()); }
 FN(void, presentStop)(JNIEnv*, jclass, jlong p) { delete reinterpret_cast<Pres*>(p); }
-// ai: presenter.h snapshot(): the picture on screen as grey bytes, its width and height into wh; null where there is none
+// ai: presenter.h snapshot(): the picture on screen as RGBA bytes, its width and height into wh; null where there is none
 FN(jbyteArray, presentSnapshot)(JNIEnv* e, jclass, jlong p, jintArray wh) {
   if (!p || !wh || e->GetArrayLength(wh) < 2) return nullptr;
   std::vector<unsigned char> px;

@@ -25,6 +25,7 @@ import dev.lizard.readout.Readout
 import dev.lizard.ui.UploadItem
 import dev.lizard.ui.ReceiveUpload
 import dev.lizard.ui.Access
+import dev.lizard.ui.focusSetting
 import dev.lizard.ui.Act
 import dev.lizard.ui.ChipChoice
 import dev.lizard.ui.Choice
@@ -57,12 +58,13 @@ import dev.lizard.ui.Screen
 // ai: the settings folds by topic (2026-11-12, lizard-ui RECV_FOLDS and SEND_FOLDS; "recvSettings" and "sendSettings"
 // ai: the one Settings fold's before, "sendLayout" Send's Layout fold's and "recvCode" Receive's Code fold's and "recvDecoder" its
 // ai: Performance fold's (titled Decoder) until 2026-11-13,
-// ai: unread)
+// ai: unread; "sendRefresh" the Refresh fold's and Rate refresh's both until 2026-11-16, unread: a boolean and a string
+// ai: under one key, whichever came last threw the other's read, Send's or the app's at its start)
 internal class AndroidFolds(private val a: MainActivity) : Folds {
     private fun key(k: FoldKey) = when (k) {
         FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvPerformance -> "recvPerformance"; FoldKey.RecvFiles -> "recvFiles"
         FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
-        FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefresh"
+        FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefreshFold"
         FoldKey.SendPerformance -> "sendPerformance"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
         FoldKey.Collapsed -> "collapsed"   // ai: one for both screens (2026-11-07; recvCollapsed and sendCollapsed before)
         FoldKey.HomeUnfinished -> "homeUnfinished"; FoldKey.HomeFiles -> "homeFiles"
@@ -278,6 +280,9 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         }
         out += crop
         out += zoom(r.zoomRange)
+        // ai: Focus (2026-11-16, lizard-ui focusSetting): Auto, the camera's continuous autofocus on the code (the
+        // ai: default), then the lens's distance by hand, infinity to its nearest
+        r.focusRange?.let { fr -> out += focusSetting(fr.start, fr.endInclusive, r.focus, r.focusAuto, dioptres = true) { r.focusTo(it) } }
     }
 
     // ai: Zoom as a slider (2026-10-01): 0.1x steps over the camera's whole range (the S26's camera 0 runs 0.6 to 10x and

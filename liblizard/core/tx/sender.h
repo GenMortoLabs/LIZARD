@@ -127,8 +127,16 @@ class Sender {
   // ai: false after, or for the test stream. The carousel's key drawn from it too, at any time, a file or the test
   // ai: stream, so a send repeats.
   bool seed(uint32_t seed);
+  // ai: The code's colours (2026-11-16, Send's Colours): its ink and its paper, 0xRRGGBB, a frame's grey painted along
+  // ai: the line between them where it is shown, each channel apart, ink + (paper - ink) v / 255 rounded (take here,
+  // ai: the presenters' expand.comp on the GPU); black and white by default, the grey itself. The painters and the ring
+  // ai: keep grey; any time, the next frame shown takes them.
+  void setColours(uint32_t ink, uint32_t paper) { ink_ = ink & 0xffffffu; paper_ = paper & 0xffffffu; }
+  uint32_t ink() const { return ink_; }
+  uint32_t paper() const { return paper_; }
 
  private:
+  std::atomic<uint32_t> ink_{0}, paper_{0xffffffu};
   // ai: car: setCarousel's when it was made; pos: each code's carousel position where car > 0
   struct Job { uint64_t seq; std::vector<uint8_t> blocks; int data; int car; uint8_t pos[2]; };
   void stopAll();

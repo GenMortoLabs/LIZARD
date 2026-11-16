@@ -26,6 +26,8 @@ object Native {
     // ai: (its pack and hash) at its next piece of work and returns the epoch a new make takes
     @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String, make: Long): Long
     @JvmStatic external fun txCancelMakes(): Long
+    // ai: the code's colours (sender.h setColours): its ink and its paper, 0xRRGGBB; the next frame shown takes them
+    @JvmStatic external fun txColours(h: Long, ink: Int, paper: Int)
     @JvmStatic external fun txError(): String
     @JvmStatic external fun txBytes(h: Long): Long
     @JvmStatic external fun txConfigure(h: Long, subch: Int, span: Int, fps: Int, threads: Int, painter: Int, assets: String, codes: Int, gap: Int, vsynced: Boolean, vsync: Boolean): String

@@ -33,6 +33,9 @@ import { makeXfer } from "./xfer-pool.mjs";
 import { Refresh, batchIds } from "./refresh.mjs";
 
 let phy = null, xs = null, fps = 0, codes = 1, chain = Promise.resolve();
+// ai: the code's colours the paint takes (the page's Colours, 2026-11-16: "colours", and start's), 0xRRGGBB, kept for each
+// ai: codec made (a start, a respec)
+let colours = [0x000000, 0xffffff];
 // ai: The transfer made at a pick's first Start ("prepare", sent just before "start"; at the pick from 2026-10-19 to
 // ai: 2026-11-01): the file packed where that pays (sim/pack.mjs, the default client's compression) and its root hashed. made: { pick, xs } while no run sends it; a run takes
 // ai: it (xsPick its pick) and a stop gives it back, so the next Start sends the same transfer on, with nothing made again.
@@ -98,6 +101,8 @@ async function handle(m) {
   } else if (m.type === "start") {
     phy?.free(); phy = null; dropRun();
     phy = await makePhy(m.spec);
+    if (m.colours) colours = m.colours;
+    phy.setColours(...colours);
     if (m.pick != null) {
       if (made?.pick !== m.pick) throw new Error("the file's transfer was not made: choose it again");
       xs = made.xs; xsPick = m.pick; made = null;
@@ -119,12 +124,14 @@ async function handle(m) {
     // would break the fountain's stream, exactly as the page used to refuse it.
     const next = await makePhy(m.spec);
     if (next.usefulBytes !== phy.usefulBytes) { next.free(); postMessage({ type: "respec", gen: m.gen, ok: false }); return; }
-    phy.free(); phy = next; phy.setFps?.(fps); codes = m.codes ?? codes; gapModules = m.gap;
+    phy.free(); phy = next; phy.setFps?.(fps); phy.setColours(...colours); codes = m.codes ?? codes; gapModules = m.gap;
     if (xs) phy.setSource(source());
     refresh.setFormat(m.spec.subch, phy.blocksPerFrame);
     postMessage({ type: "respec", gen: m.gen, ok: true, label: phy.label, blocksPerFrame: phy.blocksPerFrame });
   } else if (m.type === "fps") {
     fps = m.fps; phy?.setFps?.(fps);
+  } else if (m.type === "colours") {
+    colours = [m.ink, m.paper]; phy?.setColours(...colours);
   } else if (m.type === "refresh") {
     refresh.setEvery(m.every);
   } else if (m.type === "stop") {

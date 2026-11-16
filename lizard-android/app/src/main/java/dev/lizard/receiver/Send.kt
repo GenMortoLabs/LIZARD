@@ -139,8 +139,8 @@ class SendState(private val a: MainActivity) {
     var margin by mutableStateOf(prefs.getInt("sendMargin", MARGIN_DEFAULT).coerceIn(Pick.QUIET, MARGIN_MAX))
     // ai: Rate refresh (2026-11-12, the desktop's; lizard-ui rateRefreshSettings): each code rate's blocks new every n-th
     // ai: frame, 7/8, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change, kept
-    // ai: (sendRefresh, "a,b,c,d")
-    var refresh by mutableStateOf(refreshOf(prefs.getString("sendRefresh", null)))
+    // ai: (sendRates, "a,b,c,d"; sendRefresh until 2026-11-16, the Refresh fold's key too, unread since)
+    var refresh by mutableStateOf(refreshOf(prefs.getString("sendRates", null)))
     // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting; Sender::setCarousel): frames each symbol of
     // ai: the format's own header carousel is shown, 0 the static word ("sendCarousel"); handed to the sender with Rate
     // ai: refresh and at each change, which configures again
@@ -149,6 +149,16 @@ class SendState(private val a: MainActivity) {
     // ai: before the first frame), so a send can be repeated; "" a random one each send; kept (sendSeed)
     var seed by mutableStateOf(prefs.getString("sendSeed", null) ?: "")
     fun chooseSeed(t: String) { seed = t; prefs.edit().putString("sendSeed", t).apply() }
+    // ai: Code's Colours (2026-11-16, lizard-ui Colours): the code's ink and its paper, 0xRRGGBB, kept ("sendInk",
+    // ai: "sendPaper"); handed to each sender made and at each change (Sender::setColours: the ring's expand and the
+    // ai: window's take paint them), the box round the code the paper
+    var ink by mutableStateOf(prefs.getInt("sendInk", INK_DEFAULT) and 0xFFFFFF)
+    var paper by mutableStateOf(prefs.getInt("sendPaper", PAPER_DEFAULT) and 0xFFFFFF)
+    fun chooseColours(i: Int, p: Int) {
+        ink = i and 0xFFFFFF; paper = p and 0xFFFFFF
+        prefs.edit().putInt("sendInk", ink).putInt("sendPaper", paper).apply()
+        if (h != 0L) Native.txColours(h, ink, paper)
+    }
     private val sideModules get() = Pick.modules(ringIndex) + 2.0 * Pick.QUIET   // ai: a painted symbol's side, its quiet zone in
     private val past get() = (margin - Pick.QUIET).toDouble()           // ai: the margin past that quiet zone, modules
     // ai: the painted frame's width over its height: the codes and the gaps between them, each code as tall as the frame
@@ -346,10 +356,10 @@ class SendState(private val a: MainActivity) {
     fun chooseRefresh(rate: Int, v: Int) {
         if (refresh[rate] == v) return
         refresh = refresh.copyOf().also { it[rate] = v.coerceIn(1, REFRESH_MAX) }
-        prefs.edit().putString("sendRefresh", refreshText(refresh)).apply()
+        prefs.edit().putString("sendRates", refreshText(refresh)).apply()
         refreshNow()
     }
-    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel) } }
+    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel); Native.txColours(h, ink, paper) } }
     // ai: the animated header, applied at once as Rate refresh is (the sender's next frame; no configure)
     fun chooseCarousel(v: Int) {
         if (carousel == v) return
@@ -660,7 +670,9 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
                 val g = v.roundToInt() - SPACING_PAST; if (g != s.gap) s.chooseGap(g) } else null,
             // ai: the light round the code (SendState.margin), its label live and the box resized at the release
             Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Pick.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Pick.QUIET - 1,
-                { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() }),
+                { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() },
+            // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once
+            Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui
         // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting)
         FoldKey.SendRefresh to listOf(
@@ -689,6 +701,9 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val edgeTap = true
     override fun leaveCodeAlone() { s.pause(true); if (a.isOpen("collapsed")) a.toggle("collapsed") }
     override val codePadding = 16.dp
+    // ai: the code alone's page the code's paper while the code shows (its box is the paper in every layout; the
+    // ai: landscape column's margin stays the page's white, as the 16 dp round the box)
+    override val codeFill get() = if (alone && sending() && s.shown) colourOfRgb(s.paper) else Bg
     // ai: the code's box, its shape the code's; while it holds the file upload, at least UPLOAD_ONE_ROW tall, so a 2:1
     // ai: box never hides the selection's card under its tiles (the card always there since 2026-11-07, "0 items" empty;
     // ai: only while something was chosen before). In landscape, idle with the
@@ -717,7 +732,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override fun CodeArea(modifier: Modifier) {
         val sending = sending()
         val shown = sending && s.shown
-        BoxWithConstraints(modifier.clipToBounds().background(if (shown || uploading()) Bg else Soft), contentAlignment = Alignment.Center) {
+        BoxWithConstraints(modifier.clipToBounds().background(if (shown) colourOfRgb(s.paper) else if (uploading()) Bg else Soft), contentAlignment = Alignment.Center) {
             if (sending) AndroidView({ ctx -> SurfaceView(ctx).apply { holder.addCallback(s.holder) } }, Modifier.fillMaxSize().padding(maxHeight * s.edgeShare.toFloat()))
             // ai: the items, then a tile a read under way (loading, its counts read each tick, its x cancelling it); an item
             // ai: added since the bundle was made loading too while it is made; the total the choice's once made, the

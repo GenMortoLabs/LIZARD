@@ -7,6 +7,10 @@
 // ai:       blocks held to BLAKE3 of their ids, a file's through the receiving end (rx/xfer_rx.h) until it is whole and
 // ai:       its root the sender's. Exit 1 on a fault.
 // ai:   tx_check bench <subch> [frames]   one painter's ms a frame (encode and paint) at that format
+// ai:   tx_check colours <subch> <ink> <paper>   the code's colours (2026-11-16, Sender::setColours; RRGGBB each): a frame
+// ai:       of the test stream taken (take, the CPU's RGBA) with them set: its corner the paper, its pixel of least luma
+// ai:       the ink (of most where the ink is the lighter: an inverted code), every pixel on the line between them (each
+// ai:       channel within a level of the grey's place on it). Exit 1 on a fault
 // ai:   tx_check decode <luma> <w> <h> [held]   one frame read blind (a screenshot of the phone's Send screen, grey)
 // ai: The GPU's painter (2026-10-02, tx/gpu_painter.h), its kernels and manifest from LIZ_ASSETS (out, liblizard/out run from liblizard/, by default):
 // ai:   tx_check gputables <dir>   tx/send_tables.cpp's tables against gen/send_tables_ref.mjs's, every format in its
@@ -478,6 +482,40 @@ int main(int argc, char** argv) {
            fr.found, fr.ring, fr.n, fr.word, fr.version, LIZARD_STEP * fr.version, fr.fps, got, stream, fr.pilot_blocks, fr.pilot_r[0], fr.pilot_r[1]);
     cpu_dec_free(d);
     return got > 0 ? 0 : 1;
+  }
+  if (mode == "colours" && argc >= 5) {
+    const int subch = atoi(argv[2]);
+    const uint32_t ink = static_cast<uint32_t>(strtoul(argv[3], nullptr, 16)) & 0xffffffu, paper = static_cast<uint32_t>(strtoul(argv[4], nullptr, 16)) & 0xffffffu;
+    Sender s(nullptr, 0, "", "");
+    TxFormat f;
+    f.subch = subch; f.span = 128; f.fps = 60; f.threads = 1; f.assets = assets();
+    if (const std::string e = s.configure(f); !e.empty()) { fprintf(stderr, "colours: %s\n", e.c_str()); return 1; }
+    s.setColours(ink, paper);
+    const int W = s.side();
+    std::vector<uint8_t> rgba(static_cast<size_t>(W) * W * 4);
+    while (!s.take(rgba.data(), W * 4)) std::this_thread::sleep_for(std::chrono::microseconds(100));
+    const auto ch = [](uint32_t c, int k) { return static_cast<int>((c >> (16 - 8 * k)) & 0xffu); };
+    const auto px = [&](size_t i) { return (uint32_t{rgba[4 * i]} << 16) | (uint32_t{rgba[4 * i + 1]} << 8) | rgba[4 * i + 2]; };
+    // ai: each pixel's place on the line (its channel of most swing), every channel then within a level of ink + (paper - ink) t
+    int kmax = 0;
+    for (int k = 1; k < 3; k++) if (abs(ch(paper, k) - ch(ink, k)) > abs(ch(paper, kmax) - ch(ink, kmax))) kmax = k;
+    const int span = ch(paper, kmax) - ch(ink, kmax);
+    const auto lumaOf = [&](uint32_t c) { return 77 * ch(c, 0) + 150 * ch(c, 1) + 29 * ch(c, 2); };
+    const bool inverted = lumaOf(ink) > lumaOf(paper);
+    size_t off = 0, dark = 0;
+    int darkL = 1 << 30;
+    for (size_t i = 0; i < static_cast<size_t>(W) * W; i++) {
+      const uint32_t c = px(i);
+      const int l = inverted ? -lumaOf(c) : lumaOf(c);
+      if (l < darkL) { darkL = l; dark = i; }
+      if (rgba[4 * i + 3] != 255) { off++; continue; }
+      if (!span) { if (c != ink) off++; continue; }
+      const double t = static_cast<double>(ch(c, kmax) - ch(ink, kmax)) / span;
+      for (int k = 0; k < 3; k++) if (fabs(ch(c, k) - (ch(ink, k) + t * (ch(paper, k) - ch(ink, k)))) > 1.01 + fabs(ch(paper, k) - ch(ink, k)) / (2.0 * abs(span))) { off++; break; }
+    }
+    printf("colours: LIZARD-%d %d px a side, ink %06X paper %06X: corner %06X, %s %06X, %zu pixels off the line\n", subch, W, ink, paper, px(0),
+           inverted ? "lightest" : "darkest", px(dark), off);
+    return px(0) == paper && px(dark) == ink && off == 0 ? 0 : 1;
   }
   if (mode == "bench" && argc >= 3) {
     const int subch = atoi(argv[2]), frames = argc > 3 ? atoi(argv[3]) : 32;

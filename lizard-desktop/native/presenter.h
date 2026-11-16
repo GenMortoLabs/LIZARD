@@ -82,10 +82,10 @@ class Presenter {
   void setSize(double size, double edge);
   // ai: Paused: the last picture stays (no new pictures taken; presents go on a few times a second, uncounted).
   void setPaused(bool on);
-  // ai: The picture on screen (2026-11-02; the app's window shows it as a still while paused): its grey bytes, w x h a
-  // ai: row, read back from its slot image on the presenter's thread. false where none is on screen or the thread did
-  // ai: not answer within a second (stopped, or failed).
-  bool snapshot(std::vector<unsigned char>* grey, int* w, int* h);
+  // ai: The picture on screen (2026-11-02; the app's window shows it as a still while paused): its RGBA bytes (the
+  // ai: code's colours in it since 2026-11-16; grey bytes before), w x 4 a row, read back from its slot image on the
+  // ai: presenter's thread. false where none is on screen or the thread did not answer within a second (stopped, or failed).
+  bool snapshot(std::vector<unsigned char>* rgba, int* w, int* h);
   // ai: The last second's window, JSON (2026-10-31 beside the fields below: timing, true where the presents carry their
   // ai: target refreshes (VK_EXT_present_timing) and held, late and errMs are the display's own first-pixel times;
   // ai: late, pictures on screen a refresh or more after their target; slips, the schedule moved to the display's

@@ -116,8 +116,27 @@ int lizard_cell(void) { return F.pxm; }   // whole pixels a module in the painte
 int lizard_quiet(void) { return LIZARD_QUIET; }   // the margin the codec paints, in modules, so the JS has no copy of its own
 void lizard_tx(const uint8_t *blocks, float *drive) { lizard_encode(&F, blocks, drive); }
 // The same encode and the page's pixels in one call, margin included: drive is the scratch the encode writes, rgba
-// what is painted.
-void lizard_tx_rgba(const uint8_t *blocks, float *drive, uint8_t *rgba) { lizard_encode(&F, blocks, drive); lizard_paint_rgba(&F, drive, rgba); }
+// what is painted. ai: ink and paper (0xRRGGBB; 2026-11-16, Send's Colours, the native senders' Sender::setColours):
+// ai: each grey level v painted along the line between them, each channel apart, (ink (255 - v) + paper v + 127) / 255,
+// ai: the margin the paper; 0x000000 and 0xFFFFFF leave lizard_paint_rgba's grey as it is.
+void lizard_tx_rgba(const uint8_t *blocks, float *drive, uint8_t *rgba, uint32_t ink, uint32_t paper) {
+  lizard_encode(&F, blocks, drive);
+  lizard_paint_rgba(&F, drive, rgba);
+  ink &= 0xFFFFFFu; paper &= 0xFFFFFFu;
+  if (ink == 0 && paper == 0xFFFFFFu) return;
+  uint32_t lut[256];
+  for (uint32_t v = 0; v < 256; v++) {
+    uint32_t px = 0xFF000000u;
+    for (int k = 0; k < 3; k++) {
+      const uint32_t a = (ink >> (16 - 8 * k)) & 0xFFu, b = (paper >> (16 - 8 * k)) & 0xFFu;
+      px |= ((a * (255 - v) + b * v + 127) / 255) << (8 * k);
+    }
+    lut[v] = px;
+  }
+  const int W = F.px + 2 * LIZARD_QUIET * F.pxm;
+  uint32_t *p = (uint32_t *)(void *)rgba;
+  for (size_t i = 0, n = (size_t)W * W; i < n; i++) p[i] = lut[p[i] & 0xFFu];
+}
 // ai: The resampler's geometry and taps (lizard_phy.h lizard_resample_geom): out[0..3] q, the square's first drive pixel, n
 // ai: and px, out[4] and out[5] the heap offsets of the q first samples and the q x 6 weights. 0, or -1 before a setup.
 int lizard_rs_geom(int *out) {

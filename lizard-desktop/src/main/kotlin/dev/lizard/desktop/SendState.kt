@@ -220,6 +220,11 @@ class SendState(val full: FullScreen) {
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): a file's schedule drawn from it at each Start (txSeed,
     // ai: before the first frame), so a send can be repeated; "" a random one each send; kept
     var seed by mutableStateOf(Prefs.seed)
+    // ai: Code's Colours (2026-11-16, lizard-ui Colours): the code's ink and its paper, 0xRRGGBB, kept; handed to each
+    // ai: sender made and at each change (the sender's colours are atomics: no lock, any time), the presenter painting
+    // ai: them from the sender (expand.comp, the area round the code the paper)
+    var ink by mutableStateOf(Prefs.ink)
+    var paper by mutableStateOf(Prefs.paper)
     var toolsOpen by mutableStateOf(Prefs.toolsOpen)
     var experimentalOpen by mutableStateOf(Prefs.experimentalOpen)
     var collapsed by mutableStateOf(Prefs.collapsed)
@@ -257,9 +262,9 @@ class SendState(val full: FullScreen) {
 
     val presenting get() = p != 0L
     // ai: the code area's colour at its left edge (the column's margin beside it takes it, SendHost.codeFill; the canvas's
-    // ai: X background): the soft fill under the test stream's note, white under the file upload, round the presenter's
-    // ai: code (it clears to white) and round a paused run's still
-    val codeFill: Color get() = if (test && !canvas.shown && stamp == null) Soft else Bg
+    // ai: X background): the soft fill under the test stream's note, white under the file upload, the code's paper round
+    // ai: the presenter's code (it clears to the paper) and round a paused run's still
+    val codeFill: Color get() = if (canvas.shown || stamp != null) colourOfRgb(paper) else if (test) Soft else Bg
     val sending get() = phase == Phase.On || phase == Phase.Preparing
     val canStart get() = loadError.isEmpty() && !sending && (test || (choice != null && !reading))
     val railShown get() = collapsed
@@ -500,8 +505,9 @@ class SendState(val full: FullScreen) {
         val px = Native.presentSnapshot(p, wh) ?: return null
         val (w, h) = wh[0] to wh[1]
         if (w <= 0 || h <= 0 || px.size < w * h) return null
+        if (px.size < w * h * 4) return null
         val bm = org.jetbrains.skia.Bitmap()
-        if (!bm.installPixels(org.jetbrains.skia.ImageInfo(w, h, org.jetbrains.skia.ColorType.GRAY_8, org.jetbrains.skia.ColorAlphaType.OPAQUE), px, w)) return null
+        if (!bm.installPixels(org.jetbrains.skia.ImageInfo(w, h, org.jetbrains.skia.ColorType.RGBA_8888, org.jetbrains.skia.ColorAlphaType.OPAQUE), px, w * 4)) return null
         bm.setImmutable()
         return Stamp(w, h, bm.asComposeImageBitmap())
     }
@@ -560,7 +566,12 @@ class SendState(val full: FullScreen) {
         Prefs.refresh = refreshText(refresh)
         if (h != preparing) refreshNow()
     }
-    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel) } }
+    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel); Native.txColours(h, ink, paper) } }
+    // ai: the code's colours, applied at once (the next frame shown; the sender's atomics, so even while it prepares)
+    fun chooseColours(i: Int, p: Int) {
+        ink = i and 0xFFFFFF; paper = p and 0xFFFFFF; Prefs.ink = ink; Prefs.paper = paper
+        if (h != 0L) Native.txColours(h, ink, paper)
+    }
     // ai: the animated header, applied at once as Rate refresh is (the sender's next frame; no configure)
     fun chooseCarousel(v: Int) {
         if (carousel == v) return

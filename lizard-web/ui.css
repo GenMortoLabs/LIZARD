@@ -205,6 +205,18 @@ a.item{text-decoration:none}
 .itile{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0;
   height:104px;padding:8px;border-radius:12px;background:var(--bg)}
 .itile>svg.i{width:28px;height:28px;margin-bottom:4px;color:var(--muted)}
+/* ai: Send's code colours (2026-11-16, the apps' lizard-ui Colours): two tiles filled with the ink
+   and the paper (send.mjs sets the fill and the text's colour), the picker under them: the hue and saturation wheel,
+   the brightness bar, the hex and Done */
+.ctiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.ctile{display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;height:64px;min-height:64px;padding:10px 12px;
+  border-radius:12px;border:1px solid rgba(0,0,0,.14);font-weight:400;text-align:left}
+.ctile .n{font-size:13px;font-weight:600;opacity:.8}.ctile .h{font-size:16px;font-variant-numeric:tabular-nums}
+.ctile.open{border:2px solid var(--fg)}
+.picker{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:12px}.picker[hidden]{display:none}
+.picker #wheel{width:220px;height:220px;touch-action:none;cursor:crosshair}
+.picker #valBar{width:100%;height:28px;touch-action:none;cursor:pointer}
+.picker .hexrow{display:flex;gap:8px;width:100%;align-items:center}.picker .hexrow input{flex:1;min-width:0}
 /* ai: a pick being read (2026-11-16, the apps' loading tile): a spinner in the icon's room */
 .itile>.spin{box-sizing:border-box;width:24px;height:24px;margin:2px 2px 6px;border:2.5px solid var(--line);border-top-color:var(--fg);border-radius:50%;animation:dt-spin .8s linear infinite}
 @media (prefers-reduced-motion:reduce){.itile>.spin{animation:none}}

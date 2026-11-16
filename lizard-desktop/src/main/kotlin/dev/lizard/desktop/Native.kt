@@ -33,6 +33,8 @@ object Native {
     // ai: the animated header (Refresh's Header): frames each carousel symbol is shown, 0 the static word; the next configure takes it
     @JvmStatic external fun txCarousel(h: Long, frames: Int)
     @JvmStatic external fun txSeed(h: Long, seed: Int): Boolean
+    // ai: the code's colours (sender.h setColours): its ink and its paper, 0xRRGGBB; the next frame shown takes them
+    @JvmStatic external fun txColours(h: Long, ink: Int, paper: Int)
     // ai: the blocks a frame of subch sub-channels carries (the format's rate profile, src/lizard_phy.h lizard_blocks_for)
     @JvmStatic external fun blocksFor(subch: Int): Int
     @JvmStatic external fun txStats(h: Long): String

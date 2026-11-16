@@ -123,6 +123,12 @@
              ring and the area's edge, 2 to 34 (marginOf) -->
         <div class="blocks" id="spacingRow" hidden><span class="row"><span>Spacing</span><span id="spacingOut">16 modules</span></span><input id="spacing" type="range" min="4" max="68" step="1" value="16" aria-label="spacing"></div>
         <div class="blocks"><span class="row"><span>Margin</span><span id="marginOut">8 modules</span></span><input id="margin" type="range" min="2" max="34" step="1" value="8" aria-label="margin"></div>
+        <!-- ai: Colours (2026-11-16, the apps' lizard-ui Colours): the code's ink and paper as tiles, the picker under them (send.mjs showColours) -->
+        <div class="blocks"><span class="row"><span>Colours</span></span>
+          <div class="ctiles"><button id="inkTile" class="ctile" type="button"><span class="n">Primary</span><span class="h" id="inkHex">#000000</span></button><button id="paperTile" class="ctile" type="button"><span class="n">Secondary</span><span class="h" id="paperHex">#FFFFFF</span></button></div>
+          <div id="picker" class="picker" hidden><canvas id="wheel" width="440" height="440" aria-label="hue and saturation"></canvas><canvas id="valBar" width="600" height="56" aria-label="brightness"></canvas><div class="hexrow"><input id="pickHex" type="text" spellcheck="false" autocomplete="off" data-view aria-label="colour"><button id="pickDone" type="button">Done</button></div></div>
+          <input id="ink" type="hidden" value="#000000"><input id="paper" type="hidden" value="#FFFFFF">
+        </div>
       </div>
     </details>
     <details id="foldRefresh" class="dev"><summary>Refresh</summary>

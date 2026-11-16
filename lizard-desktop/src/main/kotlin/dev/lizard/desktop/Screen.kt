@@ -81,7 +81,9 @@ class DesktopSend(private val app: App) : SendHost {
             if (s.codes == 2) Slide("Spacing", "${s.spacing} modules", s.spacing.toFloat(), Room.SPACING_MIN.toFloat()..Room.SPACING_MAX.toFloat(),
                 Room.SPACING_MAX - Room.SPACING_MIN - 1, done = { s.repick() }) { s.chooseSpacing(it.roundToInt()) } else null,
             Slide("Margin", "${s.margin} modules", s.margin.toFloat(), Pick.QUIET.toFloat()..Room.MARGIN_MAX.toFloat(), Room.MARGIN_MAX - Pick.QUIET - 1,
-                done = { s.repick() }) { s.chooseMargin(it.roundToInt()) }),
+                done = { s.repick() }) { s.chooseMargin(it.roundToInt()) },
+            // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once
+            Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui
         // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting)
         FoldKey.SendRefresh to listOf(
@@ -141,7 +143,7 @@ class DesktopSend(private val app: App) : SendHost {
         Box(modifier.onSizeChanged { s.areaChanged(it.width, it.height) }) {
             val stamp = s.stamp
             if (s.canvas.shown) SwingPanel(background = s.codeFill, factory = { s.canvas }, modifier = Modifier.fillMaxSize())
-            else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare)
+            else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare, s.paper)
             else {
                 // ai: the items, then a tile a walk under way (loading, its counts read each tick, its x cancelling it); an
                 // ai: item added since the bundle was made loading too while it is made; the total the choice's once
@@ -162,11 +164,11 @@ class DesktopSend(private val app: App) : SendHost {
     }
 }
 
-// ai: the picture a run was paused on in the window (SendState.stamp), placed as the presenter places it: on white,
+// ai: the picture a run was paused on in the window (SendState.stamp), placed as the presenter places it: on the paper,
 // ai: centred, the largest that fits with the edge's light round it (edge, a share of its height, each side), times
 // ai: the Size share, stretched linearly
 @Composable
-private fun Stamped(st: SendState.Stamp, share: Float, edge: Float) = Canvas(Modifier.fillMaxSize().background(Bg)) {
+private fun Stamped(st: SendState.Stamp, share: Float, edge: Float, paper: Int) = Canvas(Modifier.fillMaxSize().background(colourOfRgb(paper))) {
     val e = 2 * edge * st.h
     val scale = minOf(size.width / (st.w + e), size.height / (st.h + e)) * share.coerceIn(0.25f, 1f)
     val dw = minOf(size.width, st.w * scale).roundToInt()

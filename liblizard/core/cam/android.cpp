@@ -18,7 +18,10 @@
 // ai: vision camera: STATUS "The ISP's enhancements off"): noise reduction, edge enhancement, hot pixel correction,
 // ai: chromatic aberration correction, face detection, scene modes (CONTROL_MODE AUTO with SCENE_MODE DISABLED), the
 // ai: statistics maps (lens shading, hot pixel, OIS data); video stabilisation and OIS off; the fixed rate's range;
-// ai: autofocus CONTINUOUS_VIDEO where listed, its region the code's box once the receiver finds it (focusOn);
+// ai: autofocus CONTINUOUS_VIDEO where listed, its region the code's box once the receiver finds it (focusOn); since
+// ai: 2026-11-16 a "focus" control (Receive's Focus): automatic that autofocus (the default), else AF_MODE_OFF and
+// ai: LENS_FOCUS_DISTANCE by hand, 0 (infinity) to the lens's LENS_INFO_MINIMUM_FOCUS_DISTANCE dioptres (a fixed-focus
+// ai: lens, 0 there, lists none);
 // ai: auto-exposure always (the 2026-10-04 rule: no exposure or gain control is listed); the zoom as CONTROL_ZOOM_RATIO
 // ai: from API 30 (the lens's whole range), else SCALER_CROP_REGION's centred crop of the active array (1 to the
 // ai: lens's largest digital zoom). The tone curve, lens shading and distortion correction stay the camera's.
@@ -386,6 +389,9 @@ class AndroidCamera : public Camera {
     zoom_ = std::clamp(1.5f, zoomLo_, zoomHi_);
     const std::vector<int32_t> regions = ch_->i32s(ACAMERA_CONTROL_MAX_REGIONS);
     afMax_ = regions.size() >= 3 ? regions[2] : 0;
+    const std::vector<float> mf = ch_->floats(ACAMERA_LENS_INFO_MINIMUM_FOCUS_DISTANCE);
+    minFocus_ = mf.empty() ? 0 : std::max(0.f, mf[0]);
+    afVideo_ = ch_->lists(ACAMERA_CONTROL_AF_AVAILABLE_MODES, ACAMERA_CONTROL_AF_MODE_CONTINUOUS_VIDEO);
     active_ = ch_->i32s(ACAMERA_SENSOR_INFO_ACTIVE_ARRAY_SIZE);
     say("camera: %s, %zu modes, lock %s", info_.name.c_str(), modes_.size(), bar_.empty() ? "possible" : bar_.c_str());
   }
@@ -407,9 +413,42 @@ class AndroidCamera : public Camera {
     z.step = 0.1;
     z.def = std::clamp(1.5f, zoomLo_, zoomHi_);
     z.value = zoom_.load();
-    return {z};
+    if (minFocus_ <= 0) return {z};
+    Control f;
+    f.id = "focus";
+    f.name = "Focus";
+    f.unit = "D";
+    f.min = 0;
+    f.max = minFocus_;
+    f.step = 0.01;
+    f.def = 0;
+    {
+      std::lock_guard<std::mutex> l(lastMu_);
+      f.value = focusManual_ ? focusD_.load() : lastFocus_;
+    }
+    f.canAuto = afVideo_;
+    f.isAuto = !focusManual_;
+    return {z, f};
   }
   bool set(const std::string& id, double value, bool automatic, std::string& why) override {
+    if (id == "focus") {
+      if (minFocus_ <= 0) {
+        why = "this lens has a fixed focus";
+        return false;
+      }
+      if (automatic && !afVideo_) {
+        why = "this lens has no continuous autofocus";
+        return false;
+      }
+      focusManual_ = !automatic;
+      if (!automatic) focusD_ = std::clamp(float(value), 0.f, minFocus_);
+      std::lock_guard<std::mutex> l(reqMu_);
+      if (req_ && cs_) {
+        applyFocus(req_);
+        repeat();
+      }
+      return true;
+    }
     if (id != "zoom") {
       why = "this camera has no " + id + " to set";
       return false;
@@ -477,6 +516,8 @@ class AndroidCamera : public Camera {
   void dropReader(bool holds);
   void teardownSession();
   void applyZoom(ACaptureRequest* q);
+  // ai: the focus into a request: the continuous autofocus (its region focusOn's), else off and the distance by hand
+  void applyFocus(ACaptureRequest* q);
   void repeat();
   bool delay(int64_t us, bool lock, bool quiet);
   void levels(const ACameraMetadata* r);
@@ -491,6 +532,10 @@ class AndroidCamera : public Camera {
   bool ratio_ = false;           // ai: CONTROL_ZOOM_RATIO (API 30), else the crop region
   std::atomic<float> zoom_{1.5f};
   int32_t afMax_ = 0;
+  float minFocus_ = 0;           // ai: the lens's nearest focus, dioptres (0: a fixed focus)
+  bool afVideo_ = false;         // ai: CONTINUOUS_VIDEO listed
+  std::atomic<bool> focusManual_{false};
+  std::atomic<float> focusD_{0}; // ai: the focus by hand, dioptres
   std::vector<int32_t> active_;  // ai: the active array: left, top, width, height
   std::atomic<bool> luma_{false};
 
@@ -850,8 +895,7 @@ bool AndroidCamera::configure(std::string& why) {
     const int32_t r[2] = {fps_.first, fps_.second};
     ACaptureRequest_setEntry_i32(req_, ACAMERA_CONTROL_AE_TARGET_FPS_RANGE, 2, r);
   }
-  if (ch_->lists(ACAMERA_CONTROL_AF_AVAILABLE_MODES, ACAMERA_CONTROL_AF_MODE_CONTINUOUS_VIDEO))
-    u8(ACAMERA_CONTROL_AF_MODE, ACAMERA_CONTROL_AF_MODE_CONTINUOUS_VIDEO);
+  applyFocus(req_);
   // ai: stabilisation off: it warps and crops each frame differently, which the border would have to chase
   if (ch_->lists(ACAMERA_CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_OFF))
     u8(ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE, ACAMERA_CONTROL_VIDEO_STABILIZATION_MODE_OFF);
@@ -910,6 +954,18 @@ void AndroidCamera::applyZoom(ACaptureRequest* q) {
     const int32_t w = int32_t(active_[2] / z), h = int32_t(active_[3] / z);
     const int32_t r[4] = {(active_[2] - w) / 2, (active_[3] - h) / 2, w, h};
     ACaptureRequest_setEntry_i32(q, ACAMERA_SCALER_CROP_REGION, 4, r);
+  }
+}
+
+void AndroidCamera::applyFocus(ACaptureRequest* q) {
+  if (focusManual_) {
+    const uint8_t off = ACAMERA_CONTROL_AF_MODE_OFF;
+    const float d = focusD_.load();
+    ACaptureRequest_setEntry_u8(q, ACAMERA_CONTROL_AF_MODE, 1, &off);
+    ACaptureRequest_setEntry_float(q, ACAMERA_LENS_FOCUS_DISTANCE, 1, &d);
+  } else if (afVideo_) {
+    const uint8_t af = ACAMERA_CONTROL_AF_MODE_CONTINUOUS_VIDEO;
+    ACaptureRequest_setEntry_u8(q, ACAMERA_CONTROL_AF_MODE, 1, &af);
   }
 }
 
@@ -981,7 +1037,7 @@ void AndroidCamera::previewTo(void* w) {
 // ai: tenth of the box's size, so a hand's jitter does not issue the repeating request again each second. At an
 // ai: angle the found share went 67 to 97% on the S26.
 void AndroidCamera::focusOn(const double box[4]) {
-  if (afMax_ < 1 || active_.size() < 4) return;
+  if (afMax_ < 1 || active_.size() < 4 || focusManual_) return;   // ai: no autofocus region under a focus by hand
   const double span = std::max(box[2] - box[0], box[3] - box[1]);
   if (span <= 0) return;
   if (focused_) {

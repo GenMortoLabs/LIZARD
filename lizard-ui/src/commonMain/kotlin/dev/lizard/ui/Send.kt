@@ -127,7 +127,8 @@ fun SendScreen(h: SendHost) = Box(Modifier.fillMaxSize().then(h.rootModifier)) {
     if (err.isNotEmpty() && err != said) NoteDialog(err) { said = err; h.clearError() }
 }
 
-// ai: The code alone (2026-10-26 on the phone, as the desktop's full screen): on the page's white, as large as the screen
+// ai: The code alone (2026-10-26 on the phone, as the desktop's full screen): on the code's paper (codeFill; the page's
+// ai: white before 2026-11-16), as large as the screen
 // ai: allows, clear of a display's cutout; where the platform taps (the phone), a tap within EDGE of the left edge shows
 // ai: the collapsed column over the code (its collapser, Pause or Resume, the rate, Home), a tap elsewhere or RAIL_MS
 // ai: untouched hides it
@@ -136,7 +137,7 @@ private fun CodeAlone(h: SendHost, code: @Composable (Modifier) -> Unit) {
     var rail by remember { mutableStateOf(false) }
     var touched by remember { mutableStateOf(0) }
     LaunchedEffect(rail, touched) { if (rail) { delay(RAIL_MS); rail = false } }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Bg).then(if (h.edgeTap) Modifier.pointerInput(Unit) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(h.codeFill).then(if (h.edgeTap) Modifier.pointerInput(Unit) {
         detectTapGestures { at -> rail = at.x < EDGE.toPx(); touched++ }
     }.windowInsetsPadding(WindowInsets.displayCutout) else Modifier), contentAlignment = Alignment.Center) {
         val size = h.codeSize(maxWidth, maxHeight, false)

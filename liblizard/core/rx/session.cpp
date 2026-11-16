@@ -834,17 +834,18 @@ struct Session::Impl {
   json keptJson() {
     const json k = settings->of(camId);
     const json z = objectAt(k, "zoom");
-    return {{"mode", keptMode()}, {"zoom", numOrNull(z, layoutNow().c_str())}, {"exposure", numOrNull(k, "exposure")}, {"gain", numOrNull(k, "gain")}};
+    return {{"mode", keptMode()}, {"zoom", numOrNull(z, layoutNow().c_str())}, {"exposure", numOrNull(k, "exposure")}, {"gain", numOrNull(k, "gain")},
+            {"focus", numOrNull(k, "focus")}};
   }
 
-  // ai: a setting kept for the camera where it is one cameras.json holds (zoom its crop's, exposure, gain, mode)
+  // ai: a setting kept for the camera where it is one cameras.json holds (zoom its crop's, exposure, gain, focus, mode)
   void save(const std::string& id, double value, bool automatic) {
     if (camId.empty()) return;
     json k = settings->of(camId);
     if (id == "zoom") {
       if (!k.contains("zoom") || !k["zoom"].is_object()) k["zoom"] = json::object();
       k["zoom"][layoutNow()] = value;
-    } else if (id == "exposure" || id == "gain") {
+    } else if (id == "exposure" || id == "gain" || id == "focus") {
       k[id] = automatic ? json() : json(value);
     } else if (id == "mode") {
       const int i = int(value);
@@ -1220,8 +1221,13 @@ struct Session::Impl {
       const json z = numOrNull(objectAt(k, "zoom"), layoutNow().c_str());
       if (z.is_number()) keep("zoom", z.get<double>(), false);
     }
-    for (const char* x : {"exposure", "gain"})
+    for (const char* x : {"exposure", "gain", "focus"})
       if (movable(x) && numOrNull(k, x).is_number()) keep(x, k[x].get<double>(), false);
+    // ai: the camera's own autofocus on where no focus is kept (2026-11-16, Receive's Focus: Auto the default; a UVC
+    // ai: camera's focus_automatic_continuous, a phone's continuous autofocus), as a manual focus left by another app
+    // ai: would stay; put back at stop as every change
+    if (movable("focus") && !numOrNull(k, "focus").is_number())
+      if (const cam::Control* c = control("focus"); c && c->canAuto) keep("focus", 0, true);
     if (previewWin) sp->previewTo(previewWin);
     describeNow();
     openFailed.clear();
@@ -1984,7 +1990,7 @@ struct Session::Impl {
       } catch (const std::exception&) {
       }
     }
-    json m = {{"camera", cam}, {"zoom", valueOf("zoom")}, {"exposure", valueOf("exposure")}, {"gain", valueOf("gain")},
+    json m = {{"camera", cam}, {"zoom", valueOf("zoom")}, {"exposure", valueOf("exposure")}, {"gain", valueOf("gain")}, {"focus", valueOf("focus")},
               {"layout", r ? r->layout : wantLayout}, {"decoder", wantDecoder}, {"batch", capNow}, {"phase", lockJson()}};
     {
       // ai: the platform's fields as they are at the run's end (the phone's heat)
