@@ -72,6 +72,59 @@ struct G { a: vec4u, b: vec4u, c: vec4u, d: vec4u, e: vec4u }
 // ai: has none of), dims = (blocks, sStride, symbols, c0 + 4 codes), pw the CRC's powers. Dispatch (blocks, 1,
 // ai: symbols): frames x codes of an encode. The pilots (SPEC 7.3): a frame's count is c0 (the encode's first frame's) +
 // ai: its place in the encode, mod 4, the frame symbol r / codes; bit 0 on an even block, bit 1 on an odd.
+// ai: The test stream on the GPU (2026-11-15, SPEC 9.3): a test block's 471 payload bytes are BLAKE3's extended
+// ai: output of its id's five bytes, made in PAINT from the id alone (dims.w's bit 31 set: the host writes the ids, not
+// ai: the payloads). Output block t (64 bytes) is one compression of the root's only block (the id, its length 5,
+// ai: CHUNK_START | CHUNK_END | ROOT) at counter t, so eight lanes make the eight blocks side by side. B3_PERM is
+// ai: BLAKE3's message permutation; the compression is written out with the message words that are always zero (all
+// ai: but the id's two) left out. b3Js is the same arithmetic in JS, held to the library's stream (src/xfer.h).
+export const B3_IV = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+const B3_PERM = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
+// ai: the compression's statements over v0..v15 (u32), the message m0 (the id's low word) and m1 (its fifth byte), in a
+// ai: language's syntax: add(a, b) and rot(x, n) (a rotation right) given by the caller
+function b3Steps(add, rot) {
+  let pos = [...Array(16).keys()];
+  const out = [];
+  const g = (a, b, c, d, x, y) => {
+    out.push(`v${a} = ${add(add(`v${a}`, `v${b}`), x)};`, `v${d} = ${rot(`v${d} ^ v${a}`, 16)};`, `v${c} = ${add(`v${c}`, `v${d}`)};`,
+      `v${b} = ${rot(`v${b} ^ v${c}`, 12)};`, `v${a} = ${add(add(`v${a}`, `v${b}`), y)};`, `v${d} = ${rot(`v${d} ^ v${a}`, 8)};`,
+      `v${c} = ${add(`v${c}`, `v${d}`)};`, `v${b} = ${rot(`v${b} ^ v${c}`, 7)};`);
+  };
+  for (let r = 0; r < 7; r++) {
+    const w = (k) => (pos[k] === 0 ? "m0" : pos[k] === 1 ? "m1" : null);
+    g(0, 4, 8, 12, w(0), w(1)); g(1, 5, 9, 13, w(2), w(3)); g(2, 6, 10, 14, w(4), w(5)); g(3, 7, 11, 15, w(6), w(7));
+    g(0, 5, 10, 15, w(8), w(9)); g(1, 6, 11, 12, w(10), w(11)); g(2, 7, 8, 13, w(12), w(13)); g(3, 4, 9, 14, w(14), w(15));
+    pos = pos.map((_, i) => pos[B3_PERM[i]]);
+  }
+  return out;
+}
+const B3_WGSL = (() => {
+  const add = (a, b) => (b === null ? a : `(${a} + ${b})`), rot = (x, n) => `rotr(${x}, ${n}u)`;
+  const iv = (j) => `0x${B3_IV[j].toString(16)}u`;
+  return /* wgsl */ `
+fn rotr(x: u32, n: u32) -> u32 { return (x >> n) | (x << (32u - n)); }
+// ai: output block t of BLAKE3(the id's five bytes) into stw[16 t .. 16 t + 15]
+fn b3out(m0: u32, m1: u32, t: u32) {
+  var v0 = ${iv(0)}; var v1 = ${iv(1)}; var v2 = ${iv(2)}; var v3 = ${iv(3)};
+  var v4 = ${iv(4)}; var v5 = ${iv(5)}; var v6 = ${iv(6)}; var v7 = ${iv(7)};
+  var v8 = ${iv(0)}; var v9 = ${iv(1)}; var v10 = ${iv(2)}; var v11 = ${iv(3)};
+  var v12 = t; var v13 = 0u; var v14 = 5u; var v15 = 11u;
+  ${b3Steps(add, rot).join("\n  ")}
+  let o = 16u * t;
+  ${[...Array(8).keys()].map((j) => `stw[o + ${j}u] = v${j} ^ v${j + 8};`).join(" ")}
+  ${[...Array(8).keys()].map((j) => `stw[o + ${j + 8}u] = v${j + 8} ^ ${iv(j)};`).join(" ")}
+}`;
+})();
+// ai: the JS twin: output block t (16 u32) of the id's BLAKE3, the WGSL's statements run as JS
+export const b3Js = (() => {
+  const add = (a, b) => (b === null ? a : `((${a} + ${b}) >>> 0)`), rot = (x, n) => `(((${x}) >>> ${n}) | ((${x}) << ${32 - n})) >>> 0`;
+  const body = `let v0=${B3_IV[0]},v1=${B3_IV[1]},v2=${B3_IV[2]},v3=${B3_IV[3]},v4=${B3_IV[4]},v5=${B3_IV[5]},v6=${B3_IV[6]},v7=${B3_IV[7]},` +
+    `v8=${B3_IV[0]},v9=${B3_IV[1]},v10=${B3_IV[2]},v11=${B3_IV[3]},v12=t>>>0,v13=0,v14=5,v15=11;\n` +
+    b3Steps(add, rot).join("\n") + `\nconst o=new Uint32Array(16);` +
+    [...Array(8).keys()].map((j) => `o[${j}]=(v${j}^v${j + 8})>>>0;o[${j + 8}]=(v${j + 8}^${B3_IV[j]})>>>0;`).join("") + "return o;";
+  return new Function("m0", "m1", "t", body);
+})();
+
 export const PAINT_THREADS = 128;
 export const CW_WORDS = 240;   // ai: the longest codeword's words, the 1/2 code's 7680 bits
 export function paintSource() {
@@ -89,6 +142,8 @@ var<workgroup> packw: array<u32, 120>;
 var<workgroup> crcw: atomic<u32>;
 var<workgroup> cw: array<atomic<u32>, ${CW_WORDS}>;
 var<workgroup> scan: array<u32, ${PAINT_THREADS}>;
+var<workgroup> stw: array<u32, 128>;   // ai: a test block's stream, eight BLAKE3 output blocks (B3_WGSL)
+${B3_WGSL}
 
 // ai: Data bit j of the codeword: the payload bytes MSB first, then the CRC MSB first, as packw holds them (four
 // ai: bytes a word in memory order); zeros past them.
@@ -126,10 +181,22 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) i: u3
   let cpl: u32 = (m + TH - 1u) / TH;
   let slot0: u32 = tt.y + (b - tt.x) * slots;
   // ai: this block's bit of its symbol's frame's count: the pilots' flip
-  let pq: u32 = ((((P.dims.w & 3u) + r / max(P.dims.w >> 2u, 1u)) & 3u) >> (b & 1u)) & 1u;
+  let pq: u32 = ((((P.dims.w & 3u) + r / max((P.dims.w >> 2u) & 0xffffu, 1u)) & 3u) >> (b & 1u)) & 1u;
   // ai: The payload from BLOCKS: bytes 0 to 475 in words 0 to 118; its CRC-32C big-endian in word 119 (bytes 476 to 479).
   let base: u32 = (r * P.sizes[0].x + b) * 120u;
-  if (i < CRC_CHUNKS) { packw[i] = BLOCKS[base + i]; }
+  if ((P.dims.w >> 31u) != 0u) {
+    // ai: the test stream: the payload made here from the id BLOCKS holds (its first five bytes), the block's words the
+    // ai: id's then the stream's five bytes on (word w from 2: stream bytes 4 w - 5 to 4 w - 2)
+    let m0: u32 = BLOCKS[base];
+    let m1: u32 = BLOCKS[base + 1u] & 0xffu;
+    if (i < 8u) { b3out(m0, m1, i); }
+    workgroupBarrier();
+    if (i == 0u) { packw[0] = m0; }
+    if (i == 1u) { packw[1] = m1 | (stw[0] << 8u); }
+    if (i >= 2u && i < CRC_CHUNKS) { packw[i] = (stw[i - 2u] >> 24u) | (stw[i - 1u] << 8u); }
+  } else {
+    if (i < CRC_CHUNKS) { packw[i] = BLOCKS[base + i]; }
+  }
   if (i == CRC_CHUNKS) { packw[CRC_CHUNKS] = 0u; }
   workgroupBarrier();
   let crc: u32 = crcOf(i);
@@ -332,6 +399,45 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if (x < P.b.y) { word = word | (pixel(x, y, f${A.arg}) << (8u * b)); }
   }
   FRAME[(P.c.y + f) * P.b.w + y * P.b.z + wx] = word;
+}
+`;
+}
+
+// ai: WORDS (2026-11-15, the animated header, SPEC 5.5; core/tx/gpu_painter.cpp encode's car): after rsh, each code's
+// ai: word cells painted with its own carousel symbol, so a batch of frames shows its symbols in turn. SPANS: three u32 a
+// ai: frame word (4 pixels) the word cells touch, its index within a frame's rows with its code in bit 31, then its four
+// ai: bytes' bit indices (16 bits each, bytes 0 and 1, then 2 and 3; 0xffff a byte kept); WALL: the 255 symbols' words as
+// ai: bits (U.a.w u32 a symbol, bit i the word's cell side * W + cell, src/fmt.c ob_fmt_bit); POS: each frame's codes'
+// ai: positions (U.b.x codes a frame), 255 a code's static word kept (core/tx/sender.cpp draws them); a bit 1 dark (0),
+// ai: 0 light (255), the C's border's levels. One invocation a frame word, so no two write one word.
+export const WORDS_THREADS = 64;
+export function wordsSource() {
+  return /* wgsl */ `
+struct WU { a: vec4u, b: vec4u }
+@group(0) @binding(0) var<storage, read> SPANS: array<u32>;
+@group(0) @binding(1) var<storage, read> WALL: array<u32>;
+@group(0) @binding(2) var<storage, read_write> FRAME: array<u32>;
+@group(0) @binding(3) var<uniform> U: WU;
+@group(0) @binding(4) var<storage, read> POS: array<u32>;
+@compute @workgroup_size(${WORDS_THREADS})
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  let e: u32 = id.x;
+  let f: u32 = id.y;
+  if (e >= U.a.x) { return; }
+  let s: u32 = SPANS[3u * e];
+  let p: u32 = POS[f * U.b.x + (s >> 31u)];
+  if (p >= 255u) { return; }
+  let at: u32 = (U.a.y + f) * U.a.z + (s & 0x7fffffffu);
+  var word: u32 = FRAME[at];
+  for (var k: u32 = 0u; k < 4u; k = k + 1u) {
+    let idx: u32 = (SPANS[3u * e + 1u + (k >> 1u)] >> (16u * (k & 1u))) & 0xffffu;
+    if (idx != 0xffffu) {
+      let bit: u32 = (WALL[p * U.a.w + (idx >> 5u)] >> (idx & 31u)) & 1u;
+      let v: u32 = select(255u, 0u, bit == 1u);
+      word = (word & ~(0xffu << (8u * k))) | (v << (8u * k));
+    }
+  }
+  FRAME[at] = word;
 }
 `;
 }

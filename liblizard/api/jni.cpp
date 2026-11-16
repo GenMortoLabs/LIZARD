@@ -126,9 +126,9 @@ jdouble roomFor(JNIEnv* e, jclass, jint blocks, jint ring) {
   return v;
 }
 jint pick(JNIEnv* e, jclass, jdouble w, jdouble hh, jint codes, jint ring, jint top) { return ok(e, liz_pick(w, hh, codes, ring, top)); }
-void streamFill(JNIEnv* e, jclass, jint id, jbyteArray out) {
+void streamFill(JNIEnv* e, jclass, jlong id, jbyteArray out) {
   uint8_t p[LIZ_PAYLOAD];
-  liz_stream_fill(uint32_t(id), p);
+  liz_stream_fill(uint64_t(id), p);
   e->SetByteArrayRegion(out, 0, LIZ_PAYLOAD, reinterpret_cast<const jbyte*>(p));
 }
 jint layoutRects(JNIEnv* e, jclass, jint w, jint hh, jint layout, jintArray out) {
@@ -167,21 +167,21 @@ void encoderPaintBuffer(JNIEnv* e, jclass, jlong v, jbyteArray blocks, jint pict
 jlong decoderNew(JNIEnv* e, jclass, jint nmax) { return made(e, liz_decoder_new(nmax)); }
 void decoderFree(JNIEnv*, jclass, jlong v) { liz_decoder_free(h<liz_decoder>(v)); }
 jint decoderMaxBlocks(JNIEnv* e, jclass, jlong v) { return ok(e, liz_decoder_max_blocks(h<liz_decoder>(v))); }
-// ai: the decode's result into ints (found, ring, n, word, blocks, fps, held_used, total, verified, pilot_blocks) and
-// ai: floats (quad[8], pilot_r[2], pilot_sd[2])
+// ai: the decode's result into ints (found, ring, n, word, blocks, fps, held_used, total, verified, pilot_blocks,
+// ai: animated) and floats (quad[8], pilot_r[2], pilot_sd[2])
 void putDecoded(JNIEnv* e, const liz_decoded& d, jintArray ints, jfloatArray floats) {
-  const jint i[10] = {d.found, d.ring, d.n, d.word, d.blocks, d.fps, d.held_used, d.total, d.verified, d.pilot_blocks};
+  const jint i[11] = {d.found, d.ring, d.n, d.word, d.blocks, d.fps, d.held_used, d.total, d.verified, d.pilot_blocks, d.animated};
   float f[12];
   std::memcpy(f, d.quad, sizeof d.quad);
   std::memcpy(f + 8, d.pilot_r, sizeof d.pilot_r);
   std::memcpy(f + 10, d.pilot_sd, sizeof d.pilot_sd);
-  e->SetIntArrayRegion(ints, 0, 10, i);
+  e->SetIntArrayRegion(ints, 0, 11, i);
   e->SetFloatArrayRegion(floats, 0, 12, f);
 }
-// ai: the decode's outputs hold what it writes: verified the decoder's most blocks, held 1, ints 10, floats 12
+// ai: the decode's outputs hold what it writes: verified the decoder's most blocks, held 1, ints 11, floats 12
 bool decodeOuts(JNIEnv* e, jlong v, jintArray held, jbyteArray verified, jintArray ints, jfloatArray floats) {
   return holds(e, verified, int64_t(liz_decoder_max_blocks(h<liz_decoder>(v))) * LIZ_BLOCK, "verified") && holds(e, held, 1, "held") &&
-         holds(e, ints, 10, "ints") && holds(e, floats, 12, "floats");
+         holds(e, ints, 11, "ints") && holds(e, floats, 12, "floats");
 }
 jint decodeCommon(JNIEnv* e, jlong v, const uint8_t* px, jint w, jint hh, jint stride, jint fmt, jintArray held, jbyteArray verified,
                   jintArray ints, jfloatArray floats) {
@@ -430,7 +430,7 @@ const JNINativeMethod METHODS[] = {
     M(geometry, "(IIII[I)V"),
     M(roomFor, "(II)D"),
     M(pick, "(DDIII)I"),
-    M(streamFill, "(I[B)V"),
+    M(streamFill, "(J[B)V"),
     M(layoutRects, "(III[I)I"),
     M(encoderNew, "(IIII)J"),
     M(encoderFree, "(J)V"),

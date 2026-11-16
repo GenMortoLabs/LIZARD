@@ -13,7 +13,6 @@
 
 extern "C" {
 #include "lizard_phy.h"
-#include "shake.h"
 #include "xfer.h"
 }
 #include "priority.h"
@@ -24,14 +23,39 @@ namespace {
 double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 constexpr int PAYLOAD = XFER_PAYLOAD, ID_BYTES = XFER_ID_BYTES;
 constexpr int TX_GPU_FRAMES = 32;   // ai: frames a GPU encode at most (configure)
-bool control(uint32_t id) { return (id >> 18) == 0x3fff; }   // ai: sim/xfer.mjs isControlId
+bool control(xfer_id_t id) { return xfer_id_chunk(id) == XFER_CONTROL; }   // ai: sim/xfer.mjs isControlId
 // ai: a string's text fit for the stats JSON (a driver's message may hold quotes or a backslash)
 std::string esc(const std::string& s) {
   std::string o;
   for (char c : s) { if (c == '"' || c == '\\') o += '\\'; if (static_cast<unsigned char>(c) >= 0x20) o += c; }
   return o;
 }
+// ai: the transfer's schedule's draws (xfer_tx.cpp, sim/xfer.mjs): murmur3's finaliser; xorshift32, a state never 0
+uint32_t mix32(uint32_t x) { x ^= x >> 16; x *= 0x85ebca6bu; x ^= x >> 13; x *= 0xc2b2ae35u; x ^= x >> 16; return x; }
+uint32_t xorshift(uint32_t& s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
+// ai: pass's order of the carousel's 255 positions under key (Sender::carouselPosition)
+void carouselPass(uint32_t key, uint64_t pass, uint8_t order[OB_CAR_N]) {
+  uint32_t s = mix32(key ^ mix32(static_cast<uint32_t>(pass) * 0x85ebca6bu + 0x27d4eb2fu));
+  if (!s) s = 0x9e3779b9u;
+  for (int i = 0; i < OB_CAR_N; i++) order[i] = static_cast<uint8_t>(i);
+  for (int i = OB_CAR_N - 1; i > 0; i--) std::swap(order[i], order[xorshift(s) % static_cast<uint32_t>(i + 1)]);
+}
+uint32_t freshKey() {
+  std::random_device rd;   // ai: the clock mixed in: some C++ libraries' random_device repeats from run to run
+  return rd() ^ mix32(static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+}
 }  // namespace
+
+int Sender::carouselPosition(uint32_t key, uint64_t slot) {
+  uint8_t order[OB_CAR_N];
+  carouselPass(key, slot / OB_CAR_N, order);
+  return order[slot % OB_CAR_N];
+}
+
+uint32_t Sender::carouselKey() {
+  std::lock_guard<std::mutex> l(mu_);
+  return carKey_;
+}
 
 Sender::Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir) {
   if (data) xfer_ = std::make_unique<XferTx>(data, length, name, type, -1, spillDir);
@@ -39,6 +63,7 @@ Sender::Sender(const uint8_t* data, size_t length, const std::string& name, cons
   // ai: one as new with no signal
   std::random_device rd;
   nextId_ = (rd() & 0x3fffffffu) | 1u;
+  carKey_ = freshKey();
   winStart_ = nowMs();
 }
 
@@ -58,6 +83,8 @@ void Sender::stopAll() {
 
 std::string Sender::configure(const TxFormat& f) {
   stopAll();
+  int car;
+  { std::lock_guard<std::mutex> l(mu_); car = carousel_; }
   if (f.codes < 1 || f.codes > 2) return "codes are 1 or 2, not " + std::to_string(f.codes);
   if (f.gap < 0 || f.gap > 64) return "the gap is 0 to 64 modules, not " + std::to_string(f.gap);
   // ai: one codec made here to say what the format is (and that it is one); each painter makes its own
@@ -89,13 +116,16 @@ std::string Sender::configure(const TxFormat& f) {
         std::vector<uint8_t> blocks(static_cast<size_t>(k) * T * B);
         for (int t = 0; t < k * T; t++) {
           uint8_t* o = blocks.data() + static_cast<size_t>(t) * B;
-          for (int i = 0; i < ID_BYTES; i++) o[i] = static_cast<uint8_t>(t >> 8 * i);
-          stream_fill(static_cast<uint32_t>(t), o + ID_BYTES, PAYLOAD);
+          xfer_id_put(o, static_cast<xfer_id_t>(t));
+          stream_fill(static_cast<xfer_id_t>(t), o + ID_BYTES, PAYLOAD);
         }
         const auto c = gpu_->check(blocks.data(), k);
         if (!c.ok) gpuWhy_ = "its frames are not the C's (border " + std::to_string(c.borderDiff) + " pixels apart, the square up to " + std::to_string(c.squareMax) + " levels" +
                              (c.anchorDiff ? ", the anchors " + std::to_string(c.anchorDiff) + " pixels apart" : "") + ")";
       }
+      // ai: the animated header (setCarousel) on: each frame's word cells its own symbol, painted by WORDS after rsh (the
+      // ai: check above holds the static word to the C's); where the GPU cannot, the CPU paints
+      if (gpuWhy_.empty() && car > 0 && !gpu_->wordsWhy().empty()) gpuWhy_ = gpu_->wordsWhy();
     } catch (const std::exception& e) { gpuWhy_ = e.what(); }
     if (gpuWhy_.empty()) gpu = true;
     else if (f.painter == 1) { lizard_free(&probe); return "the GPU cannot paint here: " + gpuWhy_; }
@@ -108,6 +138,7 @@ std::string Sender::configure(const TxFormat& f) {
   }
   std::lock_guard<std::mutex> l(mu_);
   fmt_ = f;
+  gpuWords_ = gpu && gpu_->wordsWhy().empty();
   n_ = n;
   fmt_.threads = gpu ? gpu_->frames() : std::max(1, f.threads);
   onGpu_ = gpu;
@@ -161,15 +192,23 @@ wg::Device* Sender::device() const { return gpu_ ? gpu_->vk() : nullptr; }
 void Sender::produce() {
   std::unique_lock<std::mutex> l(mu_);
   const int T = blocks_ * fmt_.codes, B = blockBytes_, room = std::max(1, depth_ - fmt_.margin);   // ai: a frame's blocks: its codes' one after the other
-  std::vector<uint32_t> ids(T);
+  std::vector<xfer_id_t> ids(T);
   // ai: Rate refresh (setRefresh): the frame before's blocks, which a held rate's blocks repeat; none at a configure's
   // ai: first frame (this thread is new), so it is new throughout
   std::vector<uint8_t> last;
   std::vector<uint8_t> held(T);
+  uint8_t order[OB_CAR_N];   // ai: the carousel's order for pass orderOf under orderKey (carouselPosition), made again as either moves
+  uint64_t orderOf = ~0ull;
+  uint32_t orderKey = 0;
   for (;;) {
     cv_.wait(l, [&] { return stop_ || made_ < shown_ + static_cast<uint64_t>(room); });
     if (stop_) return;
-    Job j{made_++, std::vector<uint8_t>(static_cast<size_t>(T) * B), 0};
+    Job j{made_++, std::vector<uint8_t>(static_cast<size_t>(T) * B), 0, carousel_, {0, 0}};
+    for (int c = 0; j.car > 0 && c < fmt_.codes; c++) {
+      const uint64_t slot = static_cast<uint64_t>(fmt_.codes) * (j.seq / static_cast<uint64_t>(j.car)) + static_cast<uint64_t>(c);
+      if (slot / OB_CAR_N != orderOf || carKey_ != orderKey) { orderOf = slot / OB_CAR_N; orderKey = carKey_; carouselPass(orderKey, orderOf, order); }
+      j.pos[c] = order[slot % OB_CAR_N];
+    }
     int every[4];
     std::copy(refresh_, refresh_ + 4, every);
     l.unlock();
@@ -188,10 +227,10 @@ void Sender::produce() {
       for (int t = 0, k = 0; t < T; t++) {
         uint8_t* o = j.blocks.data() + static_cast<size_t>(t) * B;
         if (held[t]) { std::memcpy(o, last.data() + static_cast<size_t>(t) * B, static_cast<size_t>(B)); continue; }
-        const uint32_t id = ids[k++];
-        for (int i = 0; i < ID_BYTES; i++) o[i] = static_cast<uint8_t>(id >> 8 * i);
+        const xfer_id_t id = ids[k++];
+        xfer_id_put(o, id);
         if (xfer_) xfer_->block(id, o + ID_BYTES);
-        else stream_fill(id, o + ID_BYTES, PAYLOAD);
+        else if (!onGpu_) stream_fill(id, o + ID_BYTES, PAYLOAD);   // ai: the GPU makes the test stream from the id itself
         if (!xfer_ || !control(id)) j.data++;   // ai: new data blocks only: a repeat adds nothing to the lap
       }
     }
@@ -225,6 +264,10 @@ void Sender::paint(int) {
     return;
   }
   lizard_fmt_fps(&f, fm.fps);
+  // ai: the animated header (setCarousel): the format's own, version, fps and extension bytes 0 and 0 (k 3)
+  uint8_t hdr[OB_CAR_SYM * OB_CAR_N];
+  const uint8_t content[4] = {static_cast<uint8_t>(fm.subch / LIZARD_STEP), static_cast<uint8_t>(fm.fps), 0, 0};
+  const int hk = ob_car_header(content, 4, hdr);
   std::vector<float> drive(static_cast<size_t>(f.px) * f.px);
   const int W = side_, codes = fm.codes, gap = gap_;
   const size_t per = static_cast<size_t>(blocks_) * blockBytes_;
@@ -241,7 +284,18 @@ void Sender::paint(int) {
     out.resize(bytes);
     const double t0 = nowMs();
     lizard_parity(&f, static_cast<int>(j.seq & 3));
+    if (j.car <= 0 && f.fmt.kind != OB_FMT_STATIC) {
+      const uint8_t b[4] = {0, 0, 0, 0};   // ai: the carousel turned off: the static word again, extension bytes 0 and 0
+      lizard_fmt_word(&f, OB_FMT_STATIC, b);
+    }
     for (int k = 0; k < codes; k++) {
+      if (j.car > 0 && hk > 0) {
+        // ai: code k's symbol (setCarousel): the position the producer drew for it
+        const int p = j.pos[k];
+        uint8_t b[4] = {static_cast<uint8_t>(p), 0, 0, 0};
+        ob_car_symbol(hdr, hk, p, b + 1);
+        lizard_fmt_word(&f, OB_FMT_ANIM, b);
+      }
       lizard_encode(&f, j.blocks.data() + k * per, drive.data());
       lizard_paint_grey(&f, drive.data(), part.data());
       const size_t x0 = static_cast<size_t>(k) * (W + gap);
@@ -318,7 +372,7 @@ void Sender::paintGpu() {
   double msPer = 0;   // ai: the newest encode's GPU ms a frame
   const auto fitOf = [&] { return batched && msPer > 0 ? std::clamp(static_cast<int>(budget / msPer), 1, R) : 1; };
   std::vector<std::vector<uint8_t>> outs(R);
-  std::vector<uint8_t> blocks;
+  std::vector<uint8_t> blocks, pos;
   std::vector<Job> js;
   std::unique_lock<std::mutex> l(mu_);
   for (;;) {
@@ -334,6 +388,11 @@ void Sender::paintGpu() {
     const int k = std::min({catchUp ? R : fitOf(), static_cast<int>(jobs_.size()), room});
     js.clear();
     for (int i = 0; i < k; i++) { js.push_back(std::move(jobs_.front())); jobs_.pop_front(); }
+    // ai: each frame's codes' carousel positions, OB_CAR_N the static word (a frame made with it off), none where no
+    // ai: frame of the encode has it on or the GPU cannot paint it
+    bool anyCar = false;
+    pos.assign(static_cast<size_t>(k) * fmt_.codes, OB_CAR_N);
+    for (int i = 0; gpuWords_ && i < k; i++) for (int c = 0; js[i].car > 0 && c < fmt_.codes; c++) { pos[static_cast<size_t>(i) * fmt_.codes + c] = js[i].pos[c]; anyCar = true; }
     if (host) for (int i = 0; i < k; i++) if (outs[i].empty() && !spare_.empty()) { outs[i] = std::move(spare_.back()); spare_.pop_back(); }
     l.unlock();
     const size_t per = js[0].blocks.size();
@@ -341,7 +400,7 @@ void Sender::paintGpu() {
     for (int i = 0; i < k; i++) std::memcpy(blocks.data() + per * i, js[i].blocks.data(), per);
     double ms = 0;
     std::string err;
-    try { ms = gpu_->encode(blocks.data(), k, static_cast<int>(js[0].seq & 3), host ? outs.data() : nullptr, js[0].seq); }
+    try { ms = gpu_->encode(blocks.data(), k, static_cast<int>(js[0].seq & 3), host ? outs.data() : nullptr, js[0].seq, !xfer_, anyCar ? pos.data() : nullptr); }
     catch (const std::exception& e) { err = e.what(); }
     l.lock();
     if (!err.empty()) { error_ = "the GPU painter stopped: " + err; cv_.notify_all(); break; }
@@ -427,13 +486,23 @@ void Sender::setRefresh(const int every[4]) {
   for (int r = 0; r < 4; r++) refresh_[r] = std::clamp(every[r], 1, REFRESH_MAX);
 }
 
+// ai: the animated header (sender.h setCarousel), clamped to 0 .. CAROUSEL_MAX; the producer's next frame takes it
+void Sender::setCarousel(int frames) {
+  std::lock_guard<std::mutex> l(mu_);
+  carousel_ = std::clamp(frames, 0, CAROUSEL_MAX);
+}
+
 bool Sender::seed(uint32_t seed) {
+  {
+    std::lock_guard<std::mutex> l(mu_);
+    carKey_ = mix32(seed ^ 0x3c6ef372u);
+  }
   std::lock_guard<std::mutex> x(xferMu_);
   return xfer_ && xfer_->reseed(seed);
 }
 
 // ai: The stats a second (the app asks): label, n, subch, fps (asked), shownFps (frames on the screen a second over the
-// ai: window), offeredKBs (data blocks shown a second x 472 B, 1000 B a KB, as the page's), paintMs (a frame's encode
+// ai: window), offeredKBs (data blocks shown a second x 471 B, 1000 B a KB, as the page's), paintMs (a frame's encode
 // ai: and paint on one painter; on the GPU its ms a frame, an encode's timestamps over its frames), paintBatch (the GPU's
 // ai: frames an encode over the window, 0 none), painters (the
 // ai: GPU's: frames an encode), painter ("gpu" or "cpu"), device (the GPU's), gpuWhy (why not the GPU where it was
@@ -441,7 +510,8 @@ bool Sender::seed(uint32_t seed) {
 // ai: shown, 1 the first), root, seed (the schedule's, 2026-11-14); refresh (Rate refresh's four, 7/8 to 1/2; offeredKBs counts new data blocks alone, a repeat none);
 // ai: fresh (the share of a frame's blocks new in each frame under Rate refresh, by the format's blocks of each rate: the
 // ai: sum of 1/every over them, over their count; 1 with none held), so a rate figured from blocks a frame counts new ones;
-// ai: error, the last failure.
+// ai: carousel (the animated header's frames a symbol, setCarousel, as frames made now paint it: 0 the static word, and
+// ai: 0 where the GPU paints and cannot); error, the last failure.
 std::string Sender::stats() {
   const double now = nowMs(), secs = std::max(1e-3, (now - winStart_) / 1000);
   if (secs >= 0.5) {
@@ -463,6 +533,7 @@ std::string Sender::stats() {
     << "\",\"gpuWhy\":\"" << esc(gpuWhy_) << "\",\"ahead\":" << ready_.size() << ",\"depth\":" << depth_ << ",\"side\":" << side_ << ",\"width\":" << width_
     << ",\"codes\":" << fmt_.codes << ",\"shown\":" << shown_ << ",\"blocks\":" << blocks_ << ",\"tiers\":\"" << tiers_ << "\""
     << ",\"refresh\":\"" << refresh_[0] << "," << refresh_[1] << "," << refresh_[2] << "," << refresh_[3] << "\""
+    << ",\"carousel\":" << (onGpu_ && !gpuWords_ ? 0 : carousel_)
     << ",\"test\":" << (xfer_ ? "false" : "true");
   double fresh = 0;
   for (const uint8_t r : rateOf_) fresh += 1.0 / refresh_[r];

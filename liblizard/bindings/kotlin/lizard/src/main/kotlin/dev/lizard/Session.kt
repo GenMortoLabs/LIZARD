@@ -9,7 +9,8 @@ package dev.lizard
 
 // ai: dataDir: the session's folder (store/, kept/, replays/, receive.lock, cameras.json); assets: the GPU's kernels
 // ai: and nets (null: the CPU decoder); decoder auto, gpu or cpu; layout 1:1 or 2:1;
-// ai: forgetSettings: the camera settings held for this session alone (a test's run)
+// ai: forgetSettings: the camera settings held for this session alone (a test's run); keepPacked: a file the default
+// ai: client packed taken as it came, for the app to unpack as it files it (kept's "packed")
 class Session(
   dataDir: String,
   assets: String? = null,
@@ -17,7 +18,8 @@ class Session(
   decoder: String = "auto",
   layout: String = "1:1",
   forgetSettings: Boolean = false,
-) : Handle(SessionNative.create(assets, cacheDir, dataDir, decoder, layout, forgetSettings), SessionNative::free) {
+  keepPacked: Boolean = false,
+) : Handle(SessionNative.create(assets, cacheDir, dataDir, decoder, layout, forgetSettings, keepPacked), SessionNative::free) {
   // ai: the camera by id ("" the first listed), its kept settings taken up; closeCamera stops and closes it
   fun open(camera: String) = SessionNative.open(live(), camera)
   fun closeCamera() = SessionNative.closeCamera(live())
@@ -45,6 +47,10 @@ class Session(
   fun replays(on: Boolean, meta: String = "{}") = SessionNative.replays(live(), on, meta)
   // ai: Replay size: a run's cap, the raw bytes of the frames it keeps (256 MiB .. 8 GiB; the run recording trimmed at once)
   fun replayBytes(bytes: Long) = SessionNative.replayBytes(live(), bytes)
+  // ai: Largest file: a transfer over bytes (0 none), or wanting more free space than room times its file (0 none; 1
+  // ai: where the app's filing moves the file, 2 where it copies it), refused at its header: the camera stopped, the
+  // ai: phase's error; a start or a change takes it afresh
+  fun fileLimit(bytes: Long, room: Double) = SessionNative.fileLimit(live(), bytes, room)
   // ai: the platform's own fields (a JSON object), merged into the stats and each replay row
   fun extra(json: String) = SessionNative.extra(live(), json)
 
@@ -65,7 +71,8 @@ class Session(
     // ai: every camera listed (opens devices to look: not on a UI thread), and a cheap mark of what is plugged in
     fun cameras(): String = SessionNative.cameras()
     fun camerasStamp(): String = SessionNative.camerasStamp()
-    // ai: dataDir's kept/ files not yet placed, oldest first: [{id, name, type, root, path, at}]; one placed ("" or why)
+    // ai: dataDir's kept/ files not yet placed, oldest first: [{id, name, type, root, path, at}, packed {name, type} where
+    // ai: path is a packed file]; one placed ("" or why)
     fun kept(dataDir: String): String = SessionNative.kept(dataDir)
     fun placed(dataDir: String, id: String): String = SessionNative.placed(dataDir, id)
     // ai: the unfinished transfers, newest first: [{id, name, length, fraction, root, at}]; one deleted with no session
@@ -85,7 +92,7 @@ class Session(
 // ai: The session's natives (api/jni_session.cpp), used through Session alone (its companion's init sees them there)
 internal object SessionNative {
   @JvmStatic external fun loaded(): Boolean
-  @JvmStatic external fun create(assets: String?, cacheDir: String?, dataDir: String, decoder: String, layout: String, forgetSettings: Boolean): Long
+  @JvmStatic external fun create(assets: String?, cacheDir: String?, dataDir: String, decoder: String, layout: String, forgetSettings: Boolean, keepPacked: Boolean): Long
   @JvmStatic external fun free(h: Long)
   @JvmStatic external fun cameras(): String
   @JvmStatic external fun camerasStamp(): String
@@ -104,6 +111,7 @@ internal object SessionNative {
   @JvmStatic external fun clear(h: Long)
   @JvmStatic external fun replays(h: Long, on: Boolean, meta: String)
   @JvmStatic external fun replayBytes(h: Long, bytes: Long)
+  @JvmStatic external fun fileLimit(h: Long, bytes: Long, room: Double)
   @JvmStatic external fun extra(h: Long, json: String)
   @JvmStatic external fun previewWindow(h: Long, surface: Any?): String
   @JvmStatic external fun link(up: Boolean, layout: String): String

@@ -50,7 +50,8 @@ std::string grown(F f) {
 
 jboolean loaded(JNIEnv*, jclass) { return JNI_TRUE; }
 
-jlong create(JNIEnv* e, jclass, jstring assets, jstring cacheDir, jstring dataDir, jstring decoder, jstring layout, jboolean forgetSettings) {
+jlong create(JNIEnv* e, jclass, jstring assets, jstring cacheDir, jstring dataDir, jstring decoder, jstring layout, jboolean forgetSettings,
+             jboolean keepPacked) {
   const std::string a = str(e, assets), c = str(e, cacheDir), d = str(e, dataDir), dec = str(e, decoder), lay = str(e, layout);
   liz_session_config cfg{};
   cfg.assets = a.empty() ? nullptr : a.c_str();
@@ -59,6 +60,7 @@ jlong create(JNIEnv* e, jclass, jstring assets, jstring cacheDir, jstring dataDi
   cfg.decoder = dec.c_str();
   cfg.layout = lay.c_str();
   cfg.forget_settings = forgetSettings == JNI_TRUE;
+  cfg.keep_packed = keepPacked == JNI_TRUE;
   cfg.log = logLine;
   liz_session* s = liz_session_new(&cfg);
   if (!s) {
@@ -109,6 +111,7 @@ void forget(JNIEnv* e, jclass, jlong h, jstring root) { liz_session_forget(ss(h)
 void clear(JNIEnv*, jclass, jlong h) { liz_session_clear(ss(h)); }
 void replays(JNIEnv* e, jclass, jlong h, jboolean on, jstring meta) { liz_session_replays(ss(h), on == JNI_TRUE, str(e, meta).c_str()); }
 void replayBytes(JNIEnv*, jclass, jlong h, jlong bytes) { liz_session_replay_bytes(ss(h), (long long)bytes); }
+void fileLimit(JNIEnv*, jclass, jlong h, jlong bytes, jdouble room) { liz_session_file_limit(ss(h), (long long)bytes, room); }
 void extra(JNIEnv* e, jclass, jlong h, jstring json) { liz_session_extra(ss(h), str(e, json).c_str()); }
 
 // ai: The Android hooks (lizard.h): "" done, else why. previewWindow takes an android.view.Surface (null drops it)
@@ -151,7 +154,7 @@ jstring deletePartial(JNIEnv* e, jclass, jstring dataDir, jstring id) {
 #define S "Ljava/lang/String;"
 const JNINativeMethod METHODS[] = {
     M(loaded, "()Z"),
-    M(create, "(" S S S S S "Z)J"),
+    M(create, "(" S S S S S "ZZ)J"),
     {const_cast<char*>("free"), const_cast<char*>("(J)V"), reinterpret_cast<void*>(freeSession)},
     M(cameras, "()" S),
     M(camerasStamp, "()" S),
@@ -170,6 +173,7 @@ const JNINativeMethod METHODS[] = {
     M(clear, "(J)V"),
     M(replays, "(JZ" S ")V"),
     M(replayBytes, "(JJ)V"),
+    M(fileLimit, "(JJD)V"),
     M(extra, "(J" S ")V"),
     M(previewWindow, "(JLjava/lang/Object;)" S),
     M(link, "(Z" S ")" S),

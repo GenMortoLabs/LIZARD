@@ -4,7 +4,8 @@
 // ai:      every > 1 and the seq is no multiple of it, a held block the frame before's id at its place, a new one an id
 // ai:      never painted before; the new ids asked equal to the new places (none asked where there are none);
 // ai:   2. a run cut in batches of 5 (the GPU encoder's "frames"): the same ids as one run, and every id of a batch among
-// ai:      batchIds' (what the worker fetches from the pool);
+// ai:      batchIds' (what the worker fetches from the pool); the ids past 2^32, as a block id is 40 bits (a Uint32Array
+// ai:      in batchIds wrapped the transfer's header and manifest ids, 2026-11-15);
 // ai:   3. every [1,1,1,1]: each frame's ids the test stream's run from its base, as before the setting;
 // ai:   4. setFormat and reset forget the frame before; a profile laying other than the symbol's blocks holds nothing;
 // ai:   5. everyOf's bounds; ratesFor over real formats (LIZARD-64 to -1024, every fifth version) the tiers' counts in order.
@@ -23,7 +24,7 @@ function runOf(every, codes, seq0, n, cut = n) {
   const r = new Refresh();
   r.setEvery(every); r.rates = ratesOf(TIERS, V); r.reset();
   const T = V * codes, frames = [], batches = [];
-  let next = 1000;
+  let next = 2 ** 39 + 1000;   // ai: 40-bit ids (sim/xfer.mjs), past what 32 bits hold
   for (let b = 0; b < n; b += cut) {
     const batch = [];
     for (let f = b; f < Math.min(n, b + cut); f++) {

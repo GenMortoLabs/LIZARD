@@ -197,6 +197,10 @@ class SendState(val full: FullScreen) {
     // ai: Rate refresh (2026-11-12, lizard-ui rateRefreshSettings): each code rate's blocks new every n-th frame, 7/8,
     // ai: 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change (refreshNow), kept
     var refresh by mutableStateOf(refreshOf(Prefs.refresh))
+    // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting; Sender::setCarousel): frames each symbol of
+    // ai: the format's own header carousel is shown, 0 the static word; handed to each sender made and at each change,
+    // ai: which re-picks (the sender configures again)
+    var carousel by mutableStateOf(Prefs.carousel.coerceIn(0, CAROUSEL_MAX))
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): a file's schedule drawn from it at each Start (txSeed,
     // ai: before the first frame), so a send can be repeated; "" a random one each send; kept
     var seed by mutableStateOf(Prefs.seed)
@@ -248,7 +252,7 @@ class SendState(val full: FullScreen) {
     private val edge get() = edgeShare
     // ai: the light the presenter keeps past the frame at each edge, a share of its height (presenter.h PresentOptions::edge)
     val edgeShare get() = Room.edgeShare(fmt?.span ?: Pick.span(ringIndex), margin).toFloat()
-    // ai: what the code offers at most, KB/s: codes x blocks a frame x 472 B x the pictures a second it can show, the
+    // ai: what the code offers at most, KB/s: codes x blocks a frame x 471 B x the pictures a second it can show, the
     // ai: asked rate or the measured refresh where lower, so a limit outside the sender shows in the figure
     // ai: (2026-10-04), x the share of blocks new in a frame (freshShare); null before a configure
     val capacityKBs: Double? get() {
@@ -514,7 +518,13 @@ class SendState(val full: FullScreen) {
         Prefs.refresh = refreshText(refresh)
         if (h != preparing) refreshNow()
     }
-    private fun refreshNow() { if (h != 0L) Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]) }
+    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel) } }
+    // ai: the animated header, applied at once as Rate refresh is (the sender's next frame; no configure)
+    fun chooseCarousel(v: Int) {
+        if (carousel == v) return
+        carousel = v.coerceIn(0, CAROUSEL_MAX); Prefs.carousel = carousel
+        if (h != preparing) refreshNow()
+    }
     fun commitFps() {
         if (phase != Phase.On) return
         configure()
@@ -607,7 +617,7 @@ class SendState(val full: FullScreen) {
             choice?.takeIf { it.single == null }?.files ?: 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("lap") ?: 0.0, stats)
     }
     // ai: the rate the pictures actually presented carry (the presenter's fresh pictures a second x codes x blocks a frame
-    // ai: x 472 B, so a limit outside the sender shows in it; 2026-10-04; x the share of blocks new in a frame, Rate
+    // ai: x 471 B, so a limit outside the sender shows in it; 2026-10-04; x the share of blocks new in a frame, Rate
     // ai: refresh's repeats none, 2026-11-12), 0 while paused or before the first present
     private val speedKBs: Double get() {
         if (phase != Phase.On || paused) return 0.0

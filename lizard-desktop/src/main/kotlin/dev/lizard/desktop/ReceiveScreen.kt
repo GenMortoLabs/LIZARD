@@ -21,6 +21,7 @@ import dev.lizard.ui.Choice
 import dev.lizard.ui.Code
 import dev.lizard.ui.ColumnWidth
 import dev.lizard.ui.FoldKey
+import dev.lizard.ui.fileLimitSetting
 import dev.lizard.ui.Folds
 import dev.lizard.ui.Icons
 import dev.lizard.ui.Press
@@ -188,7 +189,9 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         }
         // ai: the most frames a GPU launch takes: none for the C, which decodes a frame at a time
         if (!r.cpu) decoder += Slide("Batch size", "${r.batch}", r.batch.toFloat(), 1f..32f, 30, done = { r.commitBatch() }) { r.chooseBatch(it.roundToInt()) }
-        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder)
+        // ai: Largest file (2026-11-15, the Files fold)
+        val files = listOf(fileLimitSetting(r.fileGb) { r.chooseFileGb(it) })
+        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder, FoldKey.RecvFiles to files)
     }
 
     // ai: Zoom (UVC zoom_absolute), live: shown as a ratio of its least ("1.5x") where it starts above 0

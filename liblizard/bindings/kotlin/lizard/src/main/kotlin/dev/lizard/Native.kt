@@ -39,7 +39,7 @@ internal object Native {
   @JvmStatic external fun geometry(blocks: Int, ring: Int, fps: Int, codes: Int, out: IntArray)
   @JvmStatic external fun roomFor(blocks: Int, ring: Int): Double
   @JvmStatic external fun pick(w: Double, h: Double, codes: Int, ring: Int, top: Int): Int
-  @JvmStatic external fun streamFill(id: Int, out: ByteArray)
+  @JvmStatic external fun streamFill(id: Long, out: ByteArray)
   @JvmStatic external fun layoutRects(w: Int, h: Int, layout: Int, out: IntArray): Int
   @JvmStatic external fun encoderNew(blocks: Int, ring: Int, fps: Int, codes: Int): Long
   @JvmStatic external fun encoderFree(h: Long)

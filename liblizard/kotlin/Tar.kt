@@ -198,14 +198,13 @@ private fun paxRecord(key: String, value: String): String {
 }
 
 /**
- * A tar, unpacked under `dest` (made if missing). Plain files and folders are made; pax (x, g) and GNU long-name (L)
- * headers are read for the path and size. Anything else (a link, a device, a FIFO), an absolute path or one through
- * "..", or a damaged header throws, leaving what was written so far for the caller to delete. Returns the files made,
- * in archive order.
+ * A tar read entry by entry: each plain file and folder handed to `each(parts, dir, size, data)`, `parts` its path's
+ * parts (relative, checked as `tarParts` checks them), `data` the entry's bytes, exactly `size` of them, read or not by
+ * `each` (what is left is skipped, by the stream's own skip where it seeks). Pax (x, g) and GNU long-name (L) headers
+ * are read for the path and size. Anything else (a link, a device, a FIFO), a path `tarParts` refuses, a damaged header
+ * or a tar cut short throws.
  */
-fun untar(src: InputStream, dest: File): List<File> {
-    val made = ArrayList<File>()
-    val root = dest.canonicalFile.also { it.mkdirs() }
+fun tarEach(src: InputStream, each: (parts: List<String>, dir: Boolean, size: Long, data: InputStream) -> Unit) {
     val h = ByteArray(BLOCK)
     var paxPath: String? = null; var paxSize: Long? = null; var longName: String? = null
     var zeros = 0
@@ -226,13 +225,13 @@ fun untar(src: InputStream, dest: File): List<File> {
             }
             'L' -> { longName = String(readBody(src, size), Charsets.UTF_8).trimEnd('\u0000'); continue }
             '0', '\u0000', '7', '5' -> {
-                val target = safeTarget(root, path)
-                if (type == '5' || path.endsWith("/")) target.mkdirs()
+                val parts = tarParts(path)
+                if (type == '5' || path.endsWith("/")) each(parts, true, 0, Body(src, 0))
                 else {
-                    target.parentFile?.mkdirs()
-                    FileOutputStream(target).use { copyExactly(src, it, size) }
+                    val body = Body(src, size)
+                    each(parts, false, size, body)
+                    body.drain()
                     skipPad(src, size)
-                    made.add(target)
                 }
                 if (type == '5') skipPad(src, size)
             }
@@ -240,16 +239,62 @@ fun untar(src: InputStream, dest: File): List<File> {
         }
         paxPath = null; paxSize = null; longName = null
     }
-    return made
 }
 
-// ai: An entry's place under root: relative, no "..", no empty parts; refused otherwise rather than cleaned up.
-private fun safeTarget(root: File, path: String): File {
+// ai: An entry's path as its parts: relative, no "..", no empty parts, no drive; refused otherwise rather than cleaned up.
+fun tarParts(path: String): List<String> {
     val parts = path.removePrefix("./").split('/').filter { it.isNotEmpty() && it != "." }
     if (path.startsWith("/") || parts.isEmpty() || parts.any { it == ".." } || (parts[0].length == 2 && parts[0][1] == ':'))
         throw IOException("tar path refused: $path")
+    return parts
+}
+
+// ai: An entry's bytes, `size` of them off the tar's stream: reads stop there, drain skips the rest (a cut short throws)
+private class Body(private val src: InputStream, private var left: Long) : InputStream() {
+    override fun read(): Int {
+        if (left <= 0) return -1
+        val b = src.read(); if (b < 0) throw IOException("a tar cut short"); left--; return b
+    }
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (left <= 0) return -1
+        val n = src.read(b, off, minOf(len.toLong(), left).toInt()); if (n < 0) throw IOException("a tar cut short"); left -= n; return n
+    }
+    // ai: the last byte read, not skipped: a file's skip may go past its end (FileInputStream's), so a tar cut short
+    // ai: inside an entry is found here and not taken for its end
+    fun drain() {
+        val buf = ByteArray(1 shl 16)
+        while (left > 1) {
+            val k = src.skip(left - 1)
+            if (k > 0) { left -= k; continue }
+            val n = src.read(buf, 0, minOf(buf.size.toLong(), left - 1).toInt()); if (n < 0) throw IOException("a tar cut short"); left -= n
+        }
+        if (left == 1L) { if (src.read() < 0) throw IOException("a tar cut short"); left = 0 }
+    }
+}
+
+/**
+ * A tar, unpacked under `dest` (made if missing), over `tarEach`: plain files and folders made; anything `tarEach`
+ * refuses throws, leaving what was written so far for the caller to delete. Returns the files made, in archive order.
+ */
+fun untar(src: InputStream, dest: File): List<File> {
+    val made = ArrayList<File>()
+    val root = dest.canonicalFile.also { it.mkdirs() }
+    tarEach(src) { parts, dir, size, data ->
+        val target = safeTarget(root, parts)
+        if (dir) target.mkdirs()
+        else {
+            target.parentFile?.mkdirs()
+            FileOutputStream(target).use { copyExactly(data, it, size) }
+            made.add(target)
+        }
+    }
+    return made
+}
+
+// ai: An entry's place under root, its parts checked by tarParts; one the canonical path takes out of root refused.
+private fun safeTarget(root: File, parts: List<String>): File {
     val f = File(root, parts.joinToString(File.separator)).canonicalFile
-    if (!f.path.startsWith(root.path + File.separator)) throw IOException("tar path refused: $path")
+    if (!f.path.startsWith(root.path + File.separator)) throw IOException("tar path refused: ${parts.joinToString("/")}")
     return f
 }
 

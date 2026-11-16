@@ -39,7 +39,9 @@ struct CpuFrameOut {
   int ring = -1, n = 0;           // ai: the ring, and the picture the frame was finished at (0: not finished)
   bool held = false;              // ai: the held word stood in for the frame's own
   bool hasWord = false;
-  int version = 0, fps = 0;       // ai: the frame's own word
+  int version = 0, fps = 0;       // ai: the frame's own word (codec.h cpu_frame_t: kind 0 static, 1 animated)
+  int kind = 0, pos = 0;
+  uint8_t ext[2] = {0, 0}, sym[3] = {0, 0, 0};
   float quad[8] = {};             // ai: the symbol's corners in the crop, TL TR BR BL
   int pilotBlocks = 0;            // ai: the pilots (codec.h pilot_*): the blocks read (0 none), r and its standard
   float pilotR = 0, pilotSd = 0, pilotR2 = 0, pilotSd2 = 0;   // ai: error over the even blocks, then over the odd

@@ -26,7 +26,6 @@ class Credit(val name: String, val license: String)
 val CREDITS = listOf(
     Credit("Vulkan headers", "Apache 2.0"),
     Credit("BLAKE3", "Apache 2.0 / CC0 1.0"),
-    Credit("Wirehair", "BSD 3-Clause"),
     Credit("Zstandard", "BSD 3-Clause"),
     Credit("volk", "MIT"),
     Credit("JSON for Modern C++", "MIT"),

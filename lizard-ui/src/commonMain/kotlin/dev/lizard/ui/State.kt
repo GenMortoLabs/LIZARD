@@ -50,7 +50,8 @@ fun rxOf(j: JsonObject?): Readout.Rx {
     return Readout.Rx(state = j.str("state"), error = j.str("error"), goodputKBs = j.num("goodputKBs"), foundShare = j.num("foundShare"),
         bandVersion = j.num("bandVersion").toInt(), fps = j.obj("word")?.num("fps")?.toInt() ?: 0,
         hasFile = f != null, name = f?.str("name").orEmpty().ifEmpty { "a file" }, size = f?.num("size")?.toLong() ?: 0,
-        received = f?.num("received")?.toLong() ?: 0, verified = f?.flag("verified") ?: false, secs = f?.num("secs") ?: 0.0)
+        received = f?.num("received")?.toLong() ?: 0, verified = f?.flag("verified") ?: false, secs = f?.num("secs") ?: 0.0,
+        chunks = f?.num("chunks")?.toInt() ?: 0, chunksVerified = f?.num("chunksVerified")?.toInt() ?: 0, inHand = f?.flag("inHand") ?: false)
 }
 
 // ai: Save replays' runs (the stats' "replays", session.h): a run's .lizard of the newest frames the decoder takes

@@ -7,7 +7,7 @@
 // ai: scalar build (-DOB_SCALAR) prints its readings, a value a line, and a build given that list compares its own with
 // ai: it: the flags and counts equal, a grey or a mean within 1e-3, a sum of k greys within k 1e-3, a score within 1e-3;
 // ai: exit 1 past any. From liblizard/:
-// ai:   cc -O2 -ffp-contract=off -DOB_SCALAR -Isrc -o build/track_scalar test/track_check.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any,shake}.c -lm
+// ai:   cc -O2 -ffp-contract=off -DOB_SCALAR -Isrc -o build/track_scalar test/track_check.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any}.c -lm
 // ai:   cc -O2 -ffp-contract=off -msse4.1 -Isrc -o build/track_x86 test/track_check.c src/{...}.c -lm   (arm64: no -msse4.1)
 // ai:   build/track_scalar > build/track_ref.txt && build/track_x86 build/track_ref.txt
 #include "acquire.c"

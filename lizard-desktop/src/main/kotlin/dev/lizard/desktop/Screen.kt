@@ -83,17 +83,20 @@ class DesktopSend(private val app: App) : SendHost {
                 Room.SPACING_MAX - Room.SPACING_MIN - 1, done = { s.repick() }) { s.chooseSpacing(it.roundToInt()) } else null,
             Slide("Margin", "${s.margin} modules", s.margin.toFloat(), Pick.QUIET.toFloat()..Room.MARGIN_MAX.toFloat(), Room.MARGIN_MAX - Pick.QUIET - 1,
                 done = { s.repick() }) { s.chooseMargin(it.roundToInt()) }),
-        // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui rateRefreshSettings)
+        // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui
+        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting)
         FoldKey.SendRefresh to listOf(
             if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
             else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
-            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
+            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
+            carouselSetting(s.carousel) { s.chooseCarousel(it) },
         FoldKey.SendPerformance to listOf(
             // ai: GPU and CPU alone: with neither chosen the encoder is auto's and the painter running is the chip marked
             // ai: (the GPU before a first send); a choice takes that one outright
             ChipChoice("Encoder", if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.chooseEnc(it) },
             ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
-    // ai: lab arms a user may try: none (Exclusive fullscreen, the last, deleted 2026-11-13), so no fold
+    // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15; Exclusive fullscreen, the
+    // ai: one before, deleted 2026-11-13); the fold drawn only where it holds a setting
     override val experimental: List<Setting> get() = emptyList()
     // ai: Show statistics, Receive's setting (ReceiveState.showStats, Prefs.Rx.stats), one switch for both screens (2026-11-07)
     private val stats get() = app.recv.showStats

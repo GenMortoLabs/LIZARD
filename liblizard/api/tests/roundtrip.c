@@ -5,7 +5,7 @@
  * ai:      its path is given;
  * ai:   3. the test stream in every ring, one code and two, painted and read back: every block verified, every frame the
  * ai:      test stream's, none bad; then one payload byte wrong: one bad;
- * ai:   4. a file (LIZ_TEST_MB, 9 by default: three 4 MiB chunks) through two codes in a 2:1 frame (each half found by
+ * ai:   4. a file (LIZ_TEST_MB, 36 by default: three chunks of 16 MiB, the last short) through two codes in a 2:1 frame (each half found by
  * ai:      liz_layout_rects) into a memory store, and through one code into a directory store: whole, its root the
  * ai:      sender's, its bytes the file's.
  * ai: Usage: lizard_roundtrip [pick table] [store dir]. Exit 1 on any failure.
@@ -286,7 +286,7 @@ int main(int argc, char **argv) {
   if (!d) return 1;
   test_stream(d);
   const char *mb = getenv("LIZ_TEST_MB");
-  const size_t bytes = (size_t)((mb ? atof(mb) : 9.0) * 1000000);
+  const size_t bytes = (size_t)((mb ? atof(mb) : 36.0) * 1000000);
   file(d, 2, NULL, bytes);
   if (argc > 2) file(d, 1, argv[2], bytes / 3);
   if (argc > 2) session(argv[2]);

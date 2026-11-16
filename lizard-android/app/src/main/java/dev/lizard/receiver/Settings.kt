@@ -3,7 +3,9 @@ package dev.lizard.receiver
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import dev.lizard.ui.FILE_GB_DEFAULT
 import dev.lizard.ui.REPLAY_MB_DEFAULT
+import dev.lizard.ui.fileGb
 import dev.lizard.ui.replayMb
 import org.json.JSONObject
 
@@ -21,6 +23,8 @@ import org.json.JSONObject
 // ai:               began off before)
 // ai:   replaySize  256 to 8192: Replay size, MB (Developer Tools, 2026-11-09; under Save replays while it is on, the
 // ai:               session's replayBytes): a run's cap on its frames' raw bytes; 1024 by default, kept
+// ai:   fileLimit   GB, one of lizard-ui FILE_GB_STOPS (0 No limit): Largest file (the Files fold, 2026-11-15; the
+// ai:               session's fileLimit, room 2: the filing copies a file into Downloads); 50 by default, kept
 // ai:   stats       on | off: Show statistics (Developer Tools, 2026-10-10): off hides Receive's green line once a file
 // ai:               is in and Developer Tools' lab line and readout; off by default, kept
 // ai:   pcPack      on | off: the PC decoder's frames packed as .lizard frames (the default) or sent raw (a phone too weak
@@ -41,14 +45,16 @@ data class Settings(
     val pcPack: String = "on",
     val lock: String = "on",
     val replaySize: String = REPLAY_MB_DEFAULT.toString(),
+    val fileLimit: String = FILE_GB_DEFAULT.toString(),
 ) {
     val frames get() = batch.toIntOrNull()?.coerceIn(1, 32) ?: 32
     val replayMb get() = replayMb(replaySize.toIntOrNull() ?: REPLAY_MB_DEFAULT)
+    val fileGb get() = fileGb(fileLimit.toIntOrNull() ?: FILE_GB_DEFAULT)
     fun save(ctx: Context) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("decoder", decoder).putString("layout", layout).putString("camera", camera)
             .putString("batch", batch).putString("replays", replays).putString("stats", stats).putString("pcPack", pcPack)
-            .putString("lock", lock).putString("replaySize", replaySize).apply()
+            .putString("lock", lock).putString("replaySize", replaySize).putString("fileLimit", fileLimit).apply()
     }
 
     companion object {
@@ -63,7 +69,8 @@ data class Settings(
             val d = Settings()
             return Settings(p.getString("decoder", d.decoder)!!, p.getString("layout", d.layout)!!, p.getString("camera", d.camera)!!,
                 p.getString("batch", d.batch)!!, p.getString("replays", d.replays)!!, p.getString("stats", d.stats)!!, p.getString("pcPack", d.pcPack)!!,
-                p.getString("lock", d.lock)!!, p.getString("replaySize", d.replaySize)!!)
+                p.getString("lock", d.lock)!!, p.getString("replaySize", d.replaySize)!!,
+                p.getString("fileLimit", d.fileLimit)!!)
         }
 
         // ai: The cameras' settings the app kept before the session kept them, as cameras.json (session.h's header):

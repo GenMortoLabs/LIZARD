@@ -41,7 +41,7 @@ export class Refresh {
       fresh[t] = e <= 1 || seq % e === 0 ? 1 : 0;
       m += fresh[t];
     }
-    const ids = new Uint32Array(total);
+    const ids = new Float64Array(total);   // ai: a block id is 40 bits (sim/xfer.mjs)
     if (m) {
       const got = take(m);
       for (let t = 0, k = 0; t < total; t++) ids[t] = fresh[t] ? got[k++] : prev[t];
@@ -52,9 +52,10 @@ export class Refresh {
 }
 
 // ai: every id a run of consecutive frames (next's answers, in order) paints: the first frame's, then each later
-// ai: frame's new ones, since a repeat is an id of the frame before
+// ai: frame's new ones, since a repeat is an id of the frame before; 40 bits each, so a Float64Array (sim/xfer.mjs): a
+// ai: Uint32Array wrapped the header's and manifest's ids (chunk 0xffff) to chunk 255 (2026-11-15)
 export function batchIds(frames) {
   const need = frames.length ? [...frames[0].ids] : [];
   for (let f = 1; f < frames.length; f++) frames[f].ids.forEach((id, t) => { if (frames[f].fresh[t]) need.push(id); });
-  return Uint32Array.from(need);
+  return Float64Array.from(need);
 }

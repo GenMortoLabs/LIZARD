@@ -57,7 +57,9 @@ const MAIN = (() => { try { return fileURLToPath(import.meta.url) === realpathSy
 // ai: a ring longer): a tree of the old anchors would read the 64 and 128 rings' squares where the codec no longer paints them.
 // ai: 10 since 2026-11-14: the proposer's uniform without the old bank's tau and eps, the transform's Params without its
 // ai: five unread words (both written by the host, so every later word moved).
-export const TREE_VERSION = 10;
+// ai: 11 since 2026-11-15: the word RS(n, 5) with two magics (src/fmt.h): F8's record words 5 and 6 carry an animated
+// ai: word's position (as 256 + it) and symbol beside a static word's version, rate and extension bytes.
+export const TREE_VERSION = 11;
 
 const NDK = process.env.ANDROID_NDK_HOME || `${process.env.ANDROID_HOME || `${homedir()}/Android/Sdk`}/ndk/27.1.12297006`;
 // ai: SPIRV-Tools' spirv-val and shaderc's glslc: the Android NDK's shader-tools where there is an NDK, else the

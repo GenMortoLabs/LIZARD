@@ -56,9 +56,17 @@ object Readout {
     // ai: file's (null for the test stream, test); frac the meter (null hides it) and pct its percentage at the head's end;
     // ai: rows its facts, a label and a value each ("" a value not yet known, its row kept); size a received file's own (its
     // ai: size, or a bundle's count of files) and files how many it holds (a bundle's, else 1; 0 none in), for Receive.kt's card
+    // ai: spin (2026-11-14): the file's work after the light, the head's spinner in the percentage's place
+    // ai: (Details.spinning) and the rail's DecodingSquare in the percentage square's, this its figure: every chunk in hand
+    // ai: and the solves finishing, the chunks verified of all ("52/64"); then the filing, the share saved ("50%",
+    // ai: 2026-11-15), or the chunks again where the app counts none
     data class Line(val text: String, val tone: Tone = Tone.Plain, val frac: Double? = null, val pct: String = "",
                     val name: String? = null, val test: Boolean = false, val rows: List<Pair<String, String>> = emptyList(),
-                    val size: String = "", val files: Int = 0)
+                    val size: String = "", val files: Int = 0, val spin: String? = null)
+
+    // ai: A filing's progress as the app counts it (2026-11-15, Android's Received.kt): the bytes read into Downloads of
+    // ai: all (a packed file's unpacked bytes, a tar's whole stream) and the folder there ("" Downloads itself)
+    data class Saving(val done: Long, val total: Long, val folder: String)
 
     // ai: What the native receiver says (its stats JSON: liblizard/core/rx/receiver.h stats) that the screen reads.
     data class Rx(
@@ -69,6 +77,9 @@ object Readout {
         // ai: the transfer's own seconds, its first data block to its last chunk verified (the receiver's clock,
         // ai: XferProgress.secs, 2026-10-10; the screen's poll clock until then carried one file's start into the next)
         val secs: Double = 0.0,
+        // ai: the file's chunks, those verified, and inHand: every chunk verified or its solve under way, the list checked
+        // ai: (XferProgress.inHand, 2026-11-14): the light's part over
+        val chunks: Int = 0, val chunksVerified: Int = 0, val inHand: Boolean = false,
     )
 
     // ai: One state at a time, the first that holds, as recv.mjs showState: error, starting, getting ready (no answer
@@ -80,8 +91,11 @@ object Readout {
         starting || loading || (on && (rx.state.isEmpty() || rx.state == "starting" || rx.state == "loading"))
     // ai: how much of the file is in: the meter, the figures' percentage and the rail's (Parts.kt PctSquare)
     fun fraction(rx: Rx): Double = if (rx.size > 0) (rx.received.toDouble() / rx.size).coerceIn(0.0, 1.0) else 0.0
-    // ai: files: a received bundle's count once it is unpacked (2026-10-16), named in the received line
-    fun line(on: Boolean, starting: Boolean, loading: Boolean, error: String?, rx: Rx, files: Int = 0): Line = when {
+    // ai: files: a received bundle's count once it is unpacked (2026-10-16), named in the received line; filed: the
+    // ai: received file listed (in Downloads, or kept where Downloads refused it) or a note saying why not, the apps' own
+    // ai: (2026-11-14: until then the spinner holds, Saving)
+    fun line(on: Boolean, starting: Boolean, loading: Boolean, error: String?, rx: Rx, files: Int = 0, filed: Boolean = true,
+             saving: Saving? = null): Line = when {
         error != null -> Line(error, Tone.Bad)
         // ai: nothing while the camera starts or the receiver has not answered: the preview's cover says "Getting ready"
         // ai: with its spinner (Receive.kt); "Starting the camera" and "Getting ready" stood beside it until 2026-11-02
@@ -90,6 +104,11 @@ object Readout {
         // ai: the test stream first while the camera reads it (2026-10-05): it takes over from a file received or in
         // ai: progress, which shows again once the camera is back on its frames (receiver.cpp's state the same)
         on && rx.state == "test" -> Line("Test stream", test = true, rows = listOf("Speed" to rate(rx.goodputKBs)))
+        // ai: every chunk in hand, the solves finishing (2026-11-14): with the camera on or after its stop, which leaves the
+        // ai: receiver solving; the head's spinner, the meter full, Decoding in Time left's place, no speed (the camera's
+        // ai: part over)
+        rx.hasFile && !rx.verified && rx.inHand -> Line(rx.name, frac = 1.0, name = rx.name, spin = "${rx.chunksVerified}/${rx.chunks}",
+            rows = listOf("Received" to bytes(rx.received), "Size" to bytes(rx.size), "Decoding" to "${rx.chunksVerified} of ${rx.chunks}", "Speed" to ""))
         rx.hasFile && !rx.verified && on -> {
             val frac = fraction(rx)
             val now = rx.goodputKBs
@@ -97,6 +116,18 @@ object Readout {
                 "Received" to bytes(rx.received), "Size" to bytes(rx.size),
                 "Time left" to (if (now > 0) left((rx.size - rx.received) / (now * 1000)) else ""), "Speed" to (if (now > 0) rate(now) else "")))
         }
+        // ai: verified, not yet filed (2026-11-14): the session's take and the app's placing into Downloads, seconds for a
+        // ai: large bundle: the spinner and the full meter held until the received card's check. Where the app counts its
+        // ai: placing (saving, 2026-11-15, the phone's: one pass from the take's file into Downloads), Saving the bytes in
+        // ai: of all, To the folder, the rail the share; else Saving's row blank (the desktop's, which unpacks first)
+        rx.hasFile && rx.verified && !filed ->
+            if (saving != null && saving.total > 0) {
+                val share = floor(100.0 * saving.done.coerceIn(0, saving.total) / saving.total).toInt()
+                Line(rx.name, frac = 1.0, name = rx.name, spin = "$share%", rows = listOf("Received" to bytes(rx.size),
+                    "Saving" to partOf(saving.done.toDouble(), saving.total),
+                    "To" to (if (saving.folder.isEmpty()) "Downloads" else "Downloads/${saving.folder}"), "Speed" to ""))
+            } else Line(rx.name, frac = 1.0, name = rx.name, spin = "${rx.chunks}/${rx.chunks}",
+                rows = listOf("Received" to bytes(rx.size), "Size" to bytes(rx.size), "Saving" to "", "Speed" to ""))
         rx.hasFile && rx.verified -> {
             // ai: the file's facts once in: its size, a bundle's files, the transfer's own time and speed (the column's
             // ai: block with Show statistics on, Receive.kt; the card says it arrived)

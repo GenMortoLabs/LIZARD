@@ -44,6 +44,10 @@ import dev.lizard.ui.*
 // ai: want it); off Receive and idle the session is let go (letGo: its lock with it); the app's close ends it (the
 // ai: camera's controls put back, a recording replay written). The figures of the receiver's last second show only while
 // ai: they are this stream's (the stats' "live"): none while the camera is off, a received file's line kept.
+
+// ai: the free space a new transfer needs, as a multiple of its file (session.h fileLimit): the take moves the store's
+// ai: file and the filing renames it into Downloads on the same disk, so one of it
+private const val FILE_ROOM = 1.0
 class ReceiveState(private val app: App) {
     // ai: what the session says of the cameras (Session.cameras, camera): a camera listed, a mode, a control
     class Cam(val id: String, val name: String, val backend: String, val detail: String, val label: String)
@@ -91,6 +95,7 @@ class ReceiveState(private val app: App) {
     var replays by mutableStateOf(Prefs.Rx.replays)
     // ai: Replay size, MB (Settings.kt replaySizeSetting): kept across starts
     var replayMb by mutableStateOf(Prefs.Rx.replayMb)
+    var fileGb by mutableStateOf(Prefs.Rx.fileGb)
     var files by mutableStateOf<List<Received.Entry>>(emptyList())
     // ai: why the newest file is not in Downloads (Received.Filed's why; it is in the app's own folder then, listed from
     // ai: there), "" where it is; shown under the state line until a later filing of it puts it there
@@ -154,6 +159,7 @@ class ReceiveState(private val app: App) {
                 s.phaseLock(lockOn)
                 s.replays(replays, replayMeta())
                 s.replayBytes(dev.lizard.ui.replayBytes(replayMb))
+                s.fileLimit(dev.lizard.ui.fileLimitBytes(fileGb), FILE_ROOM)
                 timer.start()
             }
         } catch (e: Exception) {
@@ -424,6 +430,7 @@ class ReceiveState(private val app: App) {
     fun chooseStats(on: Boolean) { showStats = on; Prefs.Rx.stats = on }
     fun chooseReplays(on: Boolean) { replays = on; Prefs.Rx.replays = on; session?.replays(on, replayMeta()) }
     fun chooseReplayMb(mb: Int) { replayMb = mb; Prefs.Rx.replayMb = mb; session?.replayBytes(dev.lizard.ui.replayBytes(mb)) }
+    fun chooseFileGb(gb: Int) { fileGb = gb; Prefs.Rx.fileGb = gb; session?.fileLimit(dev.lizard.ui.fileLimitBytes(gb), FILE_ROOM) }
 
     // ai: the cameras read again (the Camera menu opening, the camera watch's stamp moved), off the UI thread: a backend's
     // ai: listing opens each device (V4L2's nodes, Media Foundation's sources)
@@ -685,7 +692,7 @@ class ReceiveState(private val app: App) {
 
     // ai: What Receive shows
     val line: Readout.Line get() = Readout.line(on, phase == RxPhase.Starting, phase == RxPhase.Loading, (phase as? RxPhase.Error)?.why, rx,
-        files.firstOrNull { it.root == root && it.bundle }?.files ?: 0)
+        files.firstOrNull { it.root == root && it.bundle }?.files ?: 0, filed = files.any { it.root == root } || fileNote.isNotEmpty())
     // ai: the lab line while the figures are this stream's (live), none otherwise (Readout.lab's while the camera is off)
     val lab: String get() = Readout.lab(live, rx)
     // ai: the preview's box: the crop's shape (1:1; 2:1 along the camera's long side)

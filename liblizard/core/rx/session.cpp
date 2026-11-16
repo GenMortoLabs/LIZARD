@@ -101,6 +101,18 @@ json parsed(const std::string& s) {
   }
 }
 
+// ai: bytes as the apps' Readout.bytes says them: 1 KB 1000 B, the unit chosen after rounding, one decimal under 10
+// ai: ("812 B", "7.4 MB", "64 GB"), for the session's own sentences
+std::string bytesText(uint64_t n) {
+  if (n < 1000) return std::to_string(n) + " B";
+  const double v = double(n);
+  const char* u = v < 999.5e3 ? "KB" : v < 999.5e6 ? "MB" : v < 999.5e9 ? "GB" : "TB";
+  const double x = v / (v < 999.5e3 ? 1e3 : v < 999.5e6 ? 1e6 : v < 999.5e9 ? 1e9 : 1e12);
+  char b[32];
+  if (x < 9.95) snprintf(b, sizeof b, "%.1f %s", x, u); else snprintf(b, sizeof b, "%.0f %s", x, u);
+  return b;
+}
+
 std::string text(const json& j, const char* k) {
   if (!j.is_object()) return "";
   const auto it = j.find(k);
@@ -1434,6 +1446,8 @@ struct Session::Impl {
       }
     }
     if (!haveRx(w)) return refuse(w);
+    refusedFor = false;
+    applyLimit();
     bool named = false;
     const int asked = modeFor(spec, named, w);
     if (asked < 0) return refuse(w);
@@ -1597,6 +1611,14 @@ struct Session::Impl {
   // ai: the rules (the worker's, between commands)
   std::string lastState;   // ai: the receiver's state at the last tick
   uint64_t focusTicks = 0; // ai: ticks while a stream runs, for the focus's second
+  // ai: Largest file and its room (Session::fileLimit; 0 none): each receiver's transfer told at every start, which
+  // ai: also takes a transfer refused for them afresh; refusedFor: the camera stopped once for the refusal in hand
+  uint64_t fileMax = 0;
+  double fileRoom = 0;
+  bool refusedFor = false;
+  void applyLimit() {
+    if (const auto r = current()) r->r->allow(fileMax, fileRoom);
+  }
   std::string heldRoot;    // ai: the transfer the receiver last held (its root, "" none)
   bool stoppedFor = false; // ai: the camera stopped once for heldRoot's file
   bool tookFor = false;    // ai: the take run once for heldRoot's file (one that failed is tried again at a retry)
@@ -1610,7 +1632,8 @@ struct Session::Impl {
   // ai: durable, and the store's removed: a copy whose source will not go is taken all the same), then meta.json
   // ai: removed from `from`, which leaves it nothing a store's open keeps. A file the default client packed (pack.h:
   // ai: its type says so) is unpacked into kept/ under its own name and type, made durable, the store's let go; one
-  // ai: that does not unpack is taken as it came, said in the log. A throw leaves the file in the store and no folder.
+  // ai: that does not unpack is taken as it came, said in the log; with keepPacked every one is taken as it came, the
+  // ai: app unpacking it as it files it. A throw leaves the file in the store and no folder.
   // ai: Its root.
   std::string take(const fs::path& from) {
     std::error_code e;
@@ -1640,7 +1663,7 @@ struct Session::Impl {
     try {
       std::string w;
       fs::create_directories(dir / "file");
-      if (packedType(type, original)) {
+      if (!cfg.keepPacked && packedType(type, original)) {
         const std::string plain = unpackedName(name);
         const fs::path to = dir / "file" / fs::u8path(plain);
         const std::string why = unpack(src.u8string(), to.u8string());
@@ -1808,6 +1831,7 @@ struct Session::Impl {
       heldRoot = root;
       stoppedFor = false;
       tookFor = false;
+      refusedFor = false;
     }
     const auto flag = [](const json& o, const char* k) { return o.is_object() && o.contains(k) && o[k].is_boolean() && o[k].get<bool>(); };
     const bool verified = flag(f, "verified") && !root.empty() && !flag(j, "test");
@@ -1825,6 +1849,24 @@ struct Session::Impl {
         describeNow();
         say("camera: stopped, the file is in");
       }
+    }
+    // ai: a transfer the store refused (store.h limit and room, 2026-11-15): the camera stopped and the phase the
+    // ai: refusal in the readout's words, once a refusal; a Start reads its header again (applyLimit), refused again
+    // ai: where it is still past them;
+    // ai: any other failure of the store (a write refused, the disk full mid-transfer) the same way: before 2026-11-15
+    // ai: it reached the log alone and the screen stood still
+    const std::string refusal = f.is_object() ? text(f, "refusal") : "";
+    if ((!refusal.empty() || flag(f, "failed")) && !refusedFor && (running() || streaming)) {
+      refusedFor = true;
+      const auto u64 = [&](const char* k) { return f.contains(k) && f[k].is_number() ? f[k].get<uint64_t>() : uint64_t(0); };
+      const std::string said = refusal == "limit" ? "File too large: " + bytesText(u64("size")) + ", over the " + bytesText(u64("limit")) + " limit"
+                               : refusal == "room" ? "Not enough space: needs " + bytesText(uint64_t(fileRoom * double(u64("size")))) + ", " + bytesText(u64("free")) + " free"
+                                                   : "File not kept: " + text(f, "error");
+      const uint64_t g = genNow();
+      stopLocked();
+      describeNow();
+      told(g, Phase::Error, said);
+      say("camera: stopped, " + said);
     }
     // ai: Start or Stop pressed on the phone (2026-10-27): followed here, the link open through both
     if (camera && backend == "phone") {
@@ -2459,6 +2501,18 @@ Session::Done Session::replays(bool on, const std::string& meta) {
   });
 }
 
+Session::Done Session::fileLimit(int64_t bytes, double room) {
+  Impl& p = *p_;
+  const uint64_t b = bytes > 0 ? uint64_t(bytes) : 0;
+  const double r = room > 0 ? room : 0;
+  return p.post([&p, b, r] {
+    p.fileMax = b;
+    p.fileRoom = r;
+    p.applyLimit();
+    return std::string();
+  });
+}
+
 Session::Done Session::replayBytes(int64_t bytes) {
   Impl& p = *p_;
   const int64_t b = std::clamp(bytes, REPLAY_BYTES_MIN, REPLAY_BYTES_MAX);
@@ -2636,8 +2690,11 @@ std::string Session::kept(const std::string& dataDir) {
       const fs::path f = d.path() / "file" / fs::u8path(name);
       if (!fs::is_regular_file(f, e)) continue;   // ai: placed already, or a take not yet whole
       const int64_t at = msOf(fs::last_write_time(d.path(), e));
-      takes.emplace_back(at, json{{"id", d.path().filename().u8string()}, {"name", name}, {"type", text(m, "type")}, {"root", text(m, "root")},
-                                  {"path", f.u8string()}, {"at", at}});
+      const std::string type = text(m, "type");
+      json t{{"id", d.path().filename().u8string()}, {"name", name}, {"type", type}, {"root", text(m, "root")}, {"path", f.u8string()}, {"at", at}};
+      std::string original;
+      if (packedType(type, original)) t["packed"] = json{{"name", unpackedName(name)}, {"type", original}};
+      takes.emplace_back(at, std::move(t));
     }
   std::stable_sort(takes.begin(), takes.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
   for (auto& t : takes) out.push_back(std::move(t.second));

@@ -2,7 +2,7 @@
 // ai: 3 chunks from the web's sender, 20% of blocks lost, frames repeated, blocks and frames reordered) through XferRx in
 // ai: frames of 40 blocks, the file rebuilt byte-exact and its BLAKE3 root verified, every count against the web's own
 // ai: chain on the same stream (ref.json); the same stream again after clear(); the stream with one wrong block (a chunk
-// ai: rejected, its symbols banned, the counts against the web's again); and the SHAKE256 test stream, every frame
+// ai: rejected, its symbols banned, the counts against the web's again); and the BLAKE3 test stream, every frame
 // ai: judged test, its one wrong block bad, nothing passed to the transfer. A reader thread polls progress() throughout.
 // ai: Since 2026-10-22 (a transfer kept across receivers, store.h): half the stream into one receiver and the other half
 // ai: into the next on the same directory, the file whole (a fresh receiver given that half alone is not done); a parked
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
          (stream.size() / XFER_BLOCK + 39) / 40, ref["lap"].get<int>(), ref["join"].get<int>(), file.size());
 
   namespace sfs = std::filesystem;
-  for (const char* d : {"/store", "/store-bad", "/store-test", "/store-resume", "/store-fresh", "/store-forget"}) sfs::remove_all(dir + d);
+  for (const char* d : {"/store", "/store-bad", "/store-test", "/store-resume", "/store-fresh", "/store-forget", "/store-renamed", "/store-renamed2"}) sfs::remove_all(dir + d);
   {
     XferRx rx(dir + "/store", log);
     printf("file stream:\n");
@@ -126,10 +126,30 @@ int main(int argc, char** argv) {
   }
   if (const auto bad = slurp(dir + "/bad.bin"); !bad.empty()) {
     XferRx rx(dir + "/store-bad", log);
+    rx.keepChunks(true);   // ai: the per-chunk list (r.p.per) below
     printf("file stream with one wrong block of chunk 1:\n");
     Run r = feed(rx, bad);
     compare("bad", r.got, ref["bad"]);
     expect(r.p.rejected >= 1 && r.p.per.size() == 3 && r.p.per[1] < 254, "chunk 1 rejected, collected again from fresh ids");
+  }
+  if (const auto renamed = slurp(dir + "/renamed.bin"); !renamed.empty()) {
+    // ai: the same file from another sender (src/xfer.h xfer_same_file): its header in the stream's second half under
+    // ai: another name and type, the transfer kept, the file whole at the same block, filed under the first name
+    XferRx rx(dir + "/store-renamed", log);
+    printf("file stream, its second half's headers another sender's (another name and type):\n");
+    Run r = feed(rx, renamed);
+    compare("renamed", r.got, ref["renamed"]);
+    fileChecks(r.p, file, root);
+    expect(r.p.name == "check-9MB.bin" && r.p.rejected == 0, "the transfer kept under the first header's name, nothing rejected");
+    const size_t n = renamed.size() / XFER_BLOCK, half = (n / 2 / 40) * 40 * XFER_BLOCK;
+    { XferRx a(dir + "/store-renamed2", log); feed(a, std::vector<uint8_t>(stream.begin(), stream.begin() + half)); }
+    printf("the second half's other sender into the next receiver on the same directory:\n");
+    {
+      XferRx b(dir + "/store-renamed2", log);
+      Run r2 = feed(b, std::vector<uint8_t>(renamed.begin() + half, renamed.end()));
+      expect(r2.p.done && slurp(r2.p.path) == file && r2.p.root == root && r2.p.name == "check-9MB-renamed.txt",
+             "the first half's folder resumed by the other sender's header: the file whole, filed under the name read");
+    }
   }
   {
     XferRx rx(dir + "/store-test", log);

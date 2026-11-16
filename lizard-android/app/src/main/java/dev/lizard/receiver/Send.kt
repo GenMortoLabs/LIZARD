@@ -138,6 +138,10 @@ class SendState(private val a: MainActivity) {
     // ai: frame, 7/8, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change, kept
     // ai: (sendRefresh, "a,b,c,d")
     var refresh by mutableStateOf(refreshOf(prefs.getString("sendRefresh", null)))
+    // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting; Sender::setCarousel): frames each symbol of
+    // ai: the format's own header carousel is shown, 0 the static word ("sendCarousel"); handed to the sender with Rate
+    // ai: refresh and at each change, which configures again
+    var carousel by mutableStateOf(prefs.getInt("sendCarousel", 0).coerceIn(0, CAROUSEL_MAX))
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): a file's schedule drawn from it at each Start (txSeed,
     // ai: before the first frame), so a send can be repeated; "" a random one each send; kept (sendSeed)
     var seed by mutableStateOf(prefs.getString("sendSeed", null) ?: "")
@@ -288,7 +292,7 @@ class SendState(private val a: MainActivity) {
         if (phase == Phase.On) a.window.let { w -> w.attributes = w.attributes.apply { screenBrightness = brightnessOverride } }
     }
     fun pause(p: Boolean) { if (phase == Phase.On) paused = p }
-    // ai: what the code offers at most, KB/s: blocks a frame x 472 B x pictures a second x the share of blocks new in a
+    // ai: what the code offers at most, KB/s: blocks a frame x 471 B x pictures a second x the share of blocks new in a
     // ai: frame (Rate refresh's repeats none: the stats' fresh, 1 before them); null before the first configure
     val capacityKBs get() = if (picked > 0) codes * (if (stats.blocks > 0) stats.blocks else Native.blocksFor(picked)) * Pick.PAYLOAD.toDouble() * rate * stats.fresh / 1000 else null
     fun choosePainter(p: String) { painter = p; prefs.edit().putString("sendPainter", p).apply(); if (phase == Phase.On) reconfigure() }
@@ -304,7 +308,13 @@ class SendState(private val a: MainActivity) {
         prefs.edit().putString("sendRefresh", refreshText(refresh)).apply()
         refreshNow()
     }
-    private fun refreshNow() { if (h != 0L) Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]) }
+    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel) } }
+    // ai: the animated header, applied at once as Rate refresh is (the sender's next frame; no configure)
+    fun chooseCarousel(v: Int) {
+        if (carousel == v) return
+        carousel = v.coerceIn(0, CAROUSEL_MAX); prefs.edit().putInt("sendCarousel", carousel).apply()
+        refreshNow()
+    }
     // ai: one code's room in the view, px: the box's height, or its width's share where that is less
     private fun roomOf() = min((vw / frameAspect).toInt(), vh)   // ai: the surface holds the frame alone
     // ai: the column's edge let go (2026-10-05): configured again for the box it left
@@ -606,16 +616,20 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             // ai: the light round the code (SendState.margin), its label live and the box resized at the release
             Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Pick.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Pick.QUIET - 1,
                 { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() }),
-        // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui rateRefreshSettings)
+        // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui
+        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting)
         FoldKey.SendRefresh to listOf(
             if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
             else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
-            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) },
+            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
+            carouselSetting(s.carousel) { s.chooseCarousel(it) },
         FoldKey.SendPerformance to listOf(
             // ai: with nothing chosen the setting stays auto and the painter running is the chip marked; a choice takes it outright
             ChipChoice("Encoder", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.choosePainter(it) },
             ChipChoice("VSync", s.vsyncOn, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
     private var marginDrag by mutableStateOf<Int?>(null)
+    // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15); the fold drawn only where
+    // ai: it holds a setting
     override val experimental: List<Setting> get() = emptyList()
     // ai: Show statistics, Receive's setting (Settings.stats), one switch for both screens (2026-11-07)
     private val stats get() = a.settings.stats == "on"

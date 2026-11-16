@@ -50,6 +50,14 @@ struct SendTables {
   std::vector<uint32_t> anch;
 };
 
+// ai: The animated header on the GPU (2026-11-15, gpu_painter.h carousel; gpu/wgsl/send.mjs WORDS): the frame words (4
+// ai: pixels a u32, a frame's rows RW words apart, its codes W + gap apart) the word cells touch, three u32 each (its
+// ai: index within the frame, its four bytes' bit indices 16 bits each, 0xffff a byte kept), the cells' bit i the word's
+// ai: cell side * cells + c (src/fmt.c ob_fmt_bit), from the layout's own word loop (src/layout.c ob_layout_set_fmt) at
+// ai: f's module size; held to the border t made (its word's cells 0 where its bit is 1 and 255 where 0, the C's paint),
+// ai: else why not. cells: word cells a side; nwb: the word's bits as u32.
+std::string wordSpans(const lizard_t& f, const SendTables& t, std::vector<uint32_t>& spans, int& cells, int& nwb);
+
 // ai: The gap between two codes of a frame, in modules, where none is set (liblizard/gpu/encoder.mjs GAP_MODULES,
 // ai: lizard-web/send-worker.mjs the same, since 2026-09-30); TxFormat.gap sets it
 constexpr int GAP_MODULES = 12;

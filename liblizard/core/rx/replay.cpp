@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <system_error>
+#include <utility>
 
 extern "C" {
 #include "lizard_phy.h"
@@ -40,6 +41,50 @@ Replay::Replay(std::string file_, std::string run_, int64_t maxBytes_)
     if (ec) err = "the replay's folder: " + ec.message();
   }
   if (!err.empty()) { broken = true; dead = true; }
+  else writer = std::thread([this] { writerLoop(); });
+}
+
+Replay::~Replay() {
+  { std::lock_guard<std::mutex> l(qm); stopW = true; }
+  qcv.notify_all();
+  if (writer.joinable()) writer.join();
+}
+
+// ai: the writer's queue's bound: a few seconds of 960 x 960 halves at 120 a second
+constexpr size_t QUEUE_BYTES = size_t(256) << 20;
+
+void Replay::queue(Job j) {
+  std::unique_lock<std::mutex> l(qm);
+  qcv.wait(l, [&] { return stopW || j.remove || qBytes + j.px.size() <= QUEUE_BYTES || (q.empty() && !busy); });
+  qBytes += j.px.size();
+  q.push_back(std::move(j));
+  qcv.notify_all();
+}
+
+void Replay::writerLoop() {
+  for (;;) {
+    Job j;
+    {
+      std::unique_lock<std::mutex> l(qm);
+      qcv.wait(l, [&] { return stopW || !q.empty(); });
+      if (q.empty()) return;   // ai: stopped with nothing left to do
+      j = std::move(q.front());
+      q.pop_front();
+      busy = true;
+    }
+    std::error_code ec;
+    if (j.remove) fs::remove(fs::u8path(path(j.i)), ec);
+    else if (!dead && !put(path(j.i), j.px.data(), j.px.size())) dead = true;
+    std::lock_guard<std::mutex> l(qm);
+    qBytes -= j.px.size();
+    busy = false;
+    qcv.notify_all();
+  }
+}
+
+void Replay::drainWriter() {
+  std::unique_lock<std::mutex> l(qm);
+  qcv.wait(l, [&] { return q.empty() && !busy; });
 }
 
 std::string Replay::path(uint64_t i) const {
@@ -48,7 +93,7 @@ std::string Replay::path(uint64_t i) const {
   return dir + b;
 }
 
-// ai: mu held. A whole file, or none: a write the file system refuses removes what it left, and says why in err.
+// ai: the writer's. A whole file, or none: a write the file system refuses removes what it left, and says why in err.
 bool Replay::put(const std::string& p, const void* data, size_t n) {
   {
     std::ofstream o(fs::u8path(p), std::ios::binary | std::ios::trunc);
@@ -56,7 +101,8 @@ bool Replay::put(const std::string& p, const void* data, size_t n) {
     if (o) o.close();
     if (o) return true;
   }
-  err = "write " + fs::u8path(p).filename().string() + ": " + strerror(errno);
+  const std::string why = "write " + fs::u8path(p).filename().string() + ": " + strerror(errno);
+  { std::lock_guard<std::mutex> l(qm); if (werr.empty()) werr = why; }
   std::error_code ec;
   fs::remove(fs::u8path(p), ec);
   return false;
@@ -89,7 +135,9 @@ int64_t Replay::bytes() {
 
 std::string Replay::error() {
   std::lock_guard<std::mutex> l(mu);
-  return err;
+  if (!err.empty()) return err;
+  std::lock_guard<std::mutex> w(qm);
+  return werr;
 }
 
 void Replay::frame(const uint8_t* px, uint32_t w, uint32_t h, uint32_t stride, double ms, bool isHeld, float ax, float ay) {
@@ -98,15 +146,22 @@ void Replay::frame(const uint8_t* px, uint32_t w, uint32_t h, uint32_t stride, d
   struct Done { Replay* r; bool on; ~Done() { if (on) r->release(1); } } done{this, isHeld};
   // ai: past the run's end only the frames held before it come in
   if (dead || (closing && !isHeld)) return;
+  std::vector<uint8_t> b((size_t)w * h);
+  for (uint32_t y = 0; y < h; y++) memcpy(b.data() + (size_t)y * w, px + (size_t)y * stride, w);
   std::lock_guard<std::mutex> l(mu);
+  take(std::move(b), w, h, ms, ax, ay);
+}
+
+void Replay::frame(std::vector<uint8_t>&& px, uint32_t w, uint32_t h, double ms, bool isHeld, float ax, float ay) {
+  struct Done { Replay* r; bool on; ~Done() { if (on) r->release(1); } } done{this, isHeld};
+  if (dead || (closing && !isHeld) || px.size() != (size_t)w * h) return;
+  std::lock_guard<std::mutex> l(mu);
+  take(std::move(px), w, h, ms, ax, ay);
+}
+
+void Replay::take(std::vector<uint8_t>&& px, uint32_t w, uint32_t h, double ms, float ax, float ay) {
   if (ended || !err.empty()) return;
-  const uint8_t* b = px;
-  if (stride != w) {
-    rowsBuf.resize((size_t)w * h);
-    for (uint32_t y = 0; y < h; y++) memcpy(rowsBuf.data() + (size_t)y * w, px + (size_t)y * stride, w);
-    b = rowsBuf.data();
-  }
-  if (!put(path(taken), b, (size_t)w * h)) { dead = true; return; }
+  queue(Job{taken, false, std::move(px)});
   kept.push_back({taken++, w, h, ms, ax, ay});
   held += (int64_t)w * h;
   trim();
@@ -114,8 +169,7 @@ void Replay::frame(const uint8_t* px, uint32_t w, uint32_t h, uint32_t stride, d
 
 void Replay::trim() {
   while (held > maxB && kept.size() > 1) {
-    std::error_code ec;
-    fs::remove(fs::u8path(path(kept.front().i)), ec);
+    queue(Job{kept.front().i, true, {}});
     held -= (int64_t)kept.front().w * kept.front().h;
     kept.pop_front();
   }
@@ -133,9 +187,14 @@ int Replay::finish(const std::string& rxStats, const std::string& rows, const st
     closing = true;
     cv.wait_for(h, HELD_WAIT, [&] { return pending <= 0; });
   }
+  {
+    std::lock_guard<std::mutex> l(mu);
+    if (ended) { if (err.empty()) err = "the run has ended"; return -1; }
+    ended = true;   // ai: no frame taken from here on, so the drain below is every frame's
+  }
+  drainWriter();
   std::lock_guard<std::mutex> l(mu);
-  if (ended) { if (err.empty()) err = "the run has ended"; return -1; }
-  ended = true;
+  if (err.empty()) { std::lock_guard<std::mutex> w(qm); err = werr; }
   if (broken) return -1;
   using ojson = nlohmann::ordered_json;
   const json st = json::parse(rxStats.empty() ? "{}" : rxStats, nullptr, false);
@@ -147,7 +206,7 @@ int Replay::finish(const std::string& rxStats, const std::string& rows, const st
   if (v > 0) {
     const int ring = word.contains("ring") && word["ring"].is_number() ? word["ring"].get<int>() : -1;
     const int r = ring >= 0 && ring < LIZARD_RINGS ? ring : LIZARD_RING_DEFAULT;
-    config = {{"from", "band"}, {"spec", {{"phy", "lizard"}, {"n", lizard_n_for(LIZARD_STEP * v)}, {"subch", LIZARD_STEP * v}, {"mode", 1}, {"span", 2 * LIZARD_RING[r]}, {"bitmap", 3}, {"stream", "shake256"}}}};
+    config = {{"from", "band"}, {"spec", {{"phy", "lizard"}, {"n", lizard_n_for(LIZARD_STEP * v)}, {"subch", LIZARD_STEP * v}, {"mode", 1}, {"span", 2 * LIZARD_RING[r]}, {"bitmap", 3}, {"stream", "blake3"}}}};
   }
   const ojson extra = ojson::parse(more.empty() ? "{}" : more, nullptr, false);
   // ai: The file: the frames oldest first, each scratch frame removed once it is in, so the disk holds no more than
@@ -157,13 +216,16 @@ int Replay::finish(const std::string& rxStats, const std::string& rows, const st
   auto w = lizfile::Writer::create(file, why);
   std::error_code ec;
   if (!w) { err = why; fs::remove_all(fs::u8path(dir), ec); return -1; }
-  std::string stopped = err, px;
+  std::string stopped = err;
+  std::vector<char> px;
   size_t n = 0;
   for (; n < kept.size(); n++) {
     const Kept& f = kept[n];
+    // ai: a frame read back in one call (2026-11-15: a character at a time through istreambuf_iterator before)
     std::ifstream in(fs::u8path(path(f.i)), std::ios::binary);
-    px.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    if (px.size() != (size_t)f.w * f.h) { stopped = "read " + fs::u8path(path(f.i)).filename().string() + ": cut short"; break; }
+    px.resize((size_t)f.w * f.h);
+    in.read(px.data(), (std::streamsize)px.size());
+    if (!in || (size_t)in.gcount() != px.size()) { stopped = "read " + fs::u8path(path(f.i)).filename().string() + ": cut short"; break; }
     if (!w->frame((const uint8_t*)px.data(), f.w, f.h, f.w, why)) { stopped = why; break; }
     fs::remove(fs::u8path(path(f.i)), ec);
   }

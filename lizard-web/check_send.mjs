@@ -69,7 +69,7 @@ import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initWh, Decoder, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { pack } from "../liblizard/sim/pack.mjs";
-import { XferSender, XferReceiver, MemoryStore, ID_HEADER, blake3, hex, isControlId } from "../liblizard/sim/xfer.mjs";
+import { XferSender, XferReceiver, MemoryStore, ID_HEADER, PAYLOAD, blake3, hex, isControlId, idChunk } from "../liblizard/sim/xfer.mjs";
 import { N_FOR, NAME, SPAN, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, subchOf, versionOf } from "../liblizard/sim/lizard_pick.mjs";
 import { tabs, open, evaluate, navigate } from "./phone.mjs";
 import { bundle } from "./tar.mjs";
@@ -101,7 +101,7 @@ for (let i = 0, v = 7; i < fileBytes.length; i++) { v = (Math.imul(v, 1103515245
 writeFileSync(filePath, fileBytes);
 // ai: a file of four chunks (the last 12,345 B), so the page's pool of workers makes its transfer (xfer-pool.mjs, 2026-11-06):
 // ai: every data block read is held to the serial sender's block of that id (sim/xfer.mjs XferSender)
-const bigPath = join(scratch, "check-big.bin"), bigBytes = new Uint8Array(3 * 2 ** 22 + 12345);
+const bigPath = join(scratch, "check-big.bin"), bigBytes = new Uint8Array(3 * 2 ** 24 + 12345);
 for (let i = 0, v = 11; i < bigBytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bigBytes[i] = v >>> 16; }
 writeFileSync(bigPath, bigBytes);
 // ai: prose, which the page packs (sim/pack.mjs, the default client's compression): its header is the packed stream's
@@ -169,7 +169,7 @@ async function readOnce(codes = 1) {
 // ai: codec at a time (the wasm holds one; the blind receiver's are its own), freed after.
 async function readTold(x, subs) {
   for (const sub of subs) {
-    const n = N_FOR(sub), p = await makePhy({ phy: "lizard", n, subch: sub, mode: 1, span: SPAN(n, RING_DEFAULT), bitmap: LIZARD_BITMAP, stream: "shake256" });
+    const n = N_FOR(sub), p = await makePhy({ phy: "lizard", n, subch: sub, mode: 1, span: SPAN(n, RING_DEFAULT), bitmap: LIZARD_BITMAP, stream: "blake3" });
     try { const r = p.decode(x.img, x.W, x.H, null)[0]; if (r.seen > 0) return { sub, r }; } finally { p.free(); }
   }
   return null;
@@ -250,8 +250,8 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   if (r.n !== N_FOR(subch)) faults.push(`${name}: registered at n = ${r.n}`);
   if (!stateOk) faults.push(`${name}: the block says ${JSON.stringify(g.dt)}${g.state ? `, the state line "${g.state}"` : ""}`);
   if (c.big) {
-    const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder }), x = new Uint8Array(472), data = read.filter((b) => !isControlId(b.id));
-    const chunks = new Set(data.map((b) => b.id >>> 18)), differ = data.filter((b) => { ref.block(b.id, x); return b.bytes.some((v, i) => v !== x[i]); }).length;
+    const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder }), x = new Uint8Array(PAYLOAD), data = read.filter((b) => !isControlId(b.id));
+    const chunks = new Set(data.map((b) => idChunk(b.id))), differ = data.filter((b) => { ref.block(b.id, x); return b.bytes.some((v, i) => v !== x[i]); }).length;
     ref.free();
     console.log(`  the pool's blocks: ${data.length} data blocks of ${chunks.size} chunks held to the serial sender's, ${differ} differ`);
     if (!data.length || chunks.size < 2 || differ) faults.push(`${name}: ${data.length} data blocks of ${chunks.size} chunks read, ${differ} not the serial sender's`);

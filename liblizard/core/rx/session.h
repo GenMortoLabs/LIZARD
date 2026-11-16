@@ -47,6 +47,9 @@ class Session {
     std::string decoder = "auto", layout = "1:1";   // ai: auto | gpu | cpu (and pc on Android: stream.h); 1:1 | 2:1
     // ai: the camera settings held for this session alone, none read from or written to cameras.json (a test's run)
     bool forgetSettings = false;
+    // ai: a file the default client packed (pack.h) taken as it came, for the app to unpack as it files it (kept's
+    // ai: "packed"; Android's, 2026-11-15: one pass from the store's file into Downloads); else unpacked into kept/
+    bool keepPacked = false;
     std::function<void(const std::string&)> log;
   };
   // ai: At once: the worker started, which takes the data folder's lock (waiting up to 10 s for a session of this
@@ -119,6 +122,12 @@ class Session {
   // ai: Replay size: the cap of a run's kept frames' raw bytes (held to REPLAY_BYTES_MIN .. REPLAY_BYTES_MAX), the run
   // ai: recording trimmed to it at once, the next run made with it.
   Done replayBytes(int64_t bytes);
+  // ai: Largest file (2026-11-15, the apps' setting): a transfer whose file is over bytes (0: the format's own limit),
+  // ai: or wants more free space than room times its file where the store is (0: none asked; 1 where the app's filing
+  // ai: moves the file, 2 where it copies it), is refused at its header before anything is written: the camera stopped,
+  // ai: the phase the refusal ("File too large: ...", "Not enough space: ..."). Held for every receiver, told at each
+  // ai: start; a start or a change takes a refused transfer afresh at its next header.
+  Done fileLimit(int64_t bytes, double room);
   // ai: The platform's own fields (a JSON object: heat, power), merged into the stats, each replay row and a run's meta
   // ai: (its end's) from now on.
   void extra(const std::string& json);
@@ -178,7 +187,9 @@ class Session {
   // ai: devices to look (seconds on some systems). camerasStamp: camera.h listStamp, nothing opened.
   static std::string cameras();
   static std::string camerasStamp();
-  // ai: The takes in dataDir's kept/ whose file is whole, oldest first: [{id, name, type, root, path, at (ms)}].
+  // ai: The takes in dataDir's kept/ whose file is whole, oldest first: [{id, name, type, root, path, at (ms)}], and
+  // ai: packed {name, type} where the file at path is one the default client packed (keepPacked's, or one that did not
+  // ai: unpack): the file it holds, for the app to unpack as it files it (pack.h Unpacker).
   static std::string kept(const std::string& dataDir);
   // ai: A take placed by the app (or let go with its entry): its folder deleted. False with why.
   static bool placed(const std::string& dataDir, const std::string& id, std::string& why);

@@ -163,6 +163,17 @@ fun PctSquare(frac: Double) = Square {
     }
 }
 
+// ai: The work at a transfer's end in a rail's square (2026-11-14): a spinner over its figure (Readout.Line.spin: the
+// ai: chunks verified of all, "52/64", then the share saved, "50%"), the percentage square's figure-over-unit
+@Composable
+fun DecodingSquare(figure: String) = Square {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        CircularProgressIndicator(Modifier.size(18.dp), color = Fg, strokeWidth = 2.dp, trackColor = Line)
+        Spacer(Modifier.height(3.dp))
+        Text(figure, style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"), color = Muted)
+    }
+}
+
 // ai: The other tool, at the bar's end (the web's #swap): the swap arrows and its name, a text button
 @Composable
 fun SwapBtn(label: String, onClick: () -> Unit) =

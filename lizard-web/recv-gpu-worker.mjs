@@ -12,8 +12,9 @@
 import { FrontHalf, deviceDescriptor, treeReader } from "../liblizard/gpu/host.mjs";
 import { axisWord } from "../liblizard/gpu/plan/common.mjs";
 import { blockJudge } from "../liblizard/sim/phy.mjs";
+import { ID_BYTES } from "../liblizard/sim/xfer.mjs";
 import { init as initZstd, decompress } from "../liblizard/sim/zstd.mjs";
-import { heapTop, init as initOb } from "../liblizard/sim/ob.mjs";
+import { heapTop, init as initOb, carousel } from "../liblizard/sim/ob.mjs";
 import { greyLevels, lumaOf } from "./vframes.mjs";
 
 let fh = null, opening = null, dead = "";
@@ -123,17 +124,20 @@ function launch() {
 // ai: Each frame's answer as recv-worker.mjs gives it: the verified blocks judged against the test stream, the word,
 // ai: the corners the finder settled on (the tracker's), the decode's share of its batch's GPU time.
 function answer(out, batch) {
-  const ms = out.deviceMs / Math.max(1, out.carried), P = fh.C.PAYLOAD, B = P - 4;
+  const ms = out.deviceMs / Math.max(1, out.carried), P = fh.C.PAYLOAD, B = P - ID_BYTES;
   out.frames.forEach((fo, i) => {
     const b = batch[i];
-    if (fo.hasWord) held = fo.word.version;
+    // ai: the held word (sim/phy.mjs makeBlind's rule): a static word's version, or the version of the header the
+    // ai: animated words' carousel assembles (the wasm's one assembly, src/fmt.h)
+    if (fo.hasWord && fo.word.kind === 0) held = fo.word.version;
+    else if (fo.hasWord) { const k = carousel.add(fo.word.pos, fo.word.sym), v = k ? carousel.header(k)[0] : 0; if (v >= 4 && v <= 64) held = v; }
     const n = fo.records.length, blocks = new Uint8Array(n * P);
     fo.records.forEach((r, k) => blocks.set(r.payload, k * P));
     const j = judge.frame(new Uint8Array(n).fill(1), blocks);
     const found = fo.finder.found === 1;
     const msg = { type: "result", tag: b.tag, found: found ? 1 : 0, seen: j.seen, bad: j.bad, test: j.test ? 1 : 0, judged: j.judged, heap: heapTop(), quad: found ? fo.finder.corners : null, ids: j.got.map((g) => g.id), ms, gpu: 1 };
     if (j.got.length) { const bytes = new Uint8Array(B * j.got.length); j.got.forEach((g, k) => bytes.set(g.bytes, k * B)); msg.bytes = bytes.buffer; }
-    if (fo.hasWord && fo.ring >= 0) msg.fmt = { version: fo.word.version, fps: fo.word.fps, ring: fo.ring };
+    if (fo.hasWord && fo.ring >= 0) msg.fmt = { ...fo.word, ring: fo.ring };
     if (b.vf) msg.vf = b.vf;
     if (b.levels) msg.levels = b.levels;
     postMessage(msg, msg.bytes ? [msg.bytes] : []);

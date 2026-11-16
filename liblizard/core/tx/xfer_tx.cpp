@@ -8,7 +8,6 @@
 #include <numeric>
 #include <random>
 #include <cstring>
-#include <map>
 #include <mutex>
 #include <new>
 #include <stdexcept>
@@ -38,21 +37,45 @@
 
 extern "C" {
 #include "xfer.h"
-int lizard_wh_init(void);
-int lizard_wh_encoder_create(const void* message, uint32_t message_bytes, uint32_t block_bytes, void** codec_out);
-int lizard_wh_encode(void* codec, uint32_t block_id, void* out, uint32_t capacity);
-void lizard_wh_free(void* codec);
 }
 
 namespace lizard {
 
 namespace {
-constexpr uint32_t PAYLOAD = XFER_PAYLOAD, SYMBOL_BITS = XFER_SYMBOL_BITS, SYMBOL_MASK = (1u << SYMBOL_BITS) - 1;
-constexpr uint32_t CONTROL = XFER_CONTROL, ID_HEADER = XFER_ID_HEADER, CONTROL_EVERY = 63;
-uint32_t idOf(uint32_t c, uint32_t s) { return c << SYMBOL_BITS | s; }
+constexpr uint32_t PAYLOAD = XFER_PAYLOAD;
+constexpr uint32_t CONTROL = XFER_CONTROL, CONTROL_EVERY = 63;
+constexpr xfer_id_t ID_HEADER = XFER_ID_HEADER;
+xfer_id_t idOf(uint32_t c, uint32_t s) { return xfer_id(c, s); }
 // ai: the schedule's draws (sim/xfer.mjs mix32, xorshift): murmur3's finaliser, a word's bits mixed; xorshift32, a
 // ai: state that must not be 0
 uint32_t mix32(uint32_t x) { x ^= x >> 16; x *= 0x85ebca6bu; x ^= x >> 13; x *= 0xc2b2ae35u; x ^= x >> 16; return x; }
+// ai: A chunk's symbols, pass by pass (2026-11-15): its v-th is the (v mod 2^24)-th of pass v >> 24 under a keyed
+// ai: shuffle of the 2^24 ids (four Feistel rounds over two 12-bit halves, the round function mix32), the pass's key
+// ai: drawn from the chunk's (the seed's) and the pass. Every id once a pass and each pass in an order of its own, so a
+// ai: receiver never meets the same ids at the same times twice: with consecutive ids from a start (until 2026-11-15)
+// ai: each pass repeated the last, and someone back a whole number of passes later (a kiosk looping one file, a pass of
+// ai: a one-chunk file about 19 minutes at the 2:1 sender's rate), watching the stretch they had watched, held every
+// ai: id it showed. sim/xfer.mjs symbolOf the same.
+uint32_t passKey(uint32_t chunkKey, uint64_t pass) { return mix32(chunkKey ^ mix32(static_cast<uint32_t>(pass) * 0x85ebca6bu + 0x27d4eb2fu)); }
+uint32_t shuffle24(uint32_t key, uint32_t k) {
+  uint32_t l = k >> 12 & 0xfff, r = k & 0xfff;
+  for (uint32_t i = 0; i < 4; i++) {
+    const uint32_t t = r;
+    r = l ^ (mix32(key ^ i * 0x9e3779b9u ^ r) & 0xfff);
+    l = t;
+  }
+  return l << 12 | r;
+}
+uint32_t unshuffle24(uint32_t key, uint32_t e) {
+  uint32_t l = e >> 12 & 0xfff, r = e & 0xfff;
+  for (uint32_t i = 4; i-- > 0;) {
+    const uint32_t t = l;
+    l = r ^ (mix32(key ^ i * 0x9e3779b9u ^ l) & 0xfff);
+    r = t;
+  }
+  return l << 12 | r;
+}
+uint32_t symbolOf(uint32_t chunkKey, uint64_t v) { return shuffle24(passKey(chunkKey, v >> 24), static_cast<uint32_t>(v) & 0xffffffu); }
 uint32_t xorshift(uint32_t& s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
 uint32_t nonzero(uint32_t s) { return s ? s : 0x9e3779b9u; }
 
@@ -64,7 +87,7 @@ std::string nameBytes(const std::string& name) {
 }
 // ai: The prepare's workers: one a physical core, not a hardware thread (2026-11-06, 1 GiB on the 9950X, 16 cores of
 // ai: 2 threads: 16 workers 0.46 s random and 1.09 s compressible, 32 workers 0.62 and 1.18 s at twice the CPU time;
-// ai: two chunks' Wirehair solves on one core's caches go slower than one). The hardware threads where the system
+// ai: two chunks' solves on one core's caches go slower than one). The hardware threads where the system
 // ai: does not say; one under emscripten (no threads in the wasm build).
 unsigned countCores() {
   unsigned n = 0;
@@ -100,22 +123,11 @@ int pickLog2(size_t length, int k) {
   const int f = xfer_chunk_log2_for(length);
   return f < 0 ? XFER_LOG2_MAX : f;
 }
-// ai: Wirehair's seed attempt for a message of `len` bytes, which it picks from the block count alone (the equations'
-// ai: structure, not the data, src/xfer.h): an encoder made once over zeros of that length, kept by length; 0 for one
-// ai: block. The header states it for every chunk but the last and for the last before any chunk is made.
-int seedFor(size_t len) {
-  if (xfer_blocks(len) < 2) return 0;
-  static std::mutex mu;
-  static std::map<size_t, int> memo;
-  std::lock_guard<std::mutex> l(mu);
-  const auto it = memo.find(len);
-  if (it != memo.end()) return it->second;
-  std::vector<uint8_t> zeros(len);
-  void* e = nullptr;
-  const int s = lizard_wh_encoder_create(zeros.data(), static_cast<uint32_t>(len), PAYLOAD, &e);
-  if (s < 0) throw std::runtime_error("wirehair encoder: " + std::to_string(s));
-  lizard_wh_free(e);
-  return memo[len] = s;
+// ai: chunk c's RaptorQ encoder over its own bytes (src/rq.h)
+rq_enc_t* encoderOf(const uint8_t* plain, size_t len) {
+  rq_enc_t* e = rq_enc_new(plain, len, PAYLOAD);
+  if (!e) throw std::runtime_error("RaptorQ encoder: out of memory");
+  return e;
 }
 // ai: The spill's file (xfer_tx.h): made in dir and unlinked at once (POSIX), deleted on close (Windows), `bytes` long;
 // ai: -1 where it cannot be made. Reads and writes at an offset, whole or false.
@@ -190,22 +202,20 @@ unsigned physicalCores() {
 XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, const std::string& type, int chunkLog2,
                const std::string& spillDir)
     : size_(size_t{1} << pickLog2(length, chunkLog2)), data_(data) {
-  static std::once_flag wh;
-  std::call_once(wh, [] { lizard_wh_init(); });
   chunkLog2 = pickLog2(length, chunkLog2);
   xfer_header_t h{};
   if (xfer_header_init(&h, length, chunkLog2)) throw std::runtime_error("the file is too large for 2^" + std::to_string(chunkLog2) + " chunks");
   const uint32_t C = static_cast<uint32_t>((length + size_ - 1) / size_), M = static_cast<uint32_t>(xfer_manifest_blocks(C));
   chunks_ = C;
-  len_.resize(C); K_.resize(C); enc_.resize(C); one_.resize(C); sym_.assign(C, 0);
+  len_.resize(C); K_.resize(C); enc_.resize(C); key_.assign(C, 0); cnt_.assign(C, 0);
   for (uint32_t c = 0; c < C; c++) { len_[c] = std::min(size_, length - c * size_); K_[c] = xfer_blocks(len_[c]); }
   if (!spillDir.empty() && C) {
-    // ai: the spill's slots: three segments a chunk of a quarter of its blocks, at least 64 (a chunk of one block none)
+    // ai: the spill's slots: three segments a chunk of a quarter of its blocks, at least 64
     seg_.resize(C); off_.resize(C); base_.resize(C); segBase_.resize(C); taken_.assign(C, 0);
     have_.reset(new std::atomic<int64_t>[C]);
     uint64_t at = 0;
     for (uint32_t c = 0; c < C; c++) {
-      seg_[c] = K_[c] > 1 ? std::max<uint32_t>(64, (K_[c] + 3) / 4) : 0;
+      seg_[c] = std::max<uint32_t>(64, (K_[c] + 3) / 4);
       off_[c] = at;
       at += 3ull * seg_[c] * PAYLOAD;
       have_[c] = -1;
@@ -218,10 +228,6 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, cons
     std::random_device rd;
     seedWith(rd() ^ mix32(static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count())));
   }
-  // ai: the seed attempts the header states (src/xfer.h, version 4): every chunk's but the last, and the last's
-  seedFull_ = static_cast<uint8_t>(C >= 2 ? seedFor(size_) : 0);
-  seedLast_ = static_cast<uint8_t>(C ? seedFor(len_[C - 1]) : 0);
-  h.seed = seedFull_; h.seed_last = seedLast_;
   ready_.reset(new std::atomic<uint8_t>[std::max<uint32_t>(C, 1)]());
   mready_.reset(new std::atomic<uint8_t>[std::max<uint32_t>(M, 1)]());
   left_.reset(new std::atomic<uint32_t>[std::max<uint32_t>(M, 1)]());
@@ -230,8 +236,7 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, cons
   const uint32_t W = std::min<uint32_t>(std::max<uint32_t>(C, 1), physicalCores());
   if (C >= 2) {
     // ai: every chunk's chaining value first (its own bytes, BLAKE3's wide hash), a thread a physical core, then the
-    // ai: root: all the header needs with the two seeds, so the first frame waits on a hash of the file and not on its
-    // ai: fountains
+    // ai: root: all the header needs, so the first frame waits on a hash of the file and not on its fountains
     cvs_.resize(32 * size_t{C});
     std::atomic<uint32_t> nc{0}, bad{UINT32_MAX};
     auto hash = [&] {
@@ -283,7 +288,7 @@ bool XferTx::reseed(uint32_t seed) {
   // ai: the spill's segments made from the old seed's first symbols: made again from the new
   if (spill_ >= 0)
     for (uint32_t c = 0; c < chunks_; c++)
-      if (seg_[c] && have_[c] >= 0 && segBase_[c] != base_[c]) {
+      if (have_[c] >= 0 && segBase_[c] != base_[c]) {
         have_[c] = -1;
         asks_.push_back({c, 0}); asks_.push_back({c, 1});
       }
@@ -291,12 +296,12 @@ bool XferTx::reseed(uint32_t seed) {
   return true;
 }
 
-// ai: Chunk c's first symbol mix32(seed ^ (c + 1) 0x9e3779b1) in the symbols' 18 bits, a chunk of one block's 0 always;
+// ai: Chunk c's first symbol mix32(seed ^ (c + 1) 0x9e3779b1) in the symbols' 24 bits;
 // ai: the rounds' generator from mix32(seed ^ 0x5bd1e995); each frame's shuffle from mix32((frame + 1) 0x9e3779b1 ^ seed)
 void XferTx::seedWith(uint32_t seed) {
   seed_s_ = seed;
-  for (uint32_t c = 0; c < chunks_; c++) sym_[c] = mix32(seed ^ (c + 1) * 0x9e3779b1u) & SYMBOL_MASK;
-  if (!base_.empty()) std::copy(sym_.begin(), sym_.end(), base_.begin());   // ai: the spill's: a segment's symbols count from it
+  for (uint32_t c = 0; c < chunks_; c++) key_[c] = mix32(seed ^ (c + 1) * 0x9e3779b1u);
+  if (!base_.empty()) std::copy(key_.begin(), key_.end(), base_.begin());   // ai: the spill's: a segment's symbols drawn by it
   rs_ = nonzero(mix32(seed ^ 0x5bd1e995u));
   if (scheduled_) { i_ = 0; newRound(); }
 }
@@ -309,32 +314,22 @@ void XferTx::newRound() {
   for (uint32_t i = chunks_; i > 1; i--) std::swap(perm_[i - 1], perm_[xorshift(rs_) % i]);
 }
 
-// ai: Chunk c: a fountain over its bytes where they are 2 blocks or more, else the one block kept (one_). Its slots
-// ai: written, then ready_; the last of a manifest group writes the group's block, then mready_.
+// ai: Chunk c: a RaptorQ encoder over its bytes (a chunk of one block too: K = 1). Its slots written, then ready_; the
+// ai: last of a manifest group writes the group's block, then mready_.
 void XferTx::make(uint32_t c) {
-  const uint8_t* plain = data_ + c * size_;
-  const uint32_t n = static_cast<uint32_t>(len_[c]);
-  if (K_[c] > 1) {
-    void* e = nullptr;
-    const int seed = lizard_wh_encoder_create(plain, n, PAYLOAD, &e);
-    if (seed < 0) throw std::runtime_error("wirehair encoder: " + std::to_string(seed));
-    std::unique_ptr<void, WhFree> enc(e);
-    // ai: Wirehair's attempt is the block count's: a chunk that took another than the header states would not decode
-    const int want = c + 1 == chunks_ ? seedLast_ : seedFull_;
-    if (seed != want) throw std::runtime_error("Wirehair's seed attempt " + std::to_string(seed) + ", the header's " + std::to_string(want));
-    if (spill_ >= 0) {
-      // ai: the spill: segments 0 and 1 written, the encoder let go; a seed given meanwhile (reseed) makes them again
-      uint32_t base;
-      { std::lock_guard<std::mutex> l(spillMu_); base = base_[c]; }
-      writeSegment(c, e, 0, base);
-      writeSegment(c, e, 1, base);
-      std::lock_guard<std::mutex> l(spillMu_);
-      segBase_[c] = base;
-      if (base == base_[c]) have_[c] = 1;
-      else { asks_.push_back({c, 0}); asks_.push_back({c, 1}); }
-      spillCv_.notify_all();
-    } else enc_[c] = std::move(enc);
-  } else one_[c].assign(plain, plain + n);
+  std::unique_ptr<rq_enc_t, EncFree> enc(encoderOf(data_ + c * size_, len_[c]));
+  if (spill_ >= 0) {
+    // ai: the spill: segments 0 and 1 written, the encoder let go; a seed given meanwhile (reseed) makes them again
+    uint32_t base;
+    { std::lock_guard<std::mutex> l(spillMu_); base = base_[c]; }
+    writeSegment(c, enc.get(), 0, base);
+    writeSegment(c, enc.get(), 1, base);
+    std::lock_guard<std::mutex> l(spillMu_);
+    segBase_[c] = base;
+    if (base == base_[c]) have_[c] = 1;
+    else { asks_.push_back({c, 0}); asks_.push_back({c, 1}); }
+    spillCv_.notify_all();
+  } else enc_[c] = std::move(enc);
   ready_[c].store(1, std::memory_order_release);
   if (chunks_ >= 2) {
     const uint32_t m = c / XFER_PER_BLOCK;
@@ -370,7 +365,7 @@ std::string XferTx::fault() const {
 
 // ai: the schedule (Schedule's constructor), once every chunk is made: a round visits every chunk of the most blocks
 // ai: once; a chunk of fewer in proportion to its blocks, plus 2 sqrt(K) visits a lap and at least 64. The symbols a
-// ai: chunk sent while the others were made go on (sym_), so none is sent twice. Each round visits the chunks in an order
+// ai: chunk sent while the others were made go on (cnt_), so none is sent twice. Each round visits the chunks in an order
 // ai: of its own (newRound).
 void XferTx::schedule() {
   scheduled_ = true;
@@ -393,36 +388,31 @@ void XferTx::schedule() {
 
 // ai: A frame before every chunk is made: a control block (where it has more than one slot, or nothing is made yet, or
 // ai: every other frame of one), the header every other time and the manifest blocks written so far between; the rest
-// ai: the chunks made so far in turn, each its next symbol (a chunk of one block its one); with none made, every slot a
+// ai: the chunks made so far in turn, each its next symbol; with none made, every slot a
 // ai: control block.
-void XferTx::warm(uint32_t* out, int n) {
+void XferTx::warm(xfer_id_t* out, int n) {
   std::vector<uint32_t> ready, ms;
   for (uint32_t c = 0; c < chunks_; c++) if (ready_[c].load(std::memory_order_acquire)) ready.push_back(c);
   for (uint32_t m = 0; m < manifest_.size(); m++) if (mready_[m].load(std::memory_order_acquire)) ms.push_back(m);
-  auto ctl = [&] { const uint32_t j = ctl_++; return ms.empty() || !(j & 1) ? ID_HEADER : ID_HEADER + 1 + ms[(j >> 1) % ms.size()]; };
+  auto ctl = [&]() -> xfer_id_t { const uint32_t j = ctl_++; return ms.empty() || !(j & 1) ? ID_HEADER : ID_HEADER + 1 + ms[(j >> 1) % ms.size()]; };
   int k = 0;
   if (n > 1 || ready.empty() || !(frame_ & 1)) out[k++] = ctl();
   for (; k < n; k++) {
     if (ready.empty()) { out[k] = ctl(); continue; }
     const uint32_t c = ready[turn_++ % ready.size()];
-    if (K_[c] == 1) { out[k] = idOf(c, 0); continue; }
-    out[k] = idOf(c, sym_[c]);
-    sym_[c] = (sym_[c] + 1) & SYMBOL_MASK;
+    out[k] = idOf(c, symbolOf(key_[c], cnt_[c]++));
     took(c);
   }
 }
 
-void XferTx::WhFree::operator()(void* e) const { lizard_wh_free(e); }
+void XferTx::EncFree::operator()(rq_enc_t* e) const { rq_enc_free(e); }
 
-// ai: Segment n of chunk c (its symbols base + v for v in [n seg, (n + 1) seg), the symbols' 18 bits) into slot n mod 3
-void XferTx::writeSegment(uint32_t c, void* enc, uint64_t n, uint32_t base) {
+// ai: Segment n of chunk c (its symbols symbolOf(base, v) for v in [n seg, (n + 1) seg)) into slot n mod 3
+void XferTx::writeSegment(uint32_t c, const rq_enc_t* enc, uint64_t n, uint32_t base) {
   const uint32_t L = seg_[c];
   std::vector<uint8_t> buf(static_cast<size_t>(L) * PAYLOAD);
-  for (uint32_t k = 0; k < L; k++) {
-    const uint32_t sym = static_cast<uint32_t>((base + n * L + k) & SYMBOL_MASK);
-    const int got = lizard_wh_encode(enc, sym, buf.data() + static_cast<size_t>(k) * PAYLOAD, PAYLOAD);
-    if (got <= 0) throw std::runtime_error("wirehair encode " + std::to_string(got) + " on chunk " + std::to_string(c));
-  }
+  for (uint32_t k = 0; k < L; k++)
+    rq_enc_symbol(enc, symbolOf(base, n * L + k), buf.data() + static_cast<size_t>(k) * PAYLOAD);
   if (!spillIo(spill_, off_[c] + (n % 3) * L * uint64_t{PAYLOAD}, buf.data(), buf.size(), true))
     throw std::runtime_error("the spill's file could not be written");
 }
@@ -443,11 +433,8 @@ void XferTx::spiller() {
     }
     const uint32_t c = a.first;
     try {
-      void* e = nullptr;
-      const int seed = lizard_wh_encoder_create(data_ + c * size_, static_cast<uint32_t>(len_[c]), PAYLOAD, &e);
-      if (seed < 0) throw std::runtime_error("wirehair encoder: " + std::to_string(seed));
-      std::unique_ptr<void, WhFree> enc(e);
-      writeSegment(c, e, a.second, base);
+      std::unique_ptr<rq_enc_t, EncFree> enc(encoderOf(data_ + c * size_, len_[c]));
+      writeSegment(c, enc.get(), a.second, base);
     } catch (const std::exception& x) {
       {
         std::lock_guard<std::mutex> l(faultMu_);
@@ -477,21 +464,19 @@ void XferTx::took(uint32_t c) {
   }
 }
 
-uint32_t XferTx::next() {
+xfer_id_t XferTx::next() {
   uint32_t c;
   for (;;) {
     if (i_ >= chunks_) { i_ = 0; newRound(); }
     c = perm_[i_++];
     if ((acc_[c] += w_[c]) >= max_) { acc_[c] -= max_; break; }
   }
-  if (K_[c] == 1) return idOf(c, 0);   // ai: unfountained: the one block, again
-  const uint32_t s = sym_[c];
-  sym_[c] = (s + 1) & SYMBOL_MASK;     // ai: past 2^18 ids a chunk the sender repeats (src/xfer.h)
+  const uint32_t s = symbolOf(key_[c], cnt_[c]++);   // ai: past 2^24 a chunk, a pass in a new order (symbolOf)
   took(c);
   return idOf(c, s);
 }
 
-void XferTx::frameIds(uint32_t* out, int n) {
+void XferTx::frameIds(xfer_id_t* out, int n) {
   if (!chunks_) { std::fill(out, out + n, ID_HEADER); frame_++; return; }   // ai: an empty file is its header
   if (!scheduled_ && made()) schedule();
   if (!scheduled_) warm(out, n);
@@ -520,8 +505,8 @@ void XferTx::frameIds(uint32_t* out, int n) {
   frame_++;
 }
 
-void XferTx::block(uint32_t id, uint8_t* out) const {
-  const uint32_t c = id >> SYMBOL_BITS, s = id & SYMBOL_MASK;
+void XferTx::block(xfer_id_t id, uint8_t* out) const {
+  const uint32_t c = xfer_id_chunk(id), s = xfer_id_symbol(id);
   if (c == CONTROL) {
     if (s == 0) std::memcpy(out, header_, PAYLOAD);
     else if (s - 1 < manifest_.size() && mready_[s - 1].load(std::memory_order_acquire)) std::memcpy(out, manifest_[s - 1].data(), PAYLOAD);
@@ -530,12 +515,15 @@ void XferTx::block(uint32_t id, uint8_t* out) const {
   }
   std::memset(out, 0, PAYLOAD);
   if (c >= chunks_ || !ready_[c].load(std::memory_order_acquire)) return;   // ai: frameIds names only chunks made
-  if (spill_ >= 0 && K_[c] > 1) {
-    // ai: the spill: the symbol's count v (the newest named with s's place in the symbols' 18 bits; a frame's ids are
-    // ai: all of its last segment or the one before), its segment n, read from slot n mod 3 once written
-    const uint64_t last = taken_[c] - 1;
-    const uint32_t off = (s - base_[c]) & SYMBOL_MASK;
-    const uint64_t v = last - ((static_cast<uint32_t>(last) - off) & SYMBOL_MASK);
+  if (spill_ >= 0) {
+    // ai: the spill: the symbol's count v (the newest named with id s: its place in the last named's pass, or in the
+    // ai: pass before where that comes after the last named; a frame's ids are all of its last segment or the one
+    // ai: before), its segment n, read from slot n mod 3 once written. An id named twice in those segments (once either
+    // ai: side of a pass's end: each pass names every id) maps to its later naming, the same ESI and so the same bytes,
+    // ai: in a segment still kept (research/build/idorder-2026-11-15/spill_map_check.cpp).
+    const uint64_t last = taken_[c] - 1, p = last >> 24;
+    uint64_t v = p << 24 | unshuffle24(passKey(base_[c], p), s);
+    if (v > last && p) v = (p - 1) << 24 | unshuffle24(passKey(base_[c], p - 1), s);
     const uint64_t n = v / seg_[c];
     {
       std::unique_lock<std::mutex> l(spillMu_);
@@ -545,13 +533,7 @@ void XferTx::block(uint32_t id, uint8_t* out) const {
     if (!spillIo(spill_, off_[c] + ((n % 3) * seg_[c] + v % seg_[c]) * uint64_t{PAYLOAD}, out, PAYLOAD, false)) std::memset(out, 0, PAYLOAD);
     return;
   }
-  if (enc_[c]) {
-    uint8_t buf[PAYLOAD];
-    const int n = lizard_wh_encode(enc_[c].get(), s, buf, PAYLOAD);
-    if (n > 0) std::memcpy(out, buf, static_cast<size_t>(n));
-    return;
-  }
-  std::memcpy(out, one_[c].data(), one_[c].size());   // ai: a chunk of one block, zero padded
+  if (enc_[c]) rq_enc_symbol(enc_[c].get(), s, out);
 }
 
 std::string XferTx::rootHex() const {

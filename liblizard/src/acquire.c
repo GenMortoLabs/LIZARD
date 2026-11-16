@@ -1535,7 +1535,6 @@ static void lensm_axis(int iw, int ih, lensm_t *m) {
   for (int c = 0; c < 4; c++) { const double d = hypot((c & 1 ? iw : 0) - (double)x, (c & 2 ? ih : 0) - (double)y); if (d > m->R) m->R = d; }
   if (!(m->R > 0)) m->R = 1;
 }
-static int cmp_double(const void *a, const void *b) { const double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
 static int lensm_fit(int np, const double *qx, const double *qy, const double *dx, const double *dy, const unsigned char *isb, unsigned char *drop, double tau_floor, int kmax, lensm_t *m) {
   double *res = isb ? malloc((size_t)np * sizeof(double)) : 0;
   int ok = 0;
@@ -1588,8 +1587,7 @@ static int lensm_fit(int np, const double *qx, const double *qy, const double *d
     if (!nb) break;
     double *srt = malloc((size_t)nb * sizeof(double));
     memcpy(srt, res, (size_t)nb * sizeof(double));
-    qsort(srt, (size_t)nb, sizeof(double), cmp_double);
-    const double tau = fmax(tau_floor, 3 * 1.4826 * srt[nb / 2]);
+    const double tau = fmax(tau_floor, 3 * 1.4826 * ob_select(srt, nb, nb / 2));
     free(srt);
     for (int i = 0, b = 0; i < np; i++) {
       if (!isb[i]) continue;

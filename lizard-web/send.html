@@ -189,10 +189,10 @@
       $("blocks").value = String(v);
       // ai: Show statistics on: Blocks with the count and the ring by its cells; off: Density, the bytes alone, the ring by
       // ai: its border's look (send.mjs showStatsLabels)
-      const stats = $("stats").value === "1", kb = `${(k * 472 / 1000).toFixed(1)} KB`;
+      const stats = $("stats").value === "1", kb = `${(k * 471 / 1000).toFixed(1)} KB`;
       $("blocksTitle").textContent = stats ? "Blocks" : "Density";
       if (stats) { const r = $("ring"), rv = r.value; r.innerHTML = [64, 128, 256].map((x) => `<option value="${x}">${x}</option>`).join(""); r.value = rv; }
-      $("blocksOut").textContent = stats ? `${k}, ${kb}` : kb;   // ai: 472 B a block (sim/xfer.mjs PAYLOAD), before the modules load
+      $("blocksOut").textContent = stats ? `${k}, ${kb}` : kb;   // ai: 471 B a block (sim/xfer.mjs PAYLOAD), before the modules load
       $("fpsOut").textContent = `${+$("fps").value}`;
       for (const k of ["78", "34", "23", "12"]) $(`refresh${k}Out`).textContent = `${Math.max(1, Math.min(4, Math.round(+$(`refresh${k}`).value) || 1))}`;
       $("sizeOut").textContent = `${+$("size").value}%`;

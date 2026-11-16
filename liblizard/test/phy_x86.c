@@ -6,7 +6,7 @@
 // ai: loop's conversion gives it on x86-64); turn4 against turned() on every coefficient the frame carries, at shifts up
 // ai: to +-4 and at +-300. Every byte and float compared exactly. The bit packing and the pilots' shifts are held by the
 // ai: decodes (a wrong byte fails its block's CRC). Exit 1 on any difference. It includes lizard_phy.c:
-// ai:   gcc -O3 -ffp-contract=off -msse4.1 -Isrc -o build/phy_x86 test/phy_x86.c src/{layout,fmt,rs,ldpc,fft,acquire,any,shake}.c -lm
+// ai:   gcc -O3 -ffp-contract=off -msse4.1 -Isrc -o build/phy_x86 test/phy_x86.c src/{layout,fmt,rs,ldpc,fft,acquire,any}.c -lm
 #include "lizard_phy.c"
 #include <stdio.h>
 uint32_t ob_debug_hash;

@@ -17,6 +17,7 @@
 
 #include "android_env.h"
 #include "jni_session.h"
+#include "jni_text.h"
 #include "pack.h"
 #include "sender.h"
 
@@ -49,13 +50,9 @@ extern "C" {
 
 namespace {
 
-std::string str(JNIEnv* e, jstring s) {
-  if (!s) return {};
-  const char* c = e->GetStringUTFChars(s, nullptr);
-  std::string r(c ? c : "");
-  if (c) e->ReleaseStringUTFChars(s, c);
-  return r;
-}
+// ai: a jstring as true UTF-8 (jni_text.h; JNI's modified UTF-8 until 2026-11-15 mangled a name or path past U+FFFF,
+// ai: an emoji's, on its way to the file system)
+using lizard::jni::str;
 
 // ai: a message as a JSON string's contents: quotes and backslashes escaped, control characters as spaces
 std::string jsonText(const std::string& s) {
@@ -748,7 +745,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIE
   return reinterpret_cast<jlong>(t.release());
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txError(JNIEnv* e, jclass) { return e->NewStringUTF(gTxError.c_str()); }
+extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txError(JNIEnv* e, jclass) { return lizard::jni::jstr(e, gTxError); }
 
 // ai: the bytes the transfer carries (the packed file's where it was packed, else the file's; 0 the test stream)
 extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txBytes(JNIEnv*, jclass, jlong h) { return static_cast<jlong>(tx(h)->bytes); }
@@ -780,7 +777,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txConfigure
   if (t->gring) stopFiller(*t->gring);
   const std::string err = t->s->configure(f);
   if (t->gring && err.empty() && t->s->side() == t->ringSide && t->s->width() == t->ringW) startFiller(t, t->gring);
-  return e->NewStringUTF(err.c_str());
+  return lizard::jni::jstr(e, err);
 }
 
 // ai: Rate refresh (Sender::setRefresh, 2026-11-12): the blocks of the code rates 7/8, 3/4, 2/3 and 1/2 new in every
@@ -789,6 +786,11 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txConfigure
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txRefresh(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   const int every[4] = {a, b, c, d};
   if (h) tx(h)->s->setRefresh(every);
+}
+// ai: The animated header (Sender::setCarousel, 2026-11-15, Send's Header in Refresh): frames each carousel symbol is shown, 0 the
+// ai: static word; the next frame made takes it (no configure)
+extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txCarousel(JNIEnv*, jclass, jlong h, jint frames) {
+  if (h) tx(h)->s->setCarousel(frames);
 }
 // ai: Developer Tools' Seed (Sender::seed, 2026-11-14): a file's schedule from seed (an unsigned 32-bit value in an int),
 // ai: before its first frame; false after, or for the test stream
@@ -806,7 +808,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txPrepare(J
     t->gpuExpand = probeStorage(*d, &t->ahbUsage);
     __android_log_print(ANDROID_LOG_INFO, "lizard", "send: %s", t->gpuExpand ? "the GPU fills the compositor's buffers (storage images on hardware buffers)" : "no storage images on hardware buffers here: the CPU copies frames in");
   }
-  return e->NewStringUTF(why.c_str());
+  return lizard::jni::jstr(e, why);
 }
 
 // ai: A picture due at the vsync `vsync` (its frame timeline, expected on screen at `expected` ns; `vsyncNs` the
@@ -854,7 +856,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txPostStats
     r.posts = r.shownN = r.late = r.behind = 0;
     r.held.clear();
   }
-  return e->NewStringUTF((o + ",\"error\":\"" + jsonText(t->error) + "\"}").c_str());
+  return lizard::jni::jstr(e, o + ",\"error\":\"" + jsonText(t->error) + "\"}");
 }
 
 // ai: The blocks a frame of subch sub-channels carries under the format's rate profile (src/lizard_phy.h lizard_blocks_for),
@@ -896,7 +898,7 @@ extern "C" JNIEXPORT jboolean JNICALL Java_dev_lizard_receiver_Native_txPresent(
 // ai: parent ("no child surface"), and the window's queue posted into the old window (2026-10-27).
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txSurfaceGone(JNIEnv* e, jclass, jlong h) { if (h) dropWindow(e, tx(h)); }
 
-extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txStats(JNIEnv* e, jclass, jlong h) { return e->NewStringUTF(tx(h)->s->stats().c_str()); }
+extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txStats(JNIEnv* e, jclass, jlong h) { return lizard::jni::jstr(e, tx(h)->s->stats()); }
 
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txDestroy(JNIEnv* e, jclass, jlong h) {
   Tx* t = tx(h);
@@ -906,3 +908,42 @@ extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txDestroy(JNIE
   if (t->map) munmap(const_cast<uint8_t*>(t->map), t->mapLen);
   delete t;   // ai: its packed file with it
 }
+
+// ai: A kept file the default client packed read back as the file it holds (pack.h Unpacker, 2026-11-15): Received.kt
+// ai: streams it straight into Downloads, one pass, the bytes counted for Receive's Saving row. unpackOpen: a handle,
+// ai: or an IOException with why; unpackSize: the file's bytes; unpackRead: up to len bytes into buf at off, -1 at the
+// ai: end, an IOException where a frame is damaged or the file cannot be read; unpackClose lets the handle go.
+namespace {
+lizard::Unpacker* unpacker(jlong h) { return reinterpret_cast<lizard::Unpacker*>(h); }
+void throwIo(JNIEnv* e, const std::string& why) {
+  if (jclass c = e->FindClass("java/io/IOException")) e->ThrowNew(c, why.c_str());
+}
+}  // namespace
+
+extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_unpackOpen(JNIEnv* e, jclass, jstring path) {
+  auto u = std::make_unique<lizard::Unpacker>();
+  const std::string why = u->open(str(e, path));
+  if (!why.empty()) {
+    throwIo(e, why);
+    return 0;
+  }
+  return reinterpret_cast<jlong>(u.release());
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_unpackSize(JNIEnv*, jclass, jlong h) { return static_cast<jlong>(unpacker(h)->size()); }
+
+extern "C" JNIEXPORT jint JNICALL Java_dev_lizard_receiver_Native_unpackRead(JNIEnv* e, jclass, jlong h, jbyteArray buf, jint off, jint len) {
+  if (len <= 0) return 0;
+  try {
+    size_t n = static_cast<size_t>(len);
+    const uint8_t* p = unpacker(h)->take(n);
+    if (!n) return -1;
+    e->SetByteArrayRegion(buf, off, static_cast<jsize>(n), reinterpret_cast<const jbyte*>(p));
+    return static_cast<jint>(n);
+  } catch (const std::exception& x) {
+    throwIo(e, x.what());
+    return 0;
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_unpackClose(JNIEnv*, jclass, jlong h) { delete unpacker(h); }

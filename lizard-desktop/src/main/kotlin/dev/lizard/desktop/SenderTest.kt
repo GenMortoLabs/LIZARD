@@ -26,7 +26,7 @@ import dev.lizard.ui.*
 // ai: presenter stats go to stderr as "present: {...}".
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
     companion object {
-        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh")
+        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh", "carousel")
         // ai: how long the presenter may take to start (the canvas shown, the GPU painter made) before the check fails
         private const val START_SECS = 60.0
 
@@ -83,6 +83,8 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             if (v.split(',').let { e -> e.size != 4 || e.any { it.trim().toIntOrNull() !in 1..dev.lizard.ui.REFRESH_MAX } }) fail("LIZ_SENDER_TEST: refresh=$v")
             s.refresh = dev.lizard.ui.refreshOf(v)
         }
+        // ai: Refresh's Header, the animated header (2026-11-15): frames a carousel symbol, 0 to CAROUSEL_MAX (0 the static word)
+        int("carousel", 0..dev.lizard.ui.CAROUSEL_MAX)?.let { s.carousel = it }
     }
 
     // ai: on the UI thread (Main.kt's LaunchedEffect)

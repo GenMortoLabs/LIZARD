@@ -54,6 +54,7 @@ class GpuPainter {
   int side() const { return t_.W; }      // ai: a symbol's side, the frame's height
   int width() const { return t_.FW; }    // ai: the frame's width: codes symbols and the gaps between them
   int codes() const { return t_.codes; }
+  int blocks() const { return t_.blocks; }   // ai: a symbol's blocks (the format's rate profile)
   const std::string& device() const { return name_; }
 
   // ai: count frames (1 to frames()), each codes x blocks x blockBytes (a block its id then its payload, as Sender makes
@@ -63,17 +64,31 @@ class GpuPainter {
   // ai: seq: the first frame's number: the frames go to slots seq mod depth() on (an encode never wraps the ring:
   // ai: count is at most depth() - seq mod depth()). out null: the frames stay on the device (the ring's readers take
   // ai: them there); else each is read back into out[f] as width() x side() grey.
-  double encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0);
+  // ai: test: the blocks are the test stream's (SPEC 9.3), and only their ids (each block's first five bytes) are read:
+  // ai: PAINT makes each payload from its id on the device (BLAKE3, wgsl/send.mjs; 2026-11-15)
+  // ai: pos: the animated header's carousel position of each frame's codes (count x codes, a frame's codes in turn;
+  // ai: OB_CAR_N keeps that code's static word; wordsWhy below), null every frame's static word
+  double encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false, const uint8_t* pos = nullptr);
 
-  // ai: frames painted here and by the C (its own codec, told the same counts): the border's pixels equal, the square's
+  // ai: frames painted here and by the C (its own codec, told the same counts), the blocks the test stream's: here from
+  // ai: their ids alone (encode's test), the C from their bytes, so the device's stream is held to the library's too: the border's pixels equal, the square's
   // ai: within one grey level (gpu/encoder.mjs checkNow's rule), the anchors' squares' pixels equal: anchorPx compared,
   // ai: anchorDark of them 0 here (their dark rings: the anchors are there), anchorDiff apart.
   struct Check { bool ok = false; long borderDiff = 0, squareDiff = 0, anchorPx = 0, anchorDark = 0, anchorDiff = 0; int squareMax = 0; };
   Check check(const uint8_t* blocks, int count);
 
+  // ai: The animated header (2026-11-15, sender.h setCarousel; SPEC 5.5): every symbol's word of the format's own header
+  // ai: (version, fps, extension bytes 0 and 0: k 3) made at each configure, so any encode's frames may take their own:
+  // ai: encode's pos, each code's symbol painted over its word cells by WORDS (gpu/wgsl/send.mjs) after rsh. No
+  // ai: configure between a change and the frames that show it.
+  // ai: wordsWhy: "" where it can, else why not (no WORDS kernel in the tree, no word in the format, the cells not where
+  // ai: the border has them); the sender then paints an animated header on the CPU.
+  const std::string& wordsWhy() const { return wordsWhy_; }
+
  private:
   GpuPainter() = default;
   std::string pipes(int n);
+  std::string words();
   std::unique_ptr<wg::Device> dev_;
   std::string name_, assets_;
   std::function<void(const std::string&)> log_;
@@ -90,6 +105,13 @@ class GpuPainter {
   // ai: a configuration's buffers and groups
   std::shared_ptr<wg::Buffer> BLOCKS_, UV_, S_, PU_, TW_, ROWS_, SU_, Y_, PQT_, PIC_, TAPS_, BORDER_, GU_, FRAME_, READ_, TIME_;
   std::shared_ptr<wg::BindGroup> gPaint_, gIrows_, gIpic_, gTpose_, gRsv_, gRsh_;
+  // ai: the animated header's (carousel): WORDS, the frame words it paints, every symbol's word bits, its uniform
+  std::shared_ptr<wg::BindGroupLayout> bglWords_;
+  std::shared_ptr<wg::Pipeline> words_;
+  std::shared_ptr<wg::Buffer> SPANS_, WALL_, WU_, POS_;
+  std::shared_ptr<wg::BindGroup> gWords_;
+  int carSpans_ = 0, carNwb_ = 0;
+  std::string wordsWhy_ = "no GPU paint configured";
   std::shared_ptr<wg::QuerySet> qs_;
   std::vector<uint8_t> staging_;
 };

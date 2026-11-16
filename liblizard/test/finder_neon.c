@@ -7,7 +7,7 @@
 // ai: every length to past EDGE_REACH. The line fit (the block map, both scans' candidates and fit_lines' curves, at full scale) has
 // ai: a hash of its own, exact on every target and pinned (LINE_HASH): the test fails where it differs. test/neon_kernels.sh
 // ai: builds it both ways on a phone and compares. It includes acquire.c and links the rest of the codec:
-// ai:   cc -O2 -ffp-contract=off -Isrc test/finder_neon.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any,shake}.c -lm
+// ai:   cc -O2 -ffp-contract=off -Isrc test/finder_neon.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any}.c -lm
 #include "acquire.c"
 #include <stdio.h>
 uint32_t ob_debug_hash;

@@ -137,6 +137,9 @@ class Receiver {
   // ai: batch (FrontHalf::run's keep), the C's copied as a worker takes them; 2:1's halves are a frame each. The caller
   // ai: ends the run (Replay::finish).
   virtual void record(std::shared_ptr<Replay>) {}
+  // ai: The transfer's bounds (xfer_rx.h allow: Largest file and its room, 2026-11-15; a transfer refused for them
+  // ai: taken afresh at its next header); nothing where the receiver has no transfer (the PC link's)
+  void allow(uint64_t limit, double room);
 
  private:
   // ai: the transfer this receiver feeds, for create's from; null where it has none, and create then gives the new

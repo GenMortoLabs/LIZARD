@@ -15,6 +15,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace lizard {
@@ -24,6 +25,7 @@ class Replay {
   // ai: file: the replay, a .lizard (refused where it exists, or its scratch folder holds anything); maxBytes: the
   // ai: window's cap, the kept frames' raw bytes (w x h each): past it the oldest go, the newest always kept
   Replay(std::string file, std::string run, int64_t maxBytes);
+  ~Replay();
   Replay(const Replay&) = delete;
   Replay& operator=(const Replay&) = delete;
   // ai: whether it still takes frames: false once the run is ending or ended, or a write failed
@@ -39,6 +41,8 @@ class Replay {
   // ai: ax, ay where the camera's optical axis fell in it (NaN: its centre). Written as it comes, and the oldest past
   // ai: the cap deleted.
   void frame(const uint8_t* px, uint32_t w, uint32_t h, uint32_t stride, double ms, bool held = false, float ax = NAN, float ay = NAN);
+  // ai: the same, the frame's bytes (w x h, rows packed) handed over whole: no copy (the GPU decoder's read-back frame)
+  void frame(std::vector<uint8_t>&& px, uint32_t w, uint32_t h, double ms, bool held = false, float ax = NAN, float ay = NAN);
   // ai: The run's end, once the held frames have come (or a few seconds have passed): the file written, the frames
   // ai: kept oldest first (each scratch frame removed once it is in), then stats.jsonl (`rows`, a row a line), then
   // ai: meta.json (run, w, h, frames, of, sizes as the web's; ms, each frame's capture time; axes, each frame's camera
@@ -69,10 +73,26 @@ class Replay {
   uint64_t taken = 0;
   int64_t held = 0;         // ai: the kept frames' bytes
   std::deque<Kept> kept;
-  std::vector<uint8_t> rowsBuf;   // ai: a frame's rows packed where they come `stride` apart
   std::string path(uint64_t i) const;
   bool put(const std::string& p, const void* data, size_t n);
   void trim();               // ai: mu held: the oldest frames deleted while the kept ones pass the cap, the newest kept
+  // ai: The writer (2026-11-15): every file the scratch folder takes or loses goes through one thread of its own, in
+  // ai: the order frame() and trim() named them (a frame written before its deletion), so the thread that hands a frame
+  // ai: over pays its copy, not its write (the S26: 0.8 ms a 960 x 960 frame and 2.0 a 1920 one on the GPU decoder's
+  // ai: thread before, a tenth to a quarter of it at 120 halves a second). Its queue holds at most QUEUE_BYTES of
+  // ai: frames; past it frame() waits for the disk. qm guards the queue (taken after mu, never before).
+  struct Job { uint64_t i; bool remove; std::vector<uint8_t> px; };
+  std::mutex qm;
+  std::condition_variable qcv;
+  std::deque<Job> q;
+  size_t qBytes = 0;
+  bool busy = false, stopW = false;   // ai: qm: a job taken and not yet done; the writer to end
+  std::string werr;                   // ai: qm: the writer's failure (it never takes mu: a caller waiting for room holds it)
+  std::thread writer;
+  void queue(Job j);
+  void writerLoop();
+  void drainWriter();   // ai: until every job queued so far is done
+  void take(std::vector<uint8_t>&& px, uint32_t w, uint32_t h, double ms, float ax, float ay);   // ai: mu held
 };
 
 }  // namespace lizard

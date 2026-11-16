@@ -13,7 +13,7 @@
 extern "C" {
 #include "codec.h"
 #include "lizard_phy.h"
-#include "shake.h"
+#include "xfer.h"
 // ai: src/acquire.c: RGBA to luma, the web's weights (77, 150, 29, rounded)
 void ob_luma(const uint8_t* rgba, int n, uint8_t* out);
 }
@@ -30,9 +30,10 @@ struct liz_encoder {
 
 struct liz_decoder {
   cpu_dec_t* d = nullptr;
+  cpu_hold_t* hold = cpu_hold_new();   // ai: the carousel the animated words this decoder reads assemble (codec.h)
   int top = 0, bb = 0;
   std::vector<uint8_t> luma, blocks, ok;
-  ~liz_decoder() { cpu_dec_free(d); }
+  ~liz_decoder() { cpu_dec_free(d); cpu_hold_free(hold); }
 };
 
 using namespace liz;
@@ -140,7 +141,7 @@ LIZ_API int liz_decode(liz_decoder* d, const uint8_t* px, int w, int h, int stri
     }
     cpu_frame_t fr{};
     cpu_dec_frame(d->d, img, w, h, *held, d->blocks.data(), d->ok.data(), &fr);
-    if (fr.word) *held = fr.version;
+    if (fr.word) { const int v = cpu_hold_take(d->hold, fr.kind, fr.version, fr.pos, fr.sym); if (v) *held = v; }
     int k = 0;
     const int total = std::min(fr.total, d->top);
     for (int b = 0; b < total; b++)
@@ -151,6 +152,7 @@ LIZ_API int liz_decode(liz_decoder* d, const uint8_t* px, int w, int h, int stri
       o.held_used = fr.held; o.total = fr.total; o.verified = k;
       std::memcpy(o.quad, fr.quad, sizeof o.quad);
       o.pilot_blocks = fr.pilot_blocks;
+      o.animated = fr.word && fr.kind == 1;
       std::memcpy(o.pilot_r, fr.pilot_r, sizeof o.pilot_r);
       std::memcpy(o.pilot_sd, fr.pilot_sd, sizeof o.pilot_sd);
       *out = o;
@@ -174,7 +176,7 @@ LIZ_API int liz_layout_rects(int w, int h, int layout, int rect[2][4]) {
   });
 }
 
-LIZ_API void liz_stream_fill(uint32_t id, uint8_t payload[LIZ_PAYLOAD]) {
+LIZ_API void liz_stream_fill(uint64_t id, uint8_t payload[LIZ_PAYLOAD]) {
   if (payload) stream_fill(id, payload, LIZ_PAYLOAD);
 }
 

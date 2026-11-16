@@ -13,7 +13,6 @@
 #include "xfer_tx.h"
 
 extern "C" {
-#include "shake.h"
 #include "xfer.h"
 }
 
@@ -22,7 +21,7 @@ struct liz_tx {
   std::unique_ptr<lizard::XferTx> x;   // ai: null for the test stream
   uint32_t next = 0;
   uint64_t length = 0;
-  std::vector<uint32_t> ids;
+  std::vector<xfer_id_t> ids;
 };
 
 struct liz_rx {
@@ -42,7 +41,7 @@ static liz_tx* fileTx(std::vector<uint8_t> owned, const uint8_t* data, size_t le
   try {
     t->x = std::make_unique<lizard::XferTx>(length ? data : &empty, length, name ? name : "", type ? type : "");
   } catch (const std::runtime_error& e) {
-    throw Error(LIZ_E_TOOBIG, e.what());   // ai: XferTx refuses a file only for its size (chunks, Wirehair's seeds)
+    throw Error(LIZ_E_TOOBIG, e.what());   // ai: XferTx refuses a file only for its size (chunks)
   }
   t->length = length;
   return t.release();
@@ -162,7 +161,7 @@ LIZ_API int liz_rx_progress(liz_rx* r, liz_progress* out) {
 LIZ_API int liz_rx_chunks(liz_rx* r, uint8_t* per, int cap) {
   return guard([&] {
     need(r && (per || cap <= 0), "a receiver and a place for its chunks");
-    r->core->progress(r->p);
+    r->core->progress(r->p, true);
     const int n = int(r->p.per.size());
     if (cap > 0) std::memcpy(per, r->p.per.data(), size_t(std::min(n, cap)));
     return n;

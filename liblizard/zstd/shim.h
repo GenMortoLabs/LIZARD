@@ -28,6 +28,10 @@ int32_t lizard_zstd_decompress(const uint8_t *src, uint32_t n, uint8_t *dst, uin
 int32_t lizard_zstd_frame_content(const uint8_t *src, uint32_t n);
 // The bytes the frame at src takes, where src[0..n) holds it whole: or -1.
 int32_t lizard_zstd_frame_bytes(const uint8_t *src, uint32_t n);
+// The bytes of the header of the frame at src[0..n) (18 bytes at most are enough), *checksum 1 where the frame ends in
+// a 4-byte checksum, else 0: or -1 where it is not a frame (a skippable frame neither) or n is short. With the blocks'
+// 3-byte headers after it, the frame's length without reading its bytes (core/tx/pack.h Unpacker).
+int32_t lizard_zstd_frame_head(const uint8_t *src, uint32_t n, int32_t *checksum);
 #ifdef __cplusplus
 }
 #endif

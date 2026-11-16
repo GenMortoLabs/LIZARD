@@ -47,7 +47,7 @@ import dev.lizard.readout.Readout
 // ai: Code, Refresh, Performance (Layout merged into Code 2026-11-13) (RECV_FOLDS, SEND_FOLDS). Collapsed: the tool screens' column at its rail, one for Receive and Send (2026-11-07;
 // ai: each its own before)
 enum class FoldKey {
-    RecvCamera, RecvPerformance, RecvExperimental, RecvTools,
+    RecvCamera, RecvPerformance, RecvFiles, RecvExperimental, RecvTools,
     SendCode, SendRefresh, SendPerformance, SendExperimental, SendTools,
     Collapsed, HomeUnfinished, HomeFiles
 }
@@ -188,7 +188,13 @@ fun ReceiveRail(h: ReceiveHost) {
         IconBtn(if (h.running) Icons.pause else Icons.play, if (h.running) "Stop" else "Start",
             enabled = h.access == null && !h.starting && (h.running || h.startable)) { h.toggleCamera() }
     }
-    if (kept == null) {
+    val spin = h.line.spin
+    if (kept == null && spin != null) {
+        // ai: every chunk in hand (2026-11-14), then the filing: the rate's square kept empty, the spinner over the
+        // ai: chunks verified, then the share saved
+        RateSquare(null)
+        DecodingSquare(spin)
+    } else if (kept == null) {
         RateSquare(h.railRate)
         h.railPct?.let { PctSquare(it) }
     } else {
@@ -231,7 +237,7 @@ private fun TransferPanel(h: ReceiveHost) {
     // ai: before); a file in is the card's to say, its block here only with Show statistics on and the camera off
     val good = ln.tone == Readout.Tone.Good
     val shown = ln.text.isNotEmpty() && ln.tone != Readout.Tone.Bad && (!good || (h.showStats && !h.running))
-    val now = if (shown) Details(ln.name ?: ln.text, test = ln.test, end = ln.pct, frac = ln.frac, rows = ln.rows) else null
+    val now = if (shown) Details(ln.name ?: ln.text, test = ln.test, end = ln.pct, spinning = ln.spin != null, frac = ln.frac, rows = ln.rows) else null
     // ai: Within a run (Start until it stops) the block once shown keeps its room until the run ends, drawn clear
     // ai: when it falls silent (2026-11-02: Receiving, its meter and figures, and the hint each moved the folds under them
     // ai: as they came and went); none is held before it has had words, so a camera starting shows no gap (a run's whole

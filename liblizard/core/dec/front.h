@@ -99,6 +99,11 @@ struct Slot {
   uint32_t w = 0, h = 0;
   bool luma = false;      // ai: the host-luma path: the frame is in the slot's staging buffer, and its batch copies it into the layer
   bool raw = false;       // ai: the develop path (enqueueRaw): the crop's samples in the slot's raw staging, which its batch develops and copies into the layer
+  // ai: the device path (enqueueBuffer): the frame already on this decoder's device, src's bytes from srcOffset in rows
+  // ai: srcStride bytes apart, which its batch copies into the layer
+  std::shared_ptr<wg::Buffer> src;
+  uint64_t srcOffset = 0;
+  uint32_t srcStride = 0;
   // ai: the batch copy that last read the layer: the slot is not written again until it is done (Vulkan orders
   // ai: nothing between the ingest's queue and the decoder's; the web's one queue ordered the next write for free)
   std::shared_ptr<wg::Ticket> reading;
@@ -125,7 +130,8 @@ struct FrameOut {
   bool held = false;
   struct { float found = 0, ring = -1; std::array<float, 8> corners{}; } finder;
   bool hasWord = false;
-  struct { int version = 0, fps = 0; } word;
+  // ai: the frame's own word (src/fmt.h): kind 0 static (version, fps, ext) or 1 animated (a carousel symbol: pos, sym)
+  struct { int kind = 0, version = 0, fps = 0, pos = 0; uint8_t ext[2] = {0, 0}, sym[3] = {0, 0, 0}; } word;
   int anchors = 0;   // ai: result word 31: the anchors ANCH_FIT found on the frame (0: the frame not found)
   std::vector<uint32_t> counts;       // ai: COUNTERS a frame
   std::vector<uint32_t> backCounts;   // ai: the back half's COUNTS a frame
@@ -287,6 +293,12 @@ class FrontHalf {
   // ai: developed frame, its samples staged here as they are (any thread, as enqueueLuma), developed on the device by
   // ai: the batch that takes the slot (develop.comp) and copied into its layer. Null when every slot is staged.
   Slot* enqueueRaw(const RawFrame& r, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint64_t tag = 0);
+  // ai: A frame already on this decoder's device (2026-11-15: the GPU painter's ring on the same wg::Device, a round
+  // ai: trip that never leaves the GPU; the lab's large-file run): w x h grey bytes of buf from offset, rows stride
+  // ai: bytes apart, copied into its layer by the batch that takes the slot. The caller keeps those bytes until that
+  // ai: batch's copies are done (the slot's reading ticket; its finish at the latest). Any thread; null when every
+  // ai: slot is staged.
+  Slot* enqueueBuffer(std::shared_ptr<wg::Buffer> buf, uint64_t offset, uint32_t stride, uint32_t w, uint32_t h, uint64_t tag = 0);
   CameraIngest* ingest = nullptr;   // ai: the camera ingest whose timeline a batch waits on (set by the receiver)
   std::mutex ringMu;
   void release(Slot* s);

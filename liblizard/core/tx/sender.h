@@ -1,5 +1,5 @@
 // ai: The app's sender (2026-10-01): lizard-web/send-worker.mjs natively, the C on the CPU (NEON). One thread makes each
-// ai: frame's blocks in order (a file's ids by XferTx's schedule, or the test stream's from a random first id, SHAKE256 of
+// ai: frame's blocks in order (a file's ids by XferTx's schedule, or the test stream's from a random first id, BLAKE3 of
 // ai: each id, as the page's); a few painters, each with its own codec (src/lizard_phy.c keeps its scratch in the codec),
 // ai: encode and paint them ahead (lizard_encode, lizard_paint_grey: grey with the margin, the pilots' count the
 // ai: frame's number mod 4) into the GPU painter's frame ring (2026-10-07), or the GPU paints them (painter, below);
@@ -103,12 +103,31 @@ class Sender {
   // ai: is one it has. From the next frame made (frames already made ahead keep theirs); kept across configures.
   void setRefresh(const int every[4]);
   static constexpr int REFRESH_MAX = 4;   // ai: two bits a rate; 4 at 60 is 15 a second
+  // ai: The animated header (2026-11-15, the apps' Header in Send's Refresh fold; src/fmt.h, SPEC 5.5): frames each
+  // ai: carousel symbol is shown, 1 to CAROUSEL_MAX, 0 the static word (the default). The header is the format's own
+  // ai: (version, fps, extension bytes 0 and 0: k 3). Code c of frame seq shows slot codes x (seq / frames) + c (two codes
+  // ai: each its own, so a picture gives a receiver two), and slot t position carouselPosition(key, t): every pass of
+  // ai: 255 slots shows each position once, each pass in an order of its own drawn from the sender's key (random a
+  // ai: sender, seed's where one is given), so a capture that misses periodically (a camera reading every third frame:
+  // ai: 255 = 3 x 5 x 17, which in a fixed order would see 85 positions forever) meets other positions each pass. On the
+  // ai: GPU each encode's frames take theirs from every
+  // ai: symbol's word made at each configure (gpu_painter.h wordsWhy: WORDS over the word cells after rsh); where that
+  // ai: cannot be, a configure with it on paints on the CPU (gpuWhy says why). Live, as setRefresh: the next frame made
+  // ai: takes it (those already made ahead keep theirs), no configure between; kept across configures.
+  void setCarousel(int frames);
+  static constexpr int CAROUSEL_MAX = 30;
+  // ai: the carousel's slot t's position under key: pass t / 255 a Fisher-Yates order of the 255 positions from
+  // ai: xorshift32 seeded by the key and the pass (the transfer's schedule's mix32), its (t mod 255)-th
+  static int carouselPosition(uint32_t key, uint64_t slot);
+  uint32_t carouselKey();
   // ai: A file's schedule drawn from seed in place of its random one (xfer_tx.h reseed): before its first frame only;
-  // ai: false after, or for the test stream
+  // ai: false after, or for the test stream. The carousel's key drawn from it too, at any time, a file or the test
+  // ai: stream, so a send repeats.
   bool seed(uint32_t seed);
 
  private:
-  struct Job { uint64_t seq; std::vector<uint8_t> blocks; int data; };
+  // ai: car: setCarousel's when it was made; pos: each code's carousel position where car > 0
+  struct Job { uint64_t seq; std::vector<uint8_t> blocks; int data; int car; uint8_t pos[2]; };
   void stopAll();
   void produce();
   void paint(int k);
@@ -121,6 +140,9 @@ class Sender {
   int n_ = 0, side_ = 0, width_ = 0, gap_ = 0, blocks_ = 0, blockBytes_ = 0, gen_ = 0;
   std::string label_, error_, tiers_;   // ai: tiers_: the format's rate profile as text (the stats' tiers)
   int refresh_[4] = {1, 1, 1, 1};   // ai: setRefresh's, under mu_
+  int carousel_ = 0;                // ai: setCarousel's, under mu_
+  uint32_t carKey_ = 0;             // ai: the carousel's order's key (carouselPosition), under mu_
+  bool gpuWords_ = false;           // ai: the GPU paints and can paint an animated header (gpu_painter.h wordsWhy)
   std::vector<uint8_t> rateOf_;     // ai: a symbol's block b's code rate (0 7/8 ... 3 1/2), from the format's tiers
   std::mutex mu_;
   std::mutex xferMu_;               // ai: the transfer's state: the producer fills a frame under it, stats reads under it

@@ -74,7 +74,7 @@ function swInit() {
       const b = batchOf.get(m.seq);
       batchOf.delete(m.seq);
       if (!b || !genc) { gpuGiveUp(new Error(`frames ${m.seq} came back with no GPU configuration`)); return; }
-      encodeQueue.push({ ...b, seq0: m.seq, blocks: new Uint8Array(m.buf), buf: m.buf, per: m.codes * b.cfg.V * b.cfg.B, next: 0, codes: m.codes, ms: m.ms / m.count, data: m.data });
+      encodeQueue.push({ ...b, seq0: m.seq, blocks: new Uint8Array(m.buf), buf: m.buf, per: m.codes * b.cfg.V * b.cfg.B, next: 0, codes: m.codes, test: !!m.test, ms: m.ms / m.count, data: m.data });
       pump();
       return;
     }
@@ -150,8 +150,9 @@ function pump() {
   while (genc && encodeQueue.length && tickBudget > 0) {
     const b = encodeQueue[0], cost = b.cfg.frameMs;
     const k = Math.max(1, Math.min(b.count - b.next, b.cfg.sub, cost ? Math.floor(tickBudget / cost) : 1));
-    // ai: the count the pilots carry: the painted count (seq) of the encode's first frame, mod 4 (SPEC 7.3)
-    try { genc.encode(b.half, b.next, b.blocks.subarray(b.next * b.per, (b.next + k) * b.per), k, b.cfg, (b.seq0 + b.next) & 3); } catch (e) { gpuGiveUp(e); return false; }
+    // ai: the count the pilots carry: the painted count (seq) of the encode's first frame, mod 4 (SPEC 7.3); a test
+    // ai: stream's batch its ids alone, the payloads made on the device (send-worker.mjs)
+    try { genc.encode(b.half, b.next, b.blocks.subarray(b.next * b.per, (b.next + k) * b.per), k, b.cfg, (b.seq0 + b.next) & 3, b.test); } catch (e) { gpuGiveUp(e); return false; }
     for (let f = b.next; f < b.next + k; f++) ahead.set(b.seq0 + f, { gcfg: b.cfg, slot: b.half * b.cfg.batch + f, w: b.cfg.W, codes: b.codes, ms: b.ms, data: b.data[f] });
     b.next += k;
     tickBudget -= cost ? k * cost : tickBudget;
@@ -270,7 +271,7 @@ function stateFps(force = false) {
   bandFps = v;
 }
 
-// A LIZARD file goes as a chunked transfer (sim/xfer.mjs): chunks of 2^chunk bytes (?chunk=10..24, 4 MiB unless
+// A LIZARD file goes as a chunked transfer (sim/xfer.mjs): chunks of 2^chunk bytes (?chunk=10..24, 16 MiB unless
 // ai: asked), a fountain each, the header and manifest in the light, and only there: the receiver reads it blind
 // ai: (2026-09-26).
 const URLP = new URLSearchParams(location.search), CHUNK_LOG2 = +URLP.get("chunk") || null;   // ai: null: src/xfer.h xfer_chunk_log2_for's
@@ -279,8 +280,8 @@ const URLP = new URLSearchParams(location.search), CHUNK_LOG2 = +URLP.get("chunk
 const FIT = URLP.get("fit") ?? "stretch", SURROUND = URLP.get("bg") ?? "none";
 
 // Which generator fills a test block (sim/phy.mjs STREAMS), in the spec the worker builds its codec from.
-// ai: The receiver judges it from the light (SPEC 9.3), so it is SHAKE256 and nothing else.
-const STREAM = "shake256";
+// ai: The receiver judges it from the light (SPEC 9.3), so it is BLAKE3 and nothing else.
+const STREAM = "blake3";
 
 function spec() {
   // ai: The format's rate profile (the codec's, from the sub-channel count: src/lizard_phy.c lizard_tiers_for, four rates
@@ -422,7 +423,7 @@ function setPaused(p) {
   showRail();
 }
 // ai: The collapsed rail (send.html #rail): pause while sending, play to resume or to start, and the code's capacity,
-// ai: what it offers at most (codes x new blocks a frame (freshBlocks) x 472 B x pictures a second), while a run is configured. Written
+// ai: what it offers at most (codes x new blocks a frame (freshBlocks) x 471 B x pictures a second), while a run is configured. Written
 // ai: only when it changes (tick calls it every frame). The pictures a second are the asked rate, or the browser's own
 // ai: animation frames where fewer (drawFps, measured each second while sending; since 2026-10-04, so an external
 // ai: limiter shows in the MB/s: Edge's efficiency mode drew 30 of 60 while the rail offered 60's capacity).
@@ -659,10 +660,10 @@ function stop() {
 // ai: Re-pick; the receiver reads the new version from the next frame's word.
 // This is safe mid-transfer because block_bytes is the same at every rate
 // (src/lizard_phy.h LIZARD_BLOCK, 476 B at every rate), not from n or the sub-channel
-// count, so bytes per block does not move and Wirehair, being rateless, does not mind that a frame now carries a
+// count, so bytes per block does not move and the fountain, being rateless, does not mind that a frame now carries a
 // different number of blocks. The check below refuses the change if that ever stops being true.
 //
-// What Wirehair does mind is an id it has already seen. blocksPerFrame moves here, so the id
+// What the fountain does mind is an id it has already seen. blocksPerFrame moves here, so the id
 // ai: comes from nextId rather than seq * blocksPerFrame. The worker builds the new code.
 // ai: One re-pick at a time (2026-09-29: the GPU encoder's configure made the window seconds wide): a room
 // ai: change while one runs is taken once it ends (repickAgain), and one while a start is still making its encoder,

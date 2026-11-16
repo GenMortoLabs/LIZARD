@@ -17,7 +17,7 @@ F="-O3 -ffp-contract=off -DNDEBUG -Wall -Wextra -Wno-unused-parameter -Wno-unuse
 $CC $F -o "$out/ldpc_neon" "$here/ldpc_neon.c" -lm
 $CC $F -o "$out/fft_dec" "$here/fft_dec.c" -lm
 $CC $F -o "$out/crc_check" "$here/crc_check.c" "$here/../src/layout.c" "$here/../src/fmt.c" "$here/../src/rs.c" -lm
-S=$here/../src; codec="$S/layout.c $S/fmt.c $S/rs.c $S/ldpc.c $S/fft.c $S/lizard_phy.c $S/any.c $S/shake.c"
+S=$here/../src; codec="$S/layout.c $S/fmt.c $S/rs.c $S/ldpc.c $S/fft.c $S/lizard_phy.c $S/any.c"
 $CC $F -o "$out/mesh_neon" "$here/mesh_neon.c" $codec -lm
 $CC $F -DOB_SCALAR -o "$out/mesh_scalar" "$here/mesh_neon.c" $codec -lm
 $CC $F -o "$out/finder_neon" "$here/finder_neon.c" $codec -lm

@@ -49,3 +49,11 @@ int32_t lizard_zstd_frame_bytes(const uint8_t *src, uint32_t n) {
   const size_t r = ZSTD_findFrameCompressedSize(src, n);
   return ZSTD_isError(r) || r > 0x7fffffffu ? -1 : (int32_t)r;
 }
+
+EMSCRIPTEN_KEEPALIVE
+int32_t lizard_zstd_frame_head(const uint8_t *src, uint32_t n, int32_t *checksum) {
+  ZSTD_FrameHeader h;
+  if (ZSTD_getFrameHeader(&h, src, n) != 0 || h.frameType != ZSTD_frame || h.headerSize > 0x7fffffffu) return -1;
+  *checksum = h.checksumFlag ? 1 : 0;
+  return (int32_t)h.headerSize;
+}

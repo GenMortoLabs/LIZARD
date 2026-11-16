@@ -2,7 +2,7 @@
 // solve takes long enough to drop camera frames.
 //
 // A LIZARD file is a chunked transfer (sim/xfer.mjs): the header and manifest come in the light, each chunk is its own
-// Wirehair fountain, and each is checked against the file's BLAKE3 root as it completes. Its blocks wait on disk,
+// RaptorQ source block, and each is checked against the file's BLAKE3 root as it completes. Its blocks wait on disk,
 // in the origin private file system (OPFS), where the browser has one: interleaved, every chunk is in flight until the
 // ai: end of the first lap, and the file would otherwise be held in memory twice over. The header comes from the light
 // ai: alone, and the page's config names only the store (?store=memory).
@@ -11,10 +11,10 @@
 // ai: and read again within LIVE_BLOCKS data blocks (the sender puts one in every 128 at most, sim/xfer.mjs). Until a
 // ai: header is read, and once it has gone quiet, the newest HOLD_BLOCKS wait here (0.5 MB) and go to whichever
 // ai: transfer's header comes next; a transfer with no header in sight stores nothing.
-import { init as initWh, Decoder } from "../liblizard/sim/fountain.mjs";
+import { init as initRq, Decoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
-import { XferReceiver, MemoryStore, PAYLOAD, ID_BYTES, ID_HEADER, isControlId } from "../liblizard/sim/xfer.mjs";
+import { XferReceiver, MemoryStore, PAYLOAD, ID_BYTES, ID_HEADER, isControlId, sameFile, idGet, idPut } from "../liblizard/sim/xfer.mjs";
 import { packedType, unpackedName, unpack, unpackWith } from "../liblizard/sim/pack.mjs";
 
 let rx = null, store = null, chain = Promise.resolve(), lastPost = 0, posted = null;
@@ -47,15 +47,21 @@ class OpfsStore {
       if (h.kind !== "directory" || !(await hasFile(h, "header"))) await dir.removeEntry(name, { recursive: true }).catch(() => {});
     return new OpfsStore(dir);
   }
-  constructor(dir) { this.kind = "opfs"; this.keeps = true; this.dir = dir; this.cur = null; this.id = ""; this.h = new Map(); this.out = null; this.man = null; this.ver = null; this.rec = new Uint8Array(REC); }
+  constructor(dir) { this.kind = "opfs"; this.keeps = true; this.dir = dir; this.cur = null; this.id = ""; this.h = new Map(); this.out = null; this.man = null; this.ver = null; this.rec = new Uint8Array(REC); this.id4 = new Uint8Array(4); }
+  // ai: a chunk's records (c<k>) and its ids (i<k>, 4 bytes a record, 2026-11-15: the native store's, so a chunk's
+  // ai: distinct symbols are counted from 142 KB, not its 16.8 MB of records), two handles a chunk
   async handle(c) {
     let e = this.h.get(c);
-    if (!e) { e = { h: await (await this.cur.getFileHandle(`c${c}`, { create: true })).createSyncAccessHandle(), size: 0 }; e.h.truncate(0); this.h.set(c, e); }
+    if (!e) {
+      e = { h: await (await this.cur.getFileHandle(`c${c}`, { create: true })).createSyncAccessHandle(),
+            g: await (await this.cur.getFileHandle(`i${c}`, { create: true })).createSyncAccessHandle(), size: 0 };
+      e.h.truncate(0); e.g.truncate(0); this.h.set(c, e);
+    }
     return e;
   }
   async sync(name) { const h = await (await this.cur.getFileHandle(name, { create: true })).createSyncAccessHandle(); return { h, size: h.getSize() }; }
   closeAll() {
-    for (const e of this.h.values()) e.h.close();
+    for (const e of this.h.values()) { e.h.close(); e.g.close(); }
     this.h.clear();
     for (const k of ["out", "man", "ver"]) { if (this[k]) { this[k].h.flush(); this[k].h.close(); } this[k] = null; }
     this.cur = null; this.id = "";
@@ -64,7 +70,8 @@ class OpfsStore {
     this.closeAll();
     let d = await this.dir.getDirectoryHandle(id, { create: true });
     const had = await readAll(d, "header");
-    const same = had && had.length === header.length && had.every((v, i) => v === header[i]) && (await hasFile(d, "out"));
+    // ai: this file's folder where its header is this file's (sameFile: another sender's name or type kept as the first)
+    const same = had && had.length === header.length && sameFile(had, header) && (await hasFile(d, "out"));
     if (!same) {
       await this.dir.removeEntry(id, { recursive: true }).catch(() => {});
       d = await this.dir.getDirectoryHandle(id, { create: true });
@@ -77,13 +84,14 @@ class OpfsStore {
     this.out = await this.sync("out");
     const m = (await readAll(d, "manifest")) ?? new Uint8Array(0), v = (await readAll(d, "verified")) ?? new Uint8Array(0);
     const manifest = [], verified = [], chunks = [];
-    for (let o = 0; o + REC <= m.length; o += REC) manifest.push([u32(m, o), m.slice(o + ID_BYTES, o + REC)]);
+    for (let o = 0; o + REC <= m.length; o += REC) manifest.push([idGet(m, o), m.slice(o + ID_BYTES, o + REC)]);
     for (let o = 0; o + 4 <= v.length; o += 4) verified.push(u32(v, o));
     for await (const [name, h] of d.entries()) {
       if (h.kind !== "file" || !/^c\d+$/.test(name)) continue;
       const c = +name.slice(1), sh = await h.createSyncAccessHandle(), size = sh.getSize() - (sh.getSize() % REC);
       sh.truncate(size);   // ai: a record cut short by a closed page goes, so the next lands on a record's boundary
-      this.h.set(c, { h: sh, size });
+      const g = await (await d.getFileHandle(`i${c}`, { create: true })).createSyncAccessHandle();
+      this.h.set(c, { h: sh, g, size });   // ai: its ids file made again from the records by ids() where it disagrees
       chunks.push(c);
     }
     return { found: true, manifest, verified, chunks };
@@ -93,18 +101,35 @@ class OpfsStore {
   async park() { this.closeAll(); }
   async forget(id) { if (id === this.id) return this.clear(); await this.dir.removeEntry(id, { recursive: true }).catch(() => {}); }
   async append(c, sym, bytes) {
-    const e = await this.handle(c), r = this.rec;
-    put32(r, 0, sym);
+    const e = await this.handle(c), r = this.rec, i = this.id4;
+    idPut(r, 0, sym);
     r.set(bytes.subarray(0, PAYLOAD), ID_BYTES);
-    e.h.write(r, { at: e.size }); e.size += REC;
+    put32(i, 0, sym);
+    e.h.write(r, { at: e.size }); e.g.write(i, { at: (e.size / REC) * 4 }); e.size += REC;
+  }
+  // ai: the records' symbols (i<k>); where the file does not hold exactly one a record (a folder from before it, or a
+  // ai: page closed between a record's two writes) made again from the records
+  async ids(c) {
+    const e = this.h.get(c);
+    if (!e) return new Uint32Array(0);
+    const n = e.size / REC;
+    if (e.g.getSize() === 4 * n) { const b = new Uint8Array(4 * n); e.g.read(b, { at: 0 }); return new Uint32Array(b.buffer); }
+    const recs = await this.read(c), v = new Uint32Array(n), b = new Uint8Array(4 * n);
+    for (let k = 0; k < n; k++) { v[k] = idGet(recs, k * REC); put32(b, 4 * k, v[k]); }
+    e.g.truncate(0); e.g.write(b, { at: 0 });
+    return v;
   }
   async read(c) { const e = this.h.get(c), b = new Uint8Array(e?.size ?? 0); if (e) e.h.read(b, { at: 0 }); return b; }
-  async drop(c) { const e = this.h.get(c); if (!e) return; e.h.close(); this.h.delete(c); await this.cur.removeEntry(`c${c}`).catch(() => {}); }
-  async truncate(c, n) { const e = this.h.get(c); if (!e || e.size <= n * REC) return; e.h.truncate(n * REC); e.size = n * REC; }
+  async drop(c) {
+    const e = this.h.get(c); if (!e) return;
+    e.h.close(); e.g.close(); this.h.delete(c);
+    await this.cur.removeEntry(`c${c}`).catch(() => {}); await this.cur.removeEntry(`i${c}`).catch(() => {});
+  }
+  async truncate(c, n) { const e = this.h.get(c); if (!e || e.size <= n * REC) return; e.h.truncate(n * REC); e.g.truncate(n * 4); e.size = n * REC; }
   async writeOut(off, bytes) { this.out.h.write(bytes, { at: off }); }
   async noteManifest(m, bytes) {
     this.man ??= await this.sync("manifest");
-    const r = new Uint8Array(REC); put32(r, 0, m); r.set(bytes.subarray(0, PAYLOAD), ID_BYTES);
+    const r = new Uint8Array(REC); idPut(r, 0, m); r.set(bytes.subarray(0, PAYLOAD), ID_BYTES);
     this.man.h.write(r, { at: this.man.size }); this.man.size += REC;
   }
   // ai: the output flushed before the chunk is noted: a chunk noted is a chunk on the disk
@@ -131,10 +156,11 @@ class OpfsStore {
 }
 
 async function chunked(c) {
-  const [M] = await Promise.all([initOb(), initWh(), initZstd()]);
+  const [M] = await Promise.all([initOb(), initRq(), initZstd()]);
   if (c.store === "memory" && store?.kind !== "memory") { store = new MemoryStore(); store.why = "asked for (?store=memory)"; rx = null; }
   if (!store) try { store = await OpfsStore.open(); } catch (e) { store = new MemoryStore(); store.why = String(e?.message ?? e); }
   rx ??= new XferReceiver({ M, Decoder, store });
+  rx.onSolve = () => { report(false); };   // ai: the page sees a solve begin (the transfer's last chunks: Decoding)
   await rx.reset(true);   // ai: a transfer in hand parked, as a header of another file would (2026-10-22; let go before)
   sinceHeader = Infinity; held = []; heldAt = 0;
 }
@@ -162,8 +188,8 @@ async function report(force) {
   const now = performance.now();
   if (!force && now - lastPost < 250) return;
   lastPost = now;
-  const [M, W] = await Promise.all([initOb(), initWh()]);
-  postMessage({ ...rx.progress(), type: "xfer", store: store.kind, storeWhy: store.why, mem: { wirehairHeap: W.HEAPU8.length, codecHeap: M.HEAPU8.length, storeBytes: store.held() } });
+  const M = await initOb();
+  postMessage({ ...rx.progress(), type: "xfer", store: store.kind, storeWhy: store.why, mem: { codecHeap: M.HEAPU8.length, storeBytes: store.held() } });
 }
 
 // Once a transfer, the moment its last chunk verifies. A finished receiver still reads control blocks: a header with

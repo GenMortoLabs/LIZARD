@@ -27,6 +27,8 @@ object Native {
     @JvmStatic external fun txConfigure(h: Long, subch: Int, span: Int, fps: Int, codes: Int, gap: Int, threads: Int, painter: Int, assets: String): String
     // ai: Rate refresh: a new block of the rates 7/8, 3/4, 2/3, 1/2 every a, b, c, d frames (1 to 10), from the next frame
     @JvmStatic external fun txRefresh(h: Long, a: Int, b: Int, c: Int, d: Int)
+    // ai: the animated header (Refresh's Header): frames each carousel symbol is shown, 0 the static word; the next configure takes it
+    @JvmStatic external fun txCarousel(h: Long, frames: Int)
     @JvmStatic external fun txSeed(h: Long, seed: Int): Boolean
     // ai: the blocks a frame of subch sub-channels carries (the format's rate profile, src/lizard_phy.h lizard_blocks_for)
     @JvmStatic external fun blocksFor(subch: Int): Int

@@ -128,7 +128,7 @@ let photoCaps = {}, levels = null;   // what the camera says it can be told, and
 // The last format word read out of a symbol (src/fmt.h): the version, and the rate the sender means to paint at.
 // ai: LIZARD's decoders read everything from the light; this is what the light last said of the format, as shown
 // ai: and recorded. It moves only when two results in a row that read a word agree on the new one (bandSeen is the
-// ai: last word read), so a stray wrong word (a random frame passes the word check at 8.7e-8 a read, SPEC 5.4) is never
+// ai: last word read), so a stray wrong word (a random frame passes the word check at 6.0e-7 a read, SPEC 5.4) is never
 // ai: shown and a real change shows two frames later. Decoding is untouched: every frame decodes by its own word.
 let band = null, bandSeen = null;
 // ai: What the light says: LIZARD's word.
@@ -195,9 +195,18 @@ function showState() {
   const speedNow = () => { const k = recentKBs(); return k > 0 ? nb(rate(k)) : ""; };
   // ai: nothing while the camera starts or no decoder has answered (the preview's cover says "Getting ready"), and an error
   // ai: is the preview's to say (2026-11-06, the apps' Receive.kt: errorOf, Readout.line)
+  // ai: every chunk in hand, the last solves under way (2026-11-14, the apps' Readout.line): the head's spinner in the
+  // ai: percentage's place, the meter full, Decoding in Time left's place, no speed; the camera on or stopped (the
+  // ai: fountain worker goes on with the blocks it was handed)
+  // ai: and once done, until the page offers the file (the worker's file message): Saving in Decoding's row
+  const decoding = !!h && !offered && !testing && (!!xferNow.inHand || !!xferNow.done);
   if (ui.err || ui.starting || loading) d = null;
   else if (testing) d = { name: "Test stream", test: true, rows: [["Speed", speedNow()]] };
-  else if (on && h && !offered) {
+  else if (decoding) {
+    frac = 1;
+    d = { name: h.name || "a file", spin: true, frac, rows: [["Received", nb(bytes(xferNow.bytesIn ?? h.length))], ["Size", nb(bytes(h.length))],
+      xferNow.done ? ["Saving", ""] : ["Decoding", `${xferNow.verified} of ${h.chunks}`], ["Speed", ""]] };
+  } else if (on && h && !offered) {
     frac = fractionDone(xferNow);
     // ai: the transfer's bytes in (each chunk's blocks in hand to its length); the speed the last second's new bytes
     // ai: (recentKBs)
@@ -262,21 +271,21 @@ function showState() {
   // ai: the rail had them too from 2026-10-05, the green tick opening the file before)
   const cam = $("railCam");
   cam.classList.toggle("off", !on); cam.title = on ? "Stop" : "Start"; cam.disabled = go.disabled;
-  const now = (on && h && !offered) || testing ? recentKBs() : null, [v, u] = now != null ? rate(now).split(/\s/) : ["", ""];   // ai: \s takes rate()'s no-break space
+  const now = ((on && h && !offered) || testing) && !decoding ? recentKBs() : null, [v, u] = now != null ? rate(now).split(/\s/) : ["", ""];   // ai: \s takes rate()'s no-break space; none while decoding, its room kept
   $("railRate").innerHTML = v ? `${v}<small>${u}</small>` : "";
   $("railRate").hidden = !!ui.received && !testing;   // ai: the check takes its square, except while the test stream is read
   const coming = on && h && !offered && !testing && frac != null;   // ai: the receiving line's own fraction, none under an error
-  $("railPct").innerHTML = coming ? `${Math.floor(100 * frac)}<small>%</small>` : "";
-  $("railPct").hidden = !coming;
+  // ai: decoding (2026-11-14): a spinner over the chunks verified of all, in the percentage's square
+  $("railPct").innerHTML = decoding && d ? `<span class="spin"></span><small>${xferNow.verified}/${h.chunks}</small>` : coming ? `${Math.floor(100 * frac)}<small>%</small>` : "";
+  $("railPct").hidden = !(coming || (decoding && d));
   $("railDone").hidden = !ui.received || testing;
 }
 const nb = (s) => s.replace(/ /g, "\u00a0");   // ai: a figure and its unit kept on one line
-// Block ids already forwarded. Ids only ever increase (wirehair is rateless, so the sender keeps minting them),
+// Block ids already forwarded. Ids only ever increase (the fountain is rateless, so the sender keeps minting them),
 // which used to make this grow for as long as the session lasted: about 500 a second here, and the same again
 // inside every worker. Two generations instead of one set, rolled on INSERTION, so what ages out is only ids from
 // far enough back that they cannot recur. A frozen sender inserts nothing, so it forgets nothing and still reads
-// as repeats. Forwarding a duplicate would be harmless anyway (liblizard/wirehair/shim.cpp: duplicate ids are
-// idempotent); what this set is really for is the withNew / repeat split and the bytes it saves.
+// as repeats. Forwarding a duplicate would be harmless anyway (liblizard/src/rq.h: a symbol held is ignored); what this set is really for is the withNew / repeat split and the bytes it saves.
 // Two generations of this many: at LIZARD-1024's 121 blocks a frame and 60 frames a second that is 9 to 18 s of ids,
 // where 1 << 14 was 2 to 4.5 s and a repeat older than that counted as new.
 const SEEN_KEEP = 1 << 16;
@@ -551,7 +560,7 @@ function showXfer(m) {
       `verified ${m.verified} of ${h.chunks}${m.manifest ? `, manifest ${m.manifestHave} of ${m.manifest}${m.listOk ? ", checked against the root" : ""}` : ""}${m.rejected ? `, ${m.rejected} chunk decode${m.rejected > 1 ? "s" : ""} REJECTED and collected again` : ""}${m.manifestRejected ? `, manifest refused ${m.manifestRejected}x` : ""}`);
     if (glyphs) lines.push(glyphs);
   }
-  lines.push(`held: blocks ${m.store === "opfs" ? "on disk (OPFS)" : `in memory, ${MB(m.mem.storeBytes)} MB${m.storeWhy ? ` (no OPFS: ${m.storeWhy})` : ""}`}; heaps: Wirehair ${MB(m.mem.wirehairHeap)} MB, codec ${MB(m.mem.codecHeap)} MB`);
+  lines.push(`held: blocks ${m.store === "opfs" ? "on disk (OPFS)" : `in memory, ${MB(m.mem.storeBytes)} MB${m.storeWhy ? ` (no OPFS: ${m.storeWhy})` : ""}`}; heap ${MB(m.mem.codecHeap)} MB`);
   $("file").textContent = lines.join("\n");
 }
 async function offerXfer(m) {
@@ -620,7 +629,8 @@ function take(m) {
   if (m.prof) for (const k in m.prof) cur.prof[k] = (cur.prof[k] ?? 0) + m.prof[k];
   if (m.levels) levels = m.levels;
   // ai: The band: the only place a receiver learns the sender's format and rate.
-  if (m.fmt) {
+  // ai: a static word alone (src/fmt.h): an animated word, a carousel symbol, names no format of its own
+  if (m.fmt && !m.fmt.kind) {
     ui.bandAt = performance.now();
     const same = (a, b) => a?.version === b?.version && a?.fps === b?.fps && a?.ring === b?.ring;
     if (!same(m.fmt, band) && same(m.fmt, bandSeen)) { band = m.fmt; showCfg(); showState(); }

@@ -41,6 +41,7 @@ import dev.lizard.ui.RxPhase
 import dev.lizard.ui.Setting
 import dev.lizard.ui.Slide
 import dev.lizard.ui.flag
+import dev.lizard.ui.fileLimitSetting
 import dev.lizard.ui.lockedRates
 import dev.lizard.ui.num
 import dev.lizard.ui.obj
@@ -59,7 +60,7 @@ import dev.lizard.ui.Screen
 // ai: unread)
 internal class AndroidFolds(private val a: MainActivity) : Folds {
     private fun key(k: FoldKey) = when (k) {
-        FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvPerformance -> "recvPerformance"
+        FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvPerformance -> "recvPerformance"; FoldKey.RecvFiles -> "recvFiles"
         FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
         FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefresh"
         FoldKey.SendPerformance -> "sendPerformance"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
@@ -96,7 +97,8 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override val line: Readout.Line get() =
         if (!a.granted && !r.fileMode) Readout.Line(if (a.denied) "No camera access" else "", Readout.Tone.Bad)
         else Readout.line(on, a.phase == RxPhase.Starting, a.phase == RxPhase.Loading, (a.phase as? RxPhase.Error)?.why, a.rx,
-            a.files.firstOrNull { it.root == a.root && it.bundle }?.files ?: 0)
+            a.files.firstOrNull { it.root == a.root && it.bundle }?.files ?: 0, filed = a.files.any { it.root == a.root } || a.note.isNotEmpty(),
+            saving = a.placing?.takeIf { it.first == a.root }?.second)
     override val showStats get() = s.stats == "on"
     override val heat get() = heatText(a.heat, a.clocks, r.cameraSlow)
     override val hint get() = a.hint
@@ -245,7 +247,9 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         // ai: lens: none of the camera's settings but the crop
         val crop = ChipChoice("Crop", s.layout, Settings.LAYOUTS.map { it to it }) { a.change(s.copy(layout = it)) }
         if (!r.fileMode) cameraSettings(camera, res, fmt, sizes, crop) else camera += crop
-        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder)
+        // ai: Largest file (2026-11-15, the Files fold)
+        val files = listOf(fileLimitSetting(s.fileGb) { a.change(s.copy(fileLimit = it.toString())) })
+        return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder, FoldKey.RecvFiles to files)
     }
 
     // ai: the camera's mode (Resolution, Format, Frame rate, the session's), the crop and its zoom

@@ -3,8 +3,9 @@
 // ai: registers against their layouts and the one that registered reads the word. The word names the sub-channels, so
 // ai: the picture n; the frame is finished by the codec for that count in that ring, built the first time the pair
 // ai: is seen and kept (LIZARD_ANY_PICS of them, the least recently used replaced): each count is a format of its own
-// ai: (its rate profile), not a prefix of a larger one. A frame whose word does not read is finished at the caller's
-// ai: held configuration (the last word it read); with none held, it is not finished.
+// ai: (its rate profile), not a prefix of a larger one. A frame whose word does not read, or is animated (a carousel
+// ai: symbol, fmt.h), is finished at the caller's held configuration (the last static word it read, or the version of
+// ai: the header its carousel assembled); with none held, it is not finished.
 // ai: One lizard_any_t a thread: a decode keeps its registration inside the codecs it holds, so two threads never
 // ai: share one, and the codec's per-thread state (internal.h OB_TLS) is then each thread's own. The wasm holds one
 // ai: (wasm.c), behind its lizard_any_* exports.
@@ -37,7 +38,8 @@ int lizard_any_frame(lizard_any_t *a, const uint8_t *img, int iw, int ih, float 
 // ai: The most blocks a frame this receiver finishes can hold: the most any sub-channel count whose picture fits nmax
 // ai: carries under the format's rate profile (lizard_phy.h lizard_blocks_for).
 int lizard_any_top(const lizard_any_t *a);
-// ai: The word the last frame's ring read, or 0: the held configuration is the caller's, never reported as read.
+// ai: The word the last frame's ring read, static or animated, or 0: the held configuration is the caller's, never
+// ai: reported as read.
 const ob_fmt_t *lizard_any_word(const lizard_any_t *a);
 // ai: The pilots the last frame's finish read (lizard_phy.h lizard_pilot) over the blocks its version carries: r of the
 // ai: even blocks and of the odd, their standard errors, the blocks read; 0 when the frame was not finished.

@@ -31,6 +31,18 @@
 #include <thread>
 #include <vector>
 
+namespace {
+struct HoldFree { void operator()(cpu_hold_t* h) const { cpu_hold_free(h); } };
+using HoldPtr = std::unique_ptr<cpu_hold_t, HoldFree>;
+// ai: the last word for the page: a static word's version and rate, or an animated word's position and the version its
+// ai: carousel's header names (null until one stands)
+nlohmann::json wordJson(int kind, int version, int fps, int pos, int ring) {
+  nlohmann::json w = {{"version", version > 0 ? nlohmann::json(version) : nlohmann::json()}, {"fps", fps}, {"ring", ring}};
+  if (kind) { w["animated"] = true; w["position"] = pos; }
+  return w;
+}
+}  // namespace
+
 namespace lizard {
 
 CameraFrame developedOnCpu(const CameraFrame& f, std::vector<uint8_t>& luma) {
@@ -210,6 +222,7 @@ class GpuReceiver : public Receiver {
   // ai: clears the lanes and rebuilds the ring, so no enqueue is under way on a ring that goes
   std::shared_mutex planMu;
   int held = 0;
+  HoldPtr hold{cpu_hold_new()};           // ai: the held version's source: static words, or a carousel's header (codec.h)
   int batchSize = 1;                      // ai: the batcher's size as the decoder thread last read it (push is another thread)
   std::atomic<int> cap{0};                // ai: Receiver::batchCap, set by the caller's thread and read by the decoder's; 0 for none
   // ai: camera buffers waiting for their ingest to finish before release: (timeline value, tag)
@@ -621,7 +634,7 @@ void GpuReceiver::deliver(BatchOut& out, const Kept& k) {
         }
         // ai: the axis word back to pixels for the replay's meta (0, the centre, as none)
         const float ax = fo.axis ? 0.5f * ((float)(fo.axis & 0xffffu) - 32768) : NAN, ay = fo.axis ? 0.5f * ((float)(fo.axis >> 16) - 32768) : NAN;
-        k.replay->frame(fo.luma.data(), fo.w, fo.h, fo.w, ms, true, ax, ay);
+        k.replay->frame(std::move(fo.luma), fo.w, fo.h, ms, true, ax, ay);   // ai: handed over, no copy
       }
     }
     if (fo.empty) continue;
@@ -654,7 +667,10 @@ void GpuReceiver::deliver(BatchOut& out, const Kept& k) {
     stamps.frame(fo.tag, fo.records.size(), v.fresh, fo.finder.found == 1, fo.pilotBlocks, fo.pilotR, fo.pilotSd, fo.pilotR2, fo.pilotSd2);
     totalBlocks += (long)fo.records.size();
     totalFrames++;
-    if (fo.hasWord) { held = fo.word.version; lastWord = {{"version", fo.word.version}, {"fps", fo.word.fps}, {"ring", fo.ring}}; }
+    if (fo.hasWord) {
+      held = cpu_hold_take(hold.get(), fo.word.kind, fo.word.version, fo.word.pos, fo.word.sym);
+      lastWord = wordJson(fo.word.kind, fo.word.kind ? held : fo.word.version, fo.word.fps, fo.word.pos, fo.ring);
+    }
   }
   std::lock_guard<std::mutex> l(mu);
   // ai: the batch's GPU time, a frame's share for each of its frames of the window's stream (an empty one's too)
@@ -720,14 +736,15 @@ std::string GpuReceiver::stats() {
     {"totals", {{"frames", totalFrames}, {"blocks", totalBlocks}}}, {"series", stamps.series},
     // ai: a file only once a header named one: the page reads a file's presence as a transfer under way; type, the
     // ai: header's media type, is what the app opens and shares the file as (2026-10-01)
-    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"chunks", p.chunks}, {"chunksVerified", p.verified}, {"root", p.root}, {"type", p.type}} : json()},
+    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"chunks", p.chunks}, {"chunksVerified", p.verified}, {"chunksSolving", p.solving}, {"inHand", p.inHand}, {"root", p.root}, {"type", p.type},
+                                 {"refusal", p.refusal}, {"limit", p.limit}, {"free", p.free}, {"failed", p.failed}, {"error", p.failed ? p.error : std::string()}} : json()},
     {"test", last.test > 0},
   };
   return j.dump();
 }
 
 std::string GpuReceiver::file() { auto p = xfer->progress(); return p.done ? p.path : ""; }
-void GpuReceiver::clear() { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; }
+void GpuReceiver::clear() { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; cpu_hold_reset(hold.get()); }
 void GpuReceiver::forget(const std::string& root) { xfer->forget(root); }
 
 // ai: The C on the CPU (cpu/pool.h: the web's worker pool natively): a frame's crop is copied to an idle worker or the
@@ -750,7 +767,7 @@ class CpuReceiver : public Receiver {
   std::vector<double> series(double sinceMs) override { std::lock_guard<std::mutex> l(mu); return stamps.since(held.load(), sinceMs); }
   void batchCap(int) override {}   // ai: a frame at a time already
   std::string file() override { auto p = xfer->progress(); return p.done ? p.path : ""; }
-  void clear() override { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; }
+  void clear() override { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; cpu_hold_reset(hold.get()); }
   void forget(const std::string& root) override { xfer->forget(root); }
   bool wantsLuma() const override { return true; }
   void record(std::shared_ptr<Replay> r) override { std::lock_guard<std::mutex> l(mu); rec = std::move(r); }
@@ -799,6 +816,7 @@ class CpuReceiver : public Receiver {
     if (flight.empty()) { for (auto& r : ready) stamps.add(r.second); ready.clear(); }
   }
   std::atomic<int> held{0};
+  HoldPtr hold{cpu_hold_new()};           // ai: the held version's source (codec.h), under mu
   // ai: the stats window (a second), and totals; repeat: frames that decoded blocks, none of them new; skips: frames
   // ai: lost to busy workers
   Stamps stamps;
@@ -909,7 +927,10 @@ void CpuReceiver::done(CpuFrameOut&& out) {
   flushRows();
   totalBlocks += (long)blocks.size();
   totalFrames++;
-  if (out.hasWord) { held = out.version; lastWord = {{"version", out.version}, {"fps", out.fps}, {"ring", out.ring}}; }
+  if (out.hasWord) {
+    held = cpu_hold_take(hold.get(), out.kind, out.version, out.pos, out.sym);
+    lastWord = wordJson(out.kind, out.kind ? held.load() : out.version, out.fps, out.pos, out.ring);
+  }
   rollWindow(now());
 }
 
@@ -942,7 +963,8 @@ std::string CpuReceiver::stats() {
     {"cpuMs", lastMsFrames ? last.ms / lastMsFrames : 0}, {"gpuMs", 0}, {"B", 0},
     {"bandVersion", lastWord.is_null() ? json() : lastWord["version"]}, {"word", lastWord},
     {"totals", {{"frames", totalFrames}, {"blocks", totalBlocks}}}, {"series", stamps.series},
-    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"chunks", p.chunks}, {"chunksVerified", p.verified}, {"root", p.root}, {"type", p.type}} : json()},
+    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"chunks", p.chunks}, {"chunksVerified", p.verified}, {"chunksSolving", p.solving}, {"inHand", p.inHand}, {"root", p.root}, {"type", p.type},
+                                 {"refusal", p.refusal}, {"limit", p.limit}, {"free", p.free}, {"failed", p.failed}, {"error", p.failed ? p.error : std::string()}} : json()},
     {"test", last.test > 0},
   };
   return j.dump();
@@ -966,6 +988,10 @@ static std::unique_ptr<Receiver> made(const ReceiverConfig& c, std::function<voi
     if (c.decoder == "gpu") throw std::runtime_error(why);
   }
   return std::make_unique<CpuReceiver>(c, std::move(release), why, std::move(transfer));
+}
+
+void Receiver::allow(uint64_t limit, double room) {
+  if (const auto x = transfer()) x->allow(limit, room);
 }
 
 std::unique_ptr<Receiver> Receiver::create(const ReceiverConfig& c, std::function<void(uint64_t tag)> release) {

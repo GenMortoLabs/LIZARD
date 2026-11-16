@@ -1,10 +1,10 @@
 // ai: The app's sender off the phone (2026-10-01):
 // ai:   tx_check ids <file> <frames> <blocks a frame> <out> [seed]   the sending end's ids and blocks, frame after frame
-// ai:       (the ids little-endian, then each block's 472 bytes) under the schedule's seed (1 unless given), for
+// ai:       (the ids, 5 bytes little-endian, then each block's 471 bytes) under the schedule's seed (1 unless given), for
 // ai:       gen/xfer_tx_ref.mjs to hold against the JS sender's
 // ai:   tx_check paint <file | -> <subch> [frames] [threads] [store dir]   frames painted by the Sender (core/tx), each
 // ai:       decoded blind by the C (cpu/codec.h) from its luma: the word, every block verified; the test stream's ("-")
-// ai:       blocks held to SHAKE256 of their ids, a file's through the receiving end (rx/xfer_rx.h) until it is whole and
+// ai:       blocks held to BLAKE3 of their ids, a file's through the receiving end (rx/xfer_rx.h) until it is whole and
 // ai:       its root the sender's. Exit 1 on a fault.
 // ai:   tx_check bench <subch> [frames]   one painter's ms a frame (encode and paint) at that format
 // ai:   tx_check decode <luma> <w> <h> [held]   one frame read blind (a screenshot of the phone's Send screen, grey)
@@ -14,8 +14,9 @@
 // ai:       paints again, within a grey level)
 // ai:   tx_check gpucheck <subch> [ring] [frames]   the GPU's frames of the test stream's blocks against
 // ai:       the C's paint at the same counts (the border to the byte, the square within a grey level: the web's auto
-// ai:       rule), then its GPU ms a frame over encodes of its most; ring an index into src/lizard_phy.h LIZARD_RING, the
-// ai:       default ring (LIZARD_RING_DEFAULT, the 128) unset
+// ai:       rule), then its GPU ms a frame over encodes of its most, the test stream made on the device and the blocks
+// ai:       given whole alternately (their difference the device's BLAKE3); ring an index into src/lizard_phy.h
+// ai:       LIZARD_RING, the default ring (LIZARD_RING_DEFAULT, the 128) unset
 // ai:   LIZ_PAINTER=gpu|auto tx_check paint ...   the Sender painting on the GPU (or auto), every frame read blind as before
 // ai:   LIZ_CODES=2 [LIZ_GAP=<modules>] tx_check paint ...   two codes a frame (2026-10-03), the gap between them set
 // ai:       (2026-10-04, TxFormat.gap; GAP_MODULES unset), each read blind at its own offset
@@ -28,6 +29,18 @@
 // ai:   LIZ_REFRESH=<7/8>,<3/4>,<2/3>,<1/2> tx_check paint ...   Rate refresh (2026-11-12, Sender::setRefresh) set before the
 // ai:       first frame: every read block's id held against the frame before's at its place, the same exactly where its
 // ai:       rate holds (the frame's count not a multiple of its refresh), a fault otherwise; the repeats a rate counted
+// ai:   LIZ_CAROUSEL=<frames> tx_check paint ...   the animated header (2026-11-15, Sender::setCarousel): every word a
+// ai:       carousel symbol held that many frames (with two codes each its own: code c's slot codes x (frame / frames) + c,
+// ai:       its position the sender's order, Sender::carouselPosition, under the sender's key), read blind and held as the receivers hold it (codec.h cpu_hold_*): a
+// ai:       frame before the header stands decodes nothing, after it every block; the symbols read, the frame the header
+// ai:       stood at and a wrong symbol (its position not the frame's) counted. <frames>@<on>[,<off>]: changed live, as
+// ai:       the apps' slider does: static until frame <on> is taken, then setCarousel(<frames>), and setCarousel(0) at
+// ai:       <off>; every block read throughout (the static word held first), the words static, then animated from a frame
+// ai:       at or after <on> (the frames made ahead keep theirs), then static again from one at or after <off>, each
+// ai:       switch once; the frames between the ask and the first word to show it printed
+// ai:   tx_check carousel [keys]   the carousel's order against a periodic capture (2026-11-15): a receiver reading every
+// ai:       n-th slot from a random one, the reads until it holds k (3, 10, 30, 85) distinct positions, the fixed order
+// ai:       (slot t at t mod 255: at most 255 / gcd(n, 255) ever) beside the sender's (Sender::carouselPosition)
 // ai:   tx_check gpucheck ...   the GPU's frames against the C's: the anchors' squares (SPEC 6.13) to the byte besides
 // ai:   the border, their pixels and the dark ones counted
 #include <fcntl.h>
@@ -36,6 +49,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <functional>
+#include <random>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -57,7 +72,7 @@
 
 extern "C" {
 #include "lizard_phy.h"
-#include "shake.h"
+#include "xfer.h"
 }
 
 using namespace lizard;
@@ -89,13 +104,13 @@ std::vector<uint8_t> slurp(const std::string& path) {
   fclose(f);
   return b;
 }
-// ai: count frames of the test stream's blocks from id 0, blocks x 476 B each (id then SHAKE256 of it)
+// ai: count frames of the test stream's blocks from id 0, blocks x 476 B each (id then BLAKE3 of it)
 std::vector<uint8_t> testBlocks(int count, int blocks) {
   std::vector<uint8_t> b(static_cast<size_t>(count) * blocks * XFER_BLOCK);
   for (int t = 0; t < count * blocks; t++) {
     uint8_t* o = b.data() + static_cast<size_t>(t) * XFER_BLOCK;
-    for (int i = 0; i < 4; i++) o[i] = static_cast<uint8_t>(t >> 8 * i);
-    stream_fill(static_cast<uint32_t>(t), o + 4, XFER_PAYLOAD);
+    xfer_id_put(o, static_cast<xfer_id_t>(t));
+    stream_fill(static_cast<xfer_id_t>(t), o + XFER_ID_BYTES, XFER_PAYLOAD);
   }
   return b;
 }
@@ -110,15 +125,57 @@ int main(int argc, char** argv) {
     x.waitMade();   // ai: every chunk made before the first frame, so the frames are the serial JS sender's (no warm frames)
     const int frames = atoi(argv[3]), T = atoi(argv[4]);
     FILE* out = fopen(argv[5], "wb");
-    std::vector<uint32_t> ids(T);
-    uint8_t b[XFER_PAYLOAD];
+    std::vector<xfer_id_t> ids(T);
+    uint8_t b[XFER_PAYLOAD], idb[XFER_ID_BYTES];
     for (int f = 0; f < frames; f++) {
       x.frameIds(ids.data(), T);
-      fwrite(ids.data(), 4, T, out);
-      for (uint32_t id : ids) { x.block(id, b); fwrite(b, 1, XFER_PAYLOAD, out); }
+      for (xfer_id_t id : ids) { xfer_id_put(idb, id); fwrite(idb, 1, XFER_ID_BYTES, out); }
+      for (xfer_id_t id : ids) { x.block(id, b); fwrite(b, 1, XFER_PAYLOAD, out); }
     }
     fclose(out);
     printf("ids: %d frames of %d, chunks %u, lap %u, root %s, seed %u\n", frames, T, x.chunks(), x.lap(), x.rootHex().c_str(), x.seed());
+    return 0;
+  }
+  // ai: carousel [keys]: a receiver reading every n-th slot from a random one, the reads until it holds k distinct
+  // ai: positions, the fixed order (slot t at t mod 255) beside the sender's (the mean and worst over keys keys, 100
+  // ai: unless given); "-" none within 100 passes' reads
+  if (mode == "carousel") {
+    const int keys = argc > 2 ? atoi(argv[2]) : 100;
+    const int strides[] = {1, 2, 3, 4, 5, 7, 15, 17, 51, 85}, ks[] = {3, 10, 30, 85};
+    const uint64_t cap = 100 * 255;
+    std::mt19937 rng(12345);
+    // ai: reads until k distinct, for each k (0 never) of the positions at slots start + i n
+    const auto readsTo = [&](const std::function<int(uint64_t)>& at, uint64_t start, int n, uint64_t out[4]) {
+      std::vector<uint8_t> seen(255);
+      int have = 0, next = 0;
+      for (int q = 0; q < 4; q++) out[q] = 0;
+      for (uint64_t i = 0; i * n < cap && next < 4; i++) {
+        const int p = at(start + i * static_cast<uint64_t>(n));
+        if (!seen[static_cast<size_t>(p)]) { seen[static_cast<size_t>(p)] = 1; have++; }
+        while (next < 4 && have >= ks[next]) out[next++] = i + 1;
+      }
+    };
+    printf("every n-th slot: reads until k distinct positions, the fixed order / the shuffled (mean, worst of %d keys)\n", keys);
+    for (const int n : strides) {
+      printf("n %2d:", n);
+      uint64_t fixed[4], one[4];
+      readsTo([](uint64_t t) { return static_cast<int>(t % 255); }, rng() % 255, n, fixed);
+      double sum[4] = {0, 0, 0, 0};
+      uint64_t worst[4] = {0, 0, 0, 0};
+      int never[4] = {0, 0, 0, 0};
+      for (int r = 0; r < keys; r++) {
+        const uint32_t key = static_cast<uint32_t>(rng());
+        readsTo([key](uint64_t t) { return Sender::carouselPosition(key, t); }, rng() % 255, n, one);
+        for (int q = 0; q < 4; q++) { if (!one[q]) never[q]++; sum[q] += static_cast<double>(one[q]); worst[q] = std::max(worst[q], one[q]); }
+      }
+      for (int q = 0; q < 4; q++) {
+        if (fixed[q]) printf("  k %2d %3llu /", ks[q], static_cast<unsigned long long>(fixed[q]));
+        else printf("  k %2d   - /", ks[q]);
+        if (never[q]) printf(" %d never", never[q]);
+        else printf(" %5.1f, %3llu", sum[q] / keys, static_cast<unsigned long long>(worst[q]));
+      }
+      printf("\n");
+    }
     return 0;
   }
   // ai: repick <subch A> <subch B> [painter 0|1|2] [codes] (2026-10-04, the desktop sender's stall at a re-pick): the
@@ -169,6 +226,12 @@ int main(int argc, char** argv) {
     int every[4] = {1, 1, 1, 1};
     const bool refresh = getenv("LIZ_REFRESH") && sscanf(getenv("LIZ_REFRESH"), "%d,%d,%d,%d", &every[0], &every[1], &every[2], &every[3]) == 4;
     if (refresh) s.setRefresh(every);
+    int car = 0, carOn = 0, carOff = -1;
+    if (const char* c = getenv("LIZ_CAROUSEL")) sscanf(c, "%d@%d,%d", &car, &carOn, &carOff);
+    const bool live = car > 0 && (carOn > 0 || carOff >= 0);
+    if (car > 0 && carOn == 0) s.setCarousel(car);
+    int animFrom = -1, staticFrom = -1, lastKind = -1, switches = 0;
+    const uint32_t carKey = s.carouselKey();
     const std::string err = s.configure(f);
     if (!err.empty()) { printf("FAIL configure: %s\n", err.c_str()); return 1; }
     printf("painter: %s%s%s\n", s.painter().c_str(), s.gpuWhy().empty() ? "" : ", not the GPU: ", s.gpuWhy().c_str());
@@ -179,7 +242,8 @@ int main(int argc, char** argv) {
     cpu_dec_t* d = cpu_dec_new(1536);
     const int top = cpu_dec_top(d), BB = cpu_dec_block_bytes(d);
     std::vector<uint8_t> rgba(static_cast<size_t>(FW) * W * 4), luma(static_cast<size_t>(W) * W), blocks(static_cast<size_t>(top) * BB), ok(top), want(XFER_PAYLOAD);
-    int held = 0, words = 0, faults = 0;
+    int held = 0, words = 0, faults = 0, symbols = 0, stood = -1;
+    cpu_hold_t* hold = cpu_hold_new();
     long verified = 0, total = 0;
     // ai: LIZ_REFRESH: each block's code rate (0 7/8 ... 3 1/2) in the format's order, and the ids read a symbol before
     std::vector<int> rateAt;
@@ -199,22 +263,52 @@ int main(int argc, char** argv) {
     }
     const double t0 = nowMs();
     for (int k = 0; k < frames * codes; k++) {
-      if (k % codes == 0) while (!s.take(rgba.data(), FW * 4)) std::this_thread::sleep_for(std::chrono::microseconds(200));
+      if (k % codes == 0) {
+        if (live && k / codes == carOn && carOn > 0) s.setCarousel(car);
+        if (live && k / codes == carOff) s.setCarousel(0);
+        while (!s.take(rgba.data(), FW * 4)) std::this_thread::sleep_for(std::chrono::microseconds(200));
+      }
       const int x0 = (k % codes) * (W + gap);
       for (int y = 0; y < W; y++) for (int x = 0; x < W; x++) luma[static_cast<size_t>(y) * W + x] = rgba[4 * (static_cast<size_t>(y) * FW + x0 + x)];
       if (runOut && !runOut->frame(luma.data(), W, W, W, runWhy)) { printf("LIZ_RUN_OUT: %s\n", runWhy.c_str()); runOut.reset(); }
       cpu_frame_t fr{};
       const int got = cpu_dec_frame(d, luma.data(), W, W, held, blocks.data(), ok.data(), &fr);
-      if (fr.word) { words++; held = fr.version; }
+      if (fr.word) { words++; const int v = cpu_hold_take(hold, fr.kind, fr.version, fr.pos, fr.sym); if (v) held = v; }
       verified += got; total += fr.total;
-      if (fr.version != wantSubch / LIZARD_STEP || got != wantBlocks) { faults++; if (faults < 5) printf("frame %d: word %d version %d, %d of %d blocks\n", k, fr.word, fr.version, got, fr.total); }
+      if (live) {
+        // ai: changed live: every block read (the static word held from the first frame); a word static until the ask at
+        // ai: carOn shows, then the frame's symbol until the ask at carOff shows, each kind change once
+        const int seq = k / codes, pos = Sender::carouselPosition(carKey, static_cast<uint64_t>(codes) * static_cast<uint64_t>(seq / car) + static_cast<uint64_t>(k % codes));
+        if (fr.word) {
+          symbols += fr.kind == 1;
+          if (lastKind >= 0 && fr.kind != lastKind) {
+            switches++;
+            if (fr.kind == 1 && animFrom < 0) animFrom = seq;
+            if (fr.kind == 0 && staticFrom < 0) staticFrom = seq;
+          }
+          lastKind = fr.kind;
+          const bool animOk = seq >= carOn && (carOff < 0 || staticFrom < 0);
+          if (fr.kind == 1 && (!animOk || fr.pos != pos)) { faults++; if (faults < 5) printf("frame %d: animated word position %d, the frame's %d, asked at %d\n", k, fr.pos, pos, carOn); }
+          if (fr.kind == 0 && animFrom >= 0 && (carOff < 0 || seq < carOff)) { faults++; if (faults < 5) printf("frame %d: a static word after the animated began, none asked\n", k); }
+        }
+        if (got != wantBlocks) { faults++; if (faults < 5) printf("frame %d: %d of %d blocks\n", k, got, fr.total); }
+      } else if (car > 0) {
+        // ai: the animated header: each word the frame's symbol (its position by the frame's number), every block once
+        // ai: the header stands (held at the format's version), none before
+        const int seq = k / codes, pos = Sender::carouselPosition(carKey, static_cast<uint64_t>(codes) * static_cast<uint64_t>(seq / car) + static_cast<uint64_t>(k % codes));
+        if (fr.word) symbols++;
+        if (fr.word && (fr.kind != 1 || fr.pos != pos)) { faults++; if (faults < 5) printf("frame %d: word kind %d position %d, the frame's %d\n", k, fr.kind, fr.pos, pos); }
+        if (stood < 0 && got > 0) stood = seq;
+        if (got > 0 && got != wantBlocks) { faults++; if (faults < 5) printf("frame %d: %d of %d blocks\n", k, got, fr.total); }
+        if (stood >= 0 && got == 0) { faults++; if (faults < 5) printf("frame %d: no blocks after the header stood\n", k); }
+      } else if (fr.version != wantSubch / LIZARD_STEP || got != wantBlocks) { faults++; if (faults < 5) printf("frame %d: word %d version %d, %d of %d blocks\n", k, fr.word, fr.version, got, fr.total); }
       std::vector<int64_t> now(static_cast<size_t>(fr.total), -1);
       for (int b = 0; b < fr.total; b++) {
         if (!ok[b]) continue;
         const uint8_t* blk = blocks.data() + static_cast<size_t>(b) * BB;
-        const uint32_t id = blk[0] | blk[1] << 8 | blk[2] << 16 | static_cast<uint32_t>(blk[3]) << 24;
-        now[static_cast<size_t>(b)] = id;
-        if (test) { stream_fill(id, want.data(), XFER_PAYLOAD); if (memcmp(want.data(), blk + 4, XFER_PAYLOAD)) { faults++; if (faults < 5) printf("frame %d block %d: id %u not its stream\n", k, b, id); } }
+        const xfer_id_t id = xfer_id_get(blk);
+        now[static_cast<size_t>(b)] = static_cast<int64_t>(id);
+        if (test) { stream_fill(id, want.data(), XFER_PAYLOAD); if (memcmp(want.data(), blk + XFER_ID_BYTES, XFER_PAYLOAD)) { faults++; if (faults < 5) printf("frame %d block %d: id %llu not its stream\n", k, b, static_cast<unsigned long long>(id)); } }
         else rx->take(blk);
       }
       if (refresh) {
@@ -238,6 +332,14 @@ int main(int argc, char** argv) {
     }
     printf("paint: LIZARD-%d x %d n %d, %d x %d px (gap %d px), %d painters: %d frames, %ld of %ld blocks verified, words %d, %.1f frames a second taken\n",
            wantSubch, codes, s.n(), FW, W, gap, threads, frames, verified, total, words, 1000.0 * frames / ms);
+    if (live) {
+      printf("carousel live: a symbol every %d frames asked at frame %d, the first animated word at frame %d (%d frames after), %d symbols read",
+             car, carOn, animFrom, animFrom - carOn, symbols);
+      if (carOff >= 0) printf("; off asked at frame %d, the first static word after at frame %d (%d frames after)", carOff, staticFrom, staticFrom - carOff);
+      printf("; %d switches\n", switches);
+      const int want = carOff >= 0 ? 2 : 1;
+      if (switches != want || animFrom < 0 || (carOff >= 0 && staticFrom < 0)) { faults++; printf("FAIL: %d switches of the word's kind, %d expected\n", switches, want); }
+    } else if (car > 0) printf("carousel: a symbol every %d frames, %d symbols read, the header stood at frame %d (k %d)\n", car, symbols, stood, 3);
     printf("stats: %s\n", s.stats().c_str());
     if (refresh) printf("refresh %d,%d,%d,%d: repeated 7/8 %ld of %ld, 3/4 %ld of %ld, 2/3 %ld of %ld, 1/2 %ld of %ld\n", every[0], every[1], every[2], every[3],
                         same[0], seen[0], same[1], seen[1], same[2], seen[2], same[3], seen[3]);
@@ -248,6 +350,7 @@ int main(int argc, char** argv) {
       if (!p.done) { printf("FAIL: the file did not finish in %d frames\n", frames); faults++; }
       else if (p.root != s.xfer()->rootHex()) { printf("FAIL: the root differs\n"); faults++; }
     }
+    cpu_hold_free(hold);
     cpu_dec_free(d);
     printf(faults ? "FAILED %d\n" : "ok\n", faults);
     return faults ? 1 : 0;
@@ -336,10 +439,21 @@ int main(int argc, char** argv) {
     printf("check, %d frames of LIZARD-%d x %d in the %d ring on %s: border %ld pixels apart, the square %ld pixels apart, at most %d levels%s: %s\n",
            frames, subch, codes, LIZARD_RING[ring], g->device().c_str(), c.borderDiff, c.squareDiff, c.squareMax, an, c.ok ? "ok" : "FAILED");
     std::vector<std::vector<uint8_t>> out(R);
-    double gpu = 0, wall = 0;
+    // ai: the encodes alternate the test stream made on the device from the ids (the sender's test path) and the same
+    // ai: blocks given whole (a file's path): the difference a frame is the device's BLAKE3 (2026-11-15)
+    double gpu[2] = {0, 0}, wall[2] = {0, 0};
     const int encodes = 16;
-    for (int i = 0; i < encodes; i++) { const double t0 = nowMs(); gpu += g->encode(blocks.data(), R, i & 3, out.data()); wall += nowMs() - t0; }
-    printf("time: %.2f ms of GPU a frame, %.2f ms an encode of %d frames end to end (readback included), %d px a side\n", gpu / (encodes * R), wall / encodes, R, g->side());
+    for (int i = 0; i < 2 * encodes; i++) {
+      const int k = i & 1;
+      const double t0 = nowMs();
+      gpu[k] += g->encode(blocks.data(), R, (i >> 1) & 3, out.data(), 0, k == 0);
+      wall[k] += nowMs() - t0;
+    }
+    const double perFrame = encodes * R, nb = static_cast<double>(g->blocks()) * g->codes();
+    printf("time: %.3f ms of GPU a frame making the test stream, %.3f with the blocks given: BLAKE3 %+.3f ms a frame, %+.2f us a block "
+           "(%g blocks); %.2f and %.2f ms an encode of %d frames end to end (readback included), %d px a side\n",
+           gpu[0] / perFrame, gpu[1] / perFrame, (gpu[0] - gpu[1]) / perFrame, 1000 * (gpu[0] - gpu[1]) / (perFrame * nb), nb,
+           wall[0] / encodes, wall[1] / encodes, R, g->side());
     return c.ok ? 0 : 1;
   }
   if (mode == "decode" && argc >= 5) {
@@ -357,9 +471,8 @@ int main(int argc, char** argv) {
     for (int b = 0; b < fr.total; b++) {
       if (!ok[b]) continue;
       const uint8_t* blk = blocks.data() + static_cast<size_t>(b) * BB;
-      const uint32_t id = blk[0] | blk[1] << 8 | blk[2] << 16 | static_cast<uint32_t>(blk[3]) << 24;
-      stream_fill(id, want.data(), XFER_PAYLOAD);
-      if (!memcmp(want.data(), blk + 4, XFER_PAYLOAD)) stream++;
+      stream_fill(xfer_id_get(blk), want.data(), XFER_PAYLOAD);
+      if (!memcmp(want.data(), blk + XFER_ID_BYTES, XFER_PAYLOAD)) stream++;
     }
     printf("decode: found %d, ring %d, n %d, word %d (version %d = LIZARD-%d, %d a second), %d blocks verified, %d of them the test stream's, pilots %d blocks r %.2f %.2f\n",
            fr.found, fr.ring, fr.n, fr.word, fr.version, LIZARD_STEP * fr.version, fr.fps, got, stream, fr.pilot_blocks, fr.pilot_r[0], fr.pilot_r[1]);

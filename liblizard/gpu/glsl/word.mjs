@@ -1,117 +1,136 @@
 // F8, the format word, in GLSL: the band read through the final map, each word cell against its track pairs' grey;
-// ordered statistics decoding at order 3 over the ring's code (../wordcode.mjs); the side-aware gate, held to the C's
-// false-word rate; sel written (the word's version, else the batch's held one, else none) with the result. One
-// workgroup of 256 a frame.
+// the word, static or animated, by Gauss-Jordan over GF(256) from its most reliable bytes (../wordcode.mjs); the
+// side-aware gate, held to the C's false-word rate; sel written (a static word's version, else the batch's held one,
+// else none) with the result: r[5] the version, or 256 + the position of an animated word, r[6] the bytes after it
+// (fps + 256 ext0 + 65536 ext1, or the symbol's three bytes alike), 0 and 0 where no word is taken. One workgroup of
+// 256 a frame.
 // ai: The Word, Lattice and Held uniforms are std140, every member an array of uvec4 or vec4; the uniform's layout and
 // ai: tables come from ../plan/word.mjs. No private array is indexed at run
-// ai: time (the S26's Adreno returned zeros from one): the code's rows are read from the uniform, the lattice too.
-// ai: WGSL's extractBits clamps its offset and count (naga writes the mins): so does byteOf here.
+// ai: time (the S26's Adreno returned zeros from one): the code's rows, GF(256)'s tables and the generator's columns are
+// ai: read from the uniform, the lattice too.
 import { VERSION, SAMPLERLESS, DIMS, CONVERT, MAP, uniformLoad } from "./common.mjs";
 import { COONS } from "./sample.mjs";
 import { SLOTS } from "../plan/common.mjs";
 import { LATTICE_MAX } from "../plan/back_transform.mjs";
 import { RING_COUNT } from "../plan/finder.mjs";
-import { VERSION_MIN, VERSION_MAX, TAU, SIDE_KEEP } from "../wordcode.mjs";
-import { CON_MIN, WMAX, ROWS, MIDS_MAX, VECS, K, NW, NCAND, GATE, LAYOUT } from "../plan/word.mjs";
+import { VERSION_MIN, VERSION_MAX, TAU, SIDE_KEEP, MAGIC, MAGIC_ANIM, POS_MAX } from "../wordcode.mjs";
+import { CON_MIN, WMAX, ROWS, MIDS_MAX, VECS, UNKNOWN, SWAP, PER, SETS, TOP, BYTES_MAX, GATE, LAYOUT } from "../plan/word.mjs";
 
 const TOPS = Math.ceil(SLOTS / 4);
 const WORDS = ["x", "y", "z", "w"];
 
+// ai: Gauss-Jordan over GF(256) (2026-11-15; ordered statistics decoding over the code's bit rows before): RS(n, 5) is
+// ai: MDS, so the magic (byte 0) and any four other bytes give the word, for each magic in turn (the static word's and
+// ai: the animated one's). Each byte's hard value (its 8 cells MSB first, dark 1), its reliability (the least |qs| of
+// ai: its cells) and its least reliable bit; bytes 1 to n - 1 ranked by reliability (the lower index first on a tie),
+// ai: the first TOP kept. A magic's set 0 solves the UNKNOWN most reliable; sets 1 to UNKNOWN SWAP swap one of them for
+// ai: one of the next SWAP; the last UNKNOWN flip one's least reliable bit. A lane a set solves its UNKNOWN x UNKNOWN
+// ai: system by Gauss-Jordan in its own rows of workgroup memory (the magic's column moved to the right side; the
+// ai: Adreno's pivoted eliminations on private arrays returned zeros, workgroup memory is not private); a static solve
+// ai: whose version is outside VERSION_MIN to VERSION_MAX, an animated one past POS_MAX, refused. A lane a (set, u32 of
+// ai: the word) builds that word of the candidate from the code's rows and scores it against qs; a lane a set sums them;
+// ai: lane 0 keeps the best, the first set on a tie (the static magic's first).
 const SEARCH = /* glsl */ `
   uint at0 = rg * ${ROWS}u;
-  if (li == 0u) { nbw = nb; }
-  ${uniformLoad("uint nbu", "nbw")}
-  uint nw = nbu / 32u;
-  for (uint bit = li; bit < nbu; bit += 256u) {
+  uint nw = nb / 32u;
+  uint nby = nb / 8u;
+  for (uint bit = li; bit < nb; bit += 256u) {
     float x = ((keep >> (bit / vr.x)) & 1u) != 0u ? q[bit] : 0.0;
     qs[bit >> 2u][bit & 3u] = x;
-    key[bit] = abs(x);
-    idx[bit] = bit;
-  }
-  {
-    uint g0 = W.code[${VECS}u * (at0 + 1u + (li >> 4u)) + ((li & 15u) >> 2u)][li & 3u];
-    gb[li] = (li & 15u) < nw ? g0 : 0u;
   }
   barrier();
-  for (uint k = 2u; k <= nbu; k <<= 1u) {
-    for (uint j = k >> 1u; j > 0u; j >>= 1u) {
-      if (li < nbu / 2u) {
-        uint a = 2u * j * (li / j) + (li % j);
-        uint b = a + j;
-        float ka = key[a];
-        float kb = key[b];
-        uint ia = idx[a];
-        uint ib = idx[b];
-        if ((ka > kb || (ka == kb && ia < ib)) != ((a & k) == 0u)) { key[a] = kb; key[b] = ka; idx[a] = ib; idx[b] = ia; }
+  if (li < nby) {
+    uint c = (li & 3u) * vr.x + 8u * (li >> 2u);
+    uint h = 0u;
+    float lo = 3.0e38;
+    uint wi = 0u;
+    for (uint t = 0u; t < 8u; t++) {
+      float x = qs[(c + t) >> 2u][(c + t) & 3u];
+      h = (h << 1u) | (x > 0.0 ? 1u : 0u);
+      if (abs(x) < lo) { lo = abs(x); wi = t; }
+    }
+    hb[li] = h;
+    rl[li] = lo;
+    wk[li] = wi;
+  }
+  barrier();
+  if (li >= 1u && li < nby) {
+    float r = rl[li];
+    uint rank = 0u;
+    for (uint i = 1u; i < nby; i++) { float o = rl[i]; if (o > r || (o == r && i < li)) { rank += 1u; } }
+    if (rank < ${TOP}u) { tb[rank] = li; }
+  }
+  barrier();
+  if (li < ${SETS}u) {
+    uint kind = li / ${PER}u;
+    uint t = li % ${PER}u;
+    uint magic = kind == 0u ? ${MAGIC}u : ${MAGIC_ANIM}u;
+    uint p0 = tb[0];
+    uint p1 = tb[1];
+    uint p2 = tb[2];
+    uint p3 = tb[3];
+    if (t >= 1u && t <= ${UNKNOWN * SWAP}u) {
+      uint a = (t - 1u) / ${SWAP}u;
+      uint b = tb[${UNKNOWN}u + (t - 1u) % ${SWAP}u];
+      if (a == 0u) { p0 = b; } else if (a == 1u) { p1 = b; } else if (a == 2u) { p2 = b; } else { p3 = b; }
+    }
+    uint fl = t > ${UNKNOWN * SWAP}u ? t - ${UNKNOWN * SWAP + 1}u : ${UNKNOWN}u;
+    uint m0 = li * 20u;
+    setRow(m0, rg, p0, hb[p0] ^ (fl == 0u ? 0x80u >> wk[p0] : 0u), magic);
+    setRow(m0 + 5u, rg, p1, hb[p1] ^ (fl == 1u ? 0x80u >> wk[p1] : 0u), magic);
+    setRow(m0 + 10u, rg, p2, hb[p2] ^ (fl == 2u ? 0x80u >> wk[p2] : 0u), magic);
+    setRow(m0 + 15u, rg, p3, hb[p3] ^ (fl == 3u ? 0x80u >> wk[p3] : 0u), magic);
+    bool ok = true;
+    for (uint c = 0u; c < 4u; c++) {
+      uint pr = 4u;
+      for (uint r = c; r < 4u; r++) { if (pr == 4u && mat[m0 + 5u * r + c] != 0u) { pr = r; } }
+      if (pr == 4u) { ok = false; break; }
+      if (pr != c) {
+        for (uint j = 0u; j < 5u; j++) { uint x = mat[m0 + 5u * c + j]; mat[m0 + 5u * c + j] = mat[m0 + 5u * pr + j]; mat[m0 + 5u * pr + j] = x; }
       }
-      barrier();
-    }
-  }
-  for (uint t = li; t < nbu; t += 256u) {
-    uint p = idx[t];
-    uint m = 0u;
-    for (uint k = 0u; k < ${K}u; k++) { m |= ((gb[k * ${NW}u + (p >> 5u)] >> (p & 31u)) & 1u) << k; }
-    col[t] = m;
-  }
-  barrier();
-  uint tcur = 0u;
-  uint used = 0u;
-  for (uint s = 0u; s < ${K}u; s++) {
-    if (li == 0u) {
-      uint r = ${K}u;
-      uint mask = 0u;
-      while (true) {
-        if (tcur >= nbu) { break; }
-        uint m = col[tcur];
-        tcur += 1u;
-        uint spare = m & ~used;
-        if (spare != 0u) { r = uint(findLSB(spare)); mask = m & ~(1u << r); piv[r] = idx[tcur - 1u]; break; }
+      uint iv = gexp(255u - glog(mat[m0 + 5u * c + c]));
+      for (uint j = 0u; j < 5u; j++) { mat[m0 + 5u * c + j] = gmul(mat[m0 + 5u * c + j], iv); }
+      for (uint r = 0u; r < 4u; r++) {
+        uint fr = r == c ? 0u : mat[m0 + 5u * r + c];
+        if (fr != 0u) { for (uint j = 0u; j < 5u; j++) { mat[m0 + 5u * r + j] ^= gmul(fr, mat[m0 + 5u * c + j]); } }
       }
-      if (r < ${K}u) { used |= 1u << r; }
-      stepw = uvec4(r, mask, 0u, 0u);
     }
-    ${uniformLoad("uvec4 st", "stepw")}
-    if (st.x < ${K}u) {
-      if (((st.y >> (li >> 4u)) & 1u) != 0u && (li & 15u) < nw) { gb[li] ^= gb[st.x * ${NW}u + (li & 15u)]; }
-      for (uint t = li; t < nbu; t += 256u) { uint m = col[t]; col[t] = m ^ (((m >> st.x) & 1u) != 0u ? st.y : 0u); }
-    }
-    barrier();
-  }
-  if (li == 0u) {
-    uint uu = 0u;
-    for (uint r = 0u; r < ${K}u; r++) {
-      if (((used >> r) & 1u) == 0u) { continue; }
-      uint p = piv[r];
-      uint b0 = (W.code[${VECS}u * at0 + (p >> 7u)][(p >> 5u) & 3u] >> (p & 31u)) & 1u;
-      uu |= ((qs[p >> 2u][p & 3u] > 0.0 ? 1u : 0u) ^ b0) << r;
-    }
-    stepw = uvec4(uu, 0u, 0u, 0u);
-  }
-  ${uniformLoad("uvec4 st0", "stepw")}
-  uint u0 = st0.x;
-  if (li < nw) {
-    uint cw = W.code[${VECS}u * at0 + (li >> 2u)][li & 3u];
-    for (uint r = 0u; r < ${K}u; r++) { if (((u0 >> r) & 1u) != 0u) { cw ^= gb[r * ${NW}u + li]; } }
-    c0w[li] = cw;
+    uint x0 = mat[m0 + 4u];
+    uint data = x0 | (mat[m0 + 9u] << 8u) | (mat[m0 + 14u] << 16u) | (mat[m0 + 19u] << 24u);
+    bool inRange = kind == 0u ? (x0 >= ${VERSION_MIN}u && x0 <= ${VERSION_MAX}u) : x0 <= ${POS_MAX}u;
+    sv[li] = uvec4(data, kind, ok && inRange ? 1u : 0u, 0u);
   }
   barrier();
-  float best = -1e9;
-  uint bc = 0u;
-  for (uint c = li; c < ${NCAND}u; c += 256u) {
-    uvec4 sub = unrank(c);
-    uint v = byteOf(sub, vr.x);
-    if (v < ${VERSION_MIN}u || v > ${VERSION_MAX}u) { continue; }
+  for (uint t = li; t < ${SETS * 16}u; t += 256u) {
+    uint w = t & 15u;
+    uvec4 c = sv[t >> 4u];
     float sc = 0.0;
-    for (uint w = 0u; w < nw; w++) {
-      uint cw = c0w[w] ^ rowWord(sub.y, w) ^ rowWord(sub.z, w) ^ rowWord(sub.w, w);
+    if (w < nw && c.z != 0u) {
+      uint cw = W.code[${VECS}u * (at0 + c.y) + (w >> 2u)][w & 3u];
+      for (uint b = 0u; b < 32u; b++) {
+        if (((c.x >> b) & 1u) != 0u) { cw ^= W.code[${VECS}u * (at0 + 2u + b) + (w >> 2u)][w & 3u]; }
+      }
       for (uint b = 0u; b < 8u; b++) {
         uint m = cw >> (4u * b);
         sc += dot(qs[8u * w + b], mix(vec4(-1.0), vec4(1.0), notEqual(uvec4(m) & uvec4(1u, 2u, 4u, 8u), uvec4(0u))));
       }
     }
-    if (sc > best) { best = sc; bc = c; }
+    part[t] = sc;
   }
-  red[li] = vec4(best, float(bc), 0.0, 0.0);`;
+  barrier();
+  if (li < ${SETS}u) {
+    float t = 0.0;
+    for (uint k = 0u; k < 16u; k++) { t += part[16u * li + k]; }
+    tot[li] = t;
+  }
+  barrier();
+  if (li == 0u) {
+    float best = -1e9;
+    uint bs = ${SETS}u;
+    for (uint s = 0u; s < ${SETS}u; s++) { if (sv[s].z != 0u && tot[s] > best) { best = tot[s]; bs = s; } }
+    uvec4 c = sv[min(bs, ${SETS - 1}u)];
+    wu = uvec4(c.x, c.y, bs < ${SETS}u ? 1u : 0u, floatBitsToUint(best));
+  }`;
 
 export const WORD = VERSION + SAMPLERLESS + DIMS + CONVERT + MAP + /* glsl */ `
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
@@ -128,7 +147,7 @@ layout(set = 0, binding = 8, std430) buffer Sel { uvec4 sel[]; };
 layout(set = 0, binding = 9, std430) readonly buffer Resid { vec4 resid[]; };
 layout(set = 0, binding = 10, std430) readonly buffer Pts { vec4 pts[]; };
 layout(set = 0, binding = 11, std430) buffer Results { Result result[]; };
-layout(set = 0, binding = 12, std140) uniform Word { uvec4 code[${LAYOUT.range}]; uvec4 range[${RING_COUNT}]; uvec4 plan[${RING_COUNT}]; uvec4 tops[${TOPS}]; uvec4 gate[${(RING_COUNT * GATE) / 4}]; } W;
+layout(set = 0, binding = 12, std140) uniform Word { uvec4 code[${LAYOUT.range}]; uvec4 range[${RING_COUNT}]; uvec4 plan[${RING_COUNT}]; uvec4 tops[${TOPS}]; uvec4 gate[${(RING_COUNT * GATE) / 4}]; uvec4 gf[${LAYOUT.cols - LAYOUT.gf}]; uvec4 cols[${LAYOUT.size - LAYOUT.cols}]; } W;
 layout(set = 0, binding = 13, std140) uniform Lattice { uvec4 at[${RING_COUNT}]; vec4 lat[${(RING_COUNT * LATTICE_MAX) / 4}]; } LT;
 layout(set = 0, binding = 14, std140) uniform Held { uint version; uint p0; uint p1; uint p2; } HB;
 float latAt(uint i) { return LT.lat[i >> 2u][i & 3u]; }
@@ -160,44 +179,36 @@ shared vec4 red[256];
 shared float mids[${MIDS_MAX}];
 shared float q[${4 * WMAX}];
 shared uint go;
-shared vec4 win;
+shared uvec4 wu;
 shared vec4 qs[${WMAX}];
-shared float key[${4 * WMAX}];
-shared uint idx[${4 * WMAX}];
-shared uint gb[${K * NW}];
-shared uint col[${4 * WMAX}];
-shared uint c0w[${NW}];
-shared uint piv[${K}];
-shared uint nbw;
-shared uvec4 stepw;
-uint rowWord(uint r, uint w) { uint v = gb[min(r, ${K - 1}u) * ${NW}u + w]; return r < ${K}u ? v : 0u; }
-uint byteOf(uvec4 sub, uint at) {
-  uint w = at >> 5u;
-  uint o = min(at & 31u, 32u);
-  uint n = min(8u, 32u - o);
-  return bitfieldReverse(bitfieldExtract(c0w[w] ^ rowWord(sub.y, w) ^ rowWord(sub.z, w) ^ rowWord(sub.w, w), int(o), int(n))) >> 24u;
+shared uint hb[${BYTES_MAX}];
+shared float rl[${BYTES_MAX}];
+shared uint wk[${BYTES_MAX}];
+shared uint tb[${TOP}];
+shared uvec4 sv[${SETS}];
+shared uint mat[${SETS * 20}];
+shared float part[${SETS * 16}];
+shared float tot[${SETS}];
+uint gbyte(uint i) { return (W.gf[i >> 4u][(i >> 2u) & 3u] >> (8u * (i & 3u))) & 255u; }
+uint gexp(uint e) { return gbyte(e % 255u); }
+uint glog(uint x) { return gbyte(256u + x); }
+uint gmul(uint a, uint b) { return (a == 0u || b == 0u) ? 0u : gexp(glog(a) + glog(b)); }
+// ai: a row of a set's system: position p's columns of the four unknown bytes, its value less the magic's part
+void setRow(uint at, uint r, uint p, uint v, uint magic) {
+  uint i = 2u * (${BYTES_MAX}u * r + p);
+  uint g0 = W.cols[i >> 2u][i & 3u] & 255u;
+  uint g = W.cols[(i + 1u) >> 2u][(i + 1u) & 3u];
+  mat[at] = g & 255u;
+  mat[at + 1u] = (g >> 8u) & 255u;
+  mat[at + 2u] = (g >> 16u) & 255u;
+  mat[at + 3u] = g >> 24u;
+  mat[at + 4u] = v ^ gmul(g0, magic);
 }
-uvec4 unrank(uint c0) {
-  uint c = c0;
-  if (c == 0u) { return uvec4(0u, ${K}u, ${K}u, ${K}u); }
-  c -= 1u;
-  if (c < ${K}u) { return uvec4(1u, c, ${K}u, ${K}u); }
-  c -= ${K}u;
-  if (c < ${(K * (K - 1)) / 2}u) {
-    for (uint a = 0u; a + 1u < ${K}u; a++) { uint n = ${K - 1}u - a; if (c < n) { return uvec4(2u, a, a + 1u + c, ${K}u); } c -= n; }
-  }
-  c -= ${(K * (K - 1)) / 2}u;
-  for (uint a = 0u; a + 2u < ${K}u; a++) {
-    for (uint b = a + 1u; b + 1u < ${K}u; b++) { uint n = ${K - 1}u - b; if (c < n) { return uvec4(3u, a, b, b + 1u + c); } c -= n; }
-  }
-  return uvec4(4u, ${K}u, ${K}u, ${K}u);
-}
-uint codeBit(uint at, uint v, uint fps, uint i) {
+uint codeBit(uint at, uint kind, uint data, uint i) {
   uint k = i >> 5u;
-  uint w = W.code[${VECS}u * at + (k >> 2u)][k & 3u];
-  for (uint b = 0u; b < 8u; b++) {
-    if (((v >> b) & 1u) != 0u) { w ^= W.code[${VECS}u * (at + 1u + b) + (k >> 2u)][k & 3u]; }
-    if (((fps >> b) & 1u) != 0u) { w ^= W.code[${VECS}u * (at + 9u + b) + (k >> 2u)][k & 3u]; }
+  uint w = W.code[${VECS}u * (at + kind) + (k >> 2u)][k & 3u];
+  for (uint b = 0u; b < 32u; b++) {
+    if (((data >> b) & 1u) != 0u) { w ^= W.code[${VECS}u * (at + 2u + b) + (k >> 2u)][k & 3u]; }
   }
   return (w >> (i & 31u)) & 1u;
 }
@@ -268,38 +279,12 @@ void main() {
   uint low = (sides.x < top ? 1u : 0u) | (sides.y < top ? 2u : 0u) | (sides.z < top ? 4u : 0u) | (sides.w < top ? 8u : 0u);
   uint keep = 15u & ~(low & d2);
   barrier();${SEARCH}
-  barrier();
-  if (li < 16u) {
-    vec4 b = red[16u * li];
-    for (uint k = 16u * li + 1u; k < 16u * li + 16u; k++) {
-      vec4 o = red[k];
-      if (o.x > b.x || (o.x == b.x && o.y < b.y)) { b = o; }
-    }
-    red[16u * li] = b;
-  }
-  barrier();
-  if (li == 0u) {
-    vec4 b = red[0];
-    for (uint k = 1u; k < 16u; k++) {
-      vec4 o = red[16u * k];
-      if (o.x > b.x || (o.x == b.x && o.y < b.y)) { b = o; }
-    }
-    uvec4 sub = unrank(f2u(b.y));
-    uint v = byteOf(sub, vr.x);
-    uint fr = byteOf(sub, 2u * vr.x);
-    bool valid = b.x > -1e8 && v >= ${VERSION_MIN}u && v <= ${VERSION_MAX}u;
-    uint cv = (v - 1u) * 256u + fr;
-    win = vec4(b.x, float(valid ? cv : 0u), valid ? 1.0 : 0.0, 0.0);
-  }
-  ${uniformLoad("vec4 wn", "win")}
-  uint c = f2u(wn.y);
-  uint v = 1u + c / 256u;
-  uint fps = c % 256u;
+  ${uniformLoad("uvec4 wn", "wu")}
   vec3 g = vec3(0.0);
   for (uint bit = li; bit < nb; bit += 256u) {
     if (abs(q[bit]) < ${TAU}) { continue; }
     uint s = 1u << (bit / vr.x);
-    float one = 1024.0 + (((q[bit] > 0.0) != (codeBit(at0, v, fps, bit) != 0u)) ? 1.0 : 0.0);
+    float one = 1024.0 + (((q[bit] > 0.0) != (codeBit(at0, wn.y, wn.x, bit) != 0u)) ? 1.0 : 0.0);
     g += mix(vec3(0.0), vec3(one), bvec3(true, (s & d1) == 0u, (s & d2) == 0u));
   }
   red[li] = vec4(g, 0.0);
@@ -313,13 +298,15 @@ void main() {
     uint e1 = gateAt(rg, m1);
     uint e2 = gateAt(rg, m2);
     bool through = (e0 != 0xffffu && f2u(G.x) - 1024u * m0 <= e0) || (e1 != 0xffffu && f2u(G.y) - 1024u * m1 <= e1) || (e2 != 0xffffu && f2u(G.z) - 1024u * m2 <= e2);
-    bool ok = con >= ${CON_MIN} && wn.z > 0.5 && through;
-    result[f].r[5] = ok ? float(v) : 0.0;
-    result[f].r[6] = ok ? float(fps) : 0.0;
-    result[f].r[7] = wn.x;
-    uint dv = ok ? v : HB.version;
+    bool ok = con >= ${CON_MIN} && wn.z != 0u && through;
+    uint b1 = wn.x & 255u;
+    bool own = ok && wn.y == 0u;
+    result[f].r[5] = ok ? float(wn.y == 0u ? b1 : 256u + b1) : 0.0;
+    result[f].r[6] = ok ? float(wn.x >> 8u) : 0.0;
+    result[f].r[7] = uintBitsToFloat(wn.w);
+    uint dv = own ? b1 : HB.version;
     result[f].r[29] = float(dv);
-    result[f].r[30] = (!ok && HB.version > 0u) ? 1.0 : 0.0;
+    result[f].r[30] = (!own && HB.version > 0u) ? 1.0 : 0.0;
     if (dv > 0u) { sel[f] = uvec4(rg, 1u + dv, slotOf(dv), 0u); }
     else { sel[f] = uvec4(rg, 0u, 0u, 0u); }
   }

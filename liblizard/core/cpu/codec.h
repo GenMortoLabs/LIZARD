@@ -10,8 +10,9 @@ extern "C" {
 typedef struct cpu_dec cpu_dec_t;
 
 // ai: What a frame's decode found. ring: the ring that registered (an index into src/lizard_phy.h LIZARD_RING), -1 none. n: the picture it was finished
-// ai: at, 0 not finished. held: the caller's held word stood in for the frame's own. word: the frame's own word read
-// ai: (version = sub-channels / 16, fps the display rate it states). total: the blocks the version it was finished at
+// ai: at, 0 not finished. held: the caller's held word stood in for the frame's own. word: the frame's own word read,
+// ai: kind 0 static (version = sub-channels / 16, fps the display rate it states, ext its two extension bytes) or 1
+// ai: animated (a carousel symbol, src/fmt.h: pos its position, sym its bytes; version 0). total: the blocks the version it was finished at
 // ai: carries under the rate profile (ok[] and blocks[] hold that many). quad: the symbol's corners in the image, TL
 // ai: TR BR BL. pilot_*: what the block tails read (liblizard/src/any.h lizard_any_pilot: r of the even blocks and of
 // ai: the odd, their standard errors, the blocks read, 0 none).
@@ -20,7 +21,20 @@ typedef struct {
   float quad[8];
   int pilot_blocks;
   float pilot_r[2], pilot_sd[2];
+  int kind, pos;
+  uint8_t ext[2], sym[3];
 } cpu_frame_t;
+
+// ai: The held configuration, the one state a receiver carries from frame to frame (src/any.h): a static word's version,
+// ai: or, from animated words, the version of the header their carousel assembled (src/fmt.h ob_car_rx_t; the
+// ai: header's first byte, outside the ladder ignored). take: a frame's word (kind 0 static, 1 animated; none, the
+// ai: hold as it was) and returns the version held after it, 0 none. One a receiver; reset for a new stream.
+typedef struct cpu_hold cpu_hold_t;
+cpu_hold_t *cpu_hold_new(void);
+void cpu_hold_free(cpu_hold_t *h);
+void cpu_hold_reset(cpu_hold_t *h);
+int cpu_hold_take(cpu_hold_t *h, int kind, int version, int pos, const uint8_t sym[3]);
+int cpu_hold_version(const cpu_hold_t *h);
 
 // ai: nmax: the largest picture decoded (1536 for every format; smaller saves memory). NULL where the codec refuses.
 cpu_dec_t *cpu_dec_new(int nmax);

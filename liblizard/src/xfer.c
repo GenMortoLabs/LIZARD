@@ -27,8 +27,6 @@ size_t xfer_chunk_len(const xfer_header_t *h, uint32_t index) {
 
 uint32_t xfer_blocks(size_t len) { return (uint32_t)((len + XFER_PAYLOAD - 1) / XFER_PAYLOAD); }
 
-int xfer_chunk_seed(const xfer_header_t *h, uint32_t index) { return index + 1 == h->chunks ? h->seed_last : h->seed; }
-
 int xfer_manifest_blocks(uint32_t chunks) {
   return chunks < 2 || chunks > XFER_MAX_CHUNKS ? 0 : (int)((chunks + XFER_PER_BLOCK - 1) / XFER_PER_BLOCK);
 }
@@ -37,29 +35,24 @@ int xfer_header_init(xfer_header_t *h, uint64_t length, int chunk_log2) {
   memset(h, 0, sizeof *h);
   const uint32_t chunks = xfer_chunk_count(length, chunk_log2);
   if (chunk_log2 < XFER_LOG2_MIN || chunk_log2 > XFER_LOG2_MAX || (length && !chunks)) return -1;
-  h->version = XFER_VERSION; h->hash = XFER_HASH_BLAKE3; h->chunk_log2 = (uint8_t)chunk_log2;
+  h->hash = XFER_HASH_BLAKE3; h->chunk_log2 = (uint8_t)chunk_log2;
   h->length = length; h->chunks = chunks;
   return 0;
 }
 
-// What write and parse both hold a header to: a seed where no chunk takes it (seed with fewer than 2 chunks, seed_last
-// where the last chunk is one block or there is none) says the block is not what it claims.
+// What write and parse both hold a header to.
 static int consistent(const xfer_header_t *h) {
-  if (h->version != XFER_VERSION) return XFER_ERR_VERSION;
   if (h->hash != XFER_HASH_BLAKE3) return XFER_ERR_HASH;
   if (h->chunk_log2 < XFER_LOG2_MIN || h->chunk_log2 > XFER_LOG2_MAX) return XFER_ERR;
   if (h->chunks != xfer_chunk_count(h->length, h->chunk_log2) || (h->length && !h->chunks)) return XFER_ERR;
   if (h->type_len > XFER_TYPE_MAX || !zero(h->name + h->name_len, XFER_NAME_MAX - h->name_len) || !zero(h->type + h->type_len, XFER_TYPE_MAX - h->type_len)) return XFER_ERR;
-  if (h->seed && h->chunks < 2) return XFER_ERR;
-  if (h->seed_last && (!h->chunks || xfer_blocks(xfer_chunk_len(h, h->chunks - 1)) < 2)) return XFER_ERR;
   return 0;
 }
 
 int xfer_header_write(const xfer_header_t *h, uint8_t *payload) {
   if (consistent(h)) return XFER_ERR;
   memset(payload, 0, XFER_PAYLOAD);
-  payload[XFER_H_VERSION] = h->version; payload[XFER_H_HASH] = h->hash; payload[XFER_H_LOG2] = h->chunk_log2;
-  payload[XFER_H_SEED] = h->seed; payload[XFER_H_SEED_LAST] = h->seed_last;
+  payload[XFER_H_HASH] = h->hash; payload[XFER_H_LOG2] = h->chunk_log2;
   payload[XFER_H_NAME_LEN] = h->name_len; payload[XFER_H_TYPE_LEN] = h->type_len;
   put_le(payload + XFER_H_LENGTH, h->length, 8);
   put_le(payload + XFER_H_CHUNKS, h->chunks, 4);
@@ -69,15 +62,17 @@ int xfer_header_write(const xfer_header_t *h, uint8_t *payload) {
   return 0;
 }
 
+int xfer_same_file(const xfer_header_t *a, const xfer_header_t *b) {
+  return a->hash == b->hash && a->chunk_log2 == b->chunk_log2 && a->length == b->length &&
+         a->chunks == b->chunks && !memcmp(a->root, b->root, XFER_CV);
+}
+
 int xfer_header_parse(const uint8_t *payload, xfer_header_t *h) {
   memset(h, 0, sizeof *h);
-  h->version = payload[XFER_H_VERSION];
-  if (h->version != XFER_VERSION) return XFER_ERR_VERSION;
   h->hash = payload[XFER_H_HASH]; h->chunk_log2 = payload[XFER_H_LOG2];
-  h->seed = payload[XFER_H_SEED]; h->seed_last = payload[XFER_H_SEED_LAST];
   h->name_len = payload[XFER_H_NAME_LEN]; h->type_len = payload[XFER_H_TYPE_LEN];
-  if (payload[7] || h->type_len > XFER_TYPE_MAX) return XFER_ERR;
-  // ai: the reserved bytes past the type (465 to 471) are zero, as every byte past a length
+  if (h->type_len > XFER_TYPE_MAX) return XFER_ERR;
+  // ai: the reserved bytes past the type (461 to 470) are zero, as every byte past a length
   if (!zero(payload + XFER_H_END, XFER_PAYLOAD - XFER_H_END)) return XFER_ERR;
   h->length = get_le(payload + XFER_H_LENGTH, 8);
   h->chunks = (uint32_t)get_le(payload + XFER_H_CHUNKS, 4);
@@ -158,6 +153,29 @@ static void subtree(const uint8_t *in, size_t len, uint64_t counter, int root, u
 
 void xfer_b3_subtree(const uint8_t *in, size_t len, uint64_t counter, int root, uint8_t out[XFER_CV]) {
   subtree(in, len, root ? 0 : counter, root, out);
+}
+
+static void stream_hasher(uint64_t id, blake3_hasher *h) {
+  uint8_t seed[5];
+  put_le(seed, id, 5);
+  blake3_hasher_init(h);
+  blake3_hasher_update(h, seed, sizeof seed);
+}
+void stream_fill(uint64_t id, uint8_t *out, uint32_t len) {
+  blake3_hasher h;
+  stream_hasher(id, &h);
+  blake3_hasher_finalize(&h, out, len);
+}
+int stream_matches(uint64_t id, const uint8_t *payload, uint32_t len) {
+  blake3_hasher h;
+  stream_hasher(id, &h);
+  uint8_t b[BLAKE3_BLOCK_LEN];
+  for (uint32_t at = 0; at < len; at += BLAKE3_BLOCK_LEN) {
+    const uint32_t n = len - at < BLAKE3_BLOCK_LEN ? len - at : BLAKE3_BLOCK_LEN;
+    blake3_hasher_finalize_seek(&h, at, b, n);
+    if (memcmp(b, payload + at, n)) return 0;
+  }
+  return 1;
 }
 
 void xfer_b3_hash(const uint8_t *in, size_t len, uint8_t out[XFER_CV]) {

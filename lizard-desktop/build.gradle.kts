@@ -132,7 +132,7 @@ val debDeps by tasks.registering(Exec::class) {
 tasks.matching { it.name == "packageDeb" }.configureEach { finalizedBy(debDeps) }
 
 // ai: The packages' license text: the repository's LICENSE and NOTICE, then the licenses of the vendored code compiled into
-// ai: the native library and of the fonts the window draws in, each under its name (Wirehair's BSD 3-Clause asks for its notice wherever binaries go)
+// ai: the native library and of the fonts the window draws in, each under its name (a BSD or MIT license asks for its notice wherever binaries go)
 abstract class LicenseText : DefaultTask() {
     @get:Input abstract val titles: ListProperty<String>
     @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val parts: ConfigurableFileCollection
@@ -145,11 +145,11 @@ abstract class LicenseText : DefaultTask() {
 }
 val licenseText by tasks.registering(LicenseText::class) {
     val lib = rootDir.resolve("../liblizard")
-    titles.set(listOf("", "", "Wirehair (liblizard/vendor/wirehair)", "volk (liblizard/core/third_party/volk)",
+    titles.set(listOf("", "", "volk (liblizard/core/third_party/volk)",
         "JSON for Modern C++ (liblizard/core/third_party/json.hpp)", "BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option",
         "Skia (in Compose's skiko, which draws the window)", "Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1",
         "JetBrains Mono (liblizard/vendor/fonts/jetbrains-mono), under the SIL Open Font License 1.1"))
-    parts.from(rootDir.resolve("../LICENSE"), rootDir.resolve("../NOTICE"), lib.resolve("vendor/wirehair/LICENSE"),
+    parts.from(rootDir.resolve("../LICENSE"), rootDir.resolve("../NOTICE"),
         lib.resolve("core/third_party/volk/LICENSE.md"), lib.resolve("core/third_party/json.LICENSE.MIT"), lib.resolve("vendor/blake3/LICENSE_A2"),
         project.file("packaging/skia.LICENSE"), lib.resolve("vendor/fonts/inter/LICENSE.txt"), lib.resolve("vendor/fonts/jetbrains-mono/OFL.txt"))
     // ai: macOS: MoltenVK's (Apache 2.0), carried beside the library; its release's LICENSE at build/native

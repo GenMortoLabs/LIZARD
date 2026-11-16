@@ -94,6 +94,7 @@ static int replay(const std::string& run, int want, int threads, std::string mod
       const int bb = cpu_dec_block_bytes(d), top = cpu_dec_top(d);
       std::vector<uint8_t> blocks((size_t)top * bb), ok(top);
       int held = 0;
+      cpu_hold_t* hold = cpu_hold_new();
       cpu_prof_reset();
       for (int i = t; i < frames; i += threads) {
         FrameResult r;
@@ -102,12 +103,13 @@ static int replay(const std::string& run, int want, int threads, std::string mod
         cpu_dec_set_axis(axes[i][0], axes[i][1]);
         r.got = cpu_dec_frame(d, px[i].data(), dims[i].first, dims[i].second, ordered ? held : 0, blocks.data(), ok.data(), &r.fr);
         r.ms = nowMs() - a;
-        if (r.fr.word) held = r.fr.version;
+        if (r.fr.word) { const int v = cpu_hold_take(hold, r.fr.kind, r.fr.version, r.fr.pos, r.fr.sym); if (v) held = v; }
         r.digest = digestOf(d, r.fr, r.got, blocks.data(), ok.data(), bb);
         if (hashing) r.deep = cpu_hash_take();
         res[i] = r;
       }
       if (threads == 1) for (int k = 0; k < CPU_PROF_N; k++) prof[k] = cpu_prof_ms(k);
+      cpu_hold_free(hold);
       cpu_dec_free(d);
     });
     for (auto& x : th) x.join();
@@ -125,12 +127,14 @@ static int replay(const std::string& run, int want, int threads, std::string mod
     ms.push_back(r.ms);
   }
   // ai: LIZ_PERFRAME=1: a line a frame, in frame order after the run, in lizard_gpu_check's form for the fields the C has
-  // ai: ("frame <index> found <0|1> ring <r> version <v> held <0|1> blocks <n> word <v>", word 0 where none read), so one
-  // ai: run of many cells splits by frame (scripts/gpu/native/peaks.mjs readFrames)
+  // ai: ("frame <index> found <0|1> ring <r> version <v> held <0|1> blocks <n> word <v>", word 0 where none read or the
+  // ai: word animated; then "anim <0|1> pos <p> sym <hex>", an animated word's carousel symbol), so one run of many cells
+  // ai: splits by frame (scripts/gpu/native/peaks.mjs readFrames)
   if (envOr("LIZ_PERFRAME", "") == "1")
     for (int i = 0; i < frames; i++) {
       const auto& r = res[(size_t)i];
-      printf("frame %d found %d ring %d version %d held %d blocks %d word %d\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.fr.held != 0, r.got, r.fr.word ? r.fr.version : 0);
+      printf("frame %d found %d ring %d version %d held %d blocks %d word %d anim %d pos %d sym %02x%02x%02x\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.fr.held != 0, r.got, r.fr.word ? r.fr.version : 0,
+             r.fr.word && r.fr.kind ? 1 : 0, r.fr.pos, r.fr.sym[0], r.fr.sym[1], r.fr.sym[2]);
     }
   std::sort(ms.begin(), ms.end());
   std::sort(passMs.begin(), passMs.end());

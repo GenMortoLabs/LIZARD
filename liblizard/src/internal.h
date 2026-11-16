@@ -104,6 +104,26 @@ static inline v128_t sample4(const image_t *im, v128_t x, v128_t y) {
 
 typedef struct { float h[9]; } homo_t;
 
+// The k-th smallest of v[0..n), v reordered (Hoare's selection: O(n), the same element a sort would put at k; the
+// robust fits' medians, 2026-11-15, where a qsort of the whole list took 5 to 6 times as long). n 0: v[0], as a sort's.
+static inline double ob_select(double *v, int n, int k) {
+  if (n <= 0) return v[0];
+  int lo = 0, hi = n - 1;
+  while (lo < hi) {
+    const double p = v[lo + (hi - lo) / 2];
+    int i = lo, j = hi;
+    while (i <= j) {
+      while (v[i] < p) i++;
+      while (v[j] > p) j--;
+      if (i <= j) { const double t = v[i]; v[i] = v[j], v[j] = t; i++, j--; }
+    }
+    if (k <= j) hi = j;
+    else if (k >= i) lo = i;
+    else return v[k];
+  }
+  return v[k];
+}
+
 static inline void project(const homo_t *H, float x, float y, float *u, float *v) {
   const float *h = H->h;
   float w = h[6] * x + h[7] * y + 1;

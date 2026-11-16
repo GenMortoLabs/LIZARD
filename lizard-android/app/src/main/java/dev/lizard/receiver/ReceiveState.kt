@@ -51,6 +51,10 @@ import dev.lizard.ui.*
 // ai: before the stream starts, the surface handed over), the UI's state over its stats a quarter second
 // ai: (MainActivity's poll), the camera's own rate against its peak (the heat warning's), the hints, the `rx:` log line
 // ai: a second, the platform's fields into the stats and replays (the phone's heat, GPU clock, power, battery).
+
+// ai: the free space a new transfer needs, as a multiple of its file (session.h fileLimit): the take is the store's file
+// ai: moved, then the filing copies it (unpacked) into Downloads, so two of it at once
+private const val FILE_ROOM = 2.0
 class ReceiveState(private val a: MainActivity) {
     // ai: what the camera was asked for and gave (its report in the stats: camera.report), for the crop's layout, the
     // ai: preview's turn and the Developer readout
@@ -262,13 +266,15 @@ class ReceiveState(private val a: MainActivity) {
         session?.let { return it }
         if (closed) return null
         return runCatching {
+            // ai: keepPacked: a packed file unpacked once, straight into Downloads as it is filed (Received.kt)
             Session(data.apply { mkdirs() }.path, Assets.dir(a).path, File(a.cacheDir, "lizard").apply { mkdirs() }.path, a.settings.decoder,
-                a.settings.layout)
+                a.settings.layout, keepPacked = true)
         }.onSuccess { s ->
             s.batchCap(a.settings.frames)
             s.phaseLock(a.settings.lock != "off")
             s.replays(replaysOn, replayMeta())
             s.replayBytes(dev.lizard.ui.replayBytes(a.settings.replayMb))
+            s.fileLimit(dev.lizard.ui.fileLimitBytes(a.settings.fileGb), FILE_ROOM)
             rw.write { session = s }
             made++
         }.onFailure { e ->
@@ -426,6 +432,8 @@ class ReceiveState(private val a: MainActivity) {
     fun replays(on: Boolean) { replaysOn = on; use { it.replays(on, replayMeta()) } }
     // ai: Replay size (session.h replayBytes): the run recording trimmed to it at once
     fun replayBytes(mb: Int) { use { it.replayBytes(dev.lizard.ui.replayBytes(mb)) } }
+    // ai: Largest file (session.h fileLimit; 2026-11-15): room 2, the filing copying a file into Downloads beside its take
+    fun fileLimit(gb: Int) { use { it.fileLimit(dev.lizard.ui.fileLimitBytes(gb), FILE_ROOM) } }
     fun clear() { use { it.clear() } }
     // ai: an unfinished transfer deleted (Home's Delete): forgotten by the session where one is (the receiver's, or its
     // ai: folder), else its folder deleted off the main thread (session.h deletePartial: one of this process's sessions
@@ -613,7 +621,7 @@ class ReceiveState(private val a: MainActivity) {
     // ai: read, and what it could have read at this format. With the phase held every capture is a clean one, so the
     // ai: ceiling is a clean capture's blocks at the painted rate, read off the captures since the last line, whatever
     // ai: share of them the phase let through: clean are those with at least half the blocks of the third best of them
-    // ai: (and an eighth of the word's), the ceiling their mean, 472 B a block, at the painted rate or the camera's if
+    // ai: (and an eighth of the word's), the ceiling their mean, 471 B a block, at the painted rate or the camera's if
     // ai: that is lower. At the end: the clean captures that read no new block (a sender or compositor late), the frames
     // ai: the receiver dropped, and the decode's ms a frame. The tools' patterns stop before them.
     private var rxSeen = 0.0

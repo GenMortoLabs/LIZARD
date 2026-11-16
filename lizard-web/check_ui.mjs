@@ -543,7 +543,7 @@ const SIZES = [
   await initWh();
   const M = await initOb(), bytes = new Uint8Array(LEN);
   for (let i = 0, v = 7; i < LEN; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bytes[i] = v >>> 16; }
-  const phy = await makePhy({ phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] }), B = phy.blocksPerFrame;
+  const phy = await makePhy({ phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] }), B = phy.blocksPerFrame;
   async function clip(path, frameOf, n) {
     const fd = openSync(path, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
     writeSync(fd, `YUV4MPEG2 W${CW} H${CH} F${FC}:1 Ip A1:1 C420jpeg\n`);
@@ -585,7 +585,7 @@ const SIZES = [
   const tw = await evaluate(t, rows);
   check(/(^| \/ )hint:Sender at 24\sfps\|recommended 15( \/ |$)/.test(tw), `the test stream at 24 fps on a 30 fps camera: the hint row "${tw}"`);
   for (const wf of [FC, FC / 2]) {
-    const clipPhy = await makePhy({ phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: wf, variants: [{ name: "rx" }] }), clipPath = join(scratch, `word${wf}.y4m`);
+    const clipPhy = await makePhy({ phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: wf, variants: [{ name: "rx" }] }), clipPath = join(scratch, `word${wf}.y4m`);
     const fd = openSync(clipPath, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
     writeSync(fd, `YUV4MPEG2 W${CW} H${CH} F${FC}:1 Ip A1:1 C420jpeg\n`);
     for (let i = 0; i < 60; i++) {
@@ -785,7 +785,7 @@ const SIZES = [
           size: row.querySelector(".c-size").textContent, when: vis(row.querySelector(".c-when")) && row.querySelector(".c-when").textContent !== "", open: vis(row.querySelector(".c-open")), meta: vis(row.querySelector(".meta")),
           clear: vis($("clearAllTop")), settings: vis(document.querySelector(".settings")), cols: vis(document.querySelector("#files .cols")) }; })()`);
       check(p.cards && /^300\sKB$/.test(p.size) && p.when && p.open && !p.meta && p.clear && !p.settings && p.cols, `home ${z.name}: the PC's layout (cards ${p.cards}, size "${p.size}", date ${p.when}, Open ${p.open}, Delete all on the heading ${p.clear}, Settings ${p.settings ? "shown" : "gone"})`);
-      const ab = await evaluate(s, `(() => { document.getElementById("aboutTop").click(); const d = document.getElementById("aboutDlg"), open = d.open, text = d.textContent; document.getElementById("aboutClose").click(); return { open, mpl: /Mozilla Public License 2\.0/.test(text), credits: /BSD 3-Clause: Wirehair, Zstandard/.test(text), shut: !d.open }; })()`);
+      const ab = await evaluate(s, `(() => { document.getElementById("aboutTop").click(); const d = document.getElementById("aboutDlg"), open = d.open, text = d.textContent; document.getElementById("aboutClose").click(); return { open, mpl: /Mozilla Public License 2\.0/.test(text), credits: /BSD 3-Clause: Zstandard/.test(text), shut: !d.open }; })()`);
       check(ab.open && ab.mpl && ab.credits && ab.shut, `home ${z.name}: the bar's About opens the credits in a dialog and Close shuts it`);
     }
     if (k === 0) {

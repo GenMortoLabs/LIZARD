@@ -2,7 +2,7 @@
 // are single things, so they live with the page (recv.mjs) and the fountain worker.
 // ai: Told nothing (the whole receiver blind since 2026-09-26): LIZARD through sim/phy.mjs makeBlind, each
 // ai: frame at the size and version its own word names, its blocks judged from the light (blockJudge: a frame is the
-// ai: test stream's when a block carries its id's SHAKE256, and its other blocks are then bad).
+// ai: test stream's when a block carries its id's BLAKE3, and its other blocks are then bad).
 // ai:   page to worker: { type: "config", config } ({ version, spec: sim/phy.mjs blindSpec }); { type: "frame", tag,
 // ai:     w, h, rgba, delay, prof }, the buffer transferred (the canvas grab); or { type: "frame", tag, frame,
 // ai:     x, y, w, h, delay, prof, verify }: the camera's VideoFrame, transferred, and the crop the grab would

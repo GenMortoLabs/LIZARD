@@ -11,7 +11,9 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <string>
+#include <vector>
 
 namespace lizard {
 
@@ -41,5 +43,32 @@ Packed pack(const std::string& path, const std::string& name, const std::string&
 // ai: The stream at `from` unpacked into a new file `to` (UTF-8 paths): "" or why not (a frame damaged or cut short,
 // ai: one not saying its bytes or holding more than PACK_FRAME_MAX, a write refused; `to` is removed then).
 std::string unpack(const std::string& from, const std::string& to);
+
+// ai: A packed stream read back as the file it holds, in order, one frame in memory at a time (unpack's reader; the
+// ai: Android app streams a take through it straight into Downloads, 2026-11-15). open walks the frames' headers and
+// ai: their blocks' (3 bytes a block of 128 KiB at most; none of the frames' bytes read) for each frame's place and the
+// ai: file's size; take decompresses a frame when the one in hand is spent.
+class Unpacker {
+ public:
+  // ai: The stream at `path` (UTF-8): "" or why not, as unpack's (a frame not saying its bytes or holding more than
+  // ai: PACK_FRAME_MAX, one cut short or past zstd's bound for its bytes, the file not read).
+  std::string open(const std::string& path);
+  // ai: the file's bytes, the frames' sum
+  uint64_t size() const { return total_; }
+  // ai: Up to n (at least 1) bytes of the file at the read point, valid until the next call; n set to their count, 0
+  // ai: at the end. Throws std::runtime_error where a frame is damaged or the stream cannot be read.
+  const uint8_t* take(size_t& n);
+
+ private:
+  struct Frame {
+    uint64_t at;
+    uint32_t bytes, content;
+  };
+  std::ifstream in_;
+  std::vector<Frame> frames_;
+  std::vector<uint8_t> plain_;
+  size_t next_ = 0, pos_ = 0;
+  uint64_t total_ = 0;
+};
 
 }  // namespace lizard

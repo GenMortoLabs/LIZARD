@@ -205,6 +205,13 @@ FN(void, txRefresh)(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   tx(h)->s->setRefresh(every);
 }
 
+// ai: The animated header (Sender::setCarousel, 2026-11-15, Send's Header in Refresh): frames each carousel symbol is shown, 0 the
+// ai: static word; the next frame made takes it (no configure)
+FN(void, txCarousel)(JNIEnv*, jclass, jlong h, jint frames) {
+  std::lock_guard<std::mutex> l(tx(h)->mu);
+  tx(h)->s->setCarousel(frames);
+}
+
 // ai: Developer Tools' Seed (Sender::seed, 2026-11-14): a file's schedule from seed (an unsigned 32-bit value in an int),
 // ai: before its first frame; false after, or for the test stream
 FN(jboolean, txSeed)(JNIEnv*, jclass, jlong h, jint seed) {

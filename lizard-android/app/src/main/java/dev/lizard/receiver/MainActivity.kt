@@ -145,6 +145,8 @@ class MainActivity : ComponentActivity() {
     }
     internal var rx by mutableStateOf(Readout.Rx())
     internal var root by mutableStateOf("")                // ai: the transfer in hand's BLAKE3 root, hex
+    // ai: a take being placed into Downloads: its root and Readout's figures (Received.onSaving, 2026-11-15), the Saving row's
+    internal var placing by mutableStateOf<Pair<String, Readout.Saving>?>(null)
     private var ended = ""                                 // ai: the root whose arrival stopped the camera (once a root)
     private var saving: Received.Entry? = null
     private var savingTree: Received.Entry? = null
@@ -204,6 +206,7 @@ class MainActivity : ComponentActivity() {
         carryOver(data)
         receive = ReceiveState(this)
         received = Received(this, data)
+        received.onSaving = { r, s -> main.post { placing = s?.let { r to it } } }
         receive.linkPack(settings.pcPack != "off")
         refile()
         refreshPartials()
@@ -405,6 +408,7 @@ class MainActivity : ComponentActivity() {
         if (s.frames != old.frames) receive.batch(s.frames)
         if (s.lock != old.lock) receive.phaseLock(s.lock != "off")
         if (s.replayMb != old.replayMb) receive.replayBytes(s.replayMb)
+        if (s.fileGb != old.fileGb) receive.fileLimit(s.fileGb)
         if (s.decoder != old.decoder && s.decoder != "auto") autoRan = ""
         if (s.decoder != old.decoder || s.layout != old.layout) receive.reconfigure()
         if (s.camera != old.camera) receive.cameraChosen(running)

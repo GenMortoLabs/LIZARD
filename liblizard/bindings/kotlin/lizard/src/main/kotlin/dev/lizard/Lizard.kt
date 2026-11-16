@@ -24,8 +24,8 @@ data class Rect(val x: Int, val y: Int, val w: Int, val h: Int)
 
 object Lizard {
   const val BLOCK = 476
-  const val ID_BYTES = 4
-  const val PAYLOAD = 472
+  const val ID_BYTES = 5
+  const val PAYLOAD = 471
   const val MIN_BLOCKS = 4
   const val MAX_BLOCKS = 64
   const val RINGS = 3
@@ -49,7 +49,7 @@ object Lizard {
     return List(n) { Rect(r[4 * it], r[4 * it + 1], r[4 * it + 2], r[4 * it + 3]) }
   }
   // ai: the test stream's payload for an id
-  fun streamFill(id: Int): ByteArray = ByteArray(PAYLOAD).also { Native.streamFill(id, it) }
+  fun streamFill(id: Long): ByteArray = ByteArray(PAYLOAD).also { Native.streamFill(id, it) }
 }
 
 internal fun IntArray.toGeometry() = Geometry(this[0], this[1], this[2], this[3], this[4], this[5], this[6], this[7])
@@ -83,6 +83,8 @@ class Decoded(
   val count: Int, val blocks: ByteArray, val found: Boolean, val ring: Int, val n: Int, val word: Boolean,
   val blocksPerSymbol: Int, val fps: Int, val heldUsed: Boolean, val total: Int, val quad: FloatArray,
   val pilotBlocks: Int, val pilotR: FloatArray, val pilotSd: FloatArray,
+  // ai: the word read is animated, a carousel symbol (lizard.h liz_decoded animated)
+  val animated: Boolean = false,
 )
 
 class Decoder(nmax: Int = 0) : Handle(Native.decoderNew(nmax), Native::decoderFree) {
@@ -90,7 +92,7 @@ class Decoder(nmax: Int = 0) : Handle(Native.decoderNew(nmax), Native::decoderFr
   // ai: this decoder's own held word, used when a decode names none
   val held = HeldWord()
   private val out = ByteArray(maxBlocks * Lizard.BLOCK)
-  private val ints = IntArray(10)
+  private val ints = IntArray(11)
   private val floats = FloatArray(12)
   private val heldBox = IntArray(1)
 
@@ -110,7 +112,7 @@ class Decoder(nmax: Int = 0) : Handle(Native.decoderNew(nmax), Native::decoderFr
   }
   private fun result(n: Int) = Decoded(
     n, out.copyOf(n * Lizard.BLOCK), ints[0] != 0, ints[1], ints[2], ints[3] != 0, ints[4], ints[5], ints[6] != 0, ints[7],
-    floats.copyOfRange(0, 8), ints[9], floats.copyOfRange(8, 10), floats.copyOfRange(10, 12),
+    floats.copyOfRange(0, 8), ints[9], floats.copyOfRange(8, 10), floats.copyOfRange(10, 12), ints[10] != 0,
   )
 }
 

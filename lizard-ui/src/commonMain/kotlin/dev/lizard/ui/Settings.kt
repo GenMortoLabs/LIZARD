@@ -49,7 +49,7 @@ class Press(val act: Act, val enabled: Boolean = true) : Setting
 // ai: Send's: the code and its place on the screen (Density or Blocks, Ring, Codes, then Size or the phone's Brightness,
 // ai: Spacing, Margin; a Layout fold of their own until 2026-11-13), its refresh (FPS, Rate refresh), the painter
 // ai: (Encoder, VSync). The web pages the same (lizard-web).
-val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvPerformance to "Performance")
+val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvPerformance to "Performance", FoldKey.RecvFiles to "Files")
 val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendPerformance to "Performance")
 
 // ai: each fold of `order` that the app gives a setting, open as `folds` keeps it
@@ -93,6 +93,26 @@ fun seedSetting(text: String, choose: (String) -> Unit): Setting = Typed("Seed",
 fun seedText(t: String): String? = t.trim().let { v -> if (v.isEmpty() || v.toUIntOrNull() != null) v else null }
 fun seedOf(text: String): Int? = text.trim().toUIntOrNull()?.toInt()
 
+// ai: Receive's Largest file (2026-11-15, both apps, the Files fold: look A of
+// ai: research/build/ui-proposal-2026-11-15-filelimit/mock.png; session.h fileLimit): a transfer whose file is over it is
+// ai: refused at its header, the camera stopped, the popup saying so. GB of 10^9 bytes, as the apps' figures; the stops a
+// ai: slider's, FILE_GB_NONE (0) the last, "No limit" (the format's own, 65,535 chunks of 16 MiB); 50 GB by default.
+const val FILE_GB_NONE = 0
+const val FILE_GB_DEFAULT = 50
+val FILE_GB_STOPS = listOf(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, FILE_GB_NONE)
+// ai: a kept value held to a stop (one that is none of them: the default)
+fun fileGb(v: Int): Int = if (v in FILE_GB_STOPS) v else FILE_GB_DEFAULT
+fun fileGbText(gb: Int): String = when (gb) { FILE_GB_NONE -> "No limit"; 1000 -> "1 TB"; else -> "$gb GB" }
+// ai: the bytes the session takes (0 none)
+fun fileLimitBytes(gb: Int): Long = gb.toLong() * 1_000_000_000L
+fun fileLimitSetting(gb: Int, choose: (Int) -> Unit): Setting {
+    val at = FILE_GB_STOPS.indexOf(fileGb(gb))
+    return Slide("Largest file", fileGbText(fileGb(gb)), at.toFloat(), 0f..(FILE_GB_STOPS.size - 1).toFloat(), FILE_GB_STOPS.size - 2) { v ->
+        val g = FILE_GB_STOPS[v.roundToInt().coerceIn(0, FILE_GB_STOPS.size - 1)]
+        if (g != gb) choose(g)
+    }
+}
+
 fun replaySizeSetting(mb: Int, choose: (Int) -> Unit): Setting =
     Slide("Replay size", replaySizeText(mb), mb.toFloat(), REPLAY_MB_MIN.toFloat()..REPLAY_MB_MAX.toFloat(),
         (REPLAY_MB_MAX - REPLAY_MB_MIN) / REPLAY_MB_STEP - 1) { v -> val m = replayMb(v.roundToInt()); if (m != mb) choose(m) }
@@ -123,6 +143,17 @@ fun rateRefreshSettings(every: IntArray, choose: (rate: Int, value: Int) -> Unit
         Slide(title, "$v", v.toFloat(), 1f..REFRESH_MAX.toFloat(), REFRESH_MAX - 2) { x ->
             val n = x.roundToInt().coerceIn(1, REFRESH_MAX); if (n != v) choose(r, n) }
     }
+
+// ai: Send's Header, the animated header (2026-11-15, titled Animated header in Experimental until that afternoon; the
+// ai: Refresh fold after Rate refresh; liblizard/core/tx/sender.h
+// ai: Sender::setCarousel, SPEC 5.5): Off (0, the static word, the default) or the frames each carousel symbol of the
+// ai: format's own header is shown, 1 to CAROUSEL_MAX; each move handed to the sender at once (its next frame made; the
+// ai: GPU paints each code's symbol over its word cells, gpu/wgsl/send.mjs WORDS, the CPU where it cannot)
+const val CAROUSEL_MAX = 30
+
+fun carouselSetting(frames: Int, choose: (Int) -> Unit): Setting =
+    Slide("Header", if (frames == 0) "Off" else if (frames == 1) "1 frame" else "$frames frames", frames.toFloat(),
+        0f..CAROUSEL_MAX.toFloat(), CAROUSEL_MAX - 1) { x -> val n = x.roundToInt().coerceIn(0, CAROUSEL_MAX); if (n != frames) choose(n) }
 
 // ai: the rates Frame rate offers: none past LOCK_FPS while a camera that can lock has the lock on
 fun lockedRates(rates: List<Double>, locks: Boolean): List<Double> = if (locks) rates.filter { it <= LOCK_FPS * 1.005 } else rates

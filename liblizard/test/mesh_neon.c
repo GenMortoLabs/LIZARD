@@ -9,7 +9,7 @@
 // ai: MSH_Q / 250; and msh_blur_rect to box_blur_rect's bytes and msh_integral to a plain loop's sums (both exact) on
 // ai: random rectangles and windows. Exit 1 on a hash, a bound or a byte missed. test/neon_kernels.sh builds it both
 // ai: ways on a phone. It includes acquire.c and links the rest of the codec:
-// ai:   cc -O2 -ffp-contract=off [-msse4.1] -Isrc test/mesh_neon.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any,shake}.c -lm
+// ai:   cc -O2 -ffp-contract=off [-msse4.1] -Isrc test/mesh_neon.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any}.c -lm
 #include "acquire.c"
 #include <stdio.h>
 uint32_t ob_debug_hash;

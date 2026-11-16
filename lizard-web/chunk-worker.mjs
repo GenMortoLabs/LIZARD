@@ -4,7 +4,7 @@
 // ai: let go. One message at a time, in order (the pool waits on its answers in the order it asked).
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initFountain, Encoder } from "../liblizard/sim/fountain.mjs";
-import { makeChunk, chunkCv, PAYLOAD, SYMBOL_BITS, SYMBOL_MASK } from "../liblizard/sim/xfer.mjs";
+import { makeChunk, chunkCv, PAYLOAD, idChunk, idSymbol } from "../liblizard/sim/xfer.mjs";
 
 const enc = new Map();
 let M = null, chain = Promise.resolve();
@@ -15,14 +15,14 @@ async function handle(m) {
   else if (m.type === "make") {
     const k = makeChunk(new Uint8Array(m.buf), m.c, m.chunkLog2, false, { M, Encoder });
     if (k.enc) enc.set(m.c, k.enc);
-    postMessage({ K: k.K, seed: k.seed, one: k.one });
+    postMessage({ K: k.K });
   } else if (m.type === "trial") {
     // ai: the pool's timing of the cores (xfer-pool.mjs): a chunk made and let go
-    makeChunk(new Uint8Array(m.buf), 0, m.chunkLog2, true, { M, Encoder }).enc?.free();
+    makeChunk(new Uint8Array(m.buf), 0, m.chunkLog2, true, { M, Encoder }).enc.free();
     postMessage({});
   } else if (m.type === "blocks") {
     const out = new Uint8Array(m.ids.length * PAYLOAD);
-    m.ids.forEach((id, i) => enc.get(id >>> SYMBOL_BITS).block(id & SYMBOL_MASK, out.subarray(i * PAYLOAD, (i + 1) * PAYLOAD)));
+    m.ids.forEach((id, i) => enc.get(idChunk(id)).block(idSymbol(id), out.subarray(i * PAYLOAD, (i + 1) * PAYLOAD)));
     postMessage({ buf: out.buffer }, [out.buffer]);
   }
 }

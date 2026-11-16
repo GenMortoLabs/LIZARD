@@ -12,7 +12,7 @@
 // ai: fraction's top byte and top 15 bits, 256 a + (b - a) fx modulo 2^16, UHSUB, SQRDMULH, USRA, 257 / 2^23) at random
 // ai: points in and past the frame, NaN and infinities among them, under 2^15 pixels. Exit 1 on a bound or a bit
 // ai: missed. It includes acquire.c and links the rest of the codec, from liblizard/:
-// ai:   cc -O2 -ffp-contract=off -msse4.1 -Isrc test/sample_grid.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any,shake}.c -lm
+// ai:   cc -O2 -ffp-contract=off -msse4.1 -Isrc test/sample_grid.c src/{layout,fmt,rs,ldpc,fft,lizard_phy,any}.c -lm
 #include "acquire.c"
 #include "lizard_phy.h"
 #include <stdio.h>

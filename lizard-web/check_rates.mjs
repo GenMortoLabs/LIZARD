@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { makePhy, sourceFor } from "../liblizard/sim/phy.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init, Encoder } from "../liblizard/sim/fountain.mjs";
-import { XferSender, blake3, hex, DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
+import { XferSender, blake3, hex, DEFAULT_LOG2, PAYLOAD, idChunk } from "../liblizard/sim/xfer.mjs";
 import { N_FOR, versionOf } from "../liblizard/sim/lizard_pick.mjs";
 
 const at = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -31,7 +31,7 @@ const dir = process.argv[2] ?? at("../research/build/check"), CW = +(process.env
 // stream: the same generator the live sender uses, so this measures what the demo measures.
 // SUBCH picks the LIZARD version (96 unless asked; a bigger one needs a clip tall enough for its picture, CW and CH).
 const SUBCH = +(process.env.SUBCH ?? 96), REPICK = +(process.env.REPICK ?? 0), LIE = process.env.LIE === "1", LIE_EVERY = 24;
-const spec = { phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] };
+const spec = { phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] };
 // VERIFY=1: the receiver's crop, checked from outside. The clip gets a grey marker (60, 100, 140, 180, clockwise
 // from the top left) 4 to 20 px inside each corner of what the page should be decoding (the centred square of the
 // short side, or the whole frame with CROP=full), and the page reports what it sent to the decoder at three points
@@ -175,7 +175,7 @@ if (process.env.ONLY !== "files") {
   const phy = await makePhy(spec), per = phy.usefulBytes * phy.blocksPerFrame, half = FRAMES + MOTION_S * FC;
   // ai: LIE: block 1 of every LIE_EVERY-th display frame (ids seq * T + 1) painted with a bit of its bytes flipped.
   let lies = 0;
-  if (LIE) { const gen = sourceFor("shake256"), T = phy.blocksPerFrame; phy.setSource((id, out) => { gen(id, out); if (id % (LIE_EVERY * T) === 1) { out[0] ^= 1; lies++; } }); }
+  if (LIE) { const gen = sourceFor("blake3"), T = phy.blocksPerFrame; phy.setSource((id, out) => { gen(id, out); if (id % (LIE_EVERY * T) === 1) { out[0] ^= 1; lies++; } }); }
   // ai: REPICK: the second half at another version, its ids from where the first half's end. Made at the cut, not
   // ai: before: the wasm holds one LIZARD codec, and a second Lizard replaces the first's.
   let phy2 = null;
@@ -247,7 +247,7 @@ if (process.env.ONLY !== "files") {
 // but the decode settings.
 const CASES = {
   "600k": { length: 600000 }, empty: { length: 0 }, one: { length: PAYLOAD }, small: { length: 50000 },
-  "10m": { length: 10e6 }, "64m": { length: 64e6 },   // 64 MB is past Wirehair's one-fountain limit (64,000 blocks, 30 MB)
+  "10m": { length: 10e6 }, "64m": { length: 64e6 },   // 64 MB: four chunks of 16 MiB
   // Chunk 1 painted wrong in the first lap, every 64th block from its fourth, each with its CRC right: the chunk decodes
   // to the wrong bytes, its chaining value says so, and the page must refuse it and take the chunk again from the
   // second lap. More than one block, so a frame the receiver happened to skip cannot hide the test.
@@ -269,7 +269,17 @@ if (!ONLY_TEST) {
     const phy = await makePhy(spec), B = phy.blocksPerFrame;
     const xs = new XferSender(bytes, { name: fname, type: "application/octet-stream", chunkLog2: c.log2 ?? DEFAULT_LOG2, M, Encoder });
     const src = (id, out) => xs.block(id, out);
-    phy.setSource(c.corrupt === undefined ? src : (id, out) => { src(id, out); if (id >>> 18 === c.corrupt && (id & 0x3ffff) < xs.K[c.corrupt] && (id & 63) === 3) out[5] ^= 1; return out; });
+    // ai: the corrupt case: every 64th of the chunk's first K symbols in the order they are sent, so its first solve
+    // ai: decodes wrong and the symbols after them are clean (its ids in 0 .. K - 1 until the sender's random start of
+    // ai: 2026-11-14, which left this case corrupting nothing; each pass's order shuffled since 2026-11-15)
+    const order = new Map();
+    const corrupted = (id) => {
+      if (idChunk(id) !== c.corrupt) return false;
+      let k = order.get(id);
+      if (k === undefined) { k = order.size; order.set(id, k); }
+      return k < xs.K[c.corrupt] && k % 64 === 3;
+    };
+    phy.setSource(c.corrupt === undefined ? src : (id, out) => { src(id, out); if (corrupted(id)) out[5] ^= 1; return out; });
     const least = Math.ceil(xs.K.reduce((a, b) => a + b, 0) / B);
     // A lap and a little (two for the corrupt case), a control block a frame at most. The fake camera loops the clip,
     // which repeats ids: that only helps a receiver that missed them the first time.
@@ -318,7 +328,7 @@ if (!ONLY_TEST) {
       const mem = x.mem ?? {};
       console.log(`  header ${x.lightSeen ? "read from the light" : "never read from the light"}; ${x.verified ?? "?"} of ${x.header?.chunks ?? "?"} chunks verified, ${x.rejected ?? 0} rejected, manifest ${x.manifestHave ?? 0} of ${x.manifest ?? 0}${x.listOk ? " checked against the root" : ""}; blocks held ${x.store === "opfs" ? "on disk (OPFS)" : `in memory (${(mem.storeBytes / 1048576).toFixed(1)} MB)`}`);
       console.log(`  solving and checking took ${((x.solveMs ?? 0) / 1000).toFixed(2)} s of the fountain worker's time in all`);
-      console.log(`  fountain worker: Wirehair heap ${(mem.wirehairHeap / 1048576).toFixed(1)} MB, codec heap ${(mem.codecHeap / 1048576).toFixed(1)} MB; Chrome's renderer peaked at ${(s.chromeMem.renderer / 1048576).toFixed(0)} MB resident (the page and every worker, ${s.workers} decoding at the end), the whole tree ${(s.chromeMem.total / 1048576).toFixed(0)} MB`);
+      console.log(`  fountain worker: heap ${(mem.codecHeap / 1048576).toFixed(1)} MB; Chrome's renderer peaked at ${(s.chromeMem.renderer / 1048576).toFixed(0)} MB resident (the page and every worker, ${s.workers} decoding at the end), the whole tree ${(s.chromeMem.total / 1048576).toFixed(0)} MB`);
     }
     const ok = same && agree && !!x?.lightSeen && (c.corrupt === undefined || x?.rejected >= 1);
     console.log(`  bad ${s.bad}`);

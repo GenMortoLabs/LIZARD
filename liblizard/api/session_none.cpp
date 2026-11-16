@@ -25,6 +25,7 @@ LIZ_API void liz_session_forget(liz_session*, const char*) { none(); }
 LIZ_API void liz_session_clear(liz_session*) { none(); }
 LIZ_API void liz_session_replays(liz_session*, int, const char*) { none(); }
 LIZ_API void liz_session_replay_bytes(liz_session*, long long) { none(); }
+LIZ_API void liz_session_file_limit(liz_session*, long long, double) { none(); }
 LIZ_API void liz_session_extra(liz_session*, const char*) { none(); }
 LIZ_API size_t liz_kept(const char*, char* json, size_t cap) { if (json && cap) *json = '\0'; none(); return 0; }
 LIZ_API int liz_kept_placed(const char*, const char*) { return none(); }

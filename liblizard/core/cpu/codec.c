@@ -32,11 +32,28 @@ int cpu_dec_frame(cpu_dec_t *d, const uint8_t *img, int iw, int ih, int held, ui
     const ob_fmt_t *fm = lizard_any_word(&d->any);
     out->found = d->res.found; out->ring = d->any.which; out->n = d->any.n; out->held = d->any.held;
     out->word = fm != 0; out->version = fm ? fm->version : 0; out->fps = fm ? fm->fps : 0;
+    out->kind = fm ? fm->kind : 0; out->pos = fm ? fm->pos : 0;
+    memcpy(out->ext, fm ? fm->ext : (const uint8_t[2]){ 0, 0 }, 2);
+    memcpy(out->sym, fm ? fm->sym : (const uint8_t[3]){ 0, 0, 0 }, 3);
     out->total = d->any.last ? d->any.last->blocks : 0;
     memcpy(out->quad, d->res.quad, sizeof out->quad);
     out->pilot_blocks = lizard_any_pilot(&d->any, out->pilot_r, out->pilot_sd);
   }
   return got;
+}
+struct cpu_hold { ob_car_rx_t car; int version; };
+cpu_hold_t *cpu_hold_new(void) { return calloc(1, sizeof(cpu_hold_t)); }
+void cpu_hold_free(cpu_hold_t *h) { free(h); }
+void cpu_hold_reset(cpu_hold_t *h) { ob_car_reset(&h->car); h->version = 0; }
+int cpu_hold_version(const cpu_hold_t *h) { return h->version; }
+int cpu_hold_take(cpu_hold_t *h, int kind, int version, int pos, const uint8_t sym[3]) {
+  if (kind == OB_FMT_STATIC) {
+    if (version >= OB_FMT_VERSION_MIN && version <= OB_FMT_VERSION_MAX) h->version = version;
+  } else if (kind == OB_FMT_ANIM) {
+    const int k = ob_car_add(&h->car, pos, sym), v = k ? h->car.hdr[0] : 0;
+    if (v >= OB_FMT_VERSION_MIN && v <= OB_FMT_VERSION_MAX) h->version = v;
+  }
+  return h->version;
 }
 void cpu_dec_block_stats(const cpu_dec_t *d, const int8_t **its, const float **est) {
   *its = 0; *est = 0;

@@ -12,7 +12,7 @@ import create from "../build/ob.mjs";
 // is only ever reached under node with the variable set.
 const ALT = typeof process !== "undefined" && process.env && process.env.OB_BUILD;
 let M, base;
-// ai: The default build's instance, one a worker or a script: the codec's exports and Wirehair's and zstd's
+// ai: The default build's instance, one a worker or a script: the codec's exports, RaptorQ's and zstd's
 // ai: (sim/fountain.mjs, sim/zstd.mjs) are one module since 2026-10-25, so they share it. OB_BUILD's module (an A/B) is
 // ai: init()'s alone; the shims stay the default build's (a build from before has none).
 export function baseModule() { return (base ??= create()); }
@@ -72,16 +72,40 @@ function lumaOf(rgba, n) {
   return p;
 }
 
-// The test stream (src/shake.h): SHAKE256 of the block id. Both ends derive the same bytes from
+// The test stream (src/xfer.h stream_fill): BLAKE3 of the block id (SHAKE256 until 2026-11-15). Both ends derive the same bytes from
 // the id alone, so a receiver can check any block it decodes without knowing which frame it came
-// from. It runs once per decoded block on the phone, so it lives in wasm: in JS the Keccak
-// permutations cost about 0.5 ms a frame against a 4 ms decode.
+// from. It runs once per decoded block on the phone, so it lives in wasm, beside the transfer's own BLAKE3.
 let pStream = 0, streamCap = 0;
 export function streamBlock(id, len) {
   if (len > streamCap) { if (pStream) M._free(pStream); pStream = M._malloc(len); streamCap = len; }
-  M._stream_fill(id >>> 0, pStream, len);
+  M._stream_fill_of(id, pStream, len);
   return M.HEAPU8.subarray(pStream, pStream + len);   // afresh every call: the heap may have grown
 }
+// ai: true where bytes are the test stream's for id (src/xfer.h stream_matches, 2026-11-15): compared as the stream is
+// ai: made, 64 bytes at a time, so a file's block costs one BLAKE3 compression where streamBlock and a compare cost eight
+let pMatch = 0, matchCap = 0;
+export function streamMatches(id, bytes) {
+  if (bytes.length > matchCap) { if (pMatch) M._free(pMatch); pMatch = M._malloc(bytes.length); matchCap = bytes.length; }
+  M.HEAPU8.set(bytes, pMatch);
+  return M._stream_matches_of(id, pMatch, bytes.length) === 1;
+}
+
+// ai: The header carousel (src/fmt.h, SPEC 5.5) through the wasm: the module's one assembly (reset for a new sender;
+// ai: add an animated word's symbol, k back once the header stands; header(k) its 3k bytes), and a sender's symbol of a
+// ai: header made from content.
+export const carousel = {
+  reset() { M._lizard_car_reset(); },
+  add(pos, sym) { return M._lizard_car_add(pos, sym[0], sym[1], sym[2]); },
+  header(k) { const p = M._lizard_car_hdr(); return M.HEAPU8.slice(p, p + 3 * k); },
+  symbol(content, pos) {
+    const p = M._malloc(content.length + 4);
+    M.HEAPU8.set(content, p);
+    const k = M._lizard_car_symbol(p, content.length, pos, p + content.length), sym = Array.from(M.HEAPU8.subarray(p + content.length, p + content.length + 3));
+    M._free(p);
+    if (k < 0) throw new Error(`carousel: content of ${content.length} bytes or position ${pos} refused`);
+    return { k, sym };
+  },
+};
 
 // ai: A receiver told nothing (src/lizard_phy.h lizard_acquire_ring, src/wasm.c lizard_any_rx): it registers against the
 // ai: rings (src/lizard_phy.h LIZARD_RING), reads the word there, and finishes the frame at the picture the word names, in whichever ring it was
@@ -206,13 +230,19 @@ export class Lizard {
   // The word the last decode read out of the symbol's band, or null where it read none. This is all a receiver
   // that was told nothing goes on: the version, everything derived from it (sim/lizard_pick.mjs), and the rate
   // the sender means to paint at (fps 0 where it stated none).
+  // ai: The C's ob_fmt_t (src/fmt.h): a static word's version, fps and extension bytes (kind 0), or an animated word's
+  // ai: carousel position and symbol (kind 1, version 0).
   static fmtOf(p) {
     if (!p) return null;
-    return { version: M.HEAP32[p >> 2], fps: M.HEAP32[(p >> 2) + 1] };
+    const i = p >> 2;
+    return { version: M.HEAP32[i], fps: M.HEAP32[i + 1], kind: M.HEAP32[i + 2], ext: [M.HEAPU8[p + 12], M.HEAPU8[p + 13]], pos: M.HEAP32[i + 4], sym: [M.HEAPU8[p + 20], M.HEAPU8[p + 21], M.HEAPU8[p + 22]] };
   }
   // The display rate the painted band states, whole frames a second, 0 for none (src/fmt.h). A sender may change
   // it between frames: only the word's cells move, so registration is untouched and no frame is invalidated.
   setFps(v) { if (M._lizard_fmt_fps_set(v)) throw new Error(`fps ${v} out of range for the format word`); }
+  // ai: The word the next encode paints (src/lizard_phy.h lizard_fmt_word): setWord(0, [ext0, ext1]) a static word with
+  // ai: those extension bytes (0, 0 the format as it stands); setWord(1, [pos, s0, s1, s2]) a carousel symbol.
+  setWord(kind, b) { if (M._lizard_fmt_word_set(kind, b[0] ?? 0, b[1] ?? 0, b[2] ?? 0, b[3] ?? 0)) throw new Error(`word kind ${kind} [${b}] refused`); }
   // ai: The painted picture's count, 0 to 3 (the sender's count of painted pictures mod 4), which the next encode puts
   // ai: into the blocks' tails, bit 0 on the even blocks and bit 1 on the odd (the pilots, src/lizard_phy.h lizard_parity;
   // ai: SPEC 7.3). 0 paints what every sender did before the pilots.

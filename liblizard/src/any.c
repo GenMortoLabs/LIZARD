@@ -45,9 +45,12 @@ int lizard_any_frame(lizard_any_t *a, const uint8_t *img, int iw, int ih, float 
   a->which = -1; a->n = 0; a->held = 0; a->last = 0;
   if (!a->ready || !lizard_acquire_ring(rs, LIZARD_RINGS, img, iw, ih, gamma, res, &wi)) return 0;
   a->which = wi;
+  // ai: a static word names the frame's version; an animated one (a carousel symbol, fmt.h) names none, so the frame is
+  // ai: finished at the held configuration as one whose word did not read
   const ob_fmt_t *fm = lizard_fmt_rx(&a->ring[wi]);
-  const int version = fm ? fm->version : held, known = version >= OB_FMT_VERSION_MIN && version <= OB_FMT_VERSION_MAX;
-  a->held = !fm && known;
+  const int own = fm && fm->kind == OB_FMT_STATIC;
+  const int version = own ? fm->version : held, known = version >= OB_FMT_VERSION_MIN && version <= OB_FMT_VERSION_MAX;
+  a->held = !own && known;
   const int n = known ? lizard_n_for(LIZARD_STEP * version) : 0;
   lizard_t *pic = n && n <= a->nmax ? pic_for(a, wi, n, LIZARD_STEP * version) : 0;
   if (!pic || (pic != &a->ring[wi] && !lizard_hand_over(&a->ring[wi], pic))) { lizard_release(&a->ring[wi]); return 0; }

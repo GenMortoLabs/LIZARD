@@ -27,7 +27,7 @@ endif()
 # ai: threads and no GPU (the core leaves them out under emscripten), the codec's vector paths on WebAssembly SIMD, C++
 # ai: exceptions as wasm's own (XferTx throws; every entry point catches), one ES module with its .wasm in LIZ_WASM_DIST.
 # ai: It exports the C API and, beside it, the codec's own interface (src/wasm.c: the tree's pages, the native generator
-# ai: and the lab through sim/ob.mjs; no stable interface), with Wirehair's and zstd's shims inside.
+# ai: and the lab through sim/ob.mjs; no stable interface), with RaptorQ (src/rq.c) and zstd's shim inside.
 # ai: LIZ_WASM_MVP (liblizard/build.sh mvp, the "wasm-mvp" preset): the same module as WebAssembly 1.0 with no extension,
 # ai: the library's fallback for an engine without SIMD (bindings/wasm loads it there): the codec's scalar paths (no
 # ai: -msimd128, so src/simd.h defines no OB_SIMD), exceptions through JS, lizard-mvp.mjs and its .wasm. Emscripten's
@@ -74,15 +74,15 @@ if(EMSCRIPTEN)
   target_include_directories(lizard PRIVATE src)
   # ai: the C API, then the codec's own exports (src/wasm.c and what it reaches; an in-tree interface, no stability
   # ai: promise), zstd's shim by name (the default client's pack, sim/pack.mjs: nothing in the library calls it, so its
-  # ai: object is linked only for these), then the allocator; Wirehair's shim exports itself (EMSCRIPTEN_KEEPALIVE)
+  # ai: object is linked only for these), RaptorQ (src/rq.h: the transfer's fountain for sim/fountain.mjs), then the allocator
   set(LIZ_WASM_EXPORTS _liz_version _liz_last_error _liz_last_error_code _liz_simd _liz_ring_cells _liz_geometry_of _liz_room_for
       _liz_pick _liz_blocks_for _liz_encoder_new _liz_encoder_free _liz_encoder_geometry _liz_encoder_paint _liz_decoder_new
-      _liz_decoder_free _liz_decoder_max_blocks _liz_decode _liz_layout_rects _liz_stream_fill _liz_tx_new
+      _liz_decoder_free _liz_decoder_max_blocks _liz_decode _liz_layout_rects _liz_tx_new
       _liz_tx_new_test _liz_tx_free _liz_tx_next _liz_tx_info_get _liz_rx_new _liz_rx_free _liz_rx_frame
       _liz_rx_progress _liz_rx_chunks _liz_rx_meta _liz_rx_data _liz_rx_clear
       _lizard_setup _lizard_setup_tiers _lizard_any_setup _lizard_any_rx _lizard_any_held _lizard_any_max_blocks _lizard_any_which
       _lizard_any_n _lizard_any_blocks _lizard_any_fmt _lizard_any_builds _lizard_bitmap_get _lizard_subch
-      _lizard_blocks _lizard_side _lizard_cell _lizard_quiet _lizard_fmt_rx_ptr _lizard_fmt_fps_set _lizard_parity_set
+      _lizard_blocks _lizard_side _lizard_cell _lizard_quiet _lizard_fmt_rx_ptr _lizard_fmt_fps_set _lizard_fmt_word_set _lizard_car_reset _lizard_car_add _lizard_car_hdr _lizard_car_symbol _lizard_parity_set
       _lizard_pilot_get _lizard_any_pilot_get _lizard_align_get _lizard_tx _lizard_tx_rgba _lizard_rs_geom _lizard_rx _lizard_dbg
       _lizard_dbg_sym _lizard_dbg_coef _lizard_blk_its _lizard_blk_est _ob_heap_top
       _ob_last _ob_prof _ob_prof_reset _ob_luma_strip _ob_test_binarize _ob_test_sample _ob_test_marks
@@ -90,10 +90,11 @@ if(EMSCRIPTEN)
       _ob_test_finder_out _lizard_rx_acquire _lizard_rx_acquire_quad _lizard_rx_finish _lizard_shape _lizard_pos_ptr
       _lizard_tables_out _lizard_rx_ldpc _lizard_block_runs _lizard_ldpc_tables _lizard_tiers_for _lizard_set_axis
       _lizard_anchors_found _lizard_anchor_geom_get _lizard_fmt_check_out _lizard_fmt_soft_out _lizard_grid_out _ob_test_crc_hash
-      _ob_test_crc_gate_out _ob_dbg_hash _stream_fill _xfer_layout _xfer_id_of _xfer_kind_of _xfer_hdr_write _xfer_hdr_parse
+      _ob_test_crc_gate_out _ob_dbg_hash _stream_fill_of _stream_matches_of _xfer_layout _xfer_id_of _xfer_kind_of _xfer_hdr_write _xfer_hdr_parse
       _xfer_mf_parse _xfer_chunk_ok _xfer_manifest_blocks _xfer_manifest_write _xfer_manifest_check _xfer_root
-      _xfer_chunk_cv _xfer_b3_hash _xfer_b3_sub _xfer_log2_for
+      _xfer_chunk_cv _xfer_b3_hash _xfer_b3_sub _xfer_log2_for _xfer_same_file_of
       _lizard_zstd_bound _lizard_zstd_compress _lizard_zstd_decompress _lizard_zstd_frame_content _lizard_zstd_frame_bytes
+      _rq_symbols _rq_enc_new _rq_enc_symbol _rq_enc_free _rq_dec_new _rq_dec_add _rq_dec_count _rq_dec_recover _rq_dec_free
       _malloc _free)
   string(REPLACE ";" "," LIZ_WASM_EXPORTS "${LIZ_WASM_EXPORTS}")
   set_target_properties(lizard PROPERTIES SUFFIX ".mjs" RUNTIME_OUTPUT_DIRECTORY ${LIZ_WASM_DIST})
@@ -162,7 +163,7 @@ endif()
 if(NOT MSVC)
   target_compile_options(lizard PRIVATE -Wall -Wextra -Wno-unused-parameter -ffp-contract=off)
 endif()
-# ai: exactly the C API exported: the engine's own symbols (BLAKE3, Wirehair, the codec) and the standard library's
+# ai: exactly the C API exported: the engine's own symbols (BLAKE3, RaptorQ, the codec) and the standard library's
 # ai: template instances kept out (libstdc++ marks its templates visible whatever the preset). On Windows only what
 # ai: LIZ_API marks dllexport is exported.
 if(CMAKE_SYSTEM_NAME MATCHES "Linux|Android")

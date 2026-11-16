@@ -1,6 +1,6 @@
 /* ai: liblizard: the LIZARD code as a library (2026-10-03): the C (NEON on arm64) and the GPU through Vulkan behind one
  * ai: portable API, with no UI. A luminance-only animated barcode: a frame is a grey picture whose FFT
- * ai: coefficients carry blocks of 476 bytes (a 4-byte little-endian id and 472 of payload, CRC-checked), inside a
+ * ai: coefficients carry blocks of 476 bytes (a 5-byte little-endian id and 471 of payload, CRC-checked), inside a
  * ai: border that says what is inside; a file goes as a fountain-coded transfer verified by its BLAKE3 root.
  * ai:
  * ai: Layers, each usable alone:
@@ -61,8 +61,8 @@ enum {
 
 enum {
   LIZ_BLOCK = 476,         /* ai: a block: the id and the payload */
-  LIZ_ID_BYTES = 4,        /* ai: the id, little-endian */
-  LIZ_PAYLOAD = 472,
+  LIZ_ID_BYTES = 5,        /* ai: the id, 40 bits little-endian */
+  LIZ_PAYLOAD = 471,
   LIZ_MIN_BLOCKS = 4,      /* ai: the smallest format's size (LIZARD-64, seven blocks a symbol) */
   LIZ_MAX_BLOCKS = 64,     /* ai: the largest format's size (LIZARD-1024; its symbol carries liz_blocks_for(64)) */
   LIZ_RINGS = 3,           /* ai: the borders: rings of 64, 128 or 256 cells a side */
@@ -145,13 +145,16 @@ typedef struct {
                          ai: NaN where no block's pilots were read (pilot_blocks 0); every format has blocks of both
                          ai: parities, so a frame read reads both */
   float pilot_sd[2];  /* ai: their standard errors (NaN with its reading) */
+  int animated;       /* ai: the word read is animated, a carousel symbol (no version of its own: the frame was decoded
+                         ai: at the held word; blocks 0) */
 } liz_decoded;
 
 /* ai: One captured frame (or one region of it: px at the region's first pixel, w x h, rows stride bytes apart): its
  * ai: verified blocks packed into verified (liz_decoder_max_blocks x LIZ_BLOCK bytes), their count returned. held: the
  * ai: caller's, the size (blocks) the last word read names (0 none), shared by every decoder reading one stream; a frame
- * ai: whose own word does not read is decoded at it, and with none held is not decoded; it is updated whenever a
- * ai: frame's own word reads. Every frame is otherwise decoded on its own. out may be NULL. */
+ * ai: whose own word does not read, or is animated, is decoded at it, and with none held is not decoded; it is updated
+ * ai: whenever a frame's own static word reads, and when the animated words this decoder has read assemble a header
+ * ai: (its version). Every frame is otherwise decoded on its own. out may be NULL. */
 LIZ_API int liz_decode(liz_decoder *d, const uint8_t *px, int w, int h, int stride, liz_pixfmt fmt, int *held,
                        uint8_t *verified, liz_decoded *out);
 
@@ -160,8 +163,8 @@ LIZ_API int liz_decode(liz_decoder *d, const uint8_t *px, int w, int h, int stri
  * ai: how many (1 or 2). */
 LIZ_API int liz_layout_rects(int w, int h, int layout, int rect[2][4]);
 
-/* ai: the test stream's payload for an id (SHAKE256 of its four bytes): a receiver judges a frame of it by its bytes */
-LIZ_API void liz_stream_fill(uint32_t id, uint8_t payload[LIZ_PAYLOAD]);
+/* ai: the test stream's payload for an id (BLAKE3 of its five bytes): a receiver judges a frame of it by its bytes */
+LIZ_API void liz_stream_fill(uint64_t id, uint8_t payload[LIZ_PAYLOAD]);
 
 /* ---- 3. the transfer --------------------------------------------------------------------------------------------- */
 
@@ -183,7 +186,7 @@ LIZ_API int liz_tx_next(liz_tx *t, int n, uint8_t *blocks);
 typedef struct {
   int test;              /* ai: the test stream */
   uint64_t length;       /* ai: the file's bytes */
-  uint32_t chunks;       /* ai: its chunks (4 MiB up to a file of 64 GiB, xfer_chunk_log2_for) */
+  uint32_t chunks;       /* ai: its chunks (16 MiB each, xfer_chunk_log2_for; a file to 256 GiB) */
   uint32_t lap;          /* ai: data blocks a lap of the schedule (0 until every chunk is made, behind liz_tx_new) */
   uint8_t root[32];      /* ai: BLAKE3 of the file (b3sum's) */
 } liz_tx_info;
@@ -195,7 +198,7 @@ typedef struct liz_rx liz_rx;
  * ai: file's header arrives, and across receivers on the same directory: its own header read again resumes it from the
  * ai: blocks already held. Opening the directory keeps those transfers and removes anything else under it. max_bytes
  * ai: (memory only, 0 no cap) bounds the stored blocks and the file together, which peak near twice the file's size
- * ai: (its bytes and every chunk's blocks before it solves); a chunk's fountain decoder, up to a chunk's 4 MiB, is
+ * ai: (its bytes and every chunk's blocks before it solves); a chunk's fountain decoder, about 24 MB at 16 MiB, is
  * ai: outside it. A store that cannot hold a transfer (over the cap, a write refused, a disk
  * ai: full) ends it: never done, its reason in LIZ_META_ERROR, until a new file's header begins afresh. */
 typedef struct {
@@ -212,7 +215,7 @@ typedef struct {
   int seen, bad, judged, fresh, test;
 } liz_verdict;
 /* ai: One frame's verified blocks, as liz_decode packed them (of both of a frame's regions, one call each or one
- * ai: together). A chunk completed by them is solved and checked inside the call (tens of ms for 4 MiB). */
+ * ai: together). A chunk completed by them is solved and checked inside the call (tens of ms for 16 MiB). */
 LIZ_API int liz_rx_frame(liz_rx *r, const uint8_t *verified, int count, liz_verdict *out);
 
 typedef struct {
@@ -337,6 +340,8 @@ typedef struct {
                             * ai: frames served to a PC that decodes them (liz_link) */
   const char *layout;      /* ai: "1:1" (NULL) or "2:1" (liz_layout_rects) */
   int forget_settings;     /* ai: 1: the camera settings held for this session alone, none read or written (a test's) */
+  int keep_packed;         /* ai: 1: a file the default client packed (SPEC 9.7) taken out of the store as it came, for
+                            * ai: the app to unpack as it files it (liz_kept's "packed"); 0 unpacked into kept/ */
   void (*log)(void *user, const char *line);   /* ai: NULL none; called from the session's threads */
   void *user;
 } liz_session_config;
@@ -389,6 +394,13 @@ LIZ_API void liz_session_replays(liz_session *s, int on, const char *meta_json);
 /* ai: Replay size: a run's cap, the raw bytes of the frames it keeps (the newest that fit; the oldest dropped as new ones
  * ai: come), held to 256 MiB .. 8 GiB, 1 GiB until set; the run recording takes it at once. */
 LIZ_API void liz_session_replay_bytes(liz_session *s, long long bytes);
+/* ai: Largest file (2026-11-15, the apps' setting; session.h fileLimit): a transfer whose file is over bytes (0: the
+ * ai: format's own limit), or wants more free space than room times its file where the store is (0: none asked; 1
+ * ai: where the app's filing moves the file, 2 where it copies it), refused at its header before anything is written:
+ * ai: the camera stopped, the phase's error "File too large: ..." or "Not enough space: ...", the stats' file
+ * ai: {refusal: "limit" | "room", limit, free}. Held for every receiver; a start or a change takes a refused transfer
+ * ai: afresh at its next header. */
+LIZ_API void liz_session_file_limit(liz_session *s, long long bytes, double room);
 LIZ_API void liz_session_extra(liz_session *s, const char *json);
 
 /* ai: The platform's hooks, Android's (elsewhere LIZ_E_UNSUPPORTED). The app's preview surface (an ANativeWindow*,
@@ -406,7 +418,8 @@ LIZ_API size_t liz_link_state(char *json, size_t cap);
 LIZ_API int liz_usb_accessory(int fd);
 
 /* ai: The data folder with or without a session: the verified files taken into kept/ and not yet placed, oldest first
- * ai: ([{id, name, type, root, path, at}]); one placed by the app (its kept/<id> deleted); the unfinished transfers,
+ * ai: ([{id, name, type, root, path, at}], and packed {name, type}, the file it holds, where path is a packed file:
+ * ai: keep_packed's, or one that did not unpack); one placed by the app (its kept/<id> deleted); the unfinished transfers,
  * ai: newest first ([{id, name, length, fraction, root, at}]); one deleted (LIZ_E_STATE while a session holds the folder:
  * ai: liz_session_forget then; a session of this process being freed is waited for, up to 10 s). */
 LIZ_API size_t liz_kept(const char *data_dir, char *json, size_t cap);

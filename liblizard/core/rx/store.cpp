@@ -16,6 +16,7 @@
 #ifdef _WIN32
 #include <io.h>
 #else
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -27,7 +28,10 @@ namespace fs = std::filesystem;
 
 namespace lizard {
 
-static constexpr uint32_t PAYLOAD = XFER_PAYLOAD, REC = XFER_BLOCK;
+static constexpr uint32_t PAYLOAD = XFER_PAYLOAD, REC = XFER_BLOCK, IDB = XFER_ID_BYTES;
+// ai: a verified chunk's number in the folder's list: 4 bytes, little-endian
+static void put32(uint8_t* p, uint32_t v) { for (int i = 0; i < 4; i++) p[i] = uint8_t(v >> 8 * i); }
+static uint32_t get32(const uint8_t* p) { return p[0] | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
 
 // ai: paths are UTF-8 everywhere; Windows' narrow stdio would read them in the ANSI code page
 static fs::path pathOf(const std::string& utf8) { return fs::u8path(utf8); }
@@ -77,7 +81,7 @@ static std::string safeName(const std::string& s) {
 // ai: a file of many chunks has every one in flight until the first lap ends and a phone's descriptors are few.
 class FileStore final : public Store {
  public:
-  explicit FileStore(std::string d) : dir(std::move(d)) {
+  explicit FileStore(std::string d) : dir(std::move(d)), cap(openBudget()) {
     std::error_code e;
     fs::create_directories(pathOf(dir), e);
     if (e) { fail("store: " + dir + ": " + e.message()); return; }
@@ -106,13 +110,12 @@ class FileStore final : public Store {
   }
   void park() override { closeAll(); }
   void truncate(uint32_t c, uint32_t n) override {
-    auto s = sizes.find(c);
-    if (s == sizes.end() || s->second <= uint64_t(n) * REC) return;
-    auto o = opened.find(c);
-    if (o != opened.end()) { fclose(o->second.f); opened.erase(o); }
+    if (!has(c) || uint64_t(sizes[c]) <= uint64_t(n) * REC) return;
+    closeChunk(c);
     std::error_code e;
     fs::resize_file(pathOf(chunkPath(c)), uint64_t(n) * REC, e);
-    s->second = uint64_t(n) * REC;
+    fs::resize_file(pathOf(idsPath(c)), uint64_t(n) * 4, e);
+    sizes[c] = int64_t(n) * REC;
   }
   void forget(const std::string& id) override {
     if (id.empty() || id.find('/') != std::string::npos || id.find('\\') != std::string::npos || id == "." || id == "..") return;
@@ -125,12 +128,29 @@ class FileStore final : public Store {
     before = Before{};
     error.clear();
     closeAll();
+    if (!within(length)) return false;
+    buffersFor(length);
     cur = dir + "/" + id;
     std::error_code e;
-    // ai: the folder resumed only where it holds this very header (a header is the transfer's whole description)
+    // ai: the folder resumed where it holds this file's header (xfer_same_file: its name and type may be another
+    // ai: sender's; the folder keeps the first), else made afresh
     const std::vector<uint8_t> had = slurp(cur + "/header");
-    const bool same = header && had.size() == PAYLOAD && !memcmp(had.data(), header, PAYLOAD) && fs::exists(pathOf(cur + "/out"));
+    xfer_header_t a, b;
+    const bool same = header && had.size() == PAYLOAD && !xfer_header_parse(had.data(), &a) && !xfer_header_parse(header, &b) &&
+                      xfer_same_file(&a, &b) && fs::exists(pathOf(cur + "/out"));
     if (!same) {
+      // ai: room: the free space where the store is (a resumed folder is not asked again: what it holds is there)
+      if (room > 0) {
+        std::error_code se;
+        const fs::space_info sp = fs::space(pathOf(dir), se);
+        if (!se && double(sp.available) < room * double(length)) {
+          refusal = "room";
+          free = sp.available;
+          cur.clear();
+          fail("store: a file of " + std::to_string(length) + " B wants " + std::to_string(uint64_t(room * double(length))) + " B free, " + std::to_string(sp.available) + " B are");
+          return false;
+        }
+      }
       fs::remove_all(pathOf(cur), e);
       fs::create_directories(pathOf(cur), e);
       if (e) { fail("store: " + cur + ": " + e.message()); return false; }
@@ -145,9 +165,9 @@ class FileStore final : public Store {
     if (!out) { fail("store: " + cur + "/out: " + strerror(errno)); return false; }
     before.found = true;
     const std::vector<uint8_t> m = slurp(cur + "/manifest");
-    for (size_t o = 0; o + REC <= m.size(); o += REC) before.manifest.push_back({xfer_id_get(m.data() + o), std::vector<uint8_t>(m.begin() + o + 4, m.begin() + o + REC)});
+    for (size_t o = 0; o + REC <= m.size(); o += REC) before.manifest.push_back({uint32_t(xfer_id_get(m.data() + o)), std::vector<uint8_t>(m.begin() + o + IDB, m.begin() + o + REC)});
     const std::vector<uint8_t> v = slurp(cur + "/verified");
-    for (size_t o = 0; o + 4 <= v.size(); o += 4) before.verified.push_back(xfer_id_get(v.data() + o));
+    for (size_t o = 0; o + 4 <= v.size(); o += 4) before.verified.push_back(get32(v.data() + o));
     for (auto& p : fs::directory_iterator(pathOf(cur), e)) {
       const std::string f = p.path().filename().string();
       if (f.size() < 2 || f[0] != 'c' || f.find_first_not_of("0123456789", 1) != std::string::npos) continue;
@@ -155,26 +175,49 @@ class FileStore final : public Store {
       const uint64_t size = p.file_size(e);
       // ai: a record cut short by a stop goes, so the next one appended lands on a record's boundary
       if (size % REC) fs::resize_file(p.path(), size - size % REC, e);
-      sizes[c] = size - size % REC;
+      grow(c);
+      sizes[c] = int64_t(size - size % REC);
       before.chunks.push_back(c);
     }
     return true;
   }
   bool append(uint32_t c, uint32_t sym, const uint8_t* payload) override {
-    FILE* f = handle(c);
-    uint8_t r[REC];
+    Open* h = handle(c);
+    uint8_t r[REC], i[4];
     xfer_id_put(r, sym);
-    memcpy(r + 4, payload, PAYLOAD);
-    if (!f || fwrite(r, 1, REC, f) != REC) { fail("store: a block of chunk " + std::to_string(c) + " not written"); return false; }
+    memcpy(r + IDB, payload, PAYLOAD);
+    put32(i, sym);
+    if (!h || fwrite(r, 1, REC, h->f) != REC || fwrite(i, 1, 4, h->g) != 4) { fail("store: a block of chunk " + std::to_string(c) + " not written"); return false; }
     sizes[c] += REC;
     return true;
   }
+  // ai: the ids file (i<k>), one 4-byte symbol a record; where it does not hold exactly one a record (a folder from
+  // ai: before it, or a stop between a record's two writes) it is made again from the records
+  std::vector<uint32_t> ids(uint32_t c) override {
+    if (!has(c)) return {};
+    const size_t n = size_t(sizes[c] / REC);
+    if (files[c].g) fflush(files[c].g);
+    std::vector<uint8_t> b(4 * n + 4);
+    FILE* f = openFile(idsPath(c), "rb");
+    const size_t got = f ? fread(b.data(), 1, b.size(), f) : 0;
+    if (f) fclose(f);
+    std::vector<uint32_t> v(n);
+    if (got == 4 * n) {
+      for (size_t k = 0; k < n; k++) v[k] = get32(b.data() + 4 * k);
+      return v;
+    }
+    const auto recs = read(c);
+    v.resize(recs.size() / REC);
+    b.resize(4 * v.size());
+    for (size_t k = 0; k < v.size(); k++) { v[k] = uint32_t(xfer_id_get(recs.data() + k * REC)); put32(b.data() + 4 * k, v[k]); }
+    closeChunk(c);
+    writeAll(idsPath(c), b.data(), b.size());
+    return v;
+  }
   std::vector<uint8_t> read(uint32_t c) override {
-    auto s = sizes.find(c);
-    if (s == sizes.end()) return {};
-    auto o = opened.find(c);
-    if (o != opened.end()) fflush(o->second.f);
-    std::vector<uint8_t> b(s->second);
+    if (!has(c)) return {};
+    if (files[c].f) fflush(files[c].f);
+    std::vector<uint8_t> b(static_cast<size_t>(sizes[c]));
     FILE* f = openFile(chunkPath(c), "rb");
     size_t got = f ? fread(b.data(), 1, b.size(), f) : 0;
     if (f) fclose(f);
@@ -182,9 +225,8 @@ class FileStore final : public Store {
     return b;
   }
   void drop(uint32_t c) override {
-    auto o = opened.find(c);
-    if (o != opened.end()) { fclose(o->second.f); opened.erase(o); }
-    if (sizes.erase(c)) { std::error_code e; fs::remove(pathOf(chunkPath(c)), e); }
+    closeChunk(c);
+    if (has(c)) { sizes[c] = -1; std::error_code e; fs::remove(pathOf(chunkPath(c)), e); fs::remove(pathOf(idsPath(c)), e); }
   }
   bool writeOut(uint64_t off, const uint8_t* p, size_t len) override {
     if (!out || !seek64(out, off) || fwrite(p, 1, len, out) != len) { fail("store: " + cur + "/out not written: " + strerror(errno)); return false; }
@@ -193,7 +235,7 @@ class FileStore final : public Store {
   void noteManifest(uint32_t m, const uint8_t* payload) override {
     uint8_t r[REC];
     xfer_id_put(r, m);
-    memcpy(r + 4, payload, PAYLOAD);
+    memcpy(r + IDB, payload, PAYLOAD);
     appendTo(cur + "/manifest", r, REC);
   }
   // ai: the output's bytes on the disk before the chunk is noted: a chunk noted and lost to a power cut would come back
@@ -201,7 +243,7 @@ class FileStore final : public Store {
   void noteVerified(uint32_t c) override {
     if (!out || !syncFile(out)) return;
     uint8_t r[4];
-    xfer_id_put(r, c);
+    put32(r, c);
     appendTo(cur + "/verified", r, 4);
   }
   void noteMeta(const std::string& json) override {
@@ -229,14 +271,63 @@ class FileStore final : public Store {
   }
 
  private:
-  struct Open { FILE* f; uint64_t used; };
+  // ai: A chunk's files stay open (2026-11-15): blocks come interleaved over every chunk (a round visits each once), so
+  // ai: with more chunks than open files nearly every append closed one chunk's two streams and opened another's (32
+  // ai: chunks open before: the S26 5.0 us a block at 64 chunks and 9.3 at 4,096, against 0.4 at 32;
+  // ai: research/build/perf-scan-2026-11-15/store_bench.cpp). Now as many chunks open as the process's descriptors
+  // ai: allow (openBudget), every table flat by the chunk's number; past the budget one is closed in turn (any order
+  // ai: does: the chunks come uniformly), found in O(1).
+  struct Open { FILE* f = nullptr; FILE* g = nullptr; };   // ai: a chunk's records and its ids
+  static constexpr uint32_t NONE = UINT32_MAX;
   std::string dir, cur;   // ai: cur: the transfer in hand's folder, "" none
   FILE* out = nullptr;
-  uint64_t tick = 0;
-  std::unordered_map<uint32_t, uint64_t> sizes;   // ai: chunks with a file, and its bytes
-  std::unordered_map<uint32_t, Open> opened;
-  static constexpr size_t OPEN_CAP = 32;
+  std::vector<int64_t> sizes;           // ai: by chunk: its records' bytes, -1 no file
+  std::vector<Open> files;              // ai: by chunk: its streams where open
+  std::vector<uint32_t> openList, at;   // ai: the chunks open, and each chunk's place in that list (NONE closed)
+  size_t cap, hand = 0;
+  // ai: each open chunk's stdio buffers: a page of records (stdio's own size, so its writes land on page boundaries)
+  // ai: and a kilobyte of ids up to 4,096 chunks (64 GiB), less past it so a file's buffers stay near 20 MB
+  size_t recBuf = 4096, idsBuf = 1024;
+  bool has(uint32_t c) const { return c < sizes.size() && sizes[c] >= 0; }
+  void grow(uint32_t c) {
+    if (c < sizes.size()) return;
+    const size_t n = std::max<size_t>(size_t(c) + 1, sizes.size() * 2);
+    sizes.resize(n, -1); files.resize(n); at.resize(n, NONE);
+  }
+  void buffersFor(uint64_t length) {
+    const uint64_t chunks = (length >> 24) + 1;
+    recBuf = chunks <= 4096 ? 4096 : size_t(std::max<uint64_t>(1024, (uint64_t(4096) * 4096 / chunks) & ~uint64_t(511)));
+    idsBuf = chunks <= 4096 ? 1024 : 256;
+  }
+  // ai: how many chunks may be open at once, two streams each: the process's descriptor limit less room for the rest
+  // ai: of the process (Android's apps have 32,768; a desktop JVM raises its own soft limit to the hard one at start);
+  // ai: Windows' stdio 8,192 streams at most
+  static size_t openBudget() {
+#ifdef _WIN32
+    int m = _setmaxstdio(8192);
+    if (m < 0) m = _getmaxstdio();
+    return std::max<size_t>(32, (size_t(m) - 64) / 2);
+#else
+    struct rlimit r;
+    if (getrlimit(RLIMIT_NOFILE, &r)) return 32;
+    const uint64_t n = r.rlim_cur == RLIM_INFINITY ? uint64_t(1) << 20 : uint64_t(r.rlim_cur);
+    return n >= 2048 ? size_t(std::min<uint64_t>(n, 2 * 65535 + 1024) - 512) / 2 : std::max<size_t>(32, size_t(n) / 4);
+#endif
+  }
   std::string chunkPath(uint32_t c) const { return cur + "/c" + std::to_string(c); }
+  std::string idsPath(uint32_t c) const { return cur + "/i" + std::to_string(c); }
+  void closeChunk(uint32_t c) {
+    if (c >= files.size() || !files[c].f) return;
+    // ai: a stream's last bytes go at its close: one that cannot (the disk full) is the store's failure
+    const bool ok = fclose(files[c].f) == 0;
+    if ((fclose(files[c].g) != 0 || !ok) && error.empty()) fail("store: chunk " + std::to_string(c) + " not written: " + strerror(errno));
+    files[c] = Open{};
+    const uint32_t i = at[c], last = openList.back();
+    openList[i] = last;
+    at[last] = i;
+    openList.pop_back();
+    at[c] = NONE;
+  }
   // ai: a transfer's folder holding its finished file not yet taken out (store.h): no header, meta.json, a file in done/
   static bool finished(const fs::path& d) {
     std::error_code e;
@@ -246,9 +337,8 @@ class FileStore final : public Store {
     return false;
   }
   void closeAll() {
-    for (auto& [c, o] : opened) fclose(o.f);
-    opened.clear();
-    sizes.clear();
+    while (!openList.empty()) closeChunk(openList.back());
+    sizes.clear(); files.clear(); at.clear();
     if (out) { fclose(out); out = nullptr; }
     cur.clear();
   }
@@ -273,22 +363,34 @@ class FileStore final : public Store {
     fwrite(p, 1, len, f);
     fclose(f);
   }
-  FILE* handle(uint32_t c) {
-    auto o = opened.find(c);
-    if (o != opened.end()) { o->second.used = ++tick; return o->second.f; }
-    if (opened.size() >= OPEN_CAP) {
-      auto old = std::min_element(opened.begin(), opened.end(), [](auto& a, auto& b) { return a.second.used < b.second.used; });
-      fclose(old->second.f);
-      opened.erase(old);
+  Open* handle(uint32_t c) {
+    grow(c);
+    Open& o = files[c];
+    if (o.f) return &o;
+    // ai: OpfsStore.handle truncates a chunk's file when it first opens it; a chunk closed for room, or one resumed,
+    // ai: reopens to append (its ids file the same). The process out of descriptors all the same (others took them):
+    // ai: the budget comes down to what is open and one is closed for it.
+    const bool fresh = sizes[c] < 0;
+    const auto both = [&] {
+      FILE* f = openFile(chunkPath(c), fresh ? "wb" : "ab");
+      if (!f) return false;
+      FILE* g = openFile(idsPath(c), fresh ? "wb" : "ab");
+      if (!g) { const int e = errno; fclose(f); errno = e; return false; }
+      o.f = f; o.g = g;
+      return true;
+    };
+    while (openList.size() >= cap && !openList.empty()) closeChunk(openList[hand++ % openList.size()]);
+    while (!both()) {
+      if ((errno != EMFILE && errno != ENFILE) || openList.empty()) return nullptr;
+      cap = std::max<size_t>(1, openList.size() - 1);
+      closeChunk(openList[hand++ % openList.size()]);
     }
-    // ai: OpfsStore.handle truncates a chunk's file when it first opens it; a descriptor the LRU let go, or a chunk
-    // ai: resumed, reopens to append
-    const bool fresh = !sizes.count(c);
-    FILE* f = openFile(chunkPath(c), fresh ? "wb" : "ab");
-    if (!f) return nullptr;
+    setvbuf(o.f, nullptr, _IOFBF, recBuf);
+    setvbuf(o.g, nullptr, _IOFBF, idsBuf);
     if (fresh) sizes[c] = 0;
-    opened[c] = {f, ++tick};
-    return f;
+    at[c] = uint32_t(openList.size());
+    openList.push_back(c);
+    return &o;
   }
 };
 
@@ -303,6 +405,7 @@ class MemoryStore final : public Store {
     before = Before{};
     error.clear();
     out.clear();
+    if (!within(length)) return false;
     if (length > uint64_t(SIZE_MAX) || !fits(length)) {
       fail("store: a file of " + std::to_string(length) + " B is over the memory store's " + (length > uint64_t(SIZE_MAX) ? std::string("address space") : std::to_string(cap) + " B"));
       return false;
@@ -317,13 +420,21 @@ class MemoryStore final : public Store {
     const size_t at = v.size();
     v.resize(at + REC);
     xfer_id_put(v.data() + at, sym);
-    memcpy(v.data() + at + 4, payload, PAYLOAD);
+    memcpy(v.data() + at + IDB, payload, PAYLOAD);
     held += REC;
     return true;
   }
   std::vector<uint8_t> read(uint32_t c) override {
     auto it = chunks.find(c);
     return it == chunks.end() ? std::vector<uint8_t>{} : it->second;
+  }
+  std::vector<uint32_t> ids(uint32_t c) override {
+    std::vector<uint32_t> v;
+    auto it = chunks.find(c);
+    if (it == chunks.end()) return v;
+    v.reserve(it->second.size() / REC);
+    for (size_t o = 0; o + REC <= it->second.size(); o += REC) v.push_back(uint32_t(xfer_id_get(it->second.data() + o)));
+    return v;
   }
   void drop(uint32_t c) override {
     auto it = chunks.find(c);
@@ -346,6 +457,13 @@ class MemoryStore final : public Store {
   // ai: the stored blocks, the output and a finished file all count (extra is what is about to be added)
   bool fits(uint64_t extra) const { return !cap || held + extra + done.size() <= cap; }
 };
+
+std::vector<uint32_t> Store::ids(uint32_t c) {
+  const auto recs = read(c);
+  std::vector<uint32_t> v(recs.size() / REC);
+  for (size_t k = 0; k < v.size(); k++) v[k] = uint32_t(xfer_id_get(recs.data() + k * REC));
+  return v;
+}
 
 std::unique_ptr<Store> fileStore(const std::string& dir) { return std::make_unique<FileStore>(dir); }
 std::unique_ptr<Store> memoryStore(uint64_t maxBytes) { return std::make_unique<MemoryStore>(maxBytes); }

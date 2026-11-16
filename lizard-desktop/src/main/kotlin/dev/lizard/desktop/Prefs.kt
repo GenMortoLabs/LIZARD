@@ -111,6 +111,8 @@ object Prefs {
         var replays: Boolean get() = bool("replays", false); set(v) { put("replays", v.toString()) }
         // ai: Replay size, MB (2026-11-09; the session's replayBytes): 1024 unless set
         var replayMb: Int get() = dev.lizard.ui.replayMb(int("replayMb", dev.lizard.ui.REPLAY_MB_DEFAULT)); set(v) { put("replayMb", v.toString()) }
+        // ai: Largest file, GB (2026-11-15, the Files fold; the session's fileLimit): 50 unless set, 0 No limit
+        var fileGb: Int get() = dev.lizard.ui.fileGb(int("fileGb", dev.lizard.ui.FILE_GB_DEFAULT)); set(v) { put("fileGb", v.toString()) }
     }
     private fun str(k: String, d: String) = p?.get(k, d) ?: d
     private fun int(k: String, d: Int) = p?.getInt(k, d) ?: d
@@ -132,6 +134,8 @@ object Prefs {
     var codes: Int get() = int("codes", 1); set(v) { p?.putInt("codes", v) }
     // ai: Rate refresh (2026-11-12): "a,b,c,d", lizard-ui refreshText; "1,1,1,1" unless set
     var refresh: String get() = str("refresh", "1,1,1,1"); set(v) { p?.put("refresh", v) }
+    // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting): frames a symbol, 0 (Off) unless set
+    var carousel: Int get() = int("carousel", 0); set(v) { p?.putInt("carousel", v) }
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): as typed, "" a random one each send
     var seed: String get() = str("seed", ""); set(v) { p?.put("seed", v) }
     var experimentalOpen: Boolean get() = bool("experimental", false); set(v) { p?.putBoolean("experimental", v) }

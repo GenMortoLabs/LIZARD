@@ -3,7 +3,7 @@
 // ai: build output, never edited by hand.
 // ai:   1. crawl: from the three pages, every file a page or a shipped module names by a literal (an import specifier,
 // ai:      new URL(..., import.meta.url), a fetched path; referrer-relative, or a bare name beside the referrer), comments
-// ai:      left out so a path in one ships nothing; the codec's module (BUILT, liblizard/build.sh's output, Wirehair and
+// ai:      left out so a path in one ships nothing; the codec's module (BUILT, liblizard/build.sh's output, RaptorQ and
 // ai:      zstd inside) among them, or no app;
 // ai:   2. copy: the pages to the root, their references re-pointed, and every other file under assets/ at its path under
 // ai:      the project's root (assets/lizard-web/recv.mjs, assets/liblizard/sim/phy.mjs,
@@ -36,7 +36,7 @@ const SCAN = new Set([".html", ".css", ".mjs", ".js", ".svg"]);
 const GLUE = new Set(["liblizard/bindings/wasm/dist/lizard.mjs", "liblizard/bindings/wasm/dist/lizard-media.mjs"]);
 // ai: liblizard/build.sh's output, built and not in git: the crawl drops a name whose file is not there, so before
 // ai: 2026-10-04 an app was built without the codec and the fountain where they were not built. Each must ship: the
-// ai: path the tree imports the codec by (build/ob.mjs) and the module it names, Wirehair and zstd inside since
+// ai: path the tree imports the codec by (build/ob.mjs) and the module it names, the fountain and zstd inside since
 // ai: 2026-10-25. The library's WebAssembly 1.0 fallback (dist/lizard-mvp.mjs) is its loader's (bindings/wasm/index.mjs),
 // ai: which no page imports: the app is SIMD-only. The file camera's module (dist/lizard-media.mjs, FFmpeg's reader;
 // ai: since 2026-11-07), reached by the receiver's media worker.
@@ -136,10 +136,11 @@ writeFileSync(join(OUT, "service-worker.js"), sw);
 // ai: loads it, so it is outside the worker's shell. Other hosts ignore it.
 writeFileSync(join(OUT, "_headers"), "/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n");
 // ai: The licenses the app ships under, one text beside the pages, outside the worker's shell as _headers is: its wasm
-// ai: carries the codec, BLAKE3, Wirehair and Zstandard (both BSD 3-Clause, which asks for its notice with a binary),
+// ai: carries the codec, RaptorQ (the project's own, src/rq.c), BLAKE3 and Zstandard (BSD 3-Clause, which asks for its
+// ai: notice with a binary),
 // ai: the file camera's wasm FFmpeg (LGPL, its text headed with its source and configuration) and zlib, and the build
 // ai: strips every comment.
-const NOTICES = [["", "LICENSE"], ["", "NOTICE"], ["Wirehair (liblizard/vendor/wirehair)", "liblizard/vendor/wirehair/LICENSE"],
+const NOTICES = [["", "LICENSE"], ["", "NOTICE"],
   ["Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option", "liblizard/vendor/zstd/LICENSE"],
   ["BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option", "liblizard/vendor/blake3/LICENSE_A2"],
   ["", "liblizard/build/ffmpeg/wasm/licenses/ffmpeg.txt"], ["", "liblizard/build/ffmpeg/wasm/licenses/zlib.txt"],

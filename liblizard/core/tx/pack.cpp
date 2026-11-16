@@ -166,30 +166,82 @@ Packed pack(const std::string& path, const std::string& name, const std::string&
   return r;
 }
 
+std::string Unpacker::open(const std::string& path) {
+  in_.open(fs::u8path(path), std::ios::binary);
+  if (!in_) return "the packed file could not be read";
+  in_.seekg(0, std::ios::end);
+  const uint64_t L = static_cast<uint64_t>(in_.tellg());
+  try {
+    for (uint64_t at = 0; at < L;) {
+      const size_t head = static_cast<size_t>(std::min<uint64_t>(HEAD, L - at));
+      const auto h = readAt(in_, at, head);
+      int32_t sum = 0;
+      const int32_t c = lizard_zstd_frame_content(h.data(), static_cast<uint32_t>(head));
+      const int32_t hb = lizard_zstd_frame_head(h.data(), static_cast<uint32_t>(head), &sum);
+      if (c < 0 || hb < 0 || static_cast<size_t>(c) > PACK_FRAME_MAX) return "a frame that does not say its bytes, or holds more than 64 MiB";
+      // ai: the blocks (RFC 8878 3.1.1.2): a 3-byte header, little-endian: bit 0 the last, bits 1 and 2 the type (raw,
+      // ai: RLE, compressed, reserved), the rest the size; an RLE block's content is its one byte
+      uint64_t p = at + static_cast<uint64_t>(hb);
+      for (bool last = false; !last;) {
+        if (p + 3 > L) return "a frame cut short";
+        const auto b = readAt(in_, p, 3);
+        const uint32_t w = uint32_t{b[0]} | uint32_t{b[1]} << 8 | uint32_t{b[2]} << 16;
+        const uint32_t type = w >> 1 & 3;
+        if (type == 3) return "a frame damaged";
+        last = (w & 1) != 0;
+        p += 3 + (type == 1 ? 1 : w >> 3);
+      }
+      if (sum) p += 4;
+      if (p > L) return "a frame cut short";
+      if (p - at > lizard_zstd_bound(static_cast<uint32_t>(c))) return "a frame damaged";
+      frames_.push_back({at, static_cast<uint32_t>(p - at), static_cast<uint32_t>(c)});
+      total_ += static_cast<uint64_t>(c);
+      at = p;
+    }
+  } catch (const std::exception& x) {
+    return x.what();
+  }
+  return "";
+}
+
+const uint8_t* Unpacker::take(size_t& n) {
+  while (pos_ == plain_.size()) {
+    if (next_ == frames_.size()) {
+      n = 0;
+      return nullptr;
+    }
+    const Frame& f = frames_[next_++];
+    const auto z = readAt(in_, f.at, f.bytes);
+    plain_.resize(f.content);
+    pos_ = 0;
+    if (lizard_zstd_decompress(z.data(), f.bytes, plain_.data(), f.content)) {
+      plain_.clear();
+      next_--;   // ai: the same frame again at a next call, which throws again: never a file cut short in silence
+      throw std::runtime_error("a frame damaged or cut short");
+    }
+  }
+  n = std::min(n, plain_.size() - pos_);
+  const uint8_t* p = plain_.data() + pos_;
+  pos_ += n;
+  return p;
+}
+
 std::string unpack(const std::string& from, const std::string& to) {
-  std::ifstream in(fs::u8path(from), std::ios::binary);
-  if (!in) return "the packed file could not be read";
-  in.seekg(0, std::ios::end);
-  const uint64_t L = static_cast<uint64_t>(in.tellg());
+  Unpacker u;
+  std::string why = u.open(from);
+  if (!why.empty()) return why;
   std::ofstream out(fs::u8path(to), std::ios::binary | std::ios::trunc);
   if (!out) return "the file could not be made";
-  std::string why;
   try {
-    std::vector<uint8_t> plain;
-    for (uint64_t at = 0; at < L && why.empty();) {
-      const size_t head = static_cast<size_t>(std::min<uint64_t>(HEAD, L - at));
-      const auto h = readAt(in, at, head);
-      const int32_t c = lizard_zstd_frame_content(h.data(), static_cast<uint32_t>(head));
-      if (c < 0 || static_cast<size_t>(c) > PACK_FRAME_MAX) { why = "a frame that does not say its bytes, or holds more than 64 MiB"; break; }
-      // ai: a frame of c bytes takes at most zstd's bound for c
-      const size_t want = static_cast<size_t>(std::min<uint64_t>(lizard_zstd_bound(static_cast<uint32_t>(c)), L - at));
-      const auto b = readAt(in, at, want);
-      const int32_t fb = lizard_zstd_frame_bytes(b.data(), static_cast<uint32_t>(want));
-      plain.resize(static_cast<size_t>(c));
-      if (fb < 0 || lizard_zstd_decompress(b.data(), static_cast<uint32_t>(fb), plain.data(), static_cast<uint32_t>(c))) { why = "a frame damaged or cut short"; break; }
-      out.write(reinterpret_cast<const char*>(plain.data()), static_cast<std::streamsize>(plain.size()));
-      if (!out) why = "the file could not be written";
-      at += static_cast<uint64_t>(fb);
+    for (;;) {
+      size_t n = PACK_FRAME;
+      const uint8_t* p = u.take(n);
+      if (!n) break;
+      out.write(reinterpret_cast<const char*>(p), static_cast<std::streamsize>(n));
+      if (!out) {
+        why = "the file could not be written";
+        break;
+      }
     }
   } catch (const std::exception& x) {
     why = x.what();

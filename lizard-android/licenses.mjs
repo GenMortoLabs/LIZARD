@@ -9,7 +9,6 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NOTICES = [
   ["", "LICENSE"],
   ["", "NOTICE"],
-  ["Wirehair (liblizard/vendor/wirehair)", "liblizard/vendor/wirehair/LICENSE"],
   ["Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option", "liblizard/vendor/zstd/LICENSE"],
   ["volk (liblizard/core/third_party/volk)", "liblizard/core/third_party/volk/LICENSE.md"],
   ["JSON for Modern C++ (liblizard/core/third_party/json.hpp)", "liblizard/core/third_party/json.LICENSE.MIT"],

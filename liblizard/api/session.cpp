@@ -57,6 +57,7 @@ LIZ_API liz_session* liz_session_new(const liz_session_config* c) {
     k.decoder = c->decoder && *c->decoder ? c->decoder : "auto";
     k.layout = c->layout && *c->layout ? c->layout : "1:1";
     k.forgetSettings = c->forget_settings != 0;
+    k.keepPacked = c->keep_packed != 0;
     if (c->log) {
       void (*log)(void*, const char*) = c->log;
       void* user = c->user;
@@ -129,6 +130,10 @@ LIZ_API void liz_session_clear(liz_session* s) { guard([&] { need(s, "a session"
 LIZ_API void liz_session_replays(liz_session* s, int on, const char* meta) {
   guard([&] { need(s, "a session"); s->s->replays(on != 0, str(meta)); return LIZ_OK; });
 }
+LIZ_API void liz_session_file_limit(liz_session* s, long long bytes, double room) {
+  guard([&] { need(s, "a session"); s->s->fileLimit(bytes, room); return LIZ_OK; });
+}
+
 LIZ_API void liz_session_replay_bytes(liz_session* s, long long bytes) {
   guard([&] { need(s, "a session"); s->s->replayBytes(bytes); return LIZ_OK; });
 }

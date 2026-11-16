@@ -64,6 +64,7 @@
 // ai: LIZ_YIELD_GPU=0|1: receive's ReceiverConfig::yieldGpu (the decoder's queues at the global priority LOW where offered;
 // ai: a receiver's default, 1); the other modes' own device at LOW only with 1, for an A/B against a screen's load.
 #include "front.h"
+#include "codec.h"
 #include "trial.h"
 #include "receiver.h"
 #include "recording.h"
@@ -207,6 +208,7 @@ static int probe(Ctx& c, const std::string& v, const std::string& jobPath, const
   json out = {{"variant", v}, {"device", c.dev->name}, {"driver", c.dev->driver}, {"precision", fh->S->tree["precision"]},
               {"floatPrecision", fh->S->tree["floatPrecision"]}, {"nets", fh->nets}, {"batches", json::array()}};
   int held = 0;
+  cpu_hold_t* hold = cpu_hold_new();
   for (size_t k = 0; k < px.size();) {
     const int nb = std::min<int>(std::max(1, fh->size()), (int)(px.size() - k));
     std::vector<Slot*> slots;
@@ -236,7 +238,7 @@ static int probe(Ctx& c, const std::string& v, const std::string& jobPath, const
       std::sort(ids.begin(), ids.end());
       if (!fo.luma.empty()) writeFile(bd + "/input-" + std::to_string(i) + ".gray", fo.luma.data(), fo.luma.size());
       fr.push_back({{"index", k + i}, {"tag", fo.tag}, {"w", wh[k + i].first}, {"h", wh[k + i].second}, {"empty", fo.empty}, {"kept", !fo.luma.empty()}, {"ids", ids}});
-      if (fo.hasWord) held = fo.word.version;
+      if (fo.hasWord) { const int v = cpu_hold_take(hold, fo.word.kind, fo.word.version, fo.word.pos, fo.word.sym); if (v) held = v; }
     }
     out["batches"].push_back({{"dir", "batch" + std::to_string(out["batches"].size())}, {"nb", nb},
       {"shape", {{"B", ln.B}, {"W", ln.W}, {"H", ln.H}, {"gx", ln.gx}, {"gy", ln.gy}, {"cap", fh->cap}, {"levels", levels}}},
@@ -805,6 +807,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   if (rawFmt) printf("frames as %s at bin %u, %s\n", rawName.c_str(), rawFmt == RAW_FMT_P010 ? 1 : rawBin, rawCpu ? "the CPU's develop pushed as luma" : "developed on the GPU, held to the CPU's develop");
   std::deque<std::unique_ptr<InFlight>> flight;
   int held = held0, found = 0, words = 0, heldFrames = 0, next = 0;
+  cpu_hold_t* holdW = cpu_hold_new();   // ai: static words, or the carousel's header (codec.h)
   long blocks = 0, codewords = 0, iterations = 0;   // ai: the LDPC's codewords run and iterations summed (the back half's COUNTS 3 and 7)
   std::vector<float> pilots, pilots2;   // ai: each frame's pilot readings where read (SPEC 7.3): the even blocks', the odd blocks'
   std::vector<int> anchors;   // ai: the anchors each found frame read
@@ -869,9 +872,10 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
       const FrameVerdict jv = judge.frame(packed.data(), fo.records.size(), [](const uint8_t*) {});
       bad += jv.bad; testFrames += jv.test;
       if (perFrame) {
-        printf("frame %llu found %d ring %d version %d held %d blocks %zu anchors %d word %d fps %d bad %d r %g sd %g r2 %g sd2 %g pblocks %d\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version, fo.held ? 1 : 0,
+        printf("frame %llu found %d ring %d version %d held %d blocks %zu anchors %d word %d fps %d bad %d r %g sd %g r2 %g sd2 %g pblocks %d anim %d pos %d sym %02x%02x%02x\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version, fo.held ? 1 : 0,
                fo.records.size(), fo.anchors, fo.hasWord ? fo.word.version : 0, fo.hasWord ? fo.word.fps : 0, jv.bad,
-               fo.pilotBlocks ? fo.pilotR : NAN, fo.pilotBlocks ? fo.pilotSd : NAN, fo.pilotBlocks ? fo.pilotR2 : NAN, fo.pilotBlocks ? fo.pilotSd2 : NAN, fo.pilotBlocks);
+               fo.pilotBlocks ? fo.pilotR : NAN, fo.pilotBlocks ? fo.pilotSd : NAN, fo.pilotBlocks ? fo.pilotR2 : NAN, fo.pilotBlocks ? fo.pilotSd2 : NAN, fo.pilotBlocks,
+               fo.hasWord && fo.word.kind ? 1 : 0, fo.word.pos, fo.word.sym[0], fo.word.sym[1], fo.word.sym[2]);
         // ai: the back half's counts (BCOUNTS, glsl/back_tiers.mjs): codewords the LDPC ran (blocks not declined), their
         // ai: iterations, verified by the CRC (2026-11-08)
         if (fo.backCounts.size() > 7) printf("back %llu ldpc %u its %u verified %u\n", (unsigned long long)fo.tag, fo.backCounts[3], fo.backCounts[7], fo.backCounts[4]);
@@ -895,7 +899,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
       found += fo.finder.found == 1;
       blocks += (long)fo.records.size();
       if (fo.backCounts.size() > 7) { codewords += fo.backCounts[3]; iterations += fo.backCounts[7]; }
-      if (fo.hasWord) { words++; if (hold) held = fo.word.version; }
+      if (fo.hasWord) { words++; if (hold) { const int v = cpu_hold_take(holdW, fo.word.kind, fo.word.version, fo.word.pos, fo.word.sym); if (v) held = v; } }
       heldFrames += fo.held;
       if (fo.pilotBlocks) { pilots.push_back(fo.pilotR); pilots2.push_back(fo.pilotR2); }
     }
@@ -937,7 +941,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   const double ms = fh->now() - t0;
   if (!stageSum.empty()) {
     printf("stages, ms a frame:");
-    for (auto& [k, v] : stageSum) printf(" %s %.2f", k.c_str(), v / std::max(1.0, gpuFrames));
+    for (auto& [k, v] : stageSum) printf(" %s %.3f", k.c_str(), v / std::max(1.0, gpuFrames));
     printf("\n");
   }
   std::string anch;

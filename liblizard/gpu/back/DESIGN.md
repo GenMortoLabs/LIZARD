@@ -312,8 +312,8 @@ Unequal: verdict 4.
   chunk), 7 iterations run (summed over the frame's codewords).
 
 The host reads REC whole, V, ITS, BCOUNTS and PILOT in the batch's one readback (`core/dec/front.cpp`). The checks
-hold each payload after its 4-byte id to the test stream (SHAKE256 of the id: the receiver's judge, the replay's
-per-frame `bad`), which must be 0; a receiver has only the CRC, which is what makes the CRC the last word.
+hold each payload after its 5-byte id to the test stream (BLAKE3 of the id, SPEC 9.3: the receiver's judge, the
+replay's per-frame `bad`), which must be 0; a receiver has only the CRC, which is what makes the CRC the last word.
 
 ## 8. Tables and where each comes from
 

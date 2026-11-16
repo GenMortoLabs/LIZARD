@@ -14,14 +14,14 @@ const imp = (p) => import(new URL(p, LIB).href);
 // ai: { modules: { name: WGSL }, manifest (setup/send.json), tab: TAB's bytes (blobs/<hash>.bin) }
 export async function senderSetup() {
   const { irowsSource, ipicSource } = await imp("gpu/wgsl/inverse.mjs");
-  const { paintSource, tposeSource, rsvSource, rshSource, TPOSE_TILE, RSV_THREADS, RSH_THREADS, GA_BYTES } = await imp("gpu/wgsl/send.mjs");
+  const { paintSource, tposeSource, rsvSource, rshSource, wordsSource, TPOSE_TILE, RSV_THREADS, RSH_THREADS, WORDS_THREADS, GA_BYTES } = await imp("gpu/wgsl/send.mjs");
   const { SLOTS, SIZES } = await imp("gpu/plan/common.mjs");
   const { PARAMS_AT } = await imp("gpu/wgsl/back_ldpc.mjs");
   const { CODES } = await imp("gpu/plan/back_tiers.mjs");
   const { crcPowers, PAYLOAD } = await imp("gpu/back/ref_ldpc.mjs");
   const { ruleTables } = await imp("gpu/back/codes.mjs");
   const { GAP_MODULES, sendTab } = await imp("gpu/encoder.mjs");
-  const modules = { paint: paintSource(), tpose: tposeSource(), rsv: rsvSource(), rsh: rshSource(), rshCopy: rshSource({ copy: true }) };
+  const modules = { paint: paintSource(), tpose: tposeSource(), rsv: rsvSource(), rsh: rshSource(), rshCopy: rshSource({ copy: true }), words: wordsSource() };
   for (const n of SIZES) {
     modules[`irows${n}`] = irowsSource({ n });
     modules[`ipic${n}`] = ipicSource({ n });
@@ -34,9 +34,12 @@ export async function senderSetup() {
   const tabHash = createHash("sha256").update(tabBytes).digest("hex").slice(0, 16);
   const manifest = {
     modules: Object.keys(modules).map((k) => `send_${k}`), sizes: SIZES, slots: SLOTS, paramsAt: PARAMS_AT,
-    tposeTile: TPOSE_TILE, rsvThreads: RSV_THREADS, rshThreads: RSH_THREADS, blockBytes: 480, payload: PAYLOAD, gapModules: GAP_MODULES,
+    tposeTile: TPOSE_TILE, rsvThreads: RSV_THREADS, rshThreads: RSH_THREADS, wordsThreads: WORDS_THREADS, blockBytes: 480, payload: PAYLOAD, gapModules: GAP_MODULES,
     codes: CODES.map(({ rate, slots }) => ({ rate, slots })), pw: Array.from(crcPowers(PAYLOAD)), tab: { blob: `blobs/${tabHash}.bin`, words: tab.length },
     gWords: GA_BYTES / 4,
+    // ai: paint makes the test stream's payloads from their ids where Params' dims.w has bit 31 (BLAKE3 of the id, SPEC
+    // ai: 9.3; 2026-11-15): a host that sets it refuses a setup without this (core/tx/gpu_painter.cpp)
+    stream: "blake3",
   };
   return { modules, manifest, tab: { hash: tabHash, bytes: tabBytes } };
 }

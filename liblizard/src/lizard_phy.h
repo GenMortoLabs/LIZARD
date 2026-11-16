@@ -115,6 +115,11 @@ const ob_fmt_t *lizard_fmt_rx(const lizard_t *f);
 // a sender that states none (the default, so nothing that does not care is changed). -1 where fps is out of
 // range. Repaints the word, which is safe at any time.
 int lizard_fmt_fps(lizard_t *f, int fps);
+// The word the next encode paints (fmt.h): kind OB_FMT_STATIC with extension bytes b[0] and b[1] (0 and 0, the default:
+// the format as it stands), or OB_FMT_ANIM, a carousel symbol: position b[0] (to OB_FMT_POS_MAX) and its bytes b[1] to
+// b[3]. The version stays the codec's and the rate lizard_fmt_fps's. 0, or -1 where the kind or the position is not
+// one. Repaints the word, which is safe at any time.
+int lizard_fmt_word(lizard_t *f, int kind, const uint8_t b[4]);
 // ai: The pilots (SPEC 7.3; 2026-09-30): the slots of a block past its codeword (its last 16 on a 7/8 block, its last 32
 // ai: on a 3/4 block; a 2/3 or 1/2 block has none) carry the whitening XOR a bit of c, the sender's count of
 // ai: painted pictures mod 4: bit 0 on an even block, so its tail flips sign picture to picture, and bit 1 on an odd

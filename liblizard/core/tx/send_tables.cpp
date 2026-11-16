@@ -150,4 +150,58 @@ std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendT
   return "";
 }
 
+std::string wordSpans(const lizard_t& f, const SendTables& t, std::vector<uint32_t>& spans, int& cells, int& nwb) {
+  const ob_layout_t& L = f.frame;
+  const int sideMod = L.w < L.h ? L.w : L.h, bytes = ob_fmt_bytes(sideMod, L.reserve);
+  cells = ob_fmt_side_cells(sideMod, L.reserve);
+  if (!cells || !bytes) return "the format has no word";
+  nwb = (4 * cells + 31) / 32;
+  const int C = f.pxm, m = LIZARD_QUIET * f.pxm, W = t.W;
+  // ai: a symbol's pixels (W x W, margin included) to its word's bit, -1 elsewhere: src/layout.c ob_layout_set_fmt's cells,
+  // ai: a module C pixels from the margin m in (src/lizard_phy.c lizard_encode's frame, lizard_paint_grey's margin)
+  std::vector<int16_t> bit(static_cast<size_t>(W) * W, -1);
+  for (int side = 0; side < 4; side++) for (int i = 0; i < cells; i++) for (int j = 0; j < OB_CELL; j++) for (int e = 0; e < OB_RING_DEEP; e++) {
+    const int tt = L.reserve + OB_WORD_AT(i) + j, d = OB_THIN_FMT + e;
+    const int x = side == 0 || side == 2 ? tt : side == 3 ? d : L.w - 1 - d;
+    const int y = side == 0 ? d : side == 2 ? L.h - 1 - d : tt;
+    for (int py = 0; py < C; py++) for (int px = 0; px < C; px++) {
+      const int X = m + x * C + px, Y = m + y * C + py;
+      if (X < 0 || Y < 0 || X >= W || Y >= W) return "a word cell past the symbol";
+      bit[static_cast<size_t>(Y) * W + X] = static_cast<int16_t>(side * cells + i);
+    }
+  }
+  // ai: held to the border's own word (the painted word's bit 1 dark, 0 light)
+  for (size_t p = 0; p < bit.size(); p++) {
+    if (bit[p] < 0) continue;
+    const int b = bit[p], v = ob_fmt_bit(f.fmt_cw, bytes, b / cells, b % cells);
+    if (t.border[p] != (v ? 0 : 255)) return "the word's cells are not where the border paints them";
+  }
+  // ai: the frame's words: symbol c at x c (W + gap); a frame word's code in its index's bit 31 (a word cell is the
+  // ai: quiet margin in from its symbol's edge, so the four pixels of a frame word that touch cells are one code's)
+  spans.clear();
+  for (int y = 0; y < W; y++) for (int wx = 0; wx < t.RW; wx++) {
+    uint32_t idx[4] = {0xffff, 0xffff, 0xffff, 0xffff};
+    int code = -1;
+    for (int k = 0; k < 4; k++) {
+      int x = 4 * wx + k;
+      if (x >= t.FW) continue;
+      const int c = x / (W + t.gap);
+      x -= c * (W + t.gap);
+      if (c >= t.codes || x >= W) continue;
+      const int b = bit[static_cast<size_t>(y) * W + x];
+      if (b < 0) continue;
+      if (code >= 0 && code != c) return "a frame word touches two codes' word cells";
+      idx[k] = static_cast<uint32_t>(b);
+      code = c;
+    }
+    if (code < 0) continue;
+    const uint32_t at = static_cast<uint32_t>(y * t.RW + wx);
+    if (at >> 31) return "a frame too large for the word spans";
+    spans.push_back(at | static_cast<uint32_t>(code) << 31);
+    spans.push_back(idx[0] | idx[1] << 16);
+    spans.push_back(idx[2] | idx[3] << 16);
+  }
+  return "";
+}
+
 }  // namespace lizard

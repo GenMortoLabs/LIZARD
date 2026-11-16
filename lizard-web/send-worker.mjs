@@ -18,7 +18,8 @@
 // ai: with the next, one format and one word for both.
 // ai: Under the page's GPU encoder (gpu/encoder.mjs, since 2026-09-29) frames are asked for a batch at a time
 // ai: ("frames": count frames from seq) and come back as their blocks alone, one buffer, frame after frame, each codes x
-// ai: blocksPerFrame x 476 bytes; the page encodes them.
+// ai: blocksPerFrame x 476 bytes; the page encodes them. The test stream's come as their ids alone (test, 2026-11-15):
+// ai: the encoder makes each payload from its id on the device (BLAKE3, SPEC 9.3), so nothing here hashes.
 // ai: Rate refresh (refresh.mjs, the page's "refresh", sent with every start too): a block of a held rate repeats the
 // ai: id at its place in the frame before, so only the new places take ids (the transfer's schedule, or the test
 // ai: stream's from baseId); the frame before is forgotten at start, an accepted respec and stop.
@@ -27,7 +28,7 @@ import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initFountain, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { pack } from "../liblizard/sim/pack.mjs";
-import { isControlId } from "../liblizard/sim/xfer.mjs";
+import { isControlId, ID_BYTES, idPut } from "../liblizard/sim/xfer.mjs";
 import { makeXfer } from "./xfer-pool.mjs";
 import { Refresh, batchIds } from "./refresh.mjs";
 
@@ -38,7 +39,7 @@ let phy = null, xs = null, fps = 0, codes = 1, chain = Promise.resolve();
 let made = null, xsPick = null;
 const refresh = new Refresh();
 // ai: the test stream's n new ids from the page's base (a frame's own range: baseId to baseId + its blocks)
-const run = (base, n) => Uint32Array.from({ length: n }, (_, i) => base + i);
+const run = (base, n) => Float64Array.from({ length: n }, (_, i) => base + i);   // ai: ids are 40 bits (sim/xfer.mjs)
 // ai: a frame's new data blocks: its new ids but the transfer's header and manifest (every test stream block is data)
 const dataOf = (ids, fresh) => { let n = 0; for (let t = 0; t < ids.length; t++) if (fresh[t] && (!xs || !isControlId(ids[t]))) n++; return n; };
 function dropRun() {
@@ -142,16 +143,17 @@ async function handle(m) {
     postMessage({ type: "frame", gen: m.gen, seq: m.seq, w, codes, gap, buf: out.buffer, ms: performance.now() - t, data }, [out.buffer]);
   } else if (m.type === "frames") {
     if (!phy) return;
-    const t = performance.now(), V = phy.blocksPerFrame, B = phy.usefulBytes + 4, per = codes * V * B, bytes = m.count * per;
+    const t = performance.now(), V = phy.blocksPerFrame, B = phy.usefulBytes + ID_BYTES, per = codes * V * B, bytes = m.count * per;
     const out = m.buf && m.buf.byteLength === bytes ? new Uint8Array(m.buf) : new Uint8Array(bytes), T = V * codes;
     // ai: the batch's frames in order, each holding against the one before (the batch before's last for the first)
     const all = Array.from({ length: m.count }, (_, f) => refresh.next(m.seq + f, T, (n) => (xs ? xs.frameIds(n) : run(m.baseId + f * T, n))));
     if (xs) await fetchFor(batchIds(all));
-    const data = all.map(({ ids, fresh }) => dataOf(ids, fresh));
+    const data = all.map(({ ids, fresh }) => dataOf(ids, fresh)), test = !xs;
     for (let f = 0; f < m.count; f++) {
+      if (test) { for (let t = 0; t < T; t++) idPut(out, f * per + t * B, all[f].ids[t]); continue; }
       for (let k = 0; k < codes; k++) out.set(phy.frameBlocks(m.seq + f, all[f].ids.subarray(k * V, (k + 1) * V)), f * per + k * V * B);
     }
-    postMessage({ type: "frames", gen: m.gen, seq: m.seq, count: m.count, codes, buf: out.buffer, ms: performance.now() - t, data }, [out.buffer]);
+    postMessage({ type: "frames", gen: m.gen, seq: m.seq, count: m.count, codes, test, buf: out.buffer, ms: performance.now() - t, data }, [out.buffer]);
   }
 }
 

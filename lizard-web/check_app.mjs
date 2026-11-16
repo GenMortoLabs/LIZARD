@@ -66,7 +66,7 @@ const stop = () => new Promise((ok) => { server.closeAllConnections?.(); server.
 // ai: LIZARD-96's test stream at 24 painted, 1920 x 1080 at 30, as check_ui.mjs clips it
 async function clip(path) {
   const CW = 1920, CH = 1080, FD = 24, FC = 30, SUBCH = 96;
-  const phy = await makePhy({ phy: "lizard", stream: "shake256", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] });
+  const phy = await makePhy({ phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] });
   const fd = openSync(path, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
   writeSync(fd, `YUV4MPEG2 W${CW} H${CH} F${FC}:1 Ip A1:1 C420jpeg\n`);
   let shown = -1;

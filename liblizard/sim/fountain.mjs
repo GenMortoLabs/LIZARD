@@ -1,55 +1,52 @@
-// Wirehair, the project's fixed outer code, for end-to-end runs: liblizard/vendor/wirehair under liblizard/wirehair/shim.cpp,
-// inside the codec's module (liblizard/build.sh), the instance sim/ob.mjs's default build shares.
+// RaptorQ (RFC 6330), the transfer's fountain, for end-to-end runs: liblizard/src/rq.c inside the codec's module
+// (liblizard/build.sh), the instance sim/ob.mjs's default build shares. A chunk is one source block of 471-byte symbols;
+// a symbol's ESI is its id's 24 bits.
 import { baseModule } from "./ob.mjs";
 
 let M;
 export async function init() {
-  if (!M) { const m = await baseModule(); if (m._lizard_wh_init() !== 0) throw new Error("wirehair init failed"); M = m; }
+  if (!M) M = await baseModule();
   return M;
 }
 
 export class Encoder {
   constructor(message, blockBytes) {
-    const p = M._malloc(message.length), out = M._malloc(4);
+    const p = M._malloc(Math.max(1, message.length));
     M.HEAPU8.set(message, p);
-    this.seed = M._lizard_wh_encoder_create(p, message.length, blockBytes, out);
+    this.h = M._rq_enc_new(p, message.length, blockBytes);
     M._free(p);
-    if (this.seed < 0) throw new Error(`wirehair encoder: ${this.seed}`);
-    this.h = M.HEAP32[out >> 2]; M._free(out);
+    if (!this.h) throw new Error(`RaptorQ encoder: ${message.length} B`);
     this.blockBytes = blockBytes; this.buf = M._malloc(blockBytes);
     this.blocks = Math.ceil(message.length / blockBytes);
   }
-  // Every block is blockBytes long on the wire; the last source block is zero padded.
+  // Symbol `id`, blockBytes long (a source symbol past the message zero padded).
   block(id, out = new Uint8Array(this.blockBytes)) {
-    const n = M._lizard_wh_encode(this.h, id, this.buf, this.blockBytes);
-    if (n < 0) throw new Error(`wirehair encode: ${n}`);
-    out.fill(0); out.set(M.HEAPU8.subarray(this.buf, this.buf + n));
+    M._rq_enc_symbol(this.h, id, this.buf);
+    out.set(M.HEAPU8.subarray(this.buf, this.buf + this.blockBytes));
     return out;
   }
-  free() { M._lizard_wh_free(this.h); M._free(this.buf); }
+  free() { M._rq_enc_free(this.h); M._free(this.buf); }
 }
 
 export class Decoder {
-  constructor(messageBytes, blockBytes, seed) {
-    const out = M._malloc(4), rc = M._lizard_wh_decoder_create(messageBytes, blockBytes, seed, out);
-    if (rc < 0) throw new Error(`wirehair decoder: ${rc}`);
-    this.h = M.HEAP32[out >> 2]; M._free(out);
-    Object.assign(this, { messageBytes, blockBytes, buf: M._malloc(blockBytes), lastId: Math.ceil(messageBytes / blockBytes) - 1 });
+  // ESIs below 2^24, the transfer's symbol field (RaptorQ's whole ESI).
+  constructor(messageBytes, blockBytes) {
+    this.h = M._rq_dec_new(messageBytes, blockBytes, 1 << 24);
+    if (!this.h) throw new Error(`RaptorQ decoder: ${messageBytes} B`);
+    Object.assign(this, { messageBytes, blockBytes, buf: M._malloc(blockBytes) });
   }
-  // true once enough blocks are in.
+  // true once the block is whole, false for more. It takes every symbol, never refusing one.
   add(id, bytes) {
-    // The final source block travels padded; wirehair wants its true length.
-    const n = id === this.lastId ? this.messageBytes - this.lastId * this.blockBytes : this.blockBytes;
-    M.HEAPU8.set(bytes.subarray(0, n), this.buf);
-    const rc = M._lizard_wh_decode(this.h, id, this.buf, n);
-    if (rc < 0) throw new Error(`wirehair decode: ${rc}`);
+    M.HEAPU8.set(bytes.subarray(0, this.blockBytes), this.buf);
+    const rc = M._rq_dec_add(this.h, id, this.buf);
+    if (rc < 0) throw new Error(`RaptorQ decode: symbol ${id}`);
     return rc === 1;
   }
   recover() {
-    const p = M._malloc(this.messageBytes), n = M._lizard_wh_recover(this.h, p, this.messageBytes);
-    if (n < 0) throw new Error(`wirehair recover: ${n}`);
-    const out = M.HEAPU8.slice(p, p + n); M._free(p);
+    const p = M._malloc(this.messageBytes);
+    if (M._rq_dec_recover(this.h, p)) { M._free(p); throw new Error("RaptorQ recover before the block was whole"); }
+    const out = M.HEAPU8.slice(p, p + this.messageBytes); M._free(p);
     return out;
   }
-  free() { M._lizard_wh_free(this.h); M._free(this.buf); }
+  free() { M._rq_dec_free(this.h); M._free(this.buf); }
 }

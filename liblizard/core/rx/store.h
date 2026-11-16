@@ -35,7 +35,7 @@ class Store {
     std::vector<std::pair<uint32_t, std::vector<uint8_t>>> manifest;
     std::vector<uint32_t> verified, chunks;
   };
-  // ai: The transfer whose header is header (472 B) and whose file is length bytes: its folder resumed where it holds
+  // ai: The transfer whose header is header (471 B) and whose file is length bytes: its folder resumed where it holds
   // ai: this header, else begun afresh, its output length bytes; false when the store cannot hold it (error says why).
   // ai: open, append and writeOut return false on a failure, which ends the transfer (xfer_rx_core.cpp): a file the
   // ai: store cannot keep whole is never reported received (before 2026-10-03 it was, with 0 bytes or a short file).
@@ -44,6 +44,9 @@ class Store {
   // ai: noted is a chunk on disk); the transfer's line for an app's list (meta.json)
   virtual void noteManifest(uint32_t m, const uint8_t* payload) { (void)m; (void)payload; }
   virtual void noteVerified(uint32_t c) { (void)c; }
+  // ai: chunks verified into the output together (2026-11-15): what was written made durable once, then the chunks
+  // ai: noted in one write
+  virtual void noteVerified(const std::vector<uint32_t>& cs) { for (uint32_t c : cs) noteVerified(c); }
   virtual void noteMeta(const std::string& json) { (void)json; }
   // ai: chunk c's stored blocks cut back to its first n (a park's: the blocks since the transfer's last header may be
   // ai: the next file's, xfer_rx_core.cpp)
@@ -52,12 +55,35 @@ class Store {
   virtual void park() { clear(); }
   // ai: a parked transfer let go, by its id (the transfer in hand is the caller's to clear)
   virtual void forget(const std::string& id) { (void)id; }
-  // ai: one block of chunk c (its symbol, then the 472 B payload)
+  // ai: one block of chunk c (its symbol, then the 471 B payload)
   virtual bool append(uint32_t c, uint32_t sym, const uint8_t* payload) = 0;
   // ai: chunk c's stored records (symbol then payload, 476 B each), in arrival order
   virtual std::vector<uint8_t> read(uint32_t c) = 0;
+  // ai: chunk c's stored records' symbols alone, in arrival order (2026-11-15): a file store keeps them in a file of
+  // ai: their own beside the records (4 bytes each), so a chunk's distinct symbols are counted from 142 KB, not its 16.8
+  // ai: MB of records (xfer_rx_core.cpp solve); by default read off the records
+  virtual std::vector<uint32_t> ids(uint32_t c);
   virtual void drop(uint32_t c) = 0;
   virtual bool writeOut(uint64_t off, const uint8_t* p, size_t len) = 0;
+  // ai: The solvers' own reads and writes (2026-11-15): a chunk's records read and its bytes written on the solver's
+  // ai: thread, so the receiving end's thread moves no chunk's 16.8 MB of records or 16 MiB of output (a 1 GiB burst on
+  // ai: the S26: that thread busy 22.7 ms a chunk, 1.45 s of a 2.45 s tail). A Source is chunk c's records as source()
+  // ai: left them (its buffered appends written through), read once on any thread; an Out is the transfer's output, a
+  // ai: chunk's bytes written at their place from any thread (chunks apart), made durable by noteVerified. null where a
+  // ai: store has neither (the memory store): the receiving end reads (read) and writes (writeOut) as before.
+  struct Source {
+    virtual ~Source() = default;
+    // ai: the records' first bytes into into; false where the file held fewer or could not be read
+    virtual bool read(uint8_t* into, size_t bytes) = 0;
+  };
+  struct Out {
+    virtual ~Out() = default;
+    virtual bool write(uint64_t off, const uint8_t* p, size_t len) = 0;
+  };
+  virtual std::unique_ptr<Source> source(uint32_t c) { (void)c; return nullptr; }
+  virtual std::shared_ptr<Out> output() { return nullptr; }
+  // ai: a failure found off the receiving end's thread (a solver's write), reported as the store's
+  void failWith(const std::string& s) { fail(s); }
   // ai: the output verified: its path for a file store, "" for memory (the bytes then in data()); a failure sets error
   virtual std::string finish(const std::string& name) = 0;
   // ai: the finished file's bytes where the store keeps them in memory, else null
@@ -66,9 +92,27 @@ class Store {
   // ai: this transfer's failure (a write refused, the memory cap reached), "" none; cleared as a transfer begins and by
   // ai: removeAll; the transfer reports it
   std::string error;
+  // ai: The receiver's bounds on a transfer (2026-11-15, the apps' Largest file setting): limit, the largest file it
+  // ai: takes (0: the format's own, 65,535 chunks of 16 MiB); room, the free space a new transfer needs where its folder
+  // ai: is, as a multiple of its file (0: none asked; the apps' 1 where filing moves the file, 2 where it copies it,
+  // ai: Android's into Downloads). open refuses a transfer past either before it writes anything: refusal "limit" or
+  // ai: "room" (cleared as a transfer begins), free the bytes it saw free.
+  uint64_t limit = 0;
+  double room = 0;
+  std::string refusal;
+  uint64_t free = 0;
 
  protected:
   void fail(const std::string& s) { error = s; if (log) log(s); }
+  // ai: open's first test: the file within limit, else refused ("limit")
+  bool within(uint64_t length) {
+    refusal.clear();
+    free = 0;
+    if (!limit || length <= limit) return true;
+    refusal = "limit";
+    fail("store: a file of " + std::to_string(length) + " B is over the limit of " + std::to_string(limit) + " B");
+    return false;
+  }
 };
 
 // ai: Files under dir, a folder a transfer (keeps()): <id>/header, manifest (index and payload a block), c<k> (a chunk's

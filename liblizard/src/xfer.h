@@ -2,78 +2,67 @@
 // file. Before this the fountain's header went from the sender page to the receiver page over the rig's network, and
 // the block id was a convention of sim/phy.mjs.
 //
-// A file is cut into chunks of 2^k bytes (k 10 to 24; the last one shorter), each its own Wirehair fountain and each
+// A file is cut into chunks of 2^k bytes (k 10 to 24; the last one shorter), each its own RaptorQ source block and each
 // verified on arrival against the file's one BLAKE3 root, the way Bao and iroh stream: a chunk of 2^k bytes aligned
 // at its own size is a whole subtree of BLAKE3's tree, so its chaining value comes from the chunk alone, and the
 // chaining values of all the chunks combine to the root (2026-09-24).
 //
 // ---- The block ----
 // Every LIZARD block is 476 bytes (src/lizard_phy.c block_bytes, the same in every format and at every rate; with its CRC-32C
-// the 3840 data bits of the 3/4, 2/3 and 1/2 codes): the id, uint32 little-endian in bytes 0 to 3, then XFER_PAYLOAD =
-// 472 bytes of payload (473 and 469 until 2026-11-01).
+// the 3840 data bits of the 3/4, 2/3 and 1/2 codes): the id, 40 bits little-endian in bytes 0 to 4, then XFER_PAYLOAD =
+// 471 bytes of payload.
 //
-//   id bits 31..18  chunk   0 .. 16382 a chunk of the file, 16383 (XFER_CONTROL) a control block
-//   id bits 17..0   symbol  a data block: the Wirehair block id within its chunk's fountain
-//                           a control block: 0 the header, 1 + m manifest block m (m < XFER_MAX_MANIFEST, 1171), the rest reserved
+//   id bits 39..24  chunk   0 .. 65534 a chunk of the file, 65535 (XFER_CONTROL) a control block
+//   id bits 23..0   symbol  a data block: the encoding symbol's ESI within its chunk's source block (src/rq.h)
+//                           a control block: 0 the header, 1 + m manifest block m (m < XFER_MAX_MANIFEST, 4682), the rest reserved
 //
-// Why 18 bits of symbol. Wirehair takes at most 64,000 source blocks (liblizard/wirehair/shim.cpp), so the largest chunk
-// is 16 MiB (35,545 blocks of 472 bytes; 32 MiB would be 71,090). Repair ids run past the source count without end,
-// and a sender that runs out of field wraps and repeats ids the receiver may already hold. 2^18 is 7.4 times the
-// source blocks of a 16 MiB chunk and 29 times those of a 4 MiB one: a receiver has to miss 86% of a 16 MiB chunk's
-// blocks before the sender repeats one. 16 bits would repeat at 46%.
-// Why 14 bits of chunk. 16,383 chunks: 16 GiB at 1 MiB a chunk, 64 GiB at 4 MiB, 256 GiB at 16 MiB. A file of
-// several GB at a few MiB a chunk is two thousand or so.
+// Why 24 bits of symbol: RaptorQ's whole ESI (RFC 6330 3.2). A sender that runs out of ids wraps and repeats ones a
+// receiver may already hold; 2^24 is 471 times the source symbols of a 16 MiB chunk, so a receiver has to miss 99.8% of
+// a chunk's blocks before the sender repeats one.
+// Why 16 bits of chunk: 65,535 chunks, about 1 TiB at 16 MiB a chunk.
 // Why the control range is at the top: a data block's id is then its chunk and symbol as they are, chunk 0's
-// running 0 .. 2^18 - 1 from zero, and no data id has to step round a control one.
+// running 0 .. 2^24 - 1 from zero, and no data id has to step round a control one.
 // The header's id is the same for every transfer and a manifest block's for every transfer with that many chunks, so
 // a receiver that drops a block whose id it has seen misses the next file: a control block is new when its bytes are.
 //
-// ---- The bytes it carries (header version 4, 2026-11-14) ----
-// A chunk's fountain carries the chunk's own bytes: the transfer compresses nothing. A client that compresses (the
+// ---- The bytes it carries ----
+// A chunk's source block is the chunk's own bytes: the transfer compresses nothing. A client that compresses (the
 // default client compresses a file with zstd before it enters the transfer) hands the transfer the compressed file,
 // and the length, root and chaining values are of the bytes handed over. So every chunk but the last is 2^chunk_log2
-// bytes, every block count follows from the file's length, and Wirehair's seed attempt, which it picks from a block
-// count alone (the equations' structure, not the data), is one for every chunk but the last and one for the last:
-// both ride in the header. The manifest carries the chaining values alone. A receiver builds any chunk's decoder from
-// the header. Version 3 (2026-10-05 to 11-14) compressed each chunk on its own as one zstd frame where that was shorter,
-// so each chunk's bytes as sent and its seed attempt rode in the manifest.
+// bytes and every chunk's source symbols follow from the file's length: a receiver builds any chunk's decoder from the
+// header. The manifest carries the chaining values alone.
 //
-// ---- The header block (id XFER_ID_HEADER = 0xfffc0000), 472 bytes, little-endian ----
-//     0    1  version      XFER_VERSION = 4; a receiver refuses any other (-2). 3 until 2026-11-14: a codec at 3 (zstd
-//                          frames a chunk), the one chunk's seed at 4 and its bytes as sent at 465; 2 until 2026-11-01:
-//                          blocks of 469 bytes; 1 until 2026-10-05: no codec
-//     1    1  hash         XFER_HASH_BLAKE3 = 1; 0 and 2..255 refused (-3), the room for another hash
-//     2    1  chunk_log2   the chunk size is 1 << chunk_log2 bytes, 10 .. 24
-//     3    1  seed         Wirehair seed attempt of every chunk but the last (each 2^chunk_log2 bytes); 0 where the file
-//                          has fewer than 2 chunks
-//     4    1  seed_last    Wirehair seed attempt of the last chunk; 0 where it is one block or the file is empty
-//     5    1  name_len     bytes of name, 0 .. 255
-//     6    1  type_len     bytes of media type, 0 .. 158
-//     7    1  reserved, 0
-//     8    8  length       the file's bytes, u64
-//    16    4  chunks       ceil(length / chunk size), u32, at most 16,383; 0 for an empty file
-//    20   32  root         BLAKE3 of the whole file, what b3sum prints
-//    52  255  name         the file name, UTF-8, zero padded; empty for none
-//   307  158  type         the media type, ASCII, zero padded; empty for none
-//   465    7  reserved, 0
+// ---- The header block (id XFER_ID_HEADER = 0xffff000000), 471 bytes, little-endian ----
+//     0    1  hash         XFER_HASH_BLAKE3 = 1; 0 and 2..255 refused (-3)
+//     1    1  chunk_log2   the chunk size is 1 << chunk_log2 bytes, 10 .. 24
+//     2    1  name_len     bytes of name, 0 .. 255
+//     3    1  type_len     bytes of media type, 0 .. 158
+//     4    8  length       the file's bytes, u64
+//    12    4  chunks       ceil(length / chunk size), u32, at most 65,535; 0 for an empty file
+//    16   32  root         BLAKE3 of the whole file, what b3sum prints
+//    48  255  name         the file name, UTF-8, zero padded; empty for none
+//   303  158  type         the media type, ASCII, zero padded; empty for none
+//   461   10  reserved, 0
 // Every byte past a length is zero and the parse insists, so a block that is not a header rarely passes for one.
-// Version 4 also fixes the fountain: Wirehair V2, profile WIREHAIR_V2_PROFILE_CERTIFIED_2026_07 (the shim pins it), at
-// 472-byte blocks. A change to it is a new version.
-//
-// The seed attempt. A chunk of one block (472 bytes or less, only ever the last) is not fountained, since Wirehair
-// refuses a one-block message (-9): its bytes go zero padded as symbol 0, repeated as the sender cycles, its seed 0.
+// The fountain: RaptorQ (RFC 6330), a chunk one source block of K = ceil(len / 471) source symbols of 471 bytes
+// (T = XFER_PAYLOAD; one sub-block, Z = N = 1), the last zero padded; symbol s of a chunk is its ESI s, so symbols
+// 0 .. K - 1 are the chunk's own bytes and the rest repair (src/rq.h). A chunk of one block is a block of K = 1 like
+// any other.
 //
 // ---- The manifest blocks (id XFER_ID_MANIFEST + m, m = 0 .. xfer_manifest_blocks(chunks) - 1) ----
 //     0    8  tag          the root's first 8 bytes, so a block of another transfer is refused before it is used
 //     8  448  entries      the chaining values of chunks 14 m .. 14 m + 13, 32 bytes each, in order; zero past the last
-//   456   16  reserved, 0
+//   456   15  reserved, 0
 // A file of two chunks or more has ceil(chunks / 14) of them; a file of one chunk or none has none, since its root is
 // the one chunk's own hash and is checked from the chunk.
 //
 // ---- The chunk size a sender picks (xfer_chunk_log2_for) ----
-// 4 MiB (XFER_LOG2_DEFAULT) unless the file is more chunks of 4 MiB than the id carries (64 GiB), then the least
-// power of two that holds it in 16,383 chunks, up to 16 MiB (256 GiB). Wirehair's cost a byte grows with the chunk (a
-// 4 MiB chunk 2.8 ms a MiB to decode in the wasm, a 16 MiB one 4.3), so a larger chunk only where it is needed.
+// 16 MiB (XFER_LOG2_DEFAULT, the largest power of two under RaptorQ's K'_max of 56,403 symbols: 35,621 of 471 bytes),
+// for a file of up to 65,535 chunks (about 1 TiB); a file of 16 MiB or less is one chunk of its own length. A file waits on its slowest chunk, and the
+// fewer and larger the chunks the less a slow chunk costs: the schedule interleaves every chunk, so a chunk x symbols
+// late holds the file back by x / K of it, whatever the chunk count. RaptorQ solves at K, K + 1 or K + 2 (none past in
+// 110,000 solves at 4, 8 and 16 MiB with half or 95% kept, the raptorq crate; src/rq.c the same symbols), so the size
+// is set by RaptorQ's K'_max and the decoder's memory (about 36 MB at a 16 MiB solve).
 //
 // ---- The tree ----
 // The root of chunks c[0..n), n >= 2: split at p, the largest power of two below n; left the root of c[0..p), right
@@ -93,44 +82,47 @@
 #include <stdint.h>
 
 enum {
-  XFER_ID_BYTES = 4, XFER_PAYLOAD = 472, XFER_BLOCK = XFER_ID_BYTES + XFER_PAYLOAD,
-  XFER_SYMBOL_BITS = 18, XFER_CHUNK_BITS = 14,
+  XFER_ID_BYTES = 5, XFER_PAYLOAD = 471, XFER_BLOCK = XFER_ID_BYTES + XFER_PAYLOAD,
+  XFER_SYMBOL_BITS = 24, XFER_CHUNK_BITS = 16,
   XFER_CONTROL = (1 << XFER_CHUNK_BITS) - 1, XFER_MAX_CHUNKS = XFER_CONTROL,
-  XFER_VERSION = 4, XFER_HASH_BLAKE3 = 1,
-  XFER_LOG2_MIN = 10, XFER_LOG2_MAX = 24, XFER_LOG2_DEFAULT = 22,
+  XFER_HASH_BLAKE3 = 1,
+  XFER_LOG2_MIN = 10, XFER_LOG2_MAX = 24, XFER_LOG2_DEFAULT = 24,
   XFER_CV = 32, XFER_ENTRY = XFER_CV,
   XFER_PER_BLOCK = 14,
   XFER_MAX_MANIFEST = (XFER_MAX_CHUNKS + XFER_PER_BLOCK - 1) / XFER_PER_BLOCK,
   XFER_NAME_MAX = 255, XFER_TYPE_MAX = 158,
   // header offsets
-  XFER_H_VERSION = 0, XFER_H_HASH = 1, XFER_H_LOG2 = 2, XFER_H_SEED = 3, XFER_H_SEED_LAST = 4,
-  XFER_H_NAME_LEN = 5, XFER_H_TYPE_LEN = 6, XFER_H_LENGTH = 8, XFER_H_CHUNKS = 16, XFER_H_ROOT = 20,
-  XFER_H_NAME = 52, XFER_H_TYPE = XFER_H_NAME + XFER_NAME_MAX, XFER_H_END = XFER_H_TYPE + XFER_TYPE_MAX,
+  XFER_H_HASH = 0, XFER_H_LOG2 = 1, XFER_H_NAME_LEN = 2, XFER_H_TYPE_LEN = 3, XFER_H_LENGTH = 4, XFER_H_CHUNKS = 12,
+  XFER_H_ROOT = 16, XFER_H_NAME = 48, XFER_H_TYPE = XFER_H_NAME + XFER_NAME_MAX, XFER_H_END = XFER_H_TYPE + XFER_TYPE_MAX,
   // manifest offsets
   XFER_M_TAG = 0, XFER_M_TAG_BYTES = 8, XFER_M_ENTRIES = 8,
   // what the parses return besides 0
-  XFER_ERR = -1, XFER_ERR_VERSION = -2, XFER_ERR_HASH = -3,
+  XFER_ERR = -1, XFER_ERR_HASH = -3,
 };
-#define XFER_ID_HEADER ((uint32_t)XFER_CONTROL << XFER_SYMBOL_BITS)
+// A block's id: 40 bits in a uint64_t.
+typedef uint64_t xfer_id_t;
+#define XFER_ID_HEADER ((xfer_id_t)XFER_CONTROL << XFER_SYMBOL_BITS)
 #define XFER_ID_MANIFEST (XFER_ID_HEADER + 1u)
 #define XFER_SYMBOL_MASK ((1u << XFER_SYMBOL_BITS) - 1u)
 
-// XFER_KIND_RESERVED: a control id past the manifest's, which a receiver of this version ignores.
+// XFER_KIND_RESERVED: a control id past the manifest's, which a receiver ignores.
 enum { XFER_KIND_RESERVED = -1, XFER_KIND_DATA = 0, XFER_KIND_HEADER = 1, XFER_KIND_MANIFEST = 2 };
-static inline uint32_t xfer_id(uint32_t chunk, uint32_t symbol) { return chunk << XFER_SYMBOL_BITS | (symbol & XFER_SYMBOL_MASK); }
-static inline uint32_t xfer_id_chunk(uint32_t id) { return id >> XFER_SYMBOL_BITS; }
-static inline uint32_t xfer_id_symbol(uint32_t id) { return id & XFER_SYMBOL_MASK; }
-static inline int xfer_id_kind(uint32_t id) {
+static inline xfer_id_t xfer_id(uint32_t chunk, uint32_t symbol) { return (xfer_id_t)chunk << XFER_SYMBOL_BITS | (symbol & XFER_SYMBOL_MASK); }
+static inline uint32_t xfer_id_chunk(xfer_id_t id) { return (uint32_t)(id >> XFER_SYMBOL_BITS); }
+static inline uint32_t xfer_id_symbol(xfer_id_t id) { return (uint32_t)id & XFER_SYMBOL_MASK; }
+static inline int xfer_id_kind(xfer_id_t id) {
   const uint32_t s = xfer_id_symbol(id);
   return xfer_id_chunk(id) != XFER_CONTROL ? XFER_KIND_DATA : !s ? XFER_KIND_HEADER : s <= XFER_MAX_MANIFEST ? XFER_KIND_MANIFEST : XFER_KIND_RESERVED;
 }
-static inline uint32_t xfer_id_get(const uint8_t *block) {
-  return block[0] | (uint32_t)block[1] << 8 | (uint32_t)block[2] << 16 | (uint32_t)block[3] << 24;
+static inline xfer_id_t xfer_id_get(const uint8_t *block) {
+  xfer_id_t id = 0;
+  for (int i = XFER_ID_BYTES - 1; i >= 0; i--) id = id << 8 | block[i];
+  return id;
 }
-static inline void xfer_id_put(uint8_t *block, uint32_t id) { for (int i = 0; i < 4; i++) block[i] = (uint8_t)(id >> 8 * i); }
+static inline void xfer_id_put(uint8_t *block, xfer_id_t id) { for (int i = 0; i < XFER_ID_BYTES; i++) block[i] = (uint8_t)(id >> 8 * i); }
 
 typedef struct {
-  uint8_t version, hash, chunk_log2, seed, seed_last, name_len, type_len;
+  uint8_t hash, chunk_log2, name_len, type_len;
   uint64_t length;
   uint32_t chunks;
   uint8_t root[XFER_CV];
@@ -140,23 +132,25 @@ typedef struct {
 // ceil(length / 2^chunk_log2), or 0 where that is past XFER_MAX_CHUNKS or chunk_log2 is out of range (an empty file
 // is 0 chunks too: the caller tells them apart by length).
 uint32_t xfer_chunk_count(uint64_t length, int chunk_log2);
-// The chunk size's log2 a sender picks for a file of `length` bytes (above), or -1 past 256 GiB.
+// The chunk size's log2 a sender picks for a file of `length` bytes (above), or -1 past 65,535 chunks of 16 MiB.
 int xfer_chunk_log2_for(uint64_t length);
 // Bytes of chunk `index` under h, 0 past the last.
 size_t xfer_chunk_len(const xfer_header_t *h, uint32_t index);
-// The Wirehair source blocks of `len` bytes, ceil(len / 472); 1 means sent unfountained as symbol 0.
+// The source symbols of `len` bytes, ceil(len / 471): a chunk's K.
 uint32_t xfer_blocks(size_t len);
-// Chunk `index`'s seed attempt under h: the last chunk's seed_last, every other chunk's seed.
-int xfer_chunk_seed(const xfer_header_t *h, uint32_t index);
 int xfer_manifest_blocks(uint32_t chunks);
 
-// Fills a header for a file of `length` bytes: version, hash, chunk count; everything else is the caller's (the two
-// seeds, name and type). 0, or -1 for a length or chunk size the layout cannot carry.
+// Fills a header for a file of `length` bytes: hash, chunk count; everything else is the caller's (the root, name
+// and type). 0, or -1 for a length or chunk size the layout cannot carry.
 int xfer_header_init(xfer_header_t *h, uint64_t length, int chunk_log2);
-// The 472-byte payload from h, or -1 where h is inconsistent (the same checks the parse makes).
+// The 471-byte payload from h, or -1 where h is inconsistent (the same checks the parse makes).
 int xfer_header_write(const xfer_header_t *h, uint8_t *payload);
-// 0, or XFER_ERR / XFER_ERR_VERSION / XFER_ERR_HASH.
+// 0, or XFER_ERR / XFER_ERR_HASH.
 int xfer_header_parse(const uint8_t *payload, xfer_header_t *h);
+// 1 where a and b describe one file's blocks: the same hash, chunk size, length, chunks and root (header bytes 0, 1
+// and 4 to 47). Its name and media type are not the file's: another sender's header for the same
+// file is the same transfer, and every block of the file combines whichever sender sent it. 0 otherwise.
+int xfer_same_file(const xfer_header_t *a, const xfer_header_t *b);
 
 // Manifest block m of a file of `chunks` chunks whose root is `root`: the chaining values cvs (chunks * 32 bytes).
 int xfer_manifest_write(const uint8_t *cvs, uint32_t chunks, const uint8_t root[XFER_CV], uint32_t m, uint8_t *payload);
@@ -182,5 +176,14 @@ void xfer_b3_hash(const uint8_t *in, size_t len, uint8_t out[XFER_CV]);
 // range that is a node of the input's tree: 2^j KiB on a 2^j KiB boundary, or all that is left of the input from
 // such a boundary when that is less.
 void xfer_b3_subtree(const uint8_t *in, size_t len, uint64_t counter, int root, uint8_t out[XFER_CV]);
+
+// The test stream (SPEC 9.3): the payload of a test transfer's block id, the first len bytes of BLAKE3's extended output
+// of the id as five little-endian bytes. A function of the id alone, so a receiver checks any block it decodes without
+// being told which frame carried it; BLAKE3, the transfer's own hash, so the library carries one (SHAKE256 until
+// 2026-11-15, a second family for no purpose: nothing here is cryptography).
+void stream_fill(uint64_t id, uint8_t *out, uint32_t len);
+// 1 where payload (len bytes) is id's stream, else 0: compared an output block (64 bytes, one compression) at a time
+// as the stream is made, so a payload that is not the stream's (every block of a file) costs one compression.
+int stream_matches(uint64_t id, const uint8_t *payload, uint32_t len);
 
 #endif

@@ -7,7 +7,7 @@
 // ai: its own), the kept frames (run's keep, LIZ_DUMP, LIZ_DUMP_S), the int8 twins (the WebGPU tree is f32, which has
 // ai: none), the LDPC forms' cross-check and the trial (a WebGPU device validates every module before it runs).
 
-export const TREE_VERSION = 10;   // ai: front.cpp TREE_VERSION
+export const TREE_VERSION = 11;   // ai: front.cpp TREE_VERSION
 export const WEBGPU_VARIANT = "f32";   // ai: gen.mjs WEBGPU_VARIANT: the variant gen translates to WGSL
 
 // ai: front.cpp STAGES, the profile's stage groups, a timestamp pair each.
@@ -850,7 +850,12 @@ export class FrontHalf {
       fo.held = r(30) === 1;
       fo.finder = { found: r(0), ring: r(2), corners: Array.from({ length: 8 }, (_, k) => r(17 + k)) };
       fo.hasWord = r(5) > 0;
-      if (fo.hasWord) fo.word = { version: Math.trunc(r(5)), fps: Math.trunc(r(6)) };
+      // ai: F8's word (glsl/word.mjs; front.cpp's reading): r(5) a static word's version, or 256 + an animated word's
+      // ai: position; r(6) the three bytes after it, low first (the rate and the extension bytes, or the symbol)
+      if (fo.hasWord) {
+        const a = Math.trunc(r(5)), b = Math.trunc(r(6)), by = [b & 255, (b >>> 8) & 255, (b >>> 16) & 255];
+        fo.word = a >= 256 ? { kind: 1, version: 0, fps: 0, pos: a - 256, sym: by } : { kind: 0, version: a, fps: by[0], ext: [by[1], by[2]] };
+      }
       fo.anchors = Math.trunc(r(31));
       fo.pilotBlocks = 0;
       const nblk = fo.version > 0 && fo.version < rb.length ? rb[fo.version] : fo.version;

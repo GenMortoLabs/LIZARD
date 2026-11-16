@@ -48,8 +48,9 @@ static constexpr double MiB = 1 << 20;
 // ai: front's `trace` (TRACE, each quad's bend, in both rounds' grids) and HYP doubled (SCORE's bend bit).
 // ai: 8 since 2026-11-06: REFIT's and REFIT_POST's layouts seven bindings (the eighth, REFIT's debug words, gone).
 // ai: 9 since 2026-11-09: the anchors by ring; 10 since 2026-11-14: the proposer's and the transform's uniforms without
-// ai: their unread words (gen.mjs TREE_VERSION).
-static constexpr int TREE_VERSION = 10;
+// ai: their unread words; 11 since 2026-11-15: the word RS(n, 5) with two magics, F8's record words 5 and 6 an animated
+// ai: word's position (256 + it) and symbol beside a static word's version, rate and extension bytes (gen.mjs TREE_VERSION).
+static constexpr int TREE_VERSION = 11;
 
 Consts Consts::of(const json& c) {
   Consts k;
@@ -603,7 +604,7 @@ Slot* FrontHalf::enqueueLuma(const uint8_t* bytes, uint32_t w, uint32_t h, uint3
   if (!r.staging[id]) r.staging[id] = dev.createBuffer((uint64_t)r.W * r.H, wg::MAP_WRITE);
   auto& st = *r.staging[id];
   for (uint32_t y = 0; y < h; y++) memcpy(st.mapped + (uint64_t)y * w, bytes + (uint64_t)y * stride, w);
-  s->luma = true; s->raw = false;
+  s->luma = true; s->raw = false; s->src.reset();
   s->id = id; s->w = w; s->h = h; s->tag = tag; s->ready = 0; s->axis = 0;
   r.slots[id] = s;
   return s;
@@ -634,7 +635,7 @@ Slot* FrontHalf::enqueueRaw(const RawFrame& raw, uint32_t x, uint32_t y, uint32_
     mr.memory = st.mem; mr.size = VK_WHOLE_SIZE;
     vkFlushMappedMemoryRanges(dev.dev, 1, &mr);
   }
-  s->luma = false; s->raw = true;
+  s->luma = false; s->raw = true; s->src.reset();
   s->id = id; s->w = w; s->h = h; s->tag = tag; s->ready = 0; s->axis = 0;
   r.slots[id] = s;
   return s;
@@ -650,6 +651,23 @@ Slot* FrontHalf::enqueueCamera(CameraIngest& ci, AHardwareBuffer* hb, uint32_t x
   Slot* s = r.store[id].get();
   s->ready = ci.ingest(hb, x, y, w, h, *r.tex, (uint32_t)id);
   s->id = id; s->w = w; s->h = h; s->tag = tag; s->luma = false; s->raw = false; s->axis = 0;
+  s->src.reset();
+  r.slots[id] = s;
+  return s;
+}
+
+Slot* FrontHalf::enqueueBuffer(std::shared_ptr<wg::Buffer> buf, uint64_t offset, uint32_t stride, uint32_t w, uint32_t h, uint64_t tag) {
+  std::lock_guard<std::mutex> lock(ringMu);
+  if (!ring) throw wg::Error("no ring: plan() before enqueue");
+  auto& r = *ring;
+  if (w > r.W || h > r.H) throw wg::Error(std::to_string(w) + " x " + std::to_string(h) + ": the ring holds " + std::to_string(r.W) + " x " + std::to_string(r.H));
+  if (!buf || stride < w || offset + (uint64_t)stride * (h - 1) + w > buf->size) throw wg::Error("enqueueBuffer: the frame runs past its buffer");
+  const int id = takeSlot();
+  if (id < 0) return nullptr;
+  Slot* s = r.store[id].get();
+  s->luma = false; s->raw = false;
+  s->src = std::move(buf); s->srcOffset = offset; s->srcStride = stride;
+  s->id = id; s->w = w; s->h = h; s->tag = tag; s->ready = 0; s->axis = 0;
   r.slots[id] = s;
   return s;
 }
@@ -769,8 +787,9 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   }
   // ai: The slots' copies in a submit of their own, waiting for the camera ingests they copy (the ingest's queue
   // ai: signals its timeline): the slots are free to be written again once it is done, not once the batch is. A
-  // ai: host-luma slot's staging goes into its ring layer here first (enqueueLuma wrote only the bytes), and a raw
-  // ai: slot's samples are developed and the luma copied in (enqueueRaw staged only the samples).
+  // ai: host-luma slot's staging goes into its ring layer here first (enqueueLuma wrote only the bytes), a device
+  // ai: slot's buffer likewise (enqueueBuffer), and a raw slot's samples are developed and the luma copied in
+  // ai: (enqueueRaw staged only the samples).
   std::shared_ptr<wg::Ticket> copies;
   {
     auto c = dev.encoder();
@@ -778,6 +797,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
     std::lock_guard<std::mutex> lock(ringMu);
     for (int i = 0; i < nb; i++) if (slots[i]) {
       if (slots[i]->luma) c.copyBufferToTexture(*ring->staging[slots[i]->id], 0, slots[i]->w, *ring->tex, (uint32_t)slots[i]->id, slots[i]->w, slots[i]->h);
+      if (slots[i]->src) c.copyBufferToTexture(*slots[i]->src, slots[i]->srcOffset, slots[i]->srcStride, *ring->tex, (uint32_t)slots[i]->id, slots[i]->w, slots[i]->h);
       if (slots[i]->raw) {
         const int id = slots[i]->id;
         c.setPipeline(*developPipe);
@@ -1060,7 +1080,16 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
     fo.held = r[30] == 1;
     fo.finder.found = r[0]; fo.finder.ring = r[2];
     for (int k = 0; k < 8; k++) fo.finder.corners[k] = r[17 + k];
-    if (r[5] > 0) { fo.hasWord = true; fo.word.version = (int)r[5]; fo.word.fps = (int)r[6]; }
+    // ai: F8's word (glsl/word.mjs): r[5] a static word's version, or 256 + an animated word's position; r[6] the three
+    // ai: bytes after it, low first (the rate and the extension bytes, or the symbol)
+    if (r[5] > 0) {
+      const int a = (int)r[5];
+      const uint32_t b = (uint32_t)r[6];
+      fo.hasWord = true;
+      fo.word.kind = a >= 256 ? 1 : 0;
+      if (fo.word.kind) { fo.word.pos = a - 256; for (int j = 0; j < 3; j++) fo.word.sym[j] = (uint8_t)(b >> (8 * j)); }
+      else { fo.word.version = a; fo.word.fps = (int)(b & 255); fo.word.ext[0] = (uint8_t)(b >> 8); fo.word.ext[1] = (uint8_t)(b >> 16); }
+    }
     fo.anchors = (int)r[31];   // ai: ANCH_FIT's count (PICK zeroes the record: 0 on a frame not found)
     // ai: decoder.mjs pilotOf: over the blocks the version carries, where the soft stage ran (its count column 6)
     // ai: the even blocks (bit 0 of the painted count) and the odd (bit 1), each its own mean and standard error

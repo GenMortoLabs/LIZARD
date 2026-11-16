@@ -11,7 +11,7 @@
 import { init as initOb } from "../sim/ob.mjs";
 import { init as initWh, Encoder, Decoder } from "../sim/fountain.mjs";
 import { init as initZstd, Z } from "../sim/zstd.mjs";
-import { XferSender, XferReceiver, MemoryStore, blake3, hex, isControlId, PAYLOAD, makeChunk, chunkCv } from "../sim/xfer.mjs";
+import { XferSender, XferReceiver, MemoryStore, blake3, hex, isControlId, PAYLOAD, ID_BYTES, makeChunk, chunkCv, sameFile, idChunk, idSymbol, idPut } from "../sim/xfer.mjs";
 import { pack, unpack, packType, packedType, unpackedName, PACK_FRAME } from "../sim/pack.mjs";
 
 const M = await initOb();
@@ -57,7 +57,7 @@ async function run(label, { length, log2 = 22, B = 12, loss = 0, ring = 0, burst
       sent++;
       if (rnd() < loss || k >= B * (1 - ring)) continue;
       const b = xs.block(ids[k], buf).slice();
-      if (!isControlId(ids[k]) && ids[k] >>> 18 === corrupt) { if (csym < 0) csym = ids[k] & 0x3ffff; if ((ids[k] & 0x3ffff) === csym) b[5] ^= 1; }
+      if (!isControlId(ids[k]) && idChunk(ids[k]) === corrupt) { if (csym < 0) csym = idSymbol(ids[k]); if (idSymbol(ids[k]) === csym) b[5] ^= 1; }
       await rx.add(ids[k], b);
     }
     // ai: the most bytes a chunk's symbol sets hold (sim/xfer.mjs Bits): its symbols from a random start in runs
@@ -94,8 +94,8 @@ await run("1200 B of prose, one block once packed", { length: 1200, text: true }
 await run("2 chunks of a packed stream, 30% lost", { length: 9 * 2 ** 20 - 12345, log2: 20, loss: 0.3, text: true });
 await run("10 MB of prose packed, 40% lost", { length: 10e6, loss: 0.4, text: true });
 for (let k = 0; k < 20; k++) await run(`200 KB, 20% lost, seed ${k}`, { length: 200000 + k, log2: 16, loss: 0.2 });
-// Joined after the first lap, so repair blocks only: Wirehair then wants a block past K now and again, and the chunk
-// takes the rest as they come.
+// Joined after the first lap, so repair blocks only: RaptorQ then wants a block or two past K now and again, and the
+// chunk takes the rest as they come.
 await run("41 chunks of 1 KiB, repair blocks only", { length: 40 * 1024 + 100, log2: 10, join: 100 });
 await run("3 chunks, streamed, a chunk every 40 frames", { length: 3 * 2 ** 20 - 12345, log2: 20, stream: 40 });
 await run("41 chunks of 1 KiB, streamed out of turn, 30% lost", { length: 40 * 1024 + 100, log2: 10, stream: 3, loss: 0.3 });
@@ -110,7 +110,7 @@ class KeepStore {
   async open(id, header, length) {
     const f = this.folders.get(id);
     this.id = id;
-    if (f && f.header.length === header.length && f.header.every((v, i) => v === header[i])) {
+    if (f && f.header.length === header.length && sameFile(f.header, header)) {
       this.cur = f;
       return { found: true, manifest: f.manifest.map(([m, b]) => [m, b.slice()]), verified: [...f.verified], chunks: [...f.recs.keys()] };
     }
@@ -120,12 +120,12 @@ class KeepStore {
   }
   async append(c, sym, bytes) {
     const r = this.cur.recs.get(c) ?? [];
-    const rec = new Uint8Array(4 + PAYLOAD);
-    rec[0] = sym & 255; rec[1] = (sym >>> 8) & 255; rec[2] = (sym >>> 16) & 255; rec[3] = sym >>> 24;
-    rec.set(bytes.subarray(0, PAYLOAD), 4);
+    const rec = new Uint8Array(ID_BYTES + PAYLOAD);
+    idPut(rec, 0, sym);
+    rec.set(bytes.subarray(0, PAYLOAD), ID_BYTES);
     r.push(rec); this.cur.recs.set(c, r);
   }
-  async read(c) { const r = this.cur.recs.get(c) ?? [], b = new Uint8Array(r.length * (4 + PAYLOAD)); r.forEach((x, i) => b.set(x, i * x.length)); return b; }
+  async read(c) { const r = this.cur.recs.get(c) ?? [], b = new Uint8Array(r.length * (ID_BYTES + PAYLOAD)); r.forEach((x, i) => b.set(x, i * x.length)); return b; }
   async drop(c) { this.cur?.recs.delete(c); }
   async writeOut(off, bytes) { this.cur.out.set(bytes, off); }
   async noteManifest(m, b) { this.cur.manifest.push([m, b.slice()]); }
@@ -193,6 +193,50 @@ await resume("parked by another file's header, resumed by its own", { length: 3 
 await resume("a parked transfer forgotten", { length: 3 * 2 ** 20 - 12345, log2: 20, forget: true });
 await resume("resumed from a sender made again with the same seed, 30% lost", { length: 6 * 2 ** 20 - 99, log2: 20, loss: 0.3, share: 0.8, restart: "same" });
 await resume("resumed from a sender made again with another seed, 30% lost", { length: 6 * 2 ** 20 - 99, log2: 20, loss: 0.3, share: 0.8, restart: "other" });
+
+// ai: Every block of a file combines, whichever sender sent it (src/xfer.h xfer_same_file): half a lap of File A from
+// ai: one sender, the rest from another under another name, type and seed, into one receiver (park: dropped between,
+// ai: the second on the same folders); the file whole under the first header's name, nothing rejected or begun again.
+async function twoSenders(label, { length, log2 = 20, B = 12, loss = 0.2, park = false }) {
+  const file = rand(length, length + 21), a = new XferSender(file, { name: "a.bin", type: "application/octet-stream", chunkLog2: log2, M, Encoder, seed: 11 });
+  const b = new XferSender(file, { name: "b.bin", type: "text/plain", chunkLog2: log2, M, Encoder, seed: 977 });
+  const folders = new Map(), buf = new Uint8Array(PAYLOAD), lap = a.K.reduce((x, y) => x + y, 0);
+  let s = 31337;
+  const rnd = () => { s = (Math.imul(s, 1103515245) + 12345) >>> 0; return (s >>> 8) / 16777216; };
+  const feed = async (rx, tx, frames) => { let f = 0; for (; f < frames && !rx.done; f++) { const ids = tx.frameIds(B); for (let k = 0; k < B; k++) if (rnd() >= loss) await rx.add(ids[k], tx.block(ids[k], buf).slice()); } return f; };
+  let rx = new XferReceiver({ M, Decoder, store: park ? new KeepStore(folders) : new MemoryStore() });
+  const first = await feed(rx, a, Math.ceil((0.5 * lap) / B)), held = rx.progress();
+  if (park) rx = new XferReceiver({ M, Decoder, store: new KeepStore(folders) });
+  const more = await feed(rx, b, 50 * Math.ceil(lap / B)), r = rx.result, p = rx.progress();
+  const ok = !!r && r.bytes.every((v, i) => v === file[i]) && r.root === hex(a.root) && p.rejected === 0 && r.name === (park ? "b.bin" : "a.bin") && (first + more) * B / lap < 1 / (1 - loss) + 0.25;
+  if (!ok) fails++;
+  console.log(`${ok ? "ok  " : "FAIL"} ${label}: ${a.chunks} chunks, ${held.verified} verified and half a lap in from a.bin, the rest from b.bin; ${((first + more) * B / lap).toFixed(3)} laps in all, filed as ${r?.name}`);
+  a.free(); b.free();
+}
+await twoSenders("File A from two senders, another name, type and seed each, one receiver", { length: 6 * 2 ** 20 - 77 });
+await twoSenders("File A from two senders, the receiver dropped between, the second resuming its folder", { length: 6 * 2 ** 20 - 77, park: true });
+
+// ai: The transfer Wirehair stalled (2026-11-14, STATUS "Wirehair's long tail is precode twins"): a 4 MiB file (one
+// ai: chunk, 8,887 blocks) from schedule seed 305886, whose chunk starts at symbol 246,656, with symbols 256,520 to
+// ai: 256,524 lost, which Wirehair took past K + 1,024 and then refused; RaptorQ has it back within K + 2.
+{
+  const file = rand(2 ** 22, 4242), tx = new XferSender(file, { name: "r.bin", type: "application/octet-stream", M, Encoder, seed: 305886 });
+  const lost = new Set([256520, 256521, 256522, 256523, 256524]), buf = new Uint8Array(PAYLOAD), B = 60, K = tx.K[0];
+  const rx = new XferReceiver({ M, Decoder, store: new MemoryStore() });
+  let data = 0;
+  for (let f = 0; f < 2000 && !rx.done; f++) {
+    const ids = tx.frameIds(B);
+    for (let k = 0; k < B && !rx.done; k++) {
+      if (!isControlId(ids[k]) && lost.has(idSymbol(ids[k]))) continue;
+      if (!isControlId(ids[k])) data++;
+      await rx.add(ids[k], tx.block(ids[k], buf).slice());
+    }
+  }
+  const r = rx.result, ok = !!r && r.bytes.length === file.length && r.bytes.every((v, i) => v === file[i]) && r.root === hex(tx.root) && data - K <= 2;
+  if (!ok) fails++;
+  console.log(`${ok ? "ok  " : "FAIL"} the transfer Wirehair stalled: ${r ? `back at K + ${data - K} data blocks` : "NOT back"}`);
+  tx.free();
+}
 
 // ai: The pack's rules (sim/pack.mjs): its type and name both ways, what does not pay, and a damaged stream.
 {

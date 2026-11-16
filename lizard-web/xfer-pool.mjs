@@ -1,13 +1,13 @@
 // ai: The sender's transfer made by a pool of workers (2026-11-06; the native sender's prepare across cores,
 // ai: liblizard/core/tx/xfer_tx.cpp). No chunk reads another, so each worker (chunk-worker.mjs) takes the next chunk as it
-// ai: comes free and makes it whole (its fountain, its chaining value); Wirehair runs in parallel too,
+// ai: comes free and makes it whole (its fountain, its chaining value); the encoders' solves run in parallel too,
 // ai: as each worker keeps the fountains it made (a wasm heap's state cannot move to another), and so the fountains
 // ai: spread over the workers' heaps (one heap holds 2 GiB at most). A frame's blocks are fetched from the workers that
 // ai: hold them before it is painted (send-worker.mjs). The ids and bytes are the serial sender's (sim/xfer.mjs).
 // ai: Streaming (2026-11-06, the native sender's): the workers hash every chunk first (the chaining values and the root,
 // ai: all the header needs) and makeXfer returns; the chunks are made behind it while frames go, each handed to the
 // ai: sender as it comes (XferSender.add), remote.made settling with the last.
-import { XferSender, PAYLOAD, SYMBOL_BITS, CONTROL } from "../liblizard/sim/xfer.mjs";
+import { XferSender, PAYLOAD, CONTROL, idChunk } from "../liblizard/sim/xfer.mjs";
 
 // ai: a worker's answers taken in the order they were asked (it handles one message at a time); end() refuses what is
 // ai: still asked of a worker let go
@@ -65,13 +65,13 @@ export async function makeXfer(bytes, opts, { M, Encoder, workers = null }) {
     await pass(async (call, i, c) => { const plain = part(c); cvs.set((await call({ type: "cv", c, chunkLog2, buf: plain.buffer }, [plain.buffer])).cv, 32 * c); });
     let xs = null;
     const remote = {
-      // ai: the blocks of the ids whose chunks the workers hold (a fountain's), each worker asked once for its own
+      // ai: the blocks of the ids whose chunks the workers hold (every chunk's fountain), each worker asked once for its own
       async fetch(ids) {
         const per = calls.map(() => []), got = new Map();
-        for (const id of ids) { const c = id >>> SYMBOL_BITS; if (c !== CONTROL && meta[c].K > 1) per[owner[c]].push(id); }
+        for (const id of ids) { const c = idChunk(id); if (c !== CONTROL) per[owner[c]].push(id); }
         await Promise.all(per.map(async (list, i) => {
           if (!list.length) return;
-          const b = new Uint8Array((await calls[i]({ type: "blocks", ids: Uint32Array.from(list) })).buf);
+          const b = new Uint8Array((await calls[i]({ type: "blocks", ids: Float64Array.from(list) })).buf);
           list.forEach((id, k) => got.set(id, b.subarray(k * PAYLOAD, (k + 1) * PAYLOAD)));
         }));
         return got;

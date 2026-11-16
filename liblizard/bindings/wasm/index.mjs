@@ -55,7 +55,7 @@ const made = (ptr) => {
   return ptr;
 };
 
-export const BLOCK = 476, ID_BYTES = 4, PAYLOAD = 472, MIN_BLOCKS = 4, MAX_BLOCKS = 64, RINGS = 3, RING_DEFAULT = -1, GAP_MODULES = 12;
+export const BLOCK = 476, ID_BYTES = 5, PAYLOAD = 471, MIN_BLOCKS = 4, MAX_BLOCKS = 64, RINGS = 3, RING_DEFAULT = -1, GAP_MODULES = 12;
 const PIXFMT = { grey: 1, rgbx: 2, rgba: 3, bgra: 4 };
 const bpp = (f) => (f === "grey" ? 1 : 4);
 const pixfmt = (f) => {
@@ -145,6 +145,7 @@ function decodedFrom(p, count, blocks) {
     found: !!i[0], ring: i[1], n: i[2], word: !!i[3], blocksPerSymbol: i[4], fps: i[5], heldUsed: !!i[6], total: i[7],
     quad: Array.from(f.subarray((p >> 2) + 9, (p >> 2) + 17)),
     pilot: { blocks: M.HEAP32[(p >> 2) + 17], r: Array.from(f.subarray((p >> 2) + 18, (p >> 2) + 20)), sd: Array.from(f.subarray((p >> 2) + 20, (p >> 2) + 22)) },
+    animated: !!M.HEAP32[(p >> 2) + 22],
   };
 }
 
@@ -187,7 +188,7 @@ export function layoutRects(w, h, layout = 1) {
 export function streamFill(id) {
   mod();
   const p = scratch.at(PAYLOAD);
-  M._liz_stream_fill(id >>> 0, p);
+  M._stream_fill_of(id, p, PAYLOAD);
   return M.HEAPU8.slice(p, p + PAYLOAD);
 }
 

@@ -32,7 +32,7 @@ else()
   option(LIZ_GPU "build the Vulkan targets" ON)
 endif()
 # ai: Always optimised. Gradle's debug variant passes CMAKE_BUILD_TYPE=Debug, which is no -O at all: the app then ran
-# ai: its Vulkan host, the transfer, Wirehair, BLAKE3 and the block judge's SHAKE256 unoptimised (found 2026-09-30;
+# ai: its Vulkan host, the transfer, its fountain, BLAKE3 and the block judge's stream unoptimised (found 2026-09-30;
 # ai: only the codec carried its own -O3). A debug APK is for the Kotlin side, and -g stays. LIZ_O0=ON is the way back
 # ai: for stepping through the native code.
 option(LIZ_O0 "leave a Debug build unoptimised" OFF)
@@ -72,12 +72,11 @@ add_executable(lizard_gpu_check tools/gpu_check.cpp)
 target_link_libraries(lizard_gpu_check PRIVATE dec lizard_rx)
 endif()
 
-# ai: The transfer (rx/xfer_rx.h): src's xfer and shake, BLAKE3 with its vector kernels (below), Wirehair and the
-# ai: web's own shim over it (wirehair/shim.cpp), zstd as one file under the project's shim (zstd/shim.c, the
-# ai: parameters pinned; 2026-10-05), compiled natively; vendor code without our warnings.
+# ai: The transfer (rx/xfer_rx.h): src's xfer (with the test stream, BLAKE3's since 2026-11-15; shake.c before) and rq (RaptorQ, RFC 6330, since 2026-11-14; Wirehair V2 before),
+# ai: BLAKE3 with its vector kernels (below), zstd as one file under the project's shim (zstd/shim.c, the parameters
+# ai: pinned; 2026-10-05), compiled natively; vendor code without our warnings.
 # ai: LZ is liblizard/, the folder above this one.
 set(LZ ${CMAKE_CURRENT_SOURCE_DIR}/..)
-set(WH ${LZ}/vendor/wirehair)
 # ai: BLAKE3's vector kernels (2026-11-06), upstream's own, its dispatcher choosing at run time: on x86-64 SSE4.1 (in
 # ai: the v2 floor) and AVX2 (by cpuid) as upstream's assembly (gcc 13's build of its intrinsics ran 1.5 and 3.0 GiB/s
 # ai: on the 9950X, the assembly 2.2 and 4.3; the portable 1.36), no SSE2 (below the floor, never chosen) and no
@@ -106,26 +105,31 @@ else()
   list(APPEND B3_DEFS BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_USE_NEON=0)
 endif()
 set(XFER_VENDOR ${B3_SRC}
-  ${LZ}/vendor/zstd/zstd.c ${LZ}/zstd/shim.c
-  ${WH}/wirehair.cpp ${WH}/gf256.cpp ${WH}/WirehairCodec.cpp ${WH}/WirehairTools.cpp ${WH}/codec/WirehairV2Codec.cpp
-  ${WH}/codec/WirehairV2GF16.cpp ${WH}/codec/WirehairV2Peel.cpp ${WH}/codec/WirehairV2Plan.cpp ${WH}/codec/WirehairV2Policy.cpp
-  ${WH}/codec/WirehairV2Precode.cpp ${WH}/codec/WirehairV2PrecodeDecode.cpp ${WH}/codec/WirehairV2PrecodeEncode.cpp
-  ${WH}/codec/WirehairV2Profile.cpp ${WH}/codec/WirehairV2Seeds.cpp ${WH}/codec/WirehairV2Solve.cpp ${LZ}/wirehair/shim.cpp)
+  ${LZ}/vendor/zstd/zstd.c ${LZ}/zstd/shim.c)
 # ai: lizard_xfer_core (2026-10-03): both ends of the transfer with no thread of their own (rx/xfer_rx_core.h, the
 # ai: stores, tx/xfer_tx.h; the sender alone runs workers of its own, a physical core each, that make its chunks while
 # ai: frames go and are joined when it goes, none under emscripten), the default client's pack (tx/pack.h, 2026-11-14),
 # ai: what the library and a wasm build take;
 # ai: lizard_xfer adds the app's threaded receiving end.
-add_library(lizard_xfer_core STATIC rx/xfer_rx_core.cpp rx/store.cpp tx/xfer_tx.cpp tx/pack.cpp ${LZ}/src/xfer.c ${LZ}/src/shake.c ${XFER_VENDOR})
+add_library(lizard_xfer_core STATIC rx/xfer_rx_core.cpp rx/store.cpp tx/xfer_tx.cpp tx/pack.cpp ${LZ}/src/xfer.c ${LZ}/src/rq.c ${XFER_VENDOR})
 set_source_files_properties(${XFER_VENDOR} PROPERTIES COMPILE_OPTIONS "${LIZ_NOWARN}")
 if(EMSCRIPTEN AND B3_NEON)
   set_property(SOURCE ${B3_NEON} APPEND PROPERTY COMPILE_OPTIONS -mfpu=neon)   # ai: emscripten's arm_neon.h, on wasm SIMD
 endif()
-target_include_directories(lizard_xfer_core PUBLIC rx tx ${LZ}/src ${LZ}/zstd PRIVATE ${LZ}/vendor/blake3 ${LZ}/vendor/zstd ${WH}/include ${WH})
-target_compile_definitions(lizard_xfer_core PRIVATE ${B3_DEFS} WIREHAIR_BUILDING=1)
+target_include_directories(lizard_xfer_core PUBLIC rx tx ${LZ}/src ${LZ}/zstd PRIVATE ${LZ}/vendor/blake3 ${LZ}/vendor/zstd)
+target_compile_definitions(lizard_xfer_core PRIVATE ${B3_DEFS})
+# ai: x86-64: the transfer at the x86-64-v2 floor as the codec (2026-11-15): RaptorQ's GF(256) multiply-add takes
+# ai: src/simd.h's x86 form (PSHUFB) only there; below it, its scalar twin
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  if(MSVC)
+    target_compile_options(lizard_xfer_core PRIVATE /clang:-march=x86-64-v2)
+  else()
+    target_compile_options(lizard_xfer_core PRIVATE -march=x86-64-v2)
+  endif()
+endif()
 if(NOT EMSCRIPTEN)
 find_package(Threads REQUIRED)
-target_link_libraries(lizard_xfer_core PUBLIC Threads::Threads)   # ai: std::call_once (Wirehair's init) on some C libraries
+target_link_libraries(lizard_xfer_core PUBLIC Threads::Threads)   # ai: the sender's chunk workers (tx/xfer_tx.cpp)
 add_library(lizard_xfer STATIC rx/xfer_rx.cpp)
 target_link_libraries(lizard_xfer PUBLIC lizard_xfer_core Threads::Threads)
 

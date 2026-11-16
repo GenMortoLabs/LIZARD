@@ -342,7 +342,6 @@ static int in_square(const struct lizard_ws *w, int t) {
   return 0;
 }
 // ai: the shading's basis at picture sample (x, y), x the column: 1 and the detrend's five functions (6.10)
-static int cmp_dbl(const void *a, const void *b) { const double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
 static void hole_basis(const struct lizard_ws *w, int x, int y, double b[6]) {
   const double cx = w->cx[x], cy = w->cx[y];
   b[0] = 1; b[1] = cx; b[2] = w->qx[x]; b[3] = cy; b[4] = w->qx[y]; b[5] = cx * cy;
@@ -491,6 +490,14 @@ void lizard_align(const lizard_t *f, float d[2]) { const struct lizard_ws *w = f
 int lizard_fmt_fps(lizard_t *f, int fps) {
   if (fps < 0 || fps > 255) return -1;
   f->fmt.fps = fps;
+  fmt_paint(f);
+  return 0;
+}
+int lizard_fmt_word(lizard_t *f, int kind, const uint8_t b[4]) {
+  if (kind == OB_FMT_STATIC) { f->fmt.ext[0] = b[0]; f->fmt.ext[1] = b[1]; }
+  else if (kind == OB_FMT_ANIM && b[0] <= OB_FMT_POS_MAX) { f->fmt.pos = b[0]; memcpy(f->fmt.sym, b + 1, 3); }
+  else return -1;
+  f->fmt.kind = kind;
   fmt_paint(f);
   return 0;
 }
@@ -1797,8 +1804,7 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
         w->sw_r[t] = fabs(w->sw_a[t] - fv);
         if (!w->sw_d[t]) w->sw_s[nr++] = w->sw_r[t];
       }
-      qsort(w->sw_s, (size_t)nr, sizeof(double), cmp_dbl);
-      const double tau = 3 * 1.4826 * w->sw_s[nr / 2];
+      const double tau = 3 * 1.4826 * ob_select(w->sw_s, nr, nr / 2);
       int changed = 0;
       for (int t = 0; t < nti; t++) { const unsigned char bad = w->sw_r[t] > tau; if (bad != w->sw_d[t]) { w->sw_d[t] = bad; changed++; } }
       if (!changed) break;

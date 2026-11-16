@@ -1,7 +1,7 @@
 # liblizard
 
 The LIZARD code as a library: a luminance-only animated barcode that carries a file from a screen to a camera. A
-frame is a grey picture whose FFT coefficients carry blocks of 476 bytes (a 4-byte id and 472 of payload, CRC-checked),
+frame is a grey picture whose FFT coefficients carry blocks of 476 bytes (a 5-byte id and 471 of payload, CRC-checked),
 each LDPC-coded at a rate that follows the frequency (7/8 inside, then 3/4 and 2/3, 1/2 outside), inside a border
 that says what is inside; a file goes as a fountain-coded transfer verified by its BLAKE3 root.
 
@@ -36,8 +36,8 @@ reference the engine's C++ lock (`core/rx/phase_lock`) is held to; neither app c
    at run time, WebAssembly SIMD in the wasm build, scalar elsewhere and in the wasm MVP build).
    `liz_encoder_paint`: a frame's blocks to its picture, grey or four bytes a pixel, the frame's count for the pilots.
    `liz_decode`: a captured image, or one region of it (`liz_layout_rects`: the centre square, or the two halves of a
-   2:1 region), to its verified blocks; the caller keeps the held word (the last word read), the one thing carried from
-   frame to frame.
+   2:1 region), to its verified blocks; the caller keeps the held word (the last static word read, or the version of the header the decoder's
+   carousel of animated words assembled), the one thing carried from frame to frame.
 3. **The transfer.** `liz_tx`: a file (or the test stream) to each frame's blocks. `liz_rx`: a frame's verified blocks
    in, the file out once every chunk is verified against the root, in memory or under a directory.
 4. **The engines** (native builds): `liz_receiver` decodes camera frames on its own threads (the GPU decoder through
@@ -134,7 +134,7 @@ saturating float-to-int lowered by binaryen, and the module is validated against
 without either. `init()` loads the SIMD build where the engine validates both SIMD and wasm exceptions (`hasSimd()`
 answers for SIMD alone) and the MVP build otherwise; `init(options, { build: "simd" | "mvp" })` names one. Both
 decode the same blocks from the same frames; the MVP build, on the codec's scalar paths, is several times slower. Both builds also
-carry the codec's own exports and the Wirehair and zstd shims, which the repository's pages and tools reach through
+carry the codec's own exports, RaptorQ's and the zstd shim, which the repository's pages and tools reach through
 `sim/`; those are no interface of the package. The repository's web pages load the SIMD build alone, so they need both WebAssembly SIMD and wasm
 exceptions: of the browsers with SIMD, that leaves out Chrome 91 to 94 and Firefox 89 to 99.
 

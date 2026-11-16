@@ -3,7 +3,7 @@
 //
 // A FORMAT IS ITS SUB-CHANNEL COUNT and nothing else, a multiple of 16 (src/lizard_phy.h LIZARD_STEP): the codec rejects any
 // other count. Version k is 16k sub-channels, the number its word carries; the blocks a frame are the rate profile's
-// (tiersFor below), fewer than 2k of them (7 at LIZARD-64, 124 at LIZARD-1024), each 472 B of payload.
+// (tiersFor below), fewer than 2k of them (7 at LIZARD-64, 124 at LIZARD-1024), each 471 B of payload.
 //
 // THE FIRST LADDER (2026-09-20, one code rate; the history of the decision, not the rule: VERSIONS below is).
 // Versions 2 to 32, so 16 to 256 sub-channels in steps of 8. The version number IS the block count, which is worth
