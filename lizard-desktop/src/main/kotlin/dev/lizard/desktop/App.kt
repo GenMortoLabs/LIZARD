@@ -111,7 +111,7 @@ class App {
 fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: ReceiverTest?) {
     val s = app.send
     val ws = rememberWindowState(width = 1280.dp, height = 800.dp)
-    Window(onCloseRequest = { app.close(); exitApplication() }, state = ws, title = "LIZARD", icon = rememberVectorPainter(Icons.mark)) {
+    Window(onCloseRequest = { app.close(); exitApplication() }, state = ws, title = "LIZARD", icon = rememberVectorPainter(Icons.appIcon)) {
         // ai: the frame white before Compose's first frame (2026-10-07): AWT's default grey showed until Skia drew
         remember { window.background = java.awt.Color.WHITE; window.contentPane.background = java.awt.Color.WHITE; if (app.loadError.isEmpty()) whiten(window); app.frame = window; s.frame = window; app.full.attach(window, ws) }
         // ai: Keys wherever the focus is (the canvas takes none), as video players have them (2026-10-23; F11 and Escape

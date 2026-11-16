@@ -1,6 +1,5 @@
 package dev.lizard.ui
 
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -40,13 +39,6 @@ object Icons {
     val info = stroked("info", circle(12f, 12f, 10f), "M12 16v-4", "M12 8h.01")
     val back = stroked("back", "M19 12H5M12 19l-7-7 7-7")
     val x = stroked("x", "M18,6 L6,18 M6,6 L18,18")
-    val mark = ImageVector.Builder("mark", 64.dp, 64.dp, 64f, 64f).apply {
-        addPath(addPathNodes("M0 0h64v64h-64z"), fill = SolidColor(Color.White))
-        // ai: the ink spans 70% of the square (2026-10-10, the standard lizard-web/icon.svg states)
-        addGroup(pivotX = 32f, pivotY = 32f, scaleX = 1.24444f, scaleY = 1.24444f)
-        addPath(addPathNodes("M14 14h9v9h-9zM41 14h9v9h-9zM14 41h9v9h-9zM41 41h9v9h-9zM25 16h14v3H25zM25 45h14v3H25zM16 25h3v14h-3zM45 25h3v14h-3z"), fill = SolidColor(Fg))
-        addPath(addPathNodes("M25 25h7v7h-7zM32 32h7v7h-7z"), fill = SolidColor(Color(0xFF777777)))
-        addPath(addPathNodes("M32 25h7v7h-7zM25 32h7v7h-7z"), fill = SolidColor(Color(0xFFBBBBBB)))
-        clearGroup()
-    }.build()
+    val mark = markVector()   // ai: Mark.kt, the drawing every copy of the mark shares
+    val appIcon = appIconVector()   // ai: Mark.kt: the desktop's window and taskbar icon, clear outside the ring, larger
 }
