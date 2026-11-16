@@ -11,7 +11,7 @@
 # ./build.sh scalar   -> build/nosimd/lizard.mjs: the module with the codec's scalar twins in place of its vector paths, for a
 #   lab check that is not published (scripts/exp/simd_check.mjs)
 # ./build.sh verify   -> build/verify and build/verify-scalar, for a lab check that is not published (scripts/exp/points_check.mjs)
-# ./build.sh zstd    -> the default build: zstd is in the module (for build lines that still name it)
+# ./build.sh wirehair, ./build.sh zstd -> the default build (for build lines that still name them; the fountain is RaptorQ)
 # ./build.sh native   -> the C compiled natively under ASan and UBSan, warnings on, nothing kept (a compile check)
 # ./build.sh app      -> ../lizard-web/app/, the installed web app (../lizard-web/pwa/build.mjs: content-addressed, its service worker; node only)
 # -ffp-contract=off (every target, CMakeLists.txt and core/CMakeLists.txt): the reference is exact (2026-09-24), and a
@@ -52,7 +52,7 @@ wasm() {
   cmake --build "$tree" -j "$(nproc 2>/dev/null || echo 4)"
 }
 case "$1" in
-  ""|zstd)
+  ""|wirehair|zstd)
     [ -f build/ffmpeg/wasm/lib/libavcodec.a ] || bash ffmpeg/build.sh wasm
     wasm build-native/wasm "$PWD/bindings/wasm/dist" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=ON
     mkdir -p build
@@ -70,5 +70,5 @@ case "$1" in
     wasm build-native/wasm-verify "$PWD/build/verify" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=ON -DLIZ_WASM_MEDIA=OFF
     wasm build-native/wasm-verify-scalar "$PWD/build/verify-scalar" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=ON -DLIZ_VERIFY_POINTS=ON -DLIZ_WASM_MEDIA=OFF
     ls -l build/verify/lizard.wasm build/verify-scalar/lizard.wasm ;;
-  *) echo "build.sh: no build $1 (none, mvp, scalar, verify, native, app; zstd the default)" >&2; exit 2 ;;
+  *) echo "build.sh: no build $1 (none, mvp, scalar, verify, native, app; wirehair and zstd the default)" >&2; exit 2 ;;
 esac
