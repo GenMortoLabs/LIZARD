@@ -1,0 +1,5 @@
+- Files and codes go with the new transfer and format word: this release and 0.2.4 or earlier do not read each other's files or codes.
+- RaptorQ is the fountain: a large transfer no longer slows down near its end.
+- 16 MiB chunks and a 40-bit block id: files up to 1 TiB.
+- Receive: Largest file (50 GB by default) and a free space check before a transfer starts; Decoding and Saving shown at a transfer's end.
+- Send: Header, in Refresh, sends the format's header across frames.

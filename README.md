@@ -6,7 +6,7 @@ carries about 4 MB/s (see [Status](#status)).
 
 - **Demo:** [fosslabs.dev](https://fosslabs.dev)
 - **How it works:** [an example on video](https://www.youtube.com/shorts/pjcAtQ7GcVQ)
-- **Apps:** [0.2.4 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.2.4): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
+- **Apps:** [0.3.0 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.3.0): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
 
 ## The idea
 
@@ -42,13 +42,13 @@ received archive into a folder, and the web receiver offers it as the `.tar` it 
 
 1. **Compress where it helps, then split.** A file that compresses well is first packed as a stream of zstd frames
    and sent as `<name>.zst`, which the receiving app unpacks (any zstd tool reads it too); compression is the app's,
-   not part of the code. The file is then split into 4 MiB chunks (larger only past 64 GiB).
-2. **Fountain-code each chunk** (Wirehair). The encoder can produce as many 472-byte pieces as needed, and any set
-   slightly larger than the chunk rebuilds it, whichever pieces they are. A missed frame costs only time, and nothing
+   not part of the code. The file is then split into 16 MiB chunks.
+2. **Fountain-code each chunk** (RaptorQ, RFC 6330). The encoder can produce as many 471-byte pieces as needed, and
+   any set as large as the chunk rebuilds it, at most a piece or two more, whichever pieces they are. A missed frame costs only time, and nothing
    ever has to go back to the sender.
 3. **Describe the file** in a header block (name, size, BLAKE3 hash) and manifest blocks (each chunk's hash), sent
    in the same stream as the data.
-4. **Make blocks.** A block is a 4-byte id (which chunk, which piece), 472 bytes of payload and a CRC-32.
+4. **Make blocks.** A block is a 5-byte id (which chunk, which piece), 471 bytes of payload and a CRC-32.
 5. **Add error correction.** Each block becomes one LDPC codeword. How much protection it gets depends on where it
    will sit in the spectrum:
 
@@ -298,7 +298,7 @@ grows with its frequency), which is turned back before decoding.
 | picture | the grey square inside the border | data area |
 | coefficient | one 2D spatial frequency of the picture, carrying two bits as one of four phases | subcarrier carrying a QPSK symbol |
 | sub-channel | 320 consecutive coefficients, ordered from coarse to fine | group of subcarriers |
-| block | 476 bytes (a 4-byte id and 472 of payload) plus a CRC-32, sent as one LDPC codeword over 2,248 to 3,840 consecutive frequencies by its code rate | codeword, packet |
+| block | 476 bytes (a 5-byte id and 471 of payload) plus a CRC-32, sent as one LDPC codeword over 2,248 to 3,840 consecutive frequencies by its code rate | codeword, packet |
 | code rate | the share of the sent bits that is data | code rate |
 | rate profile | which code rate each block gets, by its frequencies | unequal error protection |
 | version | how much a frame holds: a code with k sub-channels (64 to 1024, in steps of 16) is version k / 16; 592 sub-channels hold 71 blocks, about 33.5 KB | QR version (capacity) |
@@ -311,7 +311,7 @@ grows with its frequency), which is turned back before decoding.
 | bit map, whitening | the fixed permutation and the scrambling of a codeword's bits | interleaver, scrambler |
 | registration | working out where each point of the code falls in the camera image | deskewing, geometric correction |
 | soft values | how confident the receiver is of each bit | log-likelihood ratios (LLRs) |
-| chunk | a 4 MiB piece of the file, with its own fountain and hash | |
+| chunk | a 16 MiB piece of the file, with its own fountain and hash | |
 | fountain | an erasure code that rebuilds a chunk from any set of pieces slightly larger than it | fountain (rateless) code |
 | header, manifest | the blocks that describe the file and each chunk | |
 | held word | the last format word read, used for a frame whose own word cannot be read | |
@@ -438,12 +438,21 @@ Install USB driver binds.
 
 ## Roadmap
 
-The transfer's header version 4 is in since 0.2.4:
+In 0.2.4 and 0.3.0:
 
-- **zstd out of the transfer.** A chunk's fountain carries the chunk's own bytes, so every block count follows from
-  the file's length: the header carries the fountain's two seed attempts (one for every full chunk, one for the last)
-  and the manifest the chunks' hashes alone. A file compressed before it enters LIZARD leaves the code and the transfer
+- **zstd out of the transfer** (0.2.4). A chunk's fountain carries the chunk's own bytes, so every block count follows
+  from the file's length, and the manifest carries the chunks' hashes alone.
+- **RaptorQ as the fountain** (0.3.0). RFC 6330's code, one source block a chunk, in place of Wirehair: it decodes
+  from the chunk's own count of pieces or a piece or two more, with no rare long wait, and the header no longer
+  carries a seed. A file compressed before it enters LIZARD leaves the code and the transfer
   untouched. The error correction (the LDPC codes, the fountain) and the transfer's layouts stay sealed into the format.
+- **A 40-bit block id** (0.3.0): 16 bits of chunk and RaptorQ's whole 24-bit piece number, for one byte of every block. A
+  chunk's pieces repeat only once a receiver has missed 99.8% of them (86% before), two senders of one file seldom
+  send the same pieces, and a file may reach 1 TiB. The format carries no version number before 1.0.
+- **The format word's extensions** (0.3.0). The word is RS(n, 5) with two magic bytes. A static word names the
+  version, the frame rate and two extension bytes (0 and 0 today). An animated word carries one symbol of a longer
+  header, an extension's parameters: the header is three Reed-Solomon codewords over 255 positions, any k of them
+  rebuild it, and its CRC-32C is the check. The desktop and Android apps send it from Send's Header setting.
 
 Compression, encryption and signing are not part of LIZARD, as they are not part of QR: the apps and the web page pack
 a file that compresses as zstd frames before it enters, and an application that carries files over it may add its own.
@@ -473,7 +482,7 @@ CMake 3.28 and emsdk 6.0.9.
 
 ```
 source <emsdk>/emsdk_env.sh
-liblizard/build.sh             # liblizard/bindings/wasm/dist/lizard.mjs and lizard.wasm: the codec, the transfer, Wirehair and zstd
+liblizard/build.sh             # liblizard/bindings/wasm/dist/lizard.mjs and lizard.wasm: the codec, the transfer, RaptorQ and zstd
 liblizard/build.sh mvp         # the same module as WebAssembly 1.0 (lizard-mvp.*), the library's fallback without SIMD
 ```
 
