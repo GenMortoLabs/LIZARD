@@ -63,7 +63,10 @@ std::unique_ptr<GpuPainter> GpuPainter::create(const std::string& assets, std::f
   p->rsv_ = d.createPipeline(spirv(spv + "rsv.spv"), p->bglRsv_, "send rsv");
   p->rsh_ = d.createPipeline(spirv(spv + "rsh.spv"), p->bglRsh_, "send rsh");
   p->rshCopy_ = d.createPipeline(spirv(spv + "rshCopy.spv"), p->bglRsh_, "send rsh copy");
-  p->qs_ = d.createQuerySet(2, "send time");
+  for (int f = 0; f < FLIGHTS; f++) {
+    p->qs_[f] = d.createQuerySet(2, "send time");
+    p->time_[f] = d.createBuffer(16, wg::MAP_READ | wg::COPY_DST, "send TIME");
+  }
   // ai: TAB, the paint's codes and whitening: the same for every format, made once
   p->TAB_ = d.createBuffer(4ull * p->k_.tab.size(), wg::STORAGE | wg::COPY_DST, "send TAB", false);
   d.upload(*p->TAB_, 0, p->k_.tab.data(), 4ull * p->k_.tab.size());
@@ -129,7 +132,6 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
         BLOCKS_.reset(); S_.reset(); Y_.reset(); PQT_.reset(); PIC_.reset(); FRAME_.reset(); READ_.reset();
         FRAME_ = d.createBuffer(uint64_t(depth) * 4ull * t.FS, STORAGE | COPY_SRC | COPY_DST, "send FRAME");
         READ_ = d.createBuffer(R * 4ull * t.FS, MAP_READ | COPY_DST, "send READ");
-        TIME_ = d.createBuffer(16, MAP_READ | COPY_DST, "send TIME");
         if (ringOnly) {
           d.flush();
           frames_ = R;
@@ -187,7 +189,14 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
   }
 }
 
-double GpuPainter::encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq, bool test, const uint8_t* pos) {
+double GpuPainter::encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq, bool test, const uint8_t* pos,
+                          const std::function<void(wg::Encoder&)>& fill) {
+  Pending p = submit(blocks, count, parity, out, seq, test, pos, fill);
+  return finish(p);
+}
+
+GpuPainter::Pending GpuPainter::submit(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq, bool test, const uint8_t* pos,
+                                       const std::function<void(wg::Encoder&)>& fill) {
   const SendTables& t = t_;
   const int V = t.blocks, B = t.blockBytes, BB = k_.blockBytes;
   if (ringOnly_) throw std::runtime_error("the GPU painter holds the ring alone here (the CPU paints)");
@@ -196,15 +205,23 @@ double GpuPainter::encode(const uint8_t* blocks, int count, int parity, std::vec
   if (static_cast<int>(first) + count > depth_) throw std::runtime_error("an encode of " + std::to_string(count) + " frames from slot " + std::to_string(first) + " would wrap the ring of " + std::to_string(depth_));
   auto& d = *dev_;
   const int Z = count * t.codes;   // ai: the symbols, a frame's codes one after the other
-  for (int i = 0; i < Z * V; i++) std::memcpy(staging_.data() + static_cast<size_t>(i) * BB, blocks + static_cast<size_t>(i) * B, B);
-  d.writeBuffer(*BLOCKS_, 0, staging_.data(), static_cast<uint64_t>(Z) * V * BB);
+  // ai: the test stream's ids alone, packed 8 bytes a block (PAINT reads the id's two words and makes the payload), else
+  // ai: the blocks at BB bytes, unless `fill` writes them on the device
+  if (!fill) {
+    const size_t at = test ? 8 : static_cast<size_t>(BB), take = test ? 8 : static_cast<size_t>(B);
+    for (int i = 0; i < Z * V; i++) std::memcpy(staging_.data() + static_cast<size_t>(i) * at, blocks + static_cast<size_t>(i) * B, take);
+    d.writeBuffer(*BLOCKS_, 0, staging_.data(), static_cast<uint64_t>(Z) * V * at);
+  }
   const uint32_t pc = static_cast<uint32_t>(parity & 3) | (static_cast<uint32_t>(t.codes) << 2) | (test ? 0x80000000u : 0u);
   d.writeBuffer(*GU_, 36, &first, 4);
   d.writeBuffer(*PU_, 4ull * (k_.paramsDims + 3), &pc, 4);
   const uint32_t R = static_cast<uint32_t>(count), RZ = static_cast<uint32_t>(Z), n = static_cast<uint32_t>(t.n);
+  // ai: its flight's timestamps (a few encodes in flight, each reading back its own)
+  const int fl = flight_++ % FLIGHTS;
   auto enc = d.encoder();
   enc.clearBuffer(*S_, 0, uint64_t(RZ) * t.npos * 8);
-  enc.beginComputePass(qs_.get(), 0, 1);
+  enc.beginComputePass(qs_[fl].get(), 0, 1);
+  if (fill) fill(enc);
   enc.setPipeline(*paint_); enc.setBindGroup(*gPaint_); enc.dispatch(V, 1, RZ);
   enc.setPipeline(*irows_); enc.setBindGroup(*gIrows_); enc.dispatch(t.Vr, 1, RZ);
   enc.setPipeline(*ipic_); enc.setBindGroup(*gIpic_); enc.dispatch(n / 4, 1, RZ);
@@ -222,22 +239,35 @@ double GpuPainter::encode(const uint8_t* blocks, int count, int parity, std::vec
     enc.setPipeline(*words_); enc.setBindGroup(*gWords_); enc.dispatch((static_cast<uint32_t>(carSpans_) + 63) / 64, R, 1);
   }
   enc.endPass();
-  enc.resolveQuerySet(*qs_, 0, 2, *TIME_, 0);
+  enc.resolveQuerySet(*qs_[fl], 0, 2, *time_[fl], 0);
   if (out) enc.copyBufferToBuffer(*FRAME_, uint64_t(first) * 4 * t.FS, *READ_, 0, uint64_t(R) * 4 * t.FS);
-  const double t0 = nowMs();
-  auto ticket = d.submit(enc);
-  ticket->wait();
-  const double wall = nowMs() - t0;
-  if (out) {
-    const uint8_t* px = d.read(*READ_, 0, uint64_t(R) * 4 * t.FS);
-    for (int f = 0; f < count; f++) {
-      out[f].resize(static_cast<size_t>(t.FW) * t.W);
-      for (int y = 0; y < t.W; y++) std::memcpy(out[f].data() + static_cast<size_t>(y) * t.FW, px + 4 * (static_cast<size_t>(f) * t.FS + static_cast<size_t>(y) * t.RW), t.FW);
+  Pending p;
+  p.flight = fl;
+  p.count = count;
+  p.out = out;
+  p.t0 = nowMs();
+  p.ticket = d.submit(enc);
+  return p;
+}
+
+bool GpuPainter::done(const Pending& p) { return !p.ticket || p.ticket->done(); }
+
+double GpuPainter::finish(Pending& p) {
+  const SendTables& t = t_;
+  auto& d = *dev_;
+  p.ticket->wait();
+  const double wall = nowMs() - p.t0;
+  if (p.out) {
+    const uint8_t* px = d.read(*READ_, 0, uint64_t(p.count) * 4 * t.FS);
+    for (int f = 0; f < p.count; f++) {
+      p.out[f].resize(static_cast<size_t>(t.FW) * t.W);
+      for (int y = 0; y < t.W; y++) std::memcpy(p.out[f].data() + static_cast<size_t>(y) * t.FW, px + 4 * (static_cast<size_t>(f) * t.FS + static_cast<size_t>(y) * t.RW), t.FW);
     }
   }
+  p.ticket.reset();
   if (!d.features.timestamps) return wall;
   uint64_t ts[2];
-  std::memcpy(ts, d.read(*TIME_, 0, 16), 16);
+  std::memcpy(ts, d.read(*time_[p.flight], 0, 16), 16);
   return double((ts[1] - ts[0]) & d.timestampMask) * d.timestampPeriod / 1e6;
 }
 
@@ -288,6 +318,17 @@ std::string GpuPainter::words() {
   } catch (const std::exception& e) {
     return std::string("the animated header on the GPU: ") + e.what();
   }
+}
+
+void GpuPainter::readSlot(int slot, std::vector<uint8_t>& out) {
+  const SendTables& t = t_;
+  auto& d = *dev_;
+  auto enc = d.encoder();
+  enc.copyBufferToBuffer(*FRAME_, uint64_t(slot) * 4 * t.FS, *READ_, 0, 4ull * t.FS);
+  d.submit(enc)->wait();
+  const uint8_t* px = d.read(*READ_, 0, 4ull * t.FS);
+  out.resize(static_cast<size_t>(t.FW) * t.W);
+  for (int y = 0; y < t.W; y++) std::memcpy(out.data() + static_cast<size_t>(y) * t.FW, px + 4 * static_cast<size_t>(y) * t.RW, t.FW);
 }
 
 void GpuPainter::upload(int slot, const uint8_t* packed) {

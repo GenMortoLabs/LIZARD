@@ -172,7 +172,8 @@ typedef struct liz_tx liz_tx;
 enum { LIZ_TX_COPY = 1 };  /* ai: liz_tx_new copies the bytes; without it they must outlive the liz_tx */
 /* ai: A file: its bytes, its name and media type as its header carries them (a name cut to 255 bytes, a type kept
  * ai: where it is printable ASCII of at most 158). Returns once the file is hashed; its chunks are made by threads of
- * ai: its own behind it, the first frames carrying the header, the manifest and the chunks made so far (natively). */
+ * ai: its own behind it, the first frames carrying the header and the manifest alone until every chunk is made
+ * ai: (natively), so every chunk starts the schedule level. */
 LIZ_API liz_tx *liz_tx_new(const uint8_t *data, size_t length, const char *name, const char *type, int flags);
 /* ai: A file read from a path (into memory); name NULL takes the path's last part. */
 LIZ_API liz_tx *liz_tx_new_path(const char *path, const char *name, const char *type);

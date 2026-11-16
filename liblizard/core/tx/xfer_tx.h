@@ -14,11 +14,15 @@
 // ai: the bytes are the serial sender's.
 // ai: Streaming (2026-11-06): the constructor hashes the chunks' own bytes (their chaining values and the root, all the
 // ai: header needs) and returns; the workers make the chunks (their encoders) behind it while frames go. Until the
-// ai: last is made, a frame carries one control block (the header, or a manifest block once its 12 chunks are made)
-// ai: and the data of the chunks made so far in turn, fresh symbols each; then the schedule as before, every chunk's
-// ai: symbols going on from where they were. A receiver keeps a chunk's blocks from the header on and solves once the
-// ai: manifest is whole, so it needs nothing new. A file of one chunk is made before the constructor returns, and so
+// ai: last is made, a frame carries control blocks alone (the header, and the manifest blocks once their chunks are
+// ai: made), no data (since 2026-11-16: the chunks made so far in turn before, which left those made first ahead for
+// ai: the whole transfer); then the schedule, every chunk starting it level. A receiver keeps a chunk's blocks from the
+// ai: header on and solves once the manifest is whole, so it needs nothing new. A file of one chunk is made before the constructor returns, and so
 // ai: is every file under emscripten (no threads).
+// ai: Deferred (2026-11-16, the sender's blocks on the GPU): with `defer` the constructor makes no chunk, opens no spill
+// ai: and starts no worker; the sender's first configure starts them (makeOnCpu), with a sink where the GPU streams the
+// ai: blocks (core/tx/gpu_stream.h): each chunk's encoder handed to it as it is made, then let go (no spill, nothing held
+// ai: twice), block() giving zeros for its data ids (the GPU makes them).
 // ai: The spill (2026-11-14; a folder given): no chunk keeps its encoder (its L intermediate symbols, about 1.02 times its
 // ai: bytes); its symbols go to
 // ai: one unlinked file in segments of a quarter of its blocks (at least 64), three a chunk (the one being sent, the
@@ -61,8 +65,9 @@ class XferTx {
   // ai: spillDir: a folder for the spill (above; "" none: every encoder kept), its file made there and unlinked at once.
   // ai: stopped, where given, is asked before each chunk's hash: true stops the constructor with std::runtime_error
   // ai: ("cancelled") (a make the app let go, 2026-11-16; the chunks after it stop at the destructor as before).
+  // ai: defer: no chunk made (above, Deferred) until makeOnCpu.
   XferTx(const uint8_t* data, size_t length, const std::string& name, const std::string& type, int chunkLog2 = -1,
-         const std::string& spillDir = "", const std::function<bool()>& stopped = {});
+         const std::string& spillDir = "", const std::function<bool()>& stopped = {}, bool defer = false);
   ~XferTx();
   // ai: The schedule drawn from seed in place of the random one; before the first frame only (false after: the ids a
   // ai: schedule in hand gave are not given again).
@@ -85,12 +90,24 @@ class XferTx {
   // ai: worker's failure.
   void waitMade();
   std::string fault() const;   // ai: a worker's failure, "" none: the transfer cannot finish
+  // ai: Deferred: the chunks made by the CPU's workers from here (a thread of their own opening the spill first, where
+  // ai: there is no sink); once (a call after the first does nothing). sink: each chunk's encoder as it is made, on its
+  // ai: worker, let go after (false: stopped, the transfer's fault).
+  using Sink = std::function<bool(uint32_t c, const rq_enc_t* enc)>;
+  void makeOnCpu(Sink sink = {});
+  uint32_t madeCount() const { return made_.load(std::memory_order_acquire); }
+  size_t chunkSize() const { return size_; }        // ai: 2^chunk_log2: chunk c starts at c chunkSize() in the file
+  size_t length() const { return length_; }        // ai: the file's bytes
+  size_t chunkBytes(uint32_t c) const { return len_[c]; }
+  uint32_t controls() const { return 1 + static_cast<uint32_t>(manifest_.size()); }   // ai: the header and the manifest blocks
 
  private:
   xfer_id_t next();   // ai: the schedule's next data id (sim/xfer.mjs Schedule.next)
   void seedWith(uint32_t seed);   // ai: each chunk's first symbol and the rounds' generator from seed
   void newRound();    // ai: the next round's order of the chunks
   void make(uint32_t c);   // ai: chunk c made (a worker's)
+  void chunkDone(uint32_t c);   // ai: chunk c's slots written: its manifest group, made_
+  void makeAll();          // ai: makeOnCpu's thread: the spill opened, then the workers
   void work();        // ai: a worker: the next chunk until none is left, or a failure stops them
   void schedule();    // ai: the schedule, once every chunk is made (frameIds')
   void warm(xfer_id_t* out, int n);   // ai: a frame's ids before that
@@ -98,7 +115,7 @@ class XferTx {
   void writeSegment(uint32_t c, const rq_enc_t* enc, uint64_t n, uint32_t base);   // ai: segment n's symbols from base into its slot
   void spiller();                    // ai: the spill's thread: segments asked for, in order
 
-  size_t size_;
+  size_t size_, length_ = 0;
   uint32_t chunks_ = 0;
   const uint8_t* data_ = nullptr;
   std::atomic<uint32_t> lap_{0};
@@ -127,7 +144,12 @@ class XferTx {
   mutable std::mutex faultMu_;
   std::string fault_;
   bool scheduled_ = false;   // ai: frameIds' own: the schedule built
-  uint32_t turn_ = 0;        // ai: the warm frames' turn over the chunks made
+  // ai: the chunks being made (makeOnCpu called, or the constructor's), makeOnCpu's thread, its sink
+  std::atomic<bool> making_{false};
+  std::thread maker_;
+  Sink sink_;
+  std::string spillDir_;     // ai: deferred: the spill's folder and length, opened by makeAll
+  uint64_t spillBytes_ = 0;
   // ai: the spill: its file (-1 none), each chunk's segment length and slots' offset, its key (base_), the
   // ai: symbols of it named (taken_, frameIds'), the key its segments hold (segBase_) and the newest segment written
   // ai: (have_, -1 none); the segments asked for, the thread that makes them

@@ -55,7 +55,8 @@ static uint32_t rq_deg(uint32_t v, uint32_t W) {
 }
 
 // The columns of internal symbol `isi`'s row: its tuple (5.3.5.4) walked as Enc does (5.3.5.3). At most 30 LT columns
-// and 3 PI ones, all distinct (W and P1 are prime).
+// and 3 PI ones, all distinct (W and P1 are prime). The GPU sender makes the same in its kernels
+// (gpu/wgsl/rq_enc.mjs rqCols).
 enum { RQ_ROW_MAX = 33 };
 static int rq_row(const rq_par_t *p, uint32_t isi, uint32_t *cols) {
   uint32_t A = 53591 + p->J * 997;
@@ -685,6 +686,13 @@ void rq_enc_symbol(const rq_enc_t *e, uint32_t esi, uint8_t *out) {
 void rq_enc_free(rq_enc_t *e) {
   if (!e) return;
   free(e->C), free(e);
+}
+
+int rq_par_for(uint32_t K, rq_par_t *p) { return rq_par(K, p); }
+
+const uint8_t *rq_enc_intermediate(const rq_enc_t *e, rq_par_t *p) {
+  if (p) *p = e->p;
+  return e->C;
 }
 
 // ---- the decoder ----

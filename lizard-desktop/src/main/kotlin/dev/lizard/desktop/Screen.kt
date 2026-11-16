@@ -92,9 +92,10 @@ class DesktopSend(private val app: App) : SendHost {
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
             carouselSetting(s.carousel) { s.chooseCarousel(it) },
         FoldKey.SendPerformance to listOf(
-            // ai: GPU and CPU alone: with neither chosen the encoder is auto's and the painter running is the chip marked
-            // ai: (the GPU before a first send); a choice takes that one outright
-            ChipChoice("Encoder", if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.chooseEnc(it) },
+            // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's chunks either way, the
+            // ai: GPU paints and makes each frame's blocks where it is on): with neither chosen the encoder is auto's and the
+            // ai: painter running is the chip marked (On before a first send); a choice takes that one outright
+            ChipChoice("GPU acceleration", if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc, listOf("gpu" to "On", "cpu" to "Off")) { s.chooseEnc(it) },
             ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
     // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15; Exclusive fullscreen, the
     // ai: one before, deleted 2026-11-13); the fold drawn only where it holds a setting

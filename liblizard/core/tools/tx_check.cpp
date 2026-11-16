@@ -47,12 +47,27 @@
 // ai:       (slot t at t mod 255: at most 255 / gcd(n, 255) ever) beside the sender's (Sender::carouselPosition)
 // ai:   tx_check gpucheck ...   the GPU's frames against the C's: the anchors' squares (SPEC 6.13) to the byte besides
 // ai:   the border, their pixels and the dark ones counted
+// ai:   LIZ_REPAINT=<frame> tx_check paint ...   at that frame the Sender configured again on the other painter (the GPU's
+// ai:       becomes the CPU's, the CPU's the GPU's; 2026-11-16): a file the GPU made read back for the CPU's painters
+// ai:       (tx/gpu_encoder.h host), the rest of the run read blind as before
+// ai:   tx_check flights <subch> [encodes] [frames an encode]   the GPU painter's encodes in flight (2026-11-16,
+// ai:       GpuPainter::submit): the test stream's frames painted GpuPainter::FLIGHTS at a time, nothing waited for
+// ai:       between, then painted again one encode at a time and waited for: every ring frame byte-equal (6 encodes of 8
+// ai:       unless given; LIZ_SPAN, LIZ_CODES as paint's). Exit 1 on a fault
+// ai:   tx_check rqcheck <file | <MiB>m> [frames] [blocks a frame]   the sender's blocks on the GPU (2026-11-16,
+// ai:       tx/gpu_stream.h) held to the CPU's: the stream's self-test, a file (or that many MiB of seeded random bytes)
+// ai:       solved by the CPU's workers and its chunks handed up (timed), then frames of the schedule's ids (60 of 248
+// ai:       unless given) and chosen ones (each chunk's first 300 source symbols, its last, K, K + 1, 2^24 - 1) made on
+// ai:       the device and read back, every payload byte-equal to XferTx::block's (a reference transfer's encoders); frames
+// ai:       0 the making alone, no reference. LIZ_VK_DEVICE the device. Exit 1 on a fault
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <deque>
 #include <functional>
 #include <random>
 #include <chrono>
@@ -66,6 +81,7 @@
 #include <vector>
 
 #include "codec.h"
+#include "gpu_stream.h"
 #include "gpu_painter.h"
 #include "json.hpp"
 #include "lizfile.h"
@@ -73,6 +89,7 @@
 #include "sender.h"
 #include "xfer_rx.h"
 #include "xfer_tx.h"
+#include "wg.h"
 
 extern "C" {
 #include "lizard_phy.h"
@@ -139,6 +156,113 @@ int main(int argc, char** argv) {
     fclose(out);
     printf("ids: %d frames of %d, chunks %u, lap %u, root %s, seed %u\n", frames, T, x.chunks(), x.lap(), x.rootHex().c_str(), x.seed());
     return 0;
+  }
+  if (mode == "flights" && argc >= 3) {
+    const int subch = atoi(argv[2]), E = argc > 3 ? atoi(argv[3]) : 6, R = argc > 4 ? atoi(argv[4]) : 8;
+    const int span = getenv("LIZ_SPAN") ? atoi(getenv("LIZ_SPAN")) : 128, codes = getenv("LIZ_CODES") ? atoi(getenv("LIZ_CODES")) : 1;
+    auto gp = GpuPainter::create(assets());
+    if (const std::string e = gp->configure(subch, span, 60, R, codes, GAP_MODULES, E * R, 1ull << 30, 0); !e.empty()) { printf("FAIL configure: %s\n", e.c_str()); return 1; }
+    if (gp->frames() != R || gp->depth() < E * R) { printf("FAIL: encodes of %d, a ring of %d, for %d x %d\n", gp->frames(), gp->depth(), E, R); return 1; }
+    const int per = codes * gp->blocks(), N = E * R;
+    const std::vector<uint8_t> blocks = testBlocks(N, per);
+    const size_t fb = static_cast<size_t>(per) * XFER_BLOCK;
+    // ai: in flight: FLIGHTS at a time, the oldest finished only when that many are out
+    std::deque<GpuPainter::Pending> fl;
+    double t0 = nowMs();
+    for (int e = 0; e < E; e++) {
+      if (static_cast<int>(fl.size()) == GpuPainter::FLIGHTS) { gp->finish(fl.front()); fl.pop_front(); }
+      fl.push_back(gp->submit(blocks.data() + e * R * fb, R, (e * R) & 3, nullptr, static_cast<uint64_t>(e) * R, true));
+    }
+    for (auto& p : fl) gp->finish(p);
+    const double inFlight = nowMs() - t0;
+    std::vector<std::vector<uint8_t>> a(N);
+    for (int f = 0; f < N; f++) gp->readSlot(f, a[f]);
+    // ai: one at a time, waited for
+    t0 = nowMs();
+    for (int e = 0; e < E; e++) gp->encode(blocks.data() + e * R * fb, R, (e * R) & 3, nullptr, static_cast<uint64_t>(e) * R, true);
+    const double oneByOne = nowMs() - t0;
+    long apart = 0;
+    std::vector<uint8_t> b;
+    for (int f = 0; f < N; f++) { gp->readSlot(f, b); apart += b != a[f]; }
+    printf("flights: LIZARD-%d x %d, %d encodes of %d frames: in flight %.1f ms, one at a time %.1f ms (wall); %ld of %d frames apart\n", subch, codes, E, R, inFlight, oneByOne, apart, N);
+    printf(apart ? "FAIL\n" : "ok\n");
+    return apart ? 1 : 0;
+  }
+  if (mode == "rqcheck" && argc >= 3) {
+    const std::string src = argv[2];
+    std::vector<uint8_t> rnd;
+    std::unique_ptr<Mapped> m;
+    const uint8_t* data = nullptr;
+    size_t len = 0;
+    if (!src.empty() && src.back() == 'm' && !std::filesystem::exists(src)) {
+      len = static_cast<size_t>(std::atof(src.c_str()) * (1 << 20));
+      rnd.resize(len);
+      std::mt19937_64 g(5);
+      for (size_t i = 0; i < len; i += 8) { const uint64_t v = g(); std::memcpy(&rnd[i], &v, std::min<size_t>(8, len - i)); }
+      data = rnd.data();
+    } else {
+      m = std::make_unique<Mapped>(src.c_str());
+      data = m->p;
+      len = m->n;
+    }
+    const int frames = argc >= 4 ? atoi(argv[3]) : 60, BPF = argc >= 5 ? atoi(argv[4]) : 248;
+    XferTx x(data, len, "f.bin", "application/octet-stream", -1, "", {}, true);
+    const uint32_t C = x.chunks();
+    printf("rqcheck: %zu B, %u chunks of %zu B, %u controls\n", len, C, x.chunkSize(), x.controls());
+    const char* want = getenv("LIZ_VK_DEVICE");
+    auto dev = wg::Device::create(want ? want : "", false, [](const std::string& s) { fprintf(stderr, "%s\n", s.c_str()); });
+    printf("device: %s\n", dev->name.c_str());
+    std::unique_ptr<GpuStream> st;
+    try { st = GpuStream::create(*dev, assets(), {len, x.chunkSize(), C, x.controls()}); }
+    catch (const std::exception& e) { printf("FAIL: no GPU stream: %s\n", e.what()); return 1; }
+    if (const std::string why = st->selfTest(); !why.empty()) { printf("FAIL: the self-test: %s\n", why.c_str()); return 1; }
+    printf("self-test ok; %.0f MB of symbols on the device\n", st->symbolBytes() / 1e6);
+    // ai: the CPU's workers solving, each chunk copied up by its worker on the device's second queue
+    double t0 = nowMs();
+    GpuStream* sp = st.get();
+    x.makeOnCpu([sp](uint32_t c, const rq_enc_t* e) { return sp->put(c, e); });
+    x.waitMade();
+    if (!x.fault().empty() || !st->done()) { printf("FAIL: %s\n", x.fault().empty() ? "chunks missing on the device" : x.fault().c_str()); return 1; }
+    printf("every chunk solved and on the device in %.0f ms\n", nowMs() - t0);
+    if (!frames) { printf("timed alone (frames 0: no reference, nothing compared)\n"); return 0; }
+    t0 = nowMs();
+    XferTx ref(data, len, "f.bin", "application/octet-stream", -1, "");
+    ref.waitMade();
+    printf("the CPU's encoders made in %.0f ms (the reference)\n", nowMs() - t0);
+    // ai: the schedule's frames, then the chosen ids
+    std::vector<xfer_id_t> chosen;
+    for (uint32_t c = 0; c < C; c++) {
+      const uint32_t K = rq_symbols(x.chunkBytes(c), XFER_PAYLOAD);
+      for (uint32_t k = 0; k < std::min<uint32_t>(300, K); k++) chosen.push_back(xfer_id(c, k));
+      for (uint32_t s : {K - 1, K, K + 1, (1u << 24) - 1}) chosen.push_back(xfer_id(c, s));
+    }
+    std::vector<xfer_id_t> ids(BPF), data_;
+    std::vector<uint8_t> got, refb(XFER_PAYLOAD);
+    long blocks = 0, wrong = 0, ctl = 0;
+    double hostMs = 0;
+    const int extra = static_cast<int>((chosen.size() + BPF - 1) / BPF);
+    for (int f = 0; f < frames + extra; f++) {
+      if (f < frames) x.frameIds(ids.data(), BPF);
+      else for (int i = 0; i < BPF; i++) ids[i] = chosen[(static_cast<size_t>(f - frames) * BPF + i) % chosen.size()];
+      data_.clear();
+      for (xfer_id_t id : ids) { if (xfer_id_chunk(id) == XFER_CONTROL) ctl++; else data_.push_back(id); }
+      got.resize(data_.size() * XFER_PAYLOAD);
+      const double th = nowMs();
+      st->host(data_.data(), static_cast<uint32_t>(data_.size()), got.data());
+      hostMs += nowMs() - th;
+      for (size_t i = 0; i < data_.size(); i++) {
+        ref.block(data_[i], refb.data());
+        if (std::memcmp(refb.data(), got.data() + i * XFER_PAYLOAD, XFER_PAYLOAD)) {
+          if (wrong < 5) printf("block: chunk %u symbol %u differs\n", xfer_id_chunk(data_[i]), xfer_id_symbol(data_[i]));
+          wrong++;
+        }
+      }
+      blocks += static_cast<long>(data_.size());
+    }
+    printf("blocks: %ld data blocks in %d frames of %d (%ld control left out): %ld differ from XferTx::block; %.3f ms a frame made and read back\n",
+           blocks, frames + extra, BPF, ctl, wrong, hostMs / (frames + extra));
+    printf(wrong ? "FAIL\n" : "ok\n");
+    return wrong ? 1 : 0;
   }
   // ai: carousel [keys]: a receiver reading every n-th slot from a random one, the reads until it holds k distinct
   // ai: positions, the fixed order (slot t at t mod 255) beside the sender's (the mean and worst over keys keys, 100
@@ -233,6 +357,7 @@ int main(int argc, char** argv) {
     int car = 0, carOn = 0, carOff = -1;
     if (const char* c = getenv("LIZ_CAROUSEL")) sscanf(c, "%d@%d,%d", &car, &carOn, &carOff);
     const bool live = car > 0 && (carOn > 0 || carOff >= 0);
+    const int repaint = getenv("LIZ_REPAINT") ? atoi(getenv("LIZ_REPAINT")) : -1;
     if (car > 0 && carOn == 0) s.setCarousel(car);
     int animFrom = -1, staticFrom = -1, lastKind = -1, switches = 0;
     const uint32_t carKey = s.carouselKey();
@@ -270,6 +395,12 @@ int main(int argc, char** argv) {
       if (k % codes == 0) {
         if (live && k / codes == carOn && carOn > 0) s.setCarousel(car);
         if (live && k / codes == carOff) s.setCarousel(0);
+        if (k / codes == repaint) {
+          f.painter = f.painter ? 0 : 1;
+          const std::string e = s.configure(f);
+          if (!e.empty()) { printf("FAIL configure at frame %d: %s\n", repaint, e.c_str()); return 1; }
+          printf("repaint at frame %d: %s\n", repaint, s.stats().c_str());
+        }
         while (!s.take(rgba.data(), FW * 4)) std::this_thread::sleep_for(std::chrono::microseconds(200));
       }
       const int x0 = (k % codes) * (W + gap);
@@ -322,6 +453,9 @@ int main(int argc, char** argv) {
           if (now[static_cast<size_t>(b)] < 0 || was[static_cast<size_t>(b)] < 0) continue;
           const int r = rateAt[static_cast<size_t>(b)], e = std::clamp(every[r], 1, Sender::REFRESH_MAX);
           const bool hold = e > 1 && seq % static_cast<uint64_t>(e) != 0, rep = now[static_cast<size_t>(b)] == was[static_cast<size_t>(b)];
+          // ai: a fresh block may name the control block the frame before named there (the header, every other control
+          // ai: slot; the warm frames, xfer_tx.h, carry nothing else): no repeat
+          if (rep && !hold && xfer_id_chunk(static_cast<xfer_id_t>(now[static_cast<size_t>(b)])) == XFER_CONTROL) continue;
           seen[r]++; same[r] += rep;
           if (hold != rep) { faults++; if (faults < 5) printf("frame %llu block %d (rate %d, every %d): %s\n", static_cast<unsigned long long>(seq), b, r, e, rep ? "repeated" : "new where held"); }
         }
@@ -517,6 +651,34 @@ int main(int argc, char** argv) {
            inverted ? "lightest" : "darkest", px(dark), off);
     return px(0) == paper && px(dark) == ink && off == 0 ? 0 : 1;
   }
+  // ai: devinfo (2026-11-16): the device's memory types (DL device-local, HV host-visible, HC host-coherent, CA
+  // ai: host-cached, LZ lazy) and its cooperative matrix shapes (VK_KHR_cooperative_matrix), where it has them
+  if (mode == "devinfo") {
+    const char* want = getenv("LIZ_VK_DEVICE");
+    auto dev = wg::Device::create(want ? want : "", false, [](const std::string& s) { fprintf(stderr, "%s\n", s.c_str()); });
+    printf("device: %s\n", dev->name.c_str());
+    for (uint32_t i = 0; i < dev->mem.memoryTypeCount; i++) {
+      const auto fl = dev->mem.memoryTypes[i].propertyFlags;
+      printf("memory type %u (heap %u):%s%s%s%s%s\n", i, dev->mem.memoryTypes[i].heapIndex, fl & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? " DL" : "",
+             fl & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? " HV" : "", fl & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT ? " HC" : "",
+             fl & VK_MEMORY_PROPERTY_HOST_CACHED_BIT ? " CA" : "", fl & VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT ? " LZ" : "");
+    }
+    uint32_t ne = 0;
+    vkEnumerateDeviceExtensionProperties(dev->phys, nullptr, &ne, nullptr);
+    std::vector<VkExtensionProperties> ex(ne);
+    vkEnumerateDeviceExtensionProperties(dev->phys, nullptr, &ne, ex.data());
+    bool coop = false;
+    for (const auto& e : ex) if (strstr(e.extensionName, "cooperative_matrix") || strstr(e.extensionName, "COOPERATIVE_MATRIX")) { printf("extension: %s\n", e.extensionName); coop = coop || !strcmp(e.extensionName, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME); }
+    if (!coop) { printf("cooperative matrix: none\n"); return 0; }
+    uint32_t nc = 0;
+    vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(dev->phys, &nc, nullptr);
+    std::vector<VkCooperativeMatrixPropertiesKHR> cp(nc, VkCooperativeMatrixPropertiesKHR{VK_STRUCTURE_TYPE_COOPERATIVE_MATRIX_PROPERTIES_KHR});
+    vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR(dev->phys, &nc, cp.data());
+    const auto ty = [](VkComponentTypeKHR t) { switch (t) { case VK_COMPONENT_TYPE_FLOAT16_KHR: return "f16"; case VK_COMPONENT_TYPE_FLOAT32_KHR: return "f32";
+      case VK_COMPONENT_TYPE_SINT8_KHR: return "s8"; case VK_COMPONENT_TYPE_UINT8_KHR: return "u8"; case VK_COMPONENT_TYPE_SINT32_KHR: return "s32"; case VK_COMPONENT_TYPE_UINT32_KHR: return "u32"; default: return "?"; } };
+    for (const auto& c : cp) printf("coop %ux%ux%u A %s B %s C %s R %s scope %d\n", c.MSize, c.NSize, c.KSize, ty(c.AType), ty(c.BType), ty(c.CType), ty(c.ResultType), static_cast<int>(c.scope));
+    return 0;
+  }
   if (mode == "bench" && argc >= 3) {
     const int subch = atoi(argv[2]), frames = argc > 3 ? atoi(argv[3]) : 32;
     Sender s(nullptr, 0, "", "");
@@ -536,22 +698,43 @@ int main(int argc, char** argv) {
   // ai: due). The sender's batching A/B: LIZ_TX_BATCH=0 a frame a submission.
   if (mode == "pace" && argc >= 3) {
     const int subch = atoi(argv[2]), secs = argc > 3 ? atoi(argv[3]) : 10, fps = argc > 4 ? atoi(argv[4]) : 60, codes = argc > 5 ? atoi(argv[5]) : 1;
-    Sender s(nullptr, 0, "", "");
+    // ai: LIZ_PACE_FILE=<file>: a file sent in place of the test stream (2026-11-16), the process's CPU said: until every
+    // ai: chunk is made (from the configure), then a frame (LIZ_TX_RQ=cpu the CPU's encoders, else the GPU's); the test
+// ai: stream's a frame from 2 s on (the painting alone)
+    const char* pf = getenv("LIZ_PACE_FILE");
+    std::unique_ptr<Mapped> pm;
+    if (pf) pm = std::make_unique<Mapped>(pf);
+    const auto cpuMs = [] { rusage r{}; getrusage(RUSAGE_SELF, &r); return (r.ru_utime.tv_sec + r.ru_stime.tv_sec) * 1e3 + (r.ru_utime.tv_usec + r.ru_stime.tv_usec) / 1e3; };
+    Sender s(pf ? pm->p : nullptr, pf ? pm->n : 0, pf ? std::filesystem::path(pf).filename().string() : "", "");
     TxFormat f;
     f.subch = subch; f.span = 128; f.fps = fps; f.codes = codes; f.painter = 1; f.hostFrames = false; f.assets = assets();
+    const double c0 = cpuMs(), w0 = nowMs();
     if (const std::string e = s.configure(f); !e.empty()) { fprintf(stderr, "pace: %s\n", e.c_str()); return 1; }
     const auto t0 = std::chrono::steady_clock::now();
     const auto per = std::chrono::nanoseconds(1000000000LL / fps);
-    long late = 0, taken = 0;
+    long late = 0, taken = 0, madeAt = -1;
+    double cMade = 0, wMade = 0;
     for (long k = 0; k < (long)secs * fps; k++) {
       std::this_thread::sleep_until(t0 + per * (k + 1));
       uint64_t seq = 0;
       int slot = 0;
       if (s.takeSlot(&seq, &slot)) taken++;
       else late++;
+      if (pf && madeAt < 0 && s.xfer()->made()) { madeAt = k; cMade = cpuMs(); wMade = nowMs(); }
+      if (!pf && k == 2 * fps) { madeAt = k; cMade = cpuMs(); wMade = nowMs(); }   // ai: the test stream's steady state from 2 s on
       if ((k + 1) % fps == 0) printf("%s\n", s.stats().c_str());
     }
     printf("pace: LIZARD-%d x %d at %d a second, %d s: %ld taken, %ld late\n", subch, codes, fps, secs, taken, late);
+    if (pf && madeAt >= 0) {
+      const long after = (long)secs * fps - madeAt;
+      printf("cpu: every chunk made %.0f ms after the configure for %.0f core-ms; then %.3f core-ms a frame over %ld frames (%.1f%% of a core)\n",
+             wMade - w0, cMade - c0, (cpuMs() - cMade) / after, after, (cpuMs() - cMade) / (nowMs() - wMade) * 100);
+    } else if (pf) printf("cpu: not every chunk made in the run\n");
+    else if (madeAt >= 0) {
+      const long after = (long)secs * fps - madeAt;
+      printf("cpu: %.3f core-ms a frame from 2 s on over %ld frames (%.1f%% of a core; the test stream: the painting alone)\n", (cpuMs() - cMade) / after, after,
+             (cpuMs() - cMade) / (nowMs() - wMade) * 100);
+    }
     return late ? 1 : 0;
   }
   fprintf(stderr, "usage: tx_check ids <file> <frames> <T> <out> | paint <file|-> <subch> [frames] [threads] [store] | bench <subch> [frames]\n"

@@ -4,6 +4,9 @@
 // ai: encode and paint them ahead (lizard_encode, lizard_paint_grey: grey with the margin, the pilots' count the
 // ai: frame's number mod 4) into the GPU painter's frame ring (2026-10-07), or the GPU paints them (painter, below);
 // ai: the app takes them in order (take, takeSlot) and puts them on the screen at the display's pace.
+// ai: A file's chunks (2026-11-16): solved by the transfer's CPU workers at the first configure; where the GPU paints and
+// ai: holds the file, each chunk's symbols go up as it is made and the GPU makes every frame's blocks from their ids
+// ai: (gpu_stream.h; read back where the CPU paints later), else the CPU's encoders; the stats' rq and rqWhy say which.
 #pragma once
 #include <atomic>
 #include <condition_variable>
@@ -17,6 +20,7 @@
 #include <thread>
 #include <vector>
 
+#include "gpu_stream.h"
 #include "gpu_painter.h"
 #include "xfer_tx.h"
 
@@ -172,6 +176,7 @@ class Sender {
   std::thread producer_, uploader_;
   std::vector<std::thread> painters_;
   std::unique_ptr<GpuPainter> gpu_;   // ai: kept across configures (its device made once a send)
+  std::mutex devMu_;                  // ai: one recorder at a time on the painter's device (wg.h): paint, upload, read back
   bool onGpu_ = false;
   std::string gpuWhy_, gpuDevice_, prepareWhy_;
   std::shared_ptr<const wg::DeviceExtras> extras_;
@@ -179,6 +184,13 @@ class Sender {
   std::atomic<uint64_t> takenWin_{0}, dataWin_{0}, dataAll_{0}, paintedWin_{0}, encodesWin_{0};
   std::atomic<double> paintMsWin_{0};
   double winStart_ = 0, lastFps_ = 0, lastKBs_ = 0, lastPaintMs_ = 0, lastPaintBatch_ = 0;
+  // ai: who makes a file's blocks (decided at the first configure that gets that far): the GPU from the CPU's solved
+  // ai: chunks (stream_), or the CPU's encoders; why not the GPU. The destructor lets the transfer's workers go before
+  // ai: the stream (a worker waits in its put)
+  enum { RQ_NONE, RQ_CPU, RQ_GPU };
+  std::atomic<int> holder_{RQ_NONE};
+  std::string rqWhy_;
+  std::unique_ptr<GpuStream> stream_;
 };
 
 }  // namespace lizard

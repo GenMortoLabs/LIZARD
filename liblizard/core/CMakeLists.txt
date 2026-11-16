@@ -194,7 +194,7 @@ endif()
 # ai: the sender (tx/sender.h, 2026-10-01): the transfer's sending end (tx/xfer_tx.h) and the frames painted by the C,
 # ai: or since 2026-10-02 on the GPU (tx/gpu_painter.h: the web's encoder kernels on wg, the tables from the C)
 if(LIZ_GPU)
-add_library(lizard_tx STATIC tx/sender.cpp tx/send_tables.cpp tx/gpu_painter.cpp)
+add_library(lizard_tx STATIC tx/sender.cpp tx/send_tables.cpp tx/gpu_painter.cpp tx/gpu_stream.cpp)
 target_include_directories(lizard_tx PUBLIC tx)
 target_include_directories(lizard_tx SYSTEM PRIVATE ${TP})
 target_link_libraries(lizard_tx PUBLIC lizard_xfer lizard_codec wg lizard_sys Threads::Threads)

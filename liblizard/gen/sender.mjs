@@ -21,7 +21,12 @@ export async function senderSetup() {
   const { crcPowers, PAYLOAD } = await imp("gpu/back/ref_ldpc.mjs");
   const { ruleTables } = await imp("gpu/back/codes.mjs");
   const { GAP_MODULES, sendTab } = await imp("gpu/encoder.mjs");
+  const { rqBlocksSource, RQ_OUT_WORDS } = await imp("gpu/wgsl/rq_enc.mjs");
   const modules = { paint: paintSource(), tpose: tposeSource(), rsv: rsvSource(), rsh: rshSource(), rshCopy: rshSource({ copy: true }), words: wordsSource() };
+  // ai: RaptorQ's blocks (2026-11-16, gpu/wgsl/rq_enc.mjs): each frame's blocks made from their ids, written into the
+  // ai: painter's BLOCKS (core/tx/gpu_stream.h)
+  Object.assign(modules, { rqBlocks: rqBlocksSource({ outWords: RQ_OUT_WORDS }) });
+  if (RQ_OUT_WORDS * 4 !== 480) throw new Error(`the RQ blocks kernel writes ${RQ_OUT_WORDS * 4} B a block, the paint reads 480`);
   for (const n of SIZES) {
     modules[`irows${n}`] = irowsSource({ n });
     modules[`ipic${n}`] = ipicSource({ n });

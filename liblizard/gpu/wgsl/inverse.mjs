@@ -2,7 +2,8 @@
 // ai: butterflies (below; the decoder's WGSL twin, back_transform.mjs, runs them forward), conj in and conj out,
 // ai: unscaled, a symbol a slot, in f32.
 // ai: IROWS, a workgroup a (disc row, symbol), n / 8 threads: the row's coefficients at (u + n) mod n, zeros
-// ai:   elsewhere, the inverse along x, the row stored in Y's slot.
+// ai:   elsewhere, the inverse along x, the row stored in Y's slot quad-major (Y[x / 4][v][x mod 4]: IPIC's workgroup
+// ai:   reads its four columns' rows as one run).
 // ai: IPIC, a workgroup a (quad of columns, symbol), n / 8 threads: turn_pack's packing takes two columns through one
 // ai:   complex inverse along y (Z(0) = 2 Re A(0) + 2i Re B(0), Z(v) = A + iB, Z(n - v) = conj A + i conj B, zero
 // ai:   between), the real part column a and the imaginary column b, clipped to 0.5 + clamp(v, -lim, lim) 0.5 / lim
@@ -224,16 +225,21 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) tid: 
   var v: array<vec2f, 8> = ${V8};
   // ai: Register k holds x = tid + k T: the row's entry at u = x (x < n / 2) or u = x - n, conjugated; zero off the row.
 ` + load + firstStage("f32") + laterStages(n, "f32") + /* wgsl */ `
-  let yBase: u32 = r * P.a.z + vv * N;
+  // ai: quad-major: a quad of columns spans the disc's rows (P.a.y) four values each
+  let yBase: u32 = r * P.a.z + vv * 4u;
+  let QS: u32 = P.a.y * 4u;
   for (var x: u32 = tid; x < N; x = x + T) {
     let z: vec2f = ${ld("buf", "x")};
-    ${st("yb", "yBase + x", "vec2f(z.x, -z.y)")}
+    ${st("yb", "yBase + (x >> 2u) * QS + (x & 3u)", "vec2f(z.x, -z.y)")}
   }
 }
 `;
 }
 
-// ai: Bindings: Y (ro), tw (ro), PIC (rw, vec4f, the picture in f32, n^2 / 4 a slot), P (uniform, SizeParams); the clip
+// ai: Bindings: Y (ro, quad-major as IROWS stores it: the workgroup's four columns of every disc row one run of 32 B
+// ai: a row; row-major its loads were 32 B pieces a row apart, and slowed as an encode took more symbols, the S26's ipic
+// ai: 1.4 ms a frame at one frame an encode and 2.1 at two, 2026-11-16), tw (ro), PIC (rw, vec4f, the picture in f32,
+// ai: n^2 / 4 a slot), P (uniform, SizeParams); the clip
 // ai: is P.c. Dispatch (n / 4, 1, symbols). The picture is quad-major: a workgroup's four columns, row by row, are n
 // ai: consecutive vec4f (PIC[x / 4][y]), so its stores are whole lines (row-major they were 16 B a row, 2.4 of ipic's
 // ai: 4.8 ms at 1536 on the iGPU); the sender turns it row-major after (wgsl/send.mjs TPOSE).
@@ -242,7 +248,7 @@ export function ipicSource({ n }) {
   const T = n / 8, lanes = [["v0", "buf0"], ["v1", "buf1"]];
   let load = "";
   for (let k = 0; k < 8; k++) {
-    load += `  {\n    let m: u32 = tid + ${k * T}u;\n    let z0: vec2f = zAt(m, yBase, x0, x0 + 1u, V);\n    let z1: vec2f = zAt(m, yBase, x0 + 2u, x0 + 3u, V);\n`;
+    load += `  {\n    let m: u32 = tid + ${k * T}u;\n    let z0: vec2f = zAt(m, yBase, 0u, 1u, V);\n    let z1: vec2f = zAt(m, yBase, 2u, 3u, V);\n`;
     load += `    v0[${k}] = vec2f(z0.x, -z0.y);\n    v1[${k}] = vec2f(z1.x, -z1.y);\n  }\n`;
   }
   return SIZE_PARAMS + /* wgsl */ `
@@ -256,7 +262,8 @@ const T: u32 = ${T}u;
 var<workgroup> buf0: array<${ty}, N>;
 var<workgroup> buf1: array<${ty}, N>;
 ` + BUTTERFLIES + /* wgsl */ `
-// ai: Z(m) of the packed pair (xa, xb): turn_pack's rows from the inverse rows A = Y[v][xa], B = Y[v][xb].
+// ai: Z(m) of the packed pair (xa, xb), columns of the workgroup's quad (0 to 3): turn_pack's rows from the inverse
+// ai: rows A = Y[v][xa], B = Y[v][xb], the quad's rows four values apart from yBase.
 fn zAt(m: u32, yBase: u32, xa: u32, xb: u32, V: u32) -> vec2f {
   if (m == 0u) {
     let a: vec2f = ${ld("yb", "yBase + xa")};
@@ -264,14 +271,14 @@ fn zAt(m: u32, yBase: u32, xa: u32, xb: u32, V: u32) -> vec2f {
     return vec2f(2.0 * a.x, 2.0 * b.x);
   }
   if (m < V) {
-    let a: vec2f = ${ld("yb", "yBase + m * N + xa")};
-    let b: vec2f = ${ld("yb", "yBase + m * N + xb")};
+    let a: vec2f = ${ld("yb", "yBase + m * 4u + xa")};
+    let b: vec2f = ${ld("yb", "yBase + m * 4u + xb")};
     return vec2f(a.x - b.y, a.y + b.x);
   }
   if (m > N - V) {
     let vq: u32 = N - m;
-    let a: vec2f = ${ld("yb", "yBase + vq * N + xa")};
-    let b: vec2f = ${ld("yb", "yBase + vq * N + xb")};
+    let a: vec2f = ${ld("yb", "yBase + vq * 4u + xa")};
+    let b: vec2f = ${ld("yb", "yBase + vq * 4u + xb")};
     return vec2f(a.x + b.y, b.x - a.y);
   }
   return vec2f(0.0);
@@ -279,9 +286,8 @@ fn zAt(m: u32, yBase: u32, xa: u32, xb: u32, V: u32) -> vec2f {
 @compute @workgroup_size(T)
 fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) tid: u32) {
 ` + sendGate + /* wgsl */ `
-  let x0: u32 = wg.x * 4u;
-  let yBase: u32 = r * P.a.z;
   let V: u32 = P.a.y;
+  let yBase: u32 = r * P.a.z + wg.x * V * 4u;
   var v0: array<vec2f, 8> = ${V8};
   var v1: array<vec2f, 8> = ${V8};
 ` + load + firstStage("f32", lanes) + laterStages(n, "f32", lanes) + /* wgsl */ `

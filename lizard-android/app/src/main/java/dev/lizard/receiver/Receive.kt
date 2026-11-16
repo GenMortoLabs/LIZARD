@@ -214,24 +214,27 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
 
     // ai: Settings by topic (2026-11-12, lizard-ui RECV_FOLDS; one fold from 2026-10-02, the web's): Camera (the back
     // ai: lenses and File; its mode: Resolution, Format, Phase lock and Frame rate, the session's; Crop, in a Code fold of its
-    // ai: own as Codes until 2026-11-13; Zoom), Performance (titled Decoder until 2026-11-13: the Decoder, auto showing
-    // ai: what it runs on, PC only while a PC receiver is heard on the link; the PC link while a cable is in, the PC
-    // ai: decoder's Compression, the GPU's Batch size)
+    // ai: own as Codes until 2026-11-13; Zoom), Performance (titled Decoder until 2026-11-13): Decode on, the phone or the
+    // ai: PC, while a PC receiver is heard on the link (or the PC chosen); on the phone GPU acceleration (On the GPU
+    // ai: decoder, Off the C; auto showing what it runs on) and the GPU's Batch size; the PC link while a cable is in; the PC
+    // ai: decoder's Compression (2026-11-16: one Decoder of GPU, CPU and PC before)
     override val settings: Map<FoldKey, List<Setting>> get() {
         val camera = mutableListOf<Setting>()
         val decoder = mutableListOf<Setting>()
         val sizes = r.modes.map { it.size }.toSet()
         val res = r.mode?.size ?: "1920x1080"
         val fmt = r.mode?.format ?: "auto"
-        val decoders = listOf("gpu" to "GPU", "cpu" to "CPU") + listOfNotNull(("pc" to "PC").takeIf { a.pcPresent || s.decoder == "pc" })
-        decoder += ChipChoice("Decoder", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder, decoders) { a.change(s.copy(decoder = it)) }
-        if (a.usb.connected) decoder += pcLink()
-        // ai: the PC decoder's frames packed as .lizard frames or raw (Settings.pcPack): raw for a phone too weak or too warm
-        if (s.decoder == "pc") decoder += ChipChoice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) }
+        val onPc = s.decoder == "pc"
+        // ai: the phone back on its own decoder by auto (the GPU where it runs)
+        if (a.pcPresent || onPc) decoder += ChipChoice("Decode on", if (onPc) "pc" else "phone", listOf("phone" to "Phone", "pc" to "PC")) { a.change(s.copy(decoder = if (it == "pc") "pc" else "auto")) }
+        if (!onPc) decoder += ChipChoice("GPU acceleration", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder, listOf("gpu" to "On", "cpu" to "Off")) { a.change(s.copy(decoder = it)) }
         // ai: the most frames a GPU launch takes (Settings.batch); the C decodes a frame at a time: not shown with it
-        if (s.decoder != "cpu" && s.decoder != "pc") decoder += Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
+        if (s.decoder != "cpu" && !onPc) decoder += Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
             val n = v.roundToInt().coerceIn(1, 32); if (n != s.frames) a.change(s.copy(batch = n.toString()))
         }
+        if (a.usb.connected) decoder += pcLink()
+        // ai: the PC decoder's frames packed as .lizard frames or raw (Settings.pcPack): raw for a phone too weak or too warm
+        if (onPc) decoder += ChipChoice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) }
         // ai: the back cameras by lens (the closest-focusing where none is chosen: the session's first listed), then File
         // ai: (2026-11-07: images, videos and .lizard replays played as the camera; since 2026-11-09 picked in the camera's
         // ai: area, ReceiveState.picks, the field saying File and no file named here)

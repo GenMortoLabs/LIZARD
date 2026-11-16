@@ -153,8 +153,9 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         val m = r.mode
         val camera = mutableListOf<Setting>()
         val decoder = mutableListOf<Setting>()
-        // ai: GPU and CPU; with neither chosen the decoder is auto's and the one it runs on is shown
-        decoder += ChipChoice("Decoder", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "GPU", "cpu" to "CPU")) { r.chooseDecoder(it) }
+        // ai: GPU acceleration (2026-11-16; Decoder, GPU and CPU, before): On the GPU decoder, Off the C; with neither chosen the
+        // ai: decoder is auto's and the one it runs on is shown
+        decoder += ChipChoice("GPU acceleration", if (r.decoder == "auto") r.autoRan.ifEmpty { "GPU" }.lowercase() else r.decoder, listOf("gpu" to "On", "cpu" to "Off")) { r.chooseDecoder(it) }
         // ai: the file camera's field says File (its files are the camera area's, ReceiveState.picks)
         camera += Choice("Camera", r.driverFor?.id ?: if (r.fileCamera) "file:" else r.camera.ifEmpty { r.cameras.firstOrNull()?.id ?: "" }, r.cameraOptions, blank = "Camera", onOpen = { r.refreshCameras() }) { r.chooseCameraOption(it) }
         if (r.usb?.installed == true) camera += Press(Act("Remove USB driver") { r.removeDriver() }, enabled = !r.driverBusy)

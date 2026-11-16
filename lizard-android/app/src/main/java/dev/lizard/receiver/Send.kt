@@ -681,8 +681,10 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
             carouselSetting(s.carousel) { s.chooseCarousel(it) },
         FoldKey.SendPerformance to listOf(
-            // ai: with nothing chosen the setting stays auto and the painter running is the chip marked; a choice takes it outright
-            ChipChoice("Encoder", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "GPU", "cpu" to "CPU")) { s.choosePainter(it) },
+            // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's chunks either way, the
+            // ai: GPU paints and makes each frame's blocks where it is on): with nothing chosen the setting stays auto and the
+            // ai: painter running is the chip marked; a choice takes it outright
+            ChipChoice("GPU acceleration", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "On", "cpu" to "Off")) { s.choosePainter(it) },
             ChipChoice("VSync", s.vsyncOn, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
     private var marginDrag by mutableStateOf<Int?>(null)
     // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15); the fold drawn only where

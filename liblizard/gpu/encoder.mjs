@@ -355,10 +355,11 @@ export class GpuEncoder {
   encode(h, f0, blocks, count, c = this.cfg, parity = 0, test = false) {
     const d = this.device, per = c.codes * c.V, R = count * c.codes;
     if (count < 1 || count > c.sub || f0 + count > c.batch || blocks.length !== count * per * c.B) throw new Error(`an encode is 1 to ${c.sub} frames of ${per} blocks of ${c.B} B within a half of ${c.batch}, got ${count} frames from ${f0} in ${blocks.length} B`);
-    // ai: under test the id's words alone (PAINT reads the first two)
-    const take = test ? 8 : c.B;
-    for (let i = 0; i < count * per; i++) c.staging.set(blocks.subarray(i * c.B, i * c.B + take), i * BLOCK_BYTES);
-    d.queue.writeBuffer(c.BLOCKS, 0, c.staging, 0, count * per * BLOCK_BYTES);
+    // ai: under test each block's first 8 bytes alone, packed (PAINT reads the id's two words there), else the blocks at
+    // ai: BLOCK_BYTES
+    const at = test ? 8 : BLOCK_BYTES, take = test ? 8 : c.B;
+    for (let i = 0; i < count * per; i++) c.staging.set(blocks.subarray(i * c.B, i * c.B + take), i * at);
+    d.queue.writeBuffer(c.BLOCKS, 0, c.staging, 0, count * per * at);
     d.queue.writeBuffer(c.GU, 36, new Uint32Array([f0]));
     d.queue.writeBuffer(c.PU, 4 * (PARAMS_AT.dims + 3), new Uint32Array([((parity & 3) | (c.codes << 2) | (test ? 0x80000000 : 0)) >>> 0]));
     const enc = d.createCommandEncoder(), t = this.timer(), K = this.profile ? STAGES.length : 1;

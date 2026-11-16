@@ -16,7 +16,7 @@
 
 #include "send_tables.h"
 
-namespace wg { struct Device; struct DeviceExtras; struct Buffer; struct BindGroupLayout; struct Pipeline; struct BindGroup; struct QuerySet; }
+namespace wg { struct Device; struct DeviceExtras; struct Buffer; struct BindGroupLayout; struct Pipeline; struct BindGroup; struct QuerySet; struct Encoder; struct Ticket; }
 
 namespace lizard {
 
@@ -64,11 +64,32 @@ class GpuPainter {
   // ai: seq: the first frame's number: the frames go to slots seq mod depth() on (an encode never wraps the ring:
   // ai: count is at most depth() - seq mod depth()). out null: the frames stay on the device (the ring's readers take
   // ai: them there); else each is read back into out[f] as width() x side() grey.
-  // ai: test: the blocks are the test stream's (SPEC 9.3), and only their ids (each block's first five bytes) are read:
-  // ai: PAINT makes each payload from its id on the device (BLAKE3, wgsl/send.mjs; 2026-11-15)
+  // ai: test: the blocks are the test stream's (SPEC 9.3), and only their ids (each block's first five bytes) are read and
+  // ai: sent, 8 bytes a block packed: PAINT makes each payload from its id on the device (BLAKE3, wgsl/send.mjs; 2026-11-15)
   // ai: pos: the animated header's carousel position of each frame's codes (count x codes, a frame's codes in turn;
   // ai: OB_CAR_N keeps that code's static word; wordsWhy below), null every frame's static word
-  double encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false, const uint8_t* pos = nullptr);
+  // ai: fill (2026-11-16, the sender's RaptorQ on the GPU, gpu_encoder.h): records what writes BLOCKS (blocksBuffer) into
+  // ai: the encode's own pass before PAINT, in place of the host's blocks (blocks then unread, may be null).
+  double encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false, const uint8_t* pos = nullptr,
+                const std::function<void(wg::Encoder&)>& fill = {});
+  // ai: the encode's blocks on the device (480 B a block: its id's five bytes, its 471-byte payload), remade at each
+  // ai: configure
+  std::shared_ptr<wg::Buffer> blocksBuffer() const { return BLOCKS_; }
+
+  // ai: An encode in flight (2026-11-16): submit records and submits it and returns at once; done says whether the GPU
+  // ai: finished it, finish waits for it (where it must), reads its frames back where `out` was given and returns its
+  // ai: GPU ms (encode is submit then finish). At most FLIGHTS in flight (each its own timestamps); `out` wants the
+  // ai: encode finished before the next is submitted (one readback buffer). The device runs a queue's submissions in turn
+  // ai: (every command buffer begins with a barrier, wg.h), so encodes in flight share the painter's buffers safely and
+  // ai: their queue writes (blocks, uniforms) land each at its own submission's head.
+  static constexpr int FLIGHTS_MAX = 3, FLIGHTS = FLIGHTS_MAX;
+  struct Pending { std::shared_ptr<wg::Ticket> ticket; int flight = 0, count = 0; std::vector<uint8_t>* out = nullptr; double t0 = 0; };
+  Pending submit(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false, const uint8_t* pos = nullptr,
+                 const std::function<void(wg::Encoder&)>& fill = {});
+  bool done(const Pending& p);
+  double finish(Pending& p);
+  // ai: a ring slot's frame read back (width() x side() grey), a submission of its own, waited for (the checks')
+  void readSlot(int slot, std::vector<uint8_t>& out);
 
   // ai: frames painted here and by the C (its own codec, told the same counts), the blocks the test stream's: here from
   // ai: their ids alone (encode's test), the C from their bytes, so the device's stream is held to the library's too: the border's pixels equal, the square's
@@ -103,7 +124,7 @@ class GpuPainter {
   int pipesN_ = 0;
   std::shared_ptr<wg::Buffer> TAB_;   // ai: the paint's codes and whitening (send_tables.h SendConsts tab), made at create
   // ai: a configuration's buffers and groups
-  std::shared_ptr<wg::Buffer> BLOCKS_, UV_, S_, PU_, TW_, ROWS_, SU_, Y_, PQT_, PIC_, TAPS_, BORDER_, GU_, FRAME_, READ_, TIME_;
+  std::shared_ptr<wg::Buffer> BLOCKS_, UV_, S_, PU_, TW_, ROWS_, SU_, Y_, PQT_, PIC_, TAPS_, BORDER_, GU_, FRAME_, READ_;
   std::shared_ptr<wg::BindGroup> gPaint_, gIrows_, gIpic_, gTpose_, gRsv_, gRsh_;
   // ai: the animated header's (carousel): WORDS, the frame words it paints, every symbol's word bits, its uniform
   std::shared_ptr<wg::BindGroupLayout> bglWords_;
@@ -112,7 +133,10 @@ class GpuPainter {
   std::shared_ptr<wg::BindGroup> gWords_;
   int carSpans_ = 0, carNwb_ = 0;
   std::string wordsWhy_ = "no GPU paint configured";
-  std::shared_ptr<wg::QuerySet> qs_;
+  // ai: each flight's timestamp queries and their readback (submit's, round robin)
+  std::shared_ptr<wg::QuerySet> qs_[FLIGHTS_MAX];
+  std::shared_ptr<wg::Buffer> time_[FLIGHTS_MAX];
+  int flight_ = 0;
   std::vector<uint8_t> staging_;
 };
 

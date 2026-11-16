@@ -112,7 +112,7 @@ function onGpu(m) {
   take(m);
 }
 // ai: The Decoder menu's auto entry named after what runs (the apps': the GPU until it is known not to)
-function showDecoder() { $("dec").querySelector('option[value="auto"]').textContent = gpu || ($("dec").value !== "cpu" && !gpuWhy) ? "GPU" : "CPU"; }
+function showDecoder() { $("dec").querySelector('option[value="auto"]').textContent = gpu || ($("dec").value !== "cpu" && !gpuWhy) ? "On" : "Off"; }
 const decodersUp = () => (gpu?.up ? [gpu] : pool);
 // ai: config: what the decoders are told, always set (lizardConfig): nothing but the picture sizes to build.
 let config = null, track = null, file = "", next = 0, busySkips = 0;

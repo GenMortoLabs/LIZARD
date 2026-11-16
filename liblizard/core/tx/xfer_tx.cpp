@@ -214,8 +214,8 @@ unsigned physicalCores() {
 }
 
 XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, const std::string& type, int chunkLog2,
-               const std::string& spillDir, const std::function<bool()>& stopped)
-    : size_(size_t{1} << pickLog2(length, chunkLog2)), data_(data) {
+               const std::string& spillDir, const std::function<bool()>& stopped, bool defer)
+    : size_(size_t{1} << pickLog2(length, chunkLog2)), length_(length), data_(data) {
   chunkLog2 = pickLog2(length, chunkLog2);
   xfer_header_t h{};
   if (xfer_header_init(&h, length, chunkLog2)) throw std::runtime_error("the file is too large for 2^" + std::to_string(chunkLog2) + " chunks");
@@ -234,8 +234,12 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, cons
       at += 3ull * seg_[c] * PAYLOAD;
       have_[c] = -1;
     }
-    spill_ = spillOpen(spillDir, at, stopped);
-    if (spill_ < 0) throw std::runtime_error("the spill's file could not be made in " + spillDir);
+    spillDir_ = spillDir;
+    spillBytes_ = at;
+    if (!defer) {
+      spill_ = spillOpen(spillDir, at, stopped);
+      if (spill_ < 0) throw std::runtime_error("the spill's file could not be made in " + spillDir);
+    }
   }
   {
     // ai: a random seed (the clock mixed in: some C++ libraries' random_device repeats from run to run)
@@ -273,7 +277,7 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, cons
     if (bad != UINT32_MAX) fail("chaining value of chunk " + std::to_string(bad.load()));
     if (xfer_root(cvs_.data(), C, root_)) fail("root");
   } else {
-    if (C == 1) make(0);
+    if (C == 1 && !defer) make(0);
     xfer_b3_hash(data, length, root_);
   }
   std::memcpy(h.root, root_, 32);
@@ -284,6 +288,8 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, cons
 #ifndef __EMSCRIPTEN__
   if (spill_ >= 0) spillThread_ = std::thread([this] { spiller(); });
 #endif
+  if (defer && C) return;   // ai: makeOnCpu makes them
+  making_ = true;
   if (C < 2) { schedule(); return; }   // ai: made already: its lap known at once
   // ai: the chunks made behind the constructor, a worker a physical core; on this thread where no other can start
   // ai: (emscripten has no threads), every chunk then before it returns
@@ -300,9 +306,47 @@ XferTx::~XferTx() {
   }
   spillCv_.notify_all();
   for (auto& t : workers_) if (t.joinable()) t.join();
+  if (maker_.joinable()) maker_.join();   // ai: its spill thread set before it ends, or never
   if (spillThread_.joinable()) spillThread_.join();
   if (spill_ >= 0) spillClose(spill_);
 }
+
+void XferTx::makeOnCpu(Sink sink) {
+  if (!chunks_ || making_.exchange(true)) return;
+  sink_ = std::move(sink);
+#ifndef __EMSCRIPTEN__
+  try { maker_ = std::thread([this] { makeAll(); }); return; } catch (const std::system_error&) {}
+#endif
+  makeAll();   // ai: no thread (emscripten, or one refused): every chunk here
+}
+
+// ai: makeOnCpu's: the spill's file first where a folder was given (grown here, off the configuring thread; the
+// ai: destructor's stop ends its growth), then a worker a physical core, this thread one of them
+void XferTx::makeAll() {
+  if (!sink_ && !spillDir_.empty() && spill_ < 0) {
+    intptr_t f = -1;
+    try { f = spillOpen(spillDir_, spillBytes_, [this] { return stop_.load(); }); } catch (const std::exception&) { return; }   // ai: stopped
+    if (f < 0) {
+      std::lock_guard<std::mutex> l(faultMu_);
+      if (fault_.empty()) fault_ = "the spill's file could not be made in " + spillDir_;
+      return;
+    }
+    std::lock_guard<std::mutex> l(spillMu_);
+    spill_ = f;
+#ifndef __EMSCRIPTEN__
+    spillThread_ = std::thread([this] { spiller(); });
+#endif
+  }
+  const uint32_t W = std::min<uint32_t>(chunks_, physicalCores());
+  std::vector<std::thread> pool;
+#ifndef __EMSCRIPTEN__
+  for (uint32_t w = 1; w < W; w++) try { pool.emplace_back([this] { work(); }); } catch (const std::system_error&) { break; }
+#endif
+  work();
+  for (auto& t : pool) t.join();
+}
+
+
 
 bool XferTx::reseed(uint32_t seed) {
   if (frame_) return false;
@@ -341,7 +385,10 @@ void XferTx::newRound() {
 // ai: last of a manifest group writes the group's block, then mready_.
 void XferTx::make(uint32_t c) {
   std::unique_ptr<rq_enc_t, EncFree> enc(encoderOf(data_ + c * size_, len_[c]));
-  if (spill_ >= 0) {
+  if (sink_) {
+    // ai: the GPU streams its blocks (gpu_stream.h): the encoder handed over, then let go
+    if (!sink_(c, enc.get())) throw std::runtime_error("stopped");
+  } else if (spill_ >= 0) {
     // ai: the spill: segments 0 and 1 written, the encoder let go; a seed given meanwhile (reseed) makes them again
     uint32_t base;
     { std::lock_guard<std::mutex> l(spillMu_); base = base_[c]; }
@@ -354,6 +401,11 @@ void XferTx::make(uint32_t c) {
     spillCv_.notify_all();
   } else enc_[c] = std::move(enc);
   ready_[c].store(1, std::memory_order_release);
+  chunkDone(c);
+}
+
+// ai: the last chunk of a manifest group writes the group's block, then mready_
+void XferTx::chunkDone(uint32_t c) {
   if (chunks_ >= 2) {
     const uint32_t m = c / XFER_PER_BLOCK;
     if (left_[m].fetch_sub(1, std::memory_order_acq_rel) == 1) {
@@ -377,6 +429,7 @@ void XferTx::work() {
 
 void XferTx::waitMade() {
   for (auto& t : workers_) if (t.joinable()) t.join();
+  if (maker_.joinable()) maker_.join();
   const std::string f = fault();
   if (!f.empty()) throw std::runtime_error(f);
 }
@@ -409,22 +462,18 @@ void XferTx::schedule() {
   lap_ = lap;
 }
 
-// ai: A frame before every chunk is made: a control block (where it has more than one slot, or nothing is made yet, or
-// ai: every other frame of one), the header every other time and the manifest blocks written so far between; the rest
-// ai: the chunks made so far in turn, each its next symbol; with none made, every slot a
-// ai: control block.
+// ai: A frame before every chunk is made: control blocks alone, the header every other time and the manifest blocks
+// ai: written so far between. The start-up is taken whole before any data block goes (2026-11-16): every chunk then
+// ai: starts the schedule level. Frames that carried the chunks made so far, in turn, left the chunks made first ahead
+// ai: for the whole transfer while the file waited on the last made (a 64 GiB run with frames at 430 a second: about 3%
+// ai: of its symbols past the file's, the chunks spread about fifteen times wider than its losses alone spread them).
+// ai: The chunks are made a worker a physical core, so the wait is short.
 void XferTx::warm(xfer_id_t* out, int n) {
-  std::vector<uint32_t> ready, ms;
-  for (uint32_t c = 0; c < chunks_; c++) if (ready_[c].load(std::memory_order_acquire)) ready.push_back(c);
+  std::vector<uint32_t> ms;
   for (uint32_t m = 0; m < manifest_.size(); m++) if (mready_[m].load(std::memory_order_acquire)) ms.push_back(m);
-  auto ctl = [&]() -> xfer_id_t { const uint32_t j = ctl_++; return ms.empty() || !(j & 1) ? ID_HEADER : ID_HEADER + 1 + ms[(j >> 1) % ms.size()]; };
-  int k = 0;
-  if (n > 1 || ready.empty() || !(frame_ & 1)) out[k++] = ctl();
-  for (; k < n; k++) {
-    if (ready.empty()) { out[k] = ctl(); continue; }
-    const uint32_t c = ready[turn_++ % ready.size()];
-    out[k] = idOf(c, symbolOf(key_[c], cnt_[c]++));
-    took(c);
+  for (int k = 0; k < n; k++) {
+    const uint32_t j = ctl_++;
+    out[k] = ms.empty() || !(j & 1) ? ID_HEADER : ID_HEADER + 1 + ms[(j >> 1) % ms.size()];
   }
 }
 

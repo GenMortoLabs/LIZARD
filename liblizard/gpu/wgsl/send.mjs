@@ -74,7 +74,8 @@ struct G { a: vec4u, b: vec4u, c: vec4u, d: vec4u, e: vec4u }
 // ai: its place in the encode, mod 4, the frame symbol r / codes; bit 0 on an even block, bit 1 on an odd.
 // ai: The test stream on the GPU (2026-11-15, SPEC 9.3): a test block's 471 payload bytes are BLAKE3's extended
 // ai: output of its id's five bytes, made in PAINT from the id alone (dims.w's bit 31 set: the host writes the ids, not
-// ai: the payloads). Output block t (64 bytes) is one compression of the root's only block (the id, its length 5,
+// ai: the payloads; since 2026-11-16 packed in BLOCKS, 8 bytes a block, the id's five then three unread, so nothing but
+// ai: the ids crosses or is written). Output block t (64 bytes) is one compression of the root's only block (the id, its length 5,
 // ai: CHUNK_START | CHUNK_END | ROOT) at counter t, so eight lanes make the eight blocks side by side. B3_PERM is
 // ai: BLAKE3's message permutation; the compression is written out with the message words that are always zero (all
 // ai: but the id's two) left out. b3Js is the same arithmetic in JS, held to the library's stream (src/xfer.h).
@@ -185,10 +186,11 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) i: u3
   // ai: The payload from BLOCKS: bytes 0 to 475 in words 0 to 118; its CRC-32C big-endian in word 119 (bytes 476 to 479).
   let base: u32 = (r * P.sizes[0].x + b) * 120u;
   if ((P.dims.w >> 31u) != 0u) {
-    // ai: the test stream: the payload made here from the id BLOCKS holds (its first five bytes), the block's words the
-    // ai: id's then the stream's five bytes on (word w from 2: stream bytes 4 w - 5 to 4 w - 2)
-    let m0: u32 = BLOCKS[base];
-    let m1: u32 = BLOCKS[base + 1u] & 0xffu;
+    // ai: the test stream: the payload made here from the id BLOCKS holds packed (two words a block, its five bytes
+    // ai: first), the block's words the id's then the stream's five bytes on (word w from 2: stream bytes 4 w - 5 to 4 w - 2)
+    let ib: u32 = (r * P.sizes[0].x + b) * 2u;
+    let m0: u32 = BLOCKS[ib];
+    let m1: u32 = BLOCKS[ib + 1u] & 0xffu;
     if (i < 8u) { b3out(m0, m1, i); }
     workgroupBarrier();
     if (i == 0u) { packw[0] = m0; }

@@ -166,7 +166,7 @@ const wantGpu = () => $("enc").value === "gpu" || ($("enc").value === "auto" && 
 // ai: auto runs on (the run's, else the one it would try: the GPU where the browser has WebGPU and it has not failed here).
 function showEnc() {
   const gpuNow = cfg ? !!gcfg : !gpuOff && "gpu" in navigator;
-  $("enc").querySelector('option[value="auto"]').textContent = gpuNow ? "GPU" : "CPU";
+  $("enc").querySelector('option[value="auto"]').textContent = gpuNow ? "On" : "Off";
 }
 // ai: The encoder, one a page, made once however many ask at a time (a start and a re-pick), and made again in place of
 // ai: one whose device was lost while nothing ran on it; lost under a running configuration, the caller gives up.

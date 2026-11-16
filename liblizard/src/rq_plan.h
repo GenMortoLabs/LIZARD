@@ -20,6 +20,12 @@
 // A block's parameters (RFC 6330 5.3.3.3).
 typedef struct { uint32_t K, Kp, J, S, H, W, L, P, P1, B; } rq_par_t;
 
+// The parameters of a block of K source symbols: 0, or -1 for a K past RQ_KMAX or 0.
+int rq_par_for(uint32_t K, rq_par_t *p);
+// An encoder's L intermediate symbols (L x T bytes, symbol i at i T) and, where p is given, its parameters: what a
+// sender making its symbols elsewhere takes (core/tx/gpu_stream.h: the GPU makes each frame's blocks from them).
+const uint8_t *rq_enc_intermediate(const rq_enc_t *e, rq_par_t *p);
+
 typedef struct {
   rq_par_t p;
   uint32_t sym0;   // rows from sym0 on are the held symbols in hold order
