@@ -17,9 +17,12 @@ object Native {
     // ai: the process's priority raised as far as a user's may (native/priority.cpp): what was done, "" nothing
     @JvmStatic external fun raisePriority(): String
     // ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
-    // ai: form goes where packing pays (liblizard/core/tx/pack.h; removed at txDestroy); 0, why in txError()
-    @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String): Long
+    // ai: form goes where packing pays (liblizard/core/tx/pack.h; removed at txDestroy); make: the epoch it was begun
+    // ai: under (txCancelMakes), -1 one nothing cancels; 0, why in txError() (cancelled too)
+    @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String, make: Long): Long
     @JvmStatic external fun txError(): String
+    // ai: every make under way (a txCreate's pack and hash) stopped at its next piece of work; the epoch a new make takes
+    @JvmStatic external fun txCancelMakes(): Long
     // ai: the bytes the transfer carries: the packed file's where it was packed, else the file's
     @JvmStatic external fun txBytes(h: Long): Long
     @JvmStatic external fun txPrepare(h: Long, assets: String): String

@@ -21,8 +21,11 @@ object Native {
     // ai: surface's own queue when it is painted (txPresent, on the main thread at the display's pace: below Android 13,
     // ai: or once txPost has refused); the stats JSON; the handle let go.
     // ai: dir: where the file's packed form goes where packing pays (liblizard/core/tx/pack.h; removed at txDestroy);
-    // ai: txBytes: the bytes the transfer carries, the packed file's where it was packed, else the file's
-    @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String): Long
+    // ai: txBytes: the bytes the transfer carries, the packed file's where it was packed, else the file's. make: the
+    // ai: epoch it was begun under (txCancelMakes), -1 one nothing cancels; txCancelMakes stops every make under way
+    // ai: (its pack and hash) at its next piece of work and returns the epoch a new make takes
+    @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String, make: Long): Long
+    @JvmStatic external fun txCancelMakes(): Long
     @JvmStatic external fun txError(): String
     @JvmStatic external fun txBytes(h: Long): Long
     @JvmStatic external fun txConfigure(h: Long, subch: Int, span: Int, fps: Int, threads: Int, painter: Int, assets: String, codes: Int, gap: Int, vsynced: Boolean, vsync: Boolean): String

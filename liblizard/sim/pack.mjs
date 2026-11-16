@@ -43,6 +43,13 @@ function cutName(name, n) {
 // The file's bytes, its name and media type as the caller would send it: { packed, bytes, name, type }, packed where
 // that pays, else the file as it is.
 export function pack(bytes, name, type, Z) {
+  const g = packing(bytes, name, type, Z);
+  for (;;) { const r = g.next(); if (r.done) return r.value; }
+}
+// ai: pack's own steps (2026-11-16): a generator yielding after the sample and after each frame, its value pack's, so
+// ai: a caller can let other work run between them and stop there (lizard-web/send-worker.mjs: a preparation the
+// ai: page cancels, which a worker busy in one long pack never heard)
+export function* packing(bytes, name, type, Z) {
   const as = { packed: false, bytes, name, type };
   const L = bytes.length, pt = packType(/^[\x20-\x7e]*$/.test(type ?? "") ? type ?? "" : "");
   if (!L || !pt) return as;
@@ -53,6 +60,7 @@ export function pack(bytes, name, type, Z) {
   }
   const frame = (b) => { const f = Z.compress(b); if (!f) throw new Error("zstd refused a frame"); return f; };
   if (frame(s).length > SAMPLE_MAX * s.length) return as;
+  yield;
   const frames = [];
   let size = 0;
   for (let at = 0; at < L; at += PACK_FRAME) {
@@ -60,6 +68,7 @@ export function pack(bytes, name, type, Z) {
     frames.push(f);
     size += f.length;
     if (size > WHOLE_MAX * L) return as;   // past the bar already
+    yield;
   }
   const out = new Uint8Array(size);
   let o = 0;

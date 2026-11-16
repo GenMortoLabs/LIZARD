@@ -2,6 +2,7 @@ package dev.lizard.tar
 
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -19,6 +20,17 @@ import java.io.OutputStream
 const val TAR_TYPE = "application/x-tar"
 private const val BLOCK = 512
 private val ZEROS = ByteArray(2 * BLOCK)
+
+/**
+ * An output stream that stops at its next write once `live` says no (a make the app let go, 2026-11-16: a tar or a
+ * copy into the cache, under the buffer, so it is asked once a buffer), with [Stopped].
+ */
+class Stoppable(out: OutputStream, private val live: () -> Boolean) : FilterOutputStream(out) {
+    override fun write(b: Int) { check(); out.write(b) }
+    override fun write(b: ByteArray, off: Int, len: Int) { check(); out.write(b, off, len) }
+    private fun check() { if (!live()) throw Stopped() }
+}
+class Stopped : IOException("cancelled")
 
 class TarWriter(private val out: OutputStream) {
     /** The archive's bytes so far. */

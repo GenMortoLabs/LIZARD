@@ -130,12 +130,16 @@ rq_enc_t* encoderOf(const uint8_t* plain, size_t len) {
   return e;
 }
 // ai: The spill's file (xfer_tx.h): made in dir and unlinked at once (POSIX), deleted on close (Windows), `bytes` long;
-// ai: -1 where it cannot be made. Reads and writes at an offset, whole or false.
-intptr_t spillOpen(const std::string& dir, uint64_t bytes) {
+// ai: -1 where it cannot be made. Reads and writes at an offset, whole or false. It grows 256 MiB at a time, `stopped`
+// ai: asked between (std::runtime_error "cancelled", the file closed): a file system without holes writes the zeros
+// ai: (2026-11-16: ecryptfs, about 0.9 s a GiB of the file sent, one call that could not be stopped).
+void spillClose(intptr_t f);
+intptr_t spillOpen(const std::string& dir, uint64_t bytes, const std::function<bool()>& stopped) {
 #if defined(__EMSCRIPTEN__)
-  (void)dir; (void)bytes;
+  (void)dir; (void)bytes; (void)stopped;
   return -1;
-#elif defined(_WIN32)
+#else
+#if defined(_WIN32)
   static std::atomic<uint32_t> made{0};
   const std::string path = dir + "\\lizard-spill-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(made++) + ".tmp";
   const int wn = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
@@ -144,17 +148,27 @@ intptr_t spillOpen(const std::string& dir, uint64_t bytes) {
   HANDLE h = CreateFileW(w.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                          FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
   if (h == INVALID_HANDLE_VALUE) return -1;
-  LARGE_INTEGER at;
-  at.QuadPart = static_cast<LONGLONG>(bytes);
-  if (!SetFilePointerEx(h, at, nullptr, FILE_BEGIN) || !SetEndOfFile(h)) { CloseHandle(h); return -1; }
-  return reinterpret_cast<intptr_t>(h);
+  const intptr_t f = reinterpret_cast<intptr_t>(h);
+  const auto grow = [h](uint64_t n) {
+    LARGE_INTEGER at;
+    at.QuadPart = static_cast<LONGLONG>(n);
+    return SetFilePointerEx(h, at, nullptr, FILE_BEGIN) && SetEndOfFile(h);
+  };
 #else
   std::string path = dir + "/lizard-spill-XXXXXX";
   const int fd = mkstemp(path.data());
   if (fd < 0) return -1;
   unlink(path.c_str());
-  if (ftruncate(fd, static_cast<off_t>(bytes))) { close(fd); return -1; }
-  return fd;
+  const intptr_t f = fd;
+  const auto grow = [fd](uint64_t n) { return ftruncate(fd, static_cast<off_t>(n)) == 0; };
+#endif
+  constexpr uint64_t STEP = uint64_t{1} << 28;
+  for (uint64_t at = 0; at < bytes;) {
+    if (stopped && stopped()) { spillClose(f); throw std::runtime_error("cancelled"); }
+    at = std::min(bytes, at + STEP);
+    if (!grow(at)) { spillClose(f); return -1; }
+  }
+  return f;
 #endif
 }
 bool spillIo(intptr_t f, uint64_t at, uint8_t* p, size_t n, bool write) {
@@ -200,7 +214,7 @@ unsigned physicalCores() {
 }
 
 XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, const std::string& type, int chunkLog2,
-               const std::string& spillDir)
+               const std::string& spillDir, const std::function<bool()>& stopped)
     : size_(size_t{1} << pickLog2(length, chunkLog2)), data_(data) {
   chunkLog2 = pickLog2(length, chunkLog2);
   xfer_header_t h{};
@@ -220,7 +234,7 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, cons
       at += 3ull * seg_[c] * PAYLOAD;
       have_[c] = -1;
     }
-    spill_ = spillOpen(spillDir, at);
+    spill_ = spillOpen(spillDir, at, stopped);
     if (spill_ < 0) throw std::runtime_error("the spill's file could not be made in " + spillDir);
   }
   {
@@ -239,16 +253,25 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, cons
     // ai: root: all the header needs, so the first frame waits on a hash of the file and not on its fountains
     cvs_.resize(32 * size_t{C});
     std::atomic<uint32_t> nc{0}, bad{UINT32_MAX};
+    std::atomic<bool> halt{false};
     auto hash = [&] {
-      for (uint32_t c; (c = nc.fetch_add(1, std::memory_order_relaxed)) < C;)
+      for (uint32_t c; !halt.load(std::memory_order_relaxed) && (c = nc.fetch_add(1, std::memory_order_relaxed)) < C;) {
+        if (stopped && stopped()) { halt = true; break; }
         if (xfer_chunk_cv(data + c * size_, len_[c], c, chunkLog2, cvs_.data() + 32 * c)) { uint32_t none = UINT32_MAX; bad.compare_exchange_strong(none, c); }
+      }
     };
     std::vector<std::thread> pool;
     for (uint32_t w = 1; w < W; w++) try { pool.emplace_back(hash); } catch (const std::system_error&) { break; }   // ai: a thread refused: fewer do the work
     hash();
     for (auto& t : pool) t.join();
-    if (bad != UINT32_MAX) throw std::runtime_error("chaining value of chunk " + std::to_string(bad.load()));
-    if (xfer_root(cvs_.data(), C, root_)) throw std::runtime_error("root");
+    // ai: a constructor that throws runs no destructor: the spill closed first
+    const auto fail = [&](const std::string& why) {
+      if (spill_ >= 0) { spillClose(spill_); spill_ = -1; }
+      throw std::runtime_error(why);
+    };
+    if (halt) fail("cancelled");
+    if (bad != UINT32_MAX) fail("chaining value of chunk " + std::to_string(bad.load()));
+    if (xfer_root(cvs_.data(), C, root_)) fail("root");
   } else {
     if (C == 1) make(0);
     xfer_b3_hash(data, length, root_);

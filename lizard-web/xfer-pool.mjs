@@ -46,8 +46,9 @@ async function timeCores(calls, sample, chunkLog2) {
 
 // ai: The file's transfer (XferSender's options in opts; the chunk size src/xfer.h xfer_chunk_log2_for's unless given),
 // ai: made by up to `workers` workers (the cores found unless given), one a chunk at most; a file of one chunk, or one
-// ai: worker, made here as before.
-export async function makeXfer(bytes, opts, { M, Encoder, workers = null }) {
+// ai: worker, made here as before. `stopped` (2026-11-16) is asked before each chunk's hash: true ends the pool and
+// ai: throws "cancelled" (the chunks made behind the return are the transfer's, never stopped so).
+export async function makeXfer(bytes, opts, { M, Encoder, workers = null, stopped = () => false }) {
   const chunkLog2 = opts.chunkLog2 ?? M._xfer_log2_for(bytes.length), size = 2 ** chunkLog2, C = Math.ceil(bytes.length / size);
   if (chunkLog2 < 0) throw new Error(`${bytes.length} B is more than the transfer carries (16,383 chunks of 16 MiB)`);
   opts = { ...opts, chunkLog2 };
@@ -60,9 +61,12 @@ export async function makeXfer(bytes, opts, { M, Encoder, workers = null }) {
   try {
     const part = (c) => bytes.slice(c * size, Math.min(bytes.length, (c + 1) * size));
     // ai: each worker the next chunk as it comes free (the work of a pass), the pass done when every one is
-    const pass = (job) => { let next = 0; return Promise.all(calls.map(async (call, i) => { for (let c; (c = next++) < C;) await job(call, i, c); })); };
+    const pass = (job, stop = () => false) => {
+      let next = 0;
+      return Promise.all(calls.map(async (call, i) => { for (let c; (c = next++) < C;) { if (stop()) throw new Error("cancelled"); await job(call, i, c); } }));
+    };
     const cvs = new Uint8Array(32 * C);
-    await pass(async (call, i, c) => { const plain = part(c); cvs.set((await call({ type: "cv", c, chunkLog2, buf: plain.buffer }, [plain.buffer])).cv, 32 * c); });
+    await pass(async (call, i, c) => { const plain = part(c); cvs.set((await call({ type: "cv", c, chunkLog2, buf: plain.buffer }, [plain.buffer])).cv, 32 * c); }, stopped);
     let xs = null;
     const remote = {
       // ai: the blocks of the ids whose chunks the workers hold (every chunk's fountain), each worker asked once for its own

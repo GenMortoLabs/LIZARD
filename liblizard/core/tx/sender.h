@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -48,8 +49,10 @@ struct TxFormat {
 class Sender {
  public:
   // ai: A file (data alive as long as this: the app maps it) or, with data null, the test stream.
-  // ai: spillDir: where the transfer's spill goes (xfer_tx.h: no encoder kept, symbols in segments on disk); "" none
-  Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir = "");
+  // ai: spillDir: where the transfer's spill goes (xfer_tx.h: no encoder kept, symbols in segments on disk); "" none.
+  // ai: stopped: the transfer's (xfer_tx.h), its hash stopped where it says so
+  Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir = "",
+         const std::function<bool()>& stopped = {});
   ~Sender();
   Sender(const Sender&) = delete;
   Sender& operator=(const Sender&) = delete;

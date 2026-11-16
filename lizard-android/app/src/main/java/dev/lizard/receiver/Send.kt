@@ -12,6 +12,8 @@ import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import dev.lizard.tar.Bundle
+import dev.lizard.tar.Stoppable
+import dev.lizard.tar.Stopped
 import dev.lizard.tar.TAR_TYPE
 import dev.lizard.tar.TarEntry
 import android.util.Log
@@ -77,7 +79,8 @@ class SendState(private val a: MainActivity) {
 
     private val prefs = a.getSharedPreferences("lizard", Context.MODE_PRIVATE)
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
-    // ai: (liblizard/kotlin/Tar.kt Bundle, the web sender's rule); `reading` while a pick is walked and sized
+    // ai: (liblizard/kotlin/Tar.kt Bundle, the web sender's rule); `reading` while a pick wanted is walked and sized or
+    // ai: the bundle is made
     var choice by mutableStateOf<Bundle?>(null)
     var reading by mutableStateOf(false)
     var name by mutableStateOf("")
@@ -93,7 +96,7 @@ class SendState(private val a: MainActivity) {
     private var made = 0L                 // ai: the transfer made for the choice, not yet sending (0: none)
     private var madeFile: File? = null    // ai: the cache file it maps
     private var runFile: File? = null     // ai: the one the run's transfer maps
-    private var making = 0                // ai: the make under way's number: a newer make or pick orphans it
+    @Volatile private var making = 0      // ai: the make under way's number: a newer make or pick orphans it (its copy's write reads it)
     private var makingNow = false
     private var startWhenMade = false     // ai: Start pressed while the transfer was being made
     var test by mutableStateOf(false)
@@ -184,21 +187,45 @@ class SendState(private val a: MainActivity) {
     // ai: the web's does.
     class Item(val key: String, val name: String, val dir: Boolean, val files: Int, val size: Long, val entries: List<TarEntry>)
     val items = mutableStateListOf<Item>()
-    fun pick(us: List<Uri>) = add { us.map { u -> fileEntry(u).let { e -> Item(u.toString(), e.path, false, 1, e.size, listOf(e)) } } }
-    fun pickTree(tree: Uri) = add {
-        val es = treeEntries(tree)
-        if (es.isEmpty()) emptyList() else listOf(Item(tree.toString(), es[0].path, true, es.count { !it.dir }, es.filter { !it.dir }.sumOf { it.size }, es))
+    // ai: A pick's document or folder being read (2026-11-16): its tile on the card at once, its name once the provider
+    // ai: says it and what the walk has found so far (its thread's fields, which the card's ticking reads), its x
+    // ai: cancelling it (the walk stops at its next entry, the item dropped). Start waits only on the walks still wanted:
+    // ai: a whole volume picked by mistake held it until the walk ended before, with no way to stop it.
+    class Walking(val key: String, val dir: Boolean) {
+        @Volatile var name = ""
+        @Volatile var files = 0
+        @Volatile var bytes = 0L
+        @Volatile var cancelled = false
     }
-    fun remove(key: String) { items.removeAll { it.key == key }; changed() }
-    fun clear() { items.clear(); changed() }
-    private fun add(walk: () -> List<Item>) {
+    val walking = mutableStateListOf<Walking>()
+    private var walkSeq = 0
+    fun pick(us: List<Uri>) = add(us.map { u -> Walking("walk:${++walkSeq}", false) to { w: Walking ->
+        fileEntry(u, w).let { e -> w.name = e.path; w.files = 1; w.bytes = e.size; Item(u.toString(), e.path, false, 1, e.size, listOf(e)) }
+    } })
+    fun pickTree(tree: Uri) = add(listOf(Walking("walk:${++walkSeq}", true) to { w: Walking ->
+        val es = treeEntries(tree, w)
+        if (es.isEmpty()) null else Item(tree.toString(), es[0].path, true, es.count { !it.dir }, es.filter { !it.dir }.sumOf { it.size }, es)
+    }))
+    // ai: an item removed, or a read under way cancelled (its tile's x)
+    fun remove(key: String) {
+        val w = walking.firstOrNull { it.key == key }
+        if (w != null) { w.cancelled = true; walking.remove(w); readingNow(); return }
+        items.removeAll { it.key == key }; changed()
+    }
+    fun clear() { walking.forEach { it.cancelled = true }; walking.clear(); items.clear(); changed() }
+    // ai: a pick's reads, its tiles shown meanwhile: one cancelled is left out; one that fails drops the pick and says why
+    private fun add(picks: List<Pair<Walking, (Walking) -> Item?>>) {
         if (phase == Phase.On || phase == Phase.Preparing) stop()
-        test = false; reading = true
+        test = false
         if (phase is Phase.Error) phase = Phase.Idle
+        val ws = picks.map { it.first }
+        walking.addAll(ws); readingNow()
         thread(name = "lizard-send-pick") {
-            val got = try { walk() } catch (e: Exception) { a.runOnUiThread { reading = bundling != bundled; phase = Phase.Error("Files unreadable: ${e.message}") }; return@thread }
+            val got = try {
+                picks.mapNotNull { (w, read) -> try { if (w.cancelled) null else read(w) } catch (e: Exception) { if (w.cancelled) null else throw e } }
+            } catch (e: Exception) { a.runOnUiThread { walking.removeAll(ws); readingNow(); phase = Phase.Error("Files unreadable: ${e.message}") }; return@thread }
             a.runOnUiThread {
-                reading = bundling != bundled
+                walking.removeAll(ws); readingNow()
                 val have = items.mapTo(HashSet()) { it.key }
                 val fresh = got.filter { have.add(it.key) }
                 if (fresh.isNotEmpty()) { items.addAll(fresh); changed() }
@@ -207,6 +234,11 @@ class SendState(private val a: MainActivity) {
     }
     private var bundling = 0     // ai: the newest bundle asked for, and the newest one made: equal while none is being made
     private var bundled = 0
+    // ai: the items the choice was made from: one added since shows loading while the bundle is made
+    var madeFrom by mutableStateOf<Set<String>>(emptySet())
+        private set
+    private fun readingNow() { reading = walking.isNotEmpty() || bundling != bundled }
+    // ai: a bundle that fails is said (2026-11-16: its thread died silently before, Start greyed for good)
     private fun changed() {
         if (phase == Phase.On || phase == Phase.Preparing) stop()
         dropMade()
@@ -215,21 +247,22 @@ class SendState(private val a: MainActivity) {
         val list = items.toList()
         typeOf.keys.retainAll(list.flatMap { it.entries }.toSet())
         val my = ++bundling
-        if (list.isEmpty()) { bundled = my; reading = false; return }
-        reading = true
+        if (list.isEmpty()) { bundled = my; madeFrom = emptySet(); readingNow(); return }
+        readingNow()
         thread(name = "lizard-send-bundle") {
-            val b = Bundle(list.flatMap { it.entries })
+            val got = runCatching { Bundle(list.flatMap { it.entries }) }
             a.runOnUiThread {
                 if (my != bundling) return@runOnUiThread
-                bundled = my; reading = false; choice = b
-                name = b.name; size = b.size; type = b.single?.let { typeOf[it] } ?: TAR_TYPE
+                bundled = my; readingNow(); madeFrom = list.mapTo(HashSet()) { it.key }
+                got.onSuccess { b -> choice = b; name = b.name; size = b.size; type = b.single?.let { typeOf[it] } ?: TAR_TYPE }
+                    .onFailure { phase = Phase.Error("Not sendable: ${it.message}") }
             }
         }
     }
     private val typeOf = HashMap<TarEntry, String>()   // ai: a single file's own media type, the header's
     // ai: A document's name, size and time; a provider that says no size is read through once to count it (a tar
-    // ai: header needs the exact size before the bytes).
-    private fun fileEntry(u: Uri): TarEntry {
+    // ai: header needs the exact size before the bytes), stopped where w (the read's) is cancelled.
+    private fun fileEntry(u: Uri, w: Walking? = null): TarEntry {
         val cr = a.contentResolver
         var nm = "file"; var sz = -1L; var t: Long? = null
         cr.query(u, null, null, null, null)?.use { c ->
@@ -239,12 +272,17 @@ class SendState(private val a: MainActivity) {
                 c.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED).takeIf { it >= 0 && !c.isNull(it) }?.let { t = c.getLong(it) / 1000 }
             }
         }
-        if (sz < 0) sz = cr.openInputStream(u)!!.use { i -> var n = 0L; val b = ByteArray(1 shl 16); while (true) { val k = i.read(b); if (k < 0) break; n += k }; n }
+        if (sz < 0) sz = cr.openInputStream(u)!!.use { i ->
+            var n = 0L; val b = ByteArray(1 shl 16)
+            while (true) { if (w?.cancelled == true) throw Stopped(); val k = i.read(b); if (k < 0) break; n += k }
+            n
+        }
         return TarEntry(plainName(nm), sz, t) { cr.openInputStream(u) ?: throw java.io.IOException("$nm could not be opened") }.also { typeOf[it] = cr.getType(u) ?: "" }
     }
     // ai: A folder chosen through the system's tree picker, walked by DocumentsContract's child queries: its folders
-    // ai: (an empty one too) and files under its own name. 64 levels at most, so a provider's loop cannot run on.
-    private fun treeEntries(tree: Uri): List<TarEntry> {
+    // ai: (an empty one too) and files under its own name. 64 levels at most, so a provider's loop cannot run on. Its
+    // ai: name and what it holds counted into w as they are found; a cancelled w stops it at the next entry.
+    private fun treeEntries(tree: Uri, w: Walking): List<TarEntry> {
         val cr = a.contentResolver
         val cols = arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
@@ -252,23 +290,26 @@ class SendState(private val a: MainActivity) {
         fun time(c: android.database.Cursor) = if (c.isNull(4)) null else c.getLong(4) / 1000
         fun walk(id: String, path: String, t: Long?, depth: Int) {
             if (depth > 64) throw java.io.IOException("$path: too deeply nested")
+            if (w.cancelled) throw Stopped()
             out.add(TarEntry(path, mtimeSec = t))
             val dirs = ArrayList<Triple<String, String, Long?>>()
             cr.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, id), cols, null, null, null)?.use { c ->
                 while (c.moveToNext()) {
+                    if (w.cancelled) throw Stopped()
                     val kid = c.getString(0); val nm = plainName(c.getString(1) ?: kid)
                     if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) { dirs.add(Triple(kid, nm, time(c))); continue }
                     val u = DocumentsContract.buildDocumentUriUsingTree(tree, kid)
                     val sz = if (c.isNull(3)) -1L else c.getLong(3)
-                    out.add(if (sz >= 0) TarEntry("$path/$nm", sz, time(c)) { cr.openInputStream(u) ?: throw java.io.IOException("$nm could not be opened") }
-                            else fileEntry(u).let { TarEntry("$path/$nm", it.size, time(c), it.open) })
+                    val e = if (sz >= 0) TarEntry("$path/$nm", sz, time(c)) { cr.openInputStream(u) ?: throw java.io.IOException("$nm could not be opened") }
+                            else fileEntry(u, w).let { TarEntry("$path/$nm", it.size, time(c), it.open) }
+                    out.add(e); w.files++; w.bytes += e.size
                 }
             }
             for ((kid, nm, kt) in dirs) walk(kid, "$path/$nm", kt, depth + 1)
         }
         val rootId = DocumentsContract.getTreeDocumentId(tree)
         cr.query(DocumentsContract.buildDocumentUriUsingTree(tree, rootId), cols, null, null, null)?.use { c ->
-            if (c.moveToFirst()) walk(rootId, plainName(c.getString(1) ?: "folder"), time(c), 0)
+            if (c.moveToFirst()) { val nm = plainName(c.getString(1) ?: "folder"); w.name = nm; walk(rootId, nm, time(c), 0) }
         }
         return out
     }
@@ -323,25 +364,28 @@ class SendState(private val a: MainActivity) {
     // ai: The choice's transfer made off the main thread: the file into the cache (a document is a stream; the sender maps
     // ai: a file), or the bundle's tar written there from each document in turn, then txCreate (the file packed there
     // ai: where that pays, its root hashed) and the bytes it carries (txBytes). The cache keeps the made one's file and the
-    // ai: run's (a packed file the run maps goes on being read after its name is removed).
+    // ai: run's (a packed file the run maps goes on being read after its name is removed). One let go (dropMade: Stop, a
+    // ai: change) stops where it is (2026-11-16; it ran to its end before): the copy at its next MiB (Stoppable), the
+    // ai: pack and the hash at their next piece (txCancelMakes).
     private fun make() {
         val b = choice ?: return
         dropMade()
         val my = making
+        val ep = Native.txCancelMakes()
         makingNow = true
         val nm = name; val ty = type
         val keep = runFile?.name
         thread(name = "lizard-send-make") {
             val dir = File(a.cacheDir, "send").apply { mkdirs() }
-            dir.listFiles()?.forEach { if (it.name != keep) it.delete() }
+            if (my == making) dir.listFiles()?.forEach { if (it.name != keep) it.delete() }   // ai: a make let go touches nothing there
             val f = File(dir, "file-$my")
             val wrote = try {
                 val one = b.single
-                if (one != null) one.open!!().use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 20) } }
-                else f.outputStream().buffered(1 shl 20).use { o -> b.write(o) }
+                if (one != null) one.open!!().use { i -> Stoppable(f.outputStream()) { my == making }.use { o -> i.copyTo(o, 1 shl 20) } }
+                else Stoppable(f.outputStream()) { my == making }.buffered(1 shl 20).use { o -> b.write(o) }
                 null
             } catch (e: Exception) { e }
-            val hnd = if (wrote != null) 0L else Native.txCreate(f.path, nm, ty, dir.path)
+            val hnd = if (wrote != null || my != making) 0L else Native.txCreate(f.path, nm, ty, dir.path, ep)
             val err = if (wrote != null) "File unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
             val sent = if (hnd != 0L) Native.txBytes(hnd) else 0L
             a.runOnUiThread {
@@ -353,8 +397,9 @@ class SendState(private val a: MainActivity) {
             }
         }
     }
-    // ai: the made transfer let go, and any make under way orphaned
+    // ai: the made transfer let go, and any make under way stopped
     private fun dropMade() {
+        if (makingNow) Native.txCancelMakes()
         making++; makingNow = false; startWhenMade = false
         if (made != 0L) { Native.txDestroy(made); made = 0L }
         madeFile?.delete(); madeFile = null
@@ -378,7 +423,7 @@ class SendState(private val a: MainActivity) {
         val my = making
         val sd = if (test) null else seedOf(seed)
         thread(name = "lizard-send-prep") {
-            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "")
+            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "", -1L)
             if (hnd != 0L && sd != null) Native.txSeed(hnd, sd)   // ai: before the first frame, which the configure makes
             val err = if (hnd == 0L) Native.txError() else ""
             // ai: the GPU painter's device and pipelines made here, off the main thread that configures
@@ -409,6 +454,7 @@ class SendState(private val a: MainActivity) {
         if (Build.VERSION.SDK_INT >= 33) Choreographer.getInstance().removeVsyncCallback(vsync)
         if (h != 0L) { Native.txDestroy(h); h = 0 }
         runFile?.delete(); runFile = null
+        if (makingNow) dropMade()   // ai: Stop while the file is made stops the make (2026-11-16; it ran on before)
         startWhenMade = false
         if (phase == Phase.On || phase == Phase.Preparing) phase = Phase.Idle
         shown = false; placed = false
@@ -594,7 +640,6 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     }
     override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: ""
     override fun clearError() { if (s.phase is SendState.Phase.Error) s.phase = SendState.Phase.Idle }
-    override val reading get() = s.reading && !on && s.phase != SendState.Phase.Preparing
     override val heat get() = heatText(a.heat, a.clocks)
     override val railCapacity get() = if (on) s.capacityKBs else null
     // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
@@ -659,8 +704,8 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     }
     override val rootModifier: Modifier = Modifier
 
-    // ai: whether the code's box holds the file upload: no picture shown yet and a file the payload. A pick being walked
-    // ai: or the bundle being made again (`reading`) keeps it: the state line says "Reading the files"
+    // ai: whether the code's box holds the file upload: no picture shown yet and a file the payload. A pick being read
+    // ai: shows there as its tile (CodeArea)
     private fun uploading() = !(sending() && s.shown) && !s.test
     private fun sending() = s.phase == SendState.Phase.On || s.phase == SendState.Phase.Preparing
 
@@ -674,11 +719,19 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
         val shown = sending && s.shown
         BoxWithConstraints(modifier.clipToBounds().background(if (shown || uploading()) Bg else Soft), contentAlignment = Alignment.Center) {
             if (sending) AndroidView({ ctx -> SurfaceView(ctx).apply { holder.addCallback(s.holder) } }, Modifier.fillMaxSize().padding(maxHeight * s.edgeShare.toFloat()))
+            // ai: the items, then a tile a read under way (loading, its counts read each tick, its x cancelling it); an item
+            // ai: added since the bundle was made loading too while it is made; the total the choice's once made, the
+            // ai: bytes found so far while picks are read (2026-11-16)
+            ticking(s.walking.isNotEmpty())
+            val total = if (!s.reading && s.choice != null && s.size > 0) s.size
+                else (s.items.sumOf { it.size } + s.walking.sumOf { it.bytes }).takeIf { s.items.isNotEmpty() || s.walking.isNotEmpty() }
             if (uploading()) Upload(listOf(Act("File", icon = Icons.file) { a.pickFile() }, Act("Folder", icon = Icons.folder) { a.pickFolder() },
                     Act("Media", icon = Icons.image) { a.pickMedia() }),
-                s.items.map { UploadItem(it.key, it.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
+                s.items.map { UploadItem(it.key, it.name, if (it.dir) filesText(it.files) else Readout.bytes(it.size), it.dir,
+                    loading = s.reading && it.key !in s.madeFrom) } +
+                    s.walking.map { UploadItem(it.key, it.name, if (it.dir) filesText(it.files) else Readout.bytes(it.bytes), it.dir, loading = true) },
                 enabled = !sending, row = true,
-                onRemove = { s.remove(it) }, onClear = { s.clear() }, total = if (!s.reading && s.choice != null && s.size > 0) Readout.bytes(s.size) else "")
+                onRemove = { s.remove(it) }, onClear = { s.clear() }, total = total?.let { Readout.bytes(it) } ?: "")
             else if (!shown) TestStreamNote()
         }
     }

@@ -213,18 +213,18 @@ const SIZES = [
       const labels = `[window.__firstBlocks, document.getElementById("blocksOut").textContent, document.getElementById("blocksTitle").textContent,
         [...document.getElementById("ring").options].map((o) => o.value + ":" + o.text).join(" "), [...document.getElementById("codes").options].map((o) => o.text).join(" ")].join(" / ")`;
       await navigate(s, SEND);
-      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "27.4 KB"`, 10000, "the density label").catch(() => {});
+      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "27.3 KB"`, 10000, "the density label").catch(() => {});
       const off = await evaluate(s, labels);
-      check(off === "27.4 KB / 27.4 KB / Density / 256:Thin 128:Medium 64:Thick / 1 2", `send ${z.name}: Show statistics off, the labels before the first paint and after the codec, LIZARD-480 (${off})`);
+      check(off === "27.3 KB / 27.3 KB / Density / 256:Thin 128:Medium 64:Thick / 1 2", `send ${z.name}: Show statistics off, the labels before the first paint and after the codec, LIZARD-480 (${off})`);
       await evaluate(s, `localStorage.setItem("recv:stats", "1")`);
       await navigate(s, SEND);
-      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "58, 27.4 KB"`, 10000, "the blocks label").catch(() => {});
+      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "58, 27.3 KB"`, 10000, "the blocks label").catch(() => {});
       const on = await evaluate(s, labels + ` + " / " + document.getElementById("stats").value`);
-      check(on === "58, 27.4 KB / 58, 27.4 KB / Blocks / 64:64 128:128 256:256 / 1 2 / 1", `send ${z.name}: Show statistics on (the receiver's key), the labels before the first paint and after the codec (${on})`);
+      check(on === "58, 27.3 KB / 58, 27.3 KB / Blocks / 64:64 128:128 256:256 / 1 2 / 1", `send ${z.name}: Show statistics on (the receiver's key), the labels before the first paint and after the codec (${on})`);
       const ringWas = await evaluate(s, `document.getElementById("ring").value`);   // ai: the kept ring (remembered above leaves one)
       await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "0"; e.dispatchEvent(new Event("change")); })()`);
       const back = await evaluate(s, `[localStorage.getItem("recv:stats"), document.getElementById("blocksTitle").textContent, document.getElementById("blocksOut").textContent, document.getElementById("ring").value].join(" / ")`);
-      check(back === `0 / Density / 27.4 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
+      check(back === `0 / Density / 27.3 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
       // ai: Rate refresh (2026-11-12, refresh.mjs): four sliders 1 to 4 in Refresh after FPS, 1 each by default; one
       // ai: moved to 3 kept over a reload (send:refresh34), its label 3 before the first paint (the inline script's) and
       // ai: after the codec; set back to 1 for the steps after

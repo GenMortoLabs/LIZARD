@@ -27,7 +27,7 @@ import { makePhy } from "../liblizard/sim/phy.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initFountain, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
-import { pack } from "../liblizard/sim/pack.mjs";
+import { packing } from "../liblizard/sim/pack.mjs";
 import { isControlId, ID_BYTES, idPut } from "../liblizard/sim/xfer.mjs";
 import { makeXfer } from "./xfer-pool.mjs";
 import { Refresh, batchIds } from "./refresh.mjs";
@@ -58,12 +58,23 @@ function whenMade(x, said) {
     (e) => { if (x.remote) postMessage({ type: "made", ...said, error: String(e?.message ?? e) }); });
 }
 // ai: The file's transfer: packed where that pays (sim/pack.mjs; the bytes the transfer carries are `sent`), made by
-// ai: the pool (xfer-pool.mjs)
-async function transferOf(bytes, xfer) {
+// ai: the pool (xfer-pool.mjs). Between the pack's frames and the pool's chunks the worker takes its other messages
+// ai: (pause) and asks `stopped`: a preparation the page cancels ends there, a frame (4 MiB) or a chunk's hash on
+// ai: (2026-11-16; the page ended the whole worker before, which Chrome holds back about 2 s while it runs a script).
+const CANCELLED = new Error("cancelled");
+const pauseCh = new MessageChannel(), pauseQ = [];
+pauseCh.port1.onmessage = () => pauseQ.shift()();
+const pause = () => new Promise((r) => { pauseQ.push(r); pauseCh.port2.postMessage(0); });   // ai: a task, no timer's clamp
+async function transferOf(bytes, xfer, stopped = () => false) {
   await Promise.all([initFountain(), initZstd()]);
-  const p = pack(bytes, xfer.name, xfer.type, Z);
-  return makeXfer(p.bytes, { ...xfer, name: p.name, type: p.type }, { M: await initOb(), Encoder });
+  const g = packing(bytes, xfer.name, xfer.type, Z);
+  let r;
+  while (!(r = g.next()).done) { await pause(); if (stopped()) throw CANCELLED; }
+  const p = r.value;
+  return makeXfer(p.bytes, { ...xfer, name: p.name, type: p.type }, { M: await initOb(), Encoder, stopped });
 }
+// ai: the newest preparation the page let go ("cancel", taken as it comes, outside the chain; its number the page's)
+let cancelledUpTo = 0;
 // ai: the gap between two codes, in modules (the page's slider, start and respec's gap), and in the paint's pixels for
 // ai: this codec (phy.cell samples a module)
 let gapModules = 0;
@@ -71,14 +82,19 @@ const gapOf = (p) => gapModules * (p.cell || 0);
 
 async function handle(m) {
   if (m.type === "prepare") {
-    // ai: its own reply ("prepared", by pick, outside the runs' gen), a failure in it too
+    // ai: its own reply ("prepared", by pick and the page's number for it, outside the runs' gen), a failure in it or
+    // ai: its cancel too
     made?.xs.free(); made = null;
+    const stopped = () => m.prep <= cancelledUpTo;
     try {
-      const x = await transferOf(new Uint8Array(m.bytes), m.xfer);
+      const x = await transferOf(new Uint8Array(m.bytes), m.xfer, stopped);
+      if (stopped()) { x.free(); postMessage({ type: "prepared", pick: m.pick, prep: m.prep, cancelled: true }); return; }
       made = { pick: m.pick, xs: x };
-      postMessage({ type: "prepared", pick: m.pick, sent: x.length });
+      postMessage({ type: "prepared", pick: m.pick, prep: m.prep, sent: x.length });
       whenMade(x, { pick: m.pick });
-    } catch (e) { postMessage({ type: "prepared", pick: m.pick, error: String(e?.message ?? e) }); }
+    } catch (e) {
+      postMessage({ type: "prepared", pick: m.pick, prep: m.prep, ...(stopped() ? { cancelled: true } : { error: String(e?.message ?? e) }) });
+    }
   } else if (m.type === "start") {
     phy?.free(); phy = null; dropRun();
     phy = await makePhy(m.spec);
@@ -158,5 +174,6 @@ async function handle(m) {
 }
 
 onmessage = ({ data: m }) => {
+  if (m.type === "cancel") { cancelledUpTo = Math.max(cancelledUpTo, m.prep); return; }
   chain = chain.then(() => handle(m)).catch((e) => postMessage({ type: "error", gen: m.gen, message: String(e?.message ?? e) }));
 };

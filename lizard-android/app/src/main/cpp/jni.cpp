@@ -10,7 +10,9 @@
 #include <sys/system_properties.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -712,16 +714,22 @@ bool presentVsynced(Tx* t, int side, int width, int64_t vsync, int w, int h) {
 // ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
 // ai: form goes where packing pays (pack.h, the default client's compression; removed at txDestroy), and the transfer's
 // ai: spill (xfer_tx.h: its symbols on disk, no encoder kept; its file unlinked as it is made). 0 with the reason in
-// ai: txError(0) where it cannot go.
+// ai: txError(0) where it cannot go or was cancelled. make: the epoch it was begun under (txCancelMakes), -1 none.
 static std::string gTxError;
-extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir) {
+// ai: The makes' epoch (2026-11-16): txCancelMakes moves it on, and a txCreate begun under an older one stops at its
+// ai: next piece of work (pack's rounds of frames, the hash's chunks); a make of -1 nothing stops (the test stream's)
+static std::atomic<int64_t> gMakes{0};
+extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCancelMakes(JNIEnv*, jclass) { return ++gMakes; }
+extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir,
+                                                                             jlong make) {
   applyDebugEnv();
   auto t = std::make_unique<Tx>();
   std::string p = str(e, path), n = str(e, name), ty = str(e, type);
   const std::string d = str(e, dir);
+  const std::function<bool()> stopped = [make] { return make >= 0 && gMakes.load(std::memory_order_relaxed) != make; };
   try {
     if (!p.empty()) {
-      const lizard::Packed k = lizard::pack(p, n, ty, d);
+      const lizard::Packed k = lizard::pack(p, n, ty, d, stopped);
       if (k.packed) { t->packed = k.path; p = k.path; n = k.name; ty = k.type; }
       t->bytes = k.size;
       const int fd = open(p.c_str(), O_RDONLY);
@@ -736,7 +744,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIE
       close(fd);
     }
     static const uint8_t empty = 0;
-    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, ty, p.empty() ? "" : d);
+    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, ty, p.empty() ? "" : d, stopped);
   } catch (const std::exception& x) {
     if (t->map) munmap(const_cast<uint8_t*>(t->map), t->mapLen);
     gTxError = x.what();

@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.lizard.readout.Readout
 import dev.lizard.tar.Bundle
+import dev.lizard.tar.Stoppable
+import dev.lizard.tar.Stopped
 import dev.lizard.tar.TAR_TYPE
 import dev.lizard.tar.TarEntry
 import kotlinx.serialization.json.JsonObject
@@ -134,7 +136,7 @@ class SendState(val full: FullScreen) {
 
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
     // ai: (../liblizard/kotlin/Tar.kt Bundle, the web sender's rule), made from the selection (items); `reading` while
-    // ai: picks are walked or the bundle is made
+    // ai: picks wanted are walked or the bundle is made
     var choice by mutableStateOf<Bundle?>(null)
     private var singleFile: File? = null   // ai: the one file the choice is, where it is one
     var reading by mutableStateOf(false)
@@ -146,10 +148,24 @@ class SendState(val full: FullScreen) {
     // ai: made off the UI thread and its transfer made again (make), as the web's does.
     class Item(val key: String, val file: File, val name: String, val dir: Boolean, val files: Int, val size: Long, val links: Int, val entries: List<TarEntry>)
     val items = mutableStateListOf<Item>()
-    private var walks = 0           // ai: picks being walked
+    // ai: A pick's file or folder being walked (2026-11-16): its tile on the card at once, what the walk has found so
+    // ai: far (its thread's fields, which the card's ticking reads), its x cancelling it (the walk stops at its next
+    // ai: entry, the item dropped). Start waits only on the walks still wanted: a whole disk picked by mistake held it
+    // ai: until the walk ended before, with no way to stop it.
+    class Walking(val key: String, val name: String) {
+        @Volatile var files = 0
+        @Volatile var bytes = 0L
+        @Volatile var cancelled = false
+    }
+    val walking = mutableStateListOf<Walking>()
+    private var walkSeq = 0
     private var bundling = 0        // ai: the newest bundle asked for; bundleNow while it is being made
-    private var bundleNow = false
-    private fun readingNow() { reading = walks > 0 || bundleNow }
+    var bundleNow by mutableStateOf(false)
+        private set
+    // ai: the items the choice was made from: one added since shows loading while the bundle is made
+    var bundled by mutableStateOf<Set<String>>(emptySet())
+        private set
+    private fun readingNow() { reading = walking.isNotEmpty() || bundleNow }
     // ai: a drag over the window (the canvas's drop target, Screen.kt's for the rest): the idle area's outline
     var dragOver by mutableStateOf(false)
         private set
@@ -172,7 +188,7 @@ class SendState(val full: FullScreen) {
     var compressed by mutableStateOf(0L)
     private var made = 0L                 // ai: the transfer made for the choice, not yet sending (0: none)
     private var madeTar: File? = null     // ai: its tar, where the choice is a bundle
-    private var making = 0                // ai: the make under way's number: a newer make or pick orphans it
+    @Volatile private var making = 0      // ai: the make under way's number: a newer make or pick orphans it (its tar's write reads it)
     private var makingNow = false
     private var startWhenMade = false     // ai: Start pressed while the transfer was being made
     private var closing = false
@@ -274,15 +290,16 @@ class SendState(val full: FullScreen) {
     fun chooseFile() = frame?.let { Chooser.choose(it, "Choose files", false, true) { f -> pick(f) } }
     fun chooseFolder() = frame?.let { Chooser.choose(it, "Choose folders", true, true) { f -> pick(f) } }
 
-    // ai: Files and folders added (picked, dropped, handed in), walked off the UI thread
+    // ai: Files and folders added (picked, dropped, handed in), walked off the UI thread, a tile each meanwhile
     fun pick(files: List<File>) {
         if (sending) stop()
         if (phase is Phase.Error) phase = Phase.Idle
-        walks++; readingNow()
+        val ws = files.map { Walking("walk:${++walkSeq}", rootName(it)) }
+        walking.addAll(ws); readingNow()
         thread(name = "lizard-send-pick", isDaemon = true) {
-            val got = runCatching { files.map { itemOf(it) } }
+            val got = runCatching { files.zip(ws).mapNotNull { (f, w) -> itemOf(f, w) } }
             EventQueue.invokeLater {
-                walks--; readingNow()
+                walking.removeAll(ws); readingNow()
                 got.onSuccess { list ->
                     val have = items.mapTo(HashSet()) { it.key }
                     val fresh = list.filter { have.add(it.key) }
@@ -291,25 +308,40 @@ class SendState(val full: FullScreen) {
             }
         }
     }
-    fun remove(key: String) { items.removeAll { it.key == key }; changed() }
-    fun clearPicks() { items.clear(); changed() }
-    private fun itemOf(f: File): Item {
+    // ai: an item removed, or a walk under way cancelled (its tile's x)
+    fun remove(key: String) {
+        val w = walking.firstOrNull { it.key == key }
+        if (w != null) { w.cancelled = true; walking.remove(w); readingNow(); return }
+        items.removeAll { it.key == key }; changed()
+    }
+    fun clearPicks() { walking.forEach { it.cancelled = true }; walking.clear(); items.clear(); changed() }
+    // ai: a pick's name: its own; a drive's root, which has none ("/", "C:\"), its letters or "root" (2026-11-16: the
+    // ai: empty name failed the bundle)
+    private fun rootName(f: File) = f.name.ifEmpty { f.path.filter { it.isLetterOrDigit() }.ifEmpty { "root" } }
+    // ai: a pick walked into its entries, counted into w as they are found; null where w was cancelled
+    private fun itemOf(f: File, w: Walking): Item? {
         val top = f.canonicalFile
         var links = 0
         val out = ArrayList<TarEntry>()
         fun walk(x: File, rel: String) {
+            if (w.cancelled) throw Stopped()
             if (x.isDirectory) {
                 out.add(TarEntry(rel, mtimeSec = x.lastModified() / 1000))
                 val kids = x.listFiles() ?: throw java.io.IOException("$rel could not be read")
                 for (k in kids.sortedBy { it.name }) if (Files.isSymbolicLink(k.toPath())) links++ else walk(k, "$rel/${k.name}")
-            } else if (x.isFile) out.add(TarEntry(rel, x.length(), x.lastModified() / 1000) { x.inputStream() })
+            } else if (x.isFile) {
+                val n = x.length()
+                out.add(TarEntry(rel, n, x.lastModified() / 1000) { x.inputStream() })
+                w.files++; w.bytes += n
+            }
         }
-        walk(top, f.name)
-        if (out.isEmpty()) throw java.io.IOException("${f.name} is not a file or a folder")
-        return Item(top.path, top, f.name, out[0].dir, out.count { !it.dir }, out.filter { !it.dir }.sumOf { it.size }, links, out)
+        try { walk(top, w.name) } catch (e: Exception) { if (w.cancelled) return null; throw e }
+        if (out.isEmpty()) throw java.io.IOException("${w.name} is not a file or a folder")
+        return Item(top.path, top, w.name, out[0].dir, out.count { !it.dir }, out.filter { !it.dir }.sumOf { it.size }, links, out)
     }
     // ai: the selection changed: the run stopped, the made transfer let go, the bundle made again off the UI thread (its
-    // ai: transfer waits for Start)
+    // ai: transfer waits for Start); a bundle that fails is said (2026-11-16: its thread died silently before, Start
+    // ai: greyed for good)
     private fun changed() {
         if (sending) stop()
         dropMade()
@@ -318,13 +350,15 @@ class SendState(val full: FullScreen) {
         val list = items.toList()
         val my = ++bundling
         bundleNow = list.isNotEmpty(); readingNow()
-        if (list.isEmpty()) return
+        if (list.isEmpty()) { bundled = emptySet(); return }
         thread(name = "lizard-send-bundle", isDaemon = true) {
-            val b = Bundle(list.flatMap { it.entries })
+            val got = runCatching { Bundle(list.flatMap { it.entries }) }
             EventQueue.invokeLater {
                 if (my != bundling) return@invokeLater
                 bundleNow = false; readingNow()
-                choice = b; singleFile = if (b.single != null) list[0].file else null; fileSize = b.size
+                bundled = list.mapTo(HashSet()) { it.key }
+                got.onSuccess { b -> choice = b; singleFile = if (b.single != null) list[0].file else null; fileSize = b.size }
+                    .onFailure { phase = Phase.Error("Not sendable: ${it.message}") }
             }
         }
     }
@@ -334,11 +368,14 @@ class SendState(val full: FullScreen) {
 
     // ai: The choice's transfer made off the UI thread: its tar written where it is a bundle, txCreate (the file packed
     // ai: where that pays into the cache's send-pack, the files an earlier make left there let go first; its root hashed),
-    // ai: the bytes it carries (txBytes). A failure is the state line's at once.
+    // ai: the bytes it carries (txBytes). A failure is the state line's at once. One let go (dropMade: Stop, a change,
+    // ai: the close) stops where it is (2026-11-16; it ran to its end before, a disk's worth of tar, pack and hash): the
+    // ai: tar's write at its next buffer (Stoppable), the pack and the hash at their next piece (txCancelMakes).
     private fun make() {
         val b = choice ?: return
         dropMade()
         val my = making
+        val ep = Native.txCancelMakes()
         makingNow = true
         val one = if (b.single == null) null else singleFile
         val tar = if (one != null) null else File(Native.cache, "send-${ProcessHandle.current().pid()}-$my.tar")
@@ -347,12 +384,15 @@ class SendState(val full: FullScreen) {
         thread(name = "lizard-send-make", isDaemon = true) {
             val wrote = if (tar == null) null else runCatching {
                 tar.parentFile.mkdirs(); tar.deleteOnExit()
-                tar.outputStream().buffered(1 shl 20).use { b.write(it) }
+                Stoppable(tar.outputStream()) { my == making }.buffered(1 shl 20).use { b.write(it) }
             }.exceptionOrNull()
             // ai: a packed file still mapped by a transfer goes on being read after its name is removed (POSIX); Windows
-            // ai: refuses the remove, and the transfer's own release takes it
-            val packDir = File(Native.cache, "send-pack").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-            val hnd = if (wrote != null) 0L else Native.txCreate(path, b.name, type, packDir.path)
+            // ai: refuses the remove, and the transfer's own release takes it. A make let go meanwhile touches nothing
+            // ai: there (a newer make's pack may be being written)
+            val live = wrote == null && my == making
+            val packDir = File(Native.cache, "send-pack")
+            if (live) packDir.apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+            val hnd = if (!live) 0L else Native.txCreate(path, b.name, type, packDir.path, ep)
             val err = if (wrote != null) "Files unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
             val sent = if (hnd != 0L) Native.txBytes(hnd) else 0L
             EventQueue.invokeLater {
@@ -364,8 +404,9 @@ class SendState(val full: FullScreen) {
             }
         }
     }
-    // ai: the made transfer let go, and any make under way orphaned
+    // ai: the made transfer let go, and any make under way stopped
     private fun dropMade() {
+        if (makingNow) Native.txCancelMakes()
         making++; makingNow = false; startWhenMade = false
         if (made != 0L) { Native.txDestroy(made); made = 0L }
         madeTar?.delete(); madeTar = null
@@ -391,7 +432,7 @@ class SendState(val full: FullScreen) {
         val my = ++gen
         val sd = if (runTest) null else seedOf(seed)
         thread(name = "lizard-send-prep", isDaemon = true) {
-            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "")
+            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "", -1L)
             if (hnd != 0L && sd != null) Native.txSeed(hnd, sd)   // ai: before the first frame, which the configure makes
             val err = if (hnd == 0L) Native.txError() else ""
             // ai: the GPU painter's device and pipelines made here, off the UI thread that configures
@@ -417,6 +458,7 @@ class SendState(val full: FullScreen) {
         if (h != 0L && h != preparing) Native.txDestroy(h)
         h = 0L
         dropTar()
+        if (makingNow) dropMade()   // ai: Stop while the file is made stops the make (2026-11-16; it ran on before)
         startWhenMade = false
         if (sending) phase = Phase.Idle
         paused = false; fmt = null; present = null; sender = null

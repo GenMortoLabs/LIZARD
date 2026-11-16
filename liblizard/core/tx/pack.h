@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -37,8 +38,11 @@ std::string unpackedName(const std::string& name);
 
 // ai: The file at `path` (UTF-8), its name and media type as the caller would send it, packed into a new file in `dir`
 // ai: where that pays (the caller removes it after the send), else returned as it is. Throws std::runtime_error where
-// ai: the file cannot be read or the stream not written.
-Packed pack(const std::string& path, const std::string& name, const std::string& type, const std::string& dir);
+// ai: the file cannot be read or the stream not written. `stopped`, where given, is asked before the sample and before
+// ai: each round of frames (a worker's 4 MiB each): true stops the pack, its stream removed, std::runtime_error
+// ai: ("cancelled") thrown (a make the app let go, 2026-11-16).
+Packed pack(const std::string& path, const std::string& name, const std::string& type, const std::string& dir,
+            const std::function<bool()>& stopped = {});
 
 // ai: The stream at `from` unpacked into a new file `to` (UTF-8 paths): "" or why not (a frame damaged or cut short,
 // ai: one not saying its bytes or holding more than PACK_FRAME_MAX, a write refused; `to` is removed then).

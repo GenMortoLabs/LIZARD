@@ -58,6 +58,7 @@ let paused = false;
 const AHEAD = 3;
 // ai: The rejection a stop hands a reply still awaited: not an error, so nothing is said about it.
 const STOPPED = new Error("stopped");
+let prepping = null, prepGen = 0;   // ai: a pick's transfer being prepared (prepare, cancelPrep)
 let sw = null, gen = 0, pending = null, ahead = new Map(), inflight = 0, reqSeq = 0, spare = [], respecPending = false, behind = 0;
 function swInit() {
   if (sw) return;
@@ -522,7 +523,7 @@ async function start() {
   // ai: here, which says why
   if (!test) { file.posted ??= prepare(file); await file.posted; }
   if (my !== gen) return;
-  const bytes = test || !file.failed ? null : await readOf(file);
+  const bytes = test || !file.failed ? null : await readOf(file, () => my === gen);
   if (my !== gen) return;   // ai: stopped, or started again, while the file was read
   // ai: The spec after the read, so the room is the one the preparing controls left.
   const s = spec(), xfer = bytes ? { name: file.name, type: file.type, chunkLog2: CHUNK_LOG2 } : null;
@@ -644,6 +645,7 @@ async function start() {
 function stop() {
   offeredKBs = 0; drawFps = 0; cancelAnimationFrame(timer); cfg = shown = null; bandFps = 0; running = live = paused = hiddenPause = false;
   showEnc();
+  cancelPrep();
   // The worker's frames from this run are dropped by generation; a reply still awaited is refused, not left hanging.
   sw?.postMessage({ type: "stop", gen });
   gen++; if (pending) { pending.rej(STOPPED); pending = null; }
@@ -729,6 +731,7 @@ $("railSend").onclick = playPause;
 // ai: transfer is made at the next Start (prepare: the file packed where that pays); a reply for a selection since changed is
 // ai: ignored by its pick number.
 let picks = 0, items = [];
+let walking = [], walkSeq = 0, walkTimer = 0;   // ai: the walks under way (walkIn)
 function itemOf(name, entries) {
   const files = entries.filter((e) => !e.dir), size = files.reduce((n, f) => n + f.blob.size, 0);
   const dir = entries.length !== 1 || !!entries[0].dir || entries[0].path.includes("/");
@@ -740,8 +743,13 @@ function add(fresh) {
   items = [...items, ...more];
   changed();
 }
-function remove(key) { items = items.filter((i) => i.key !== key); changed(); }
-function clearPick() { items = []; changed(); }
+// ai: an item removed, or a walk under way cancelled (its tile's x)
+function remove(key) {
+  const w = walking.find((x) => x.key === key);
+  if (w) { w.cancelled = true; walksDone([w]); return; }
+  items = items.filter((i) => i.key !== key); changed();
+}
+function clearPick() { for (const w of walking) w.cancelled = true; walksDone(walking); items = []; changed(); }
 function changed() {
   if (running) stop();
   $("payload").value = "file";
@@ -751,16 +759,50 @@ function changed() {
   else ++picks;
   showReady();
 }
-// ai: the chosen file's bytes, with the page's words for one the browser no longer reads
-const readOf = (file) => file.blob.arrayBuffer().then((b) => new Uint8Array(b), (e) => {
-  throw e?.name === "NotReadableError" || e?.name === "NotFoundError" ? alone(`File changed: choose ${file.bundled ? "the files" : "it"} again`) : e;
-});
+// ai: the chosen file's bytes, read a piece at a time so a prepare cancelled meanwhile stops there (`live`, STOPPED),
+// ai: with the page's words for one the browser no longer reads: a file saved again, moved or replaced since it was
+// ai: chosen is refused (Chrome's stream a TypeError "network error", arrayBuffer a NotReadableError), and one that
+// ai: reads longer or shorter than it was has changed too
+async function readOf(file, live = () => true) {
+  const changed = () => alone(`File changed: choose ${file.bundled ? "the files" : "it"} again`);
+  const out = new Uint8Array(file.blob.size), r = file.blob.stream().getReader();
+  let at = 0;
+  for (;;) {
+    let got;
+    try { got = await r.read(); } catch { throw changed(); }
+    if (got.done) break;
+    if (!live()) { r.cancel().catch(() => {}); throw STOPPED; }
+    if (at + got.value.length > out.length) { r.cancel().catch(() => {}); throw changed(); }
+    out.set(got.value, at); at += got.value.length;
+  }
+  if (at !== out.length) throw changed();
+  return out;
+}
+// ai: A pick's transfer being prepared (2026-11-16): `prepping` while its file is read here and then made in the worker
+// ai: (packed, its chunks hashed by the pool), until the worker's "prepared". Stop or a new selection meanwhile cancels
+// ai: it (cancelPrep, from stop): the read stops at its next piece, and the worker, told "cancel" with the prepare's
+// ai: number, stops at its next frame of the pack or chunk of the hash (it takes its messages between them); the next
+// ai: Start prepares anew. Kept through a stop once prepared, as before.
 async function prepare(p) {
+  const my = ++prepGen;
+  prepping = { pick: p.pick, worker: false, my };
   let b;
-  try { b = await readOf(p); } catch (e) { p.failed = e; return; }   // ai: said at Start, which reads it again
-  if (p !== chosen) return;
+  try { b = await readOf(p, () => my === prepGen); } catch (e) {
+    if (my !== prepGen) return;   // ai: cancelled
+    prepping = null; p.failed = e; return;   // ai: said at Start, which reads it again
+  }
+  if (my !== prepGen) return;
+  if (p !== chosen) { prepping = null; return; }
   swInit();
-  sw.postMessage({ type: "prepare", pick: p.pick, bytes: b.buffer, xfer: { name: p.name, type: p.type, chunkLog2: CHUNK_LOG2 } }, [b.buffer]);
+  prepping.worker = true;
+  sw.postMessage({ type: "prepare", pick: p.pick, prep: my, bytes: b.buffer, xfer: { name: p.name, type: p.type, chunkLog2: CHUNK_LOG2 } }, [b.buffer]);
+}
+function cancelPrep() {
+  if (!prepping) return;
+  const p = prepping;
+  prepping = null; prepGen++;
+  if (p.worker) sw?.postMessage({ type: "cancel", prep: p.my });
+  if (chosen?.pick === p.pick) chosen.posted = null;
 }
 // ai: A file's transfer whole in the worker (streaming, 2026-11-06: the pool makes its chunks behind the first frames):
 // ai: its lap known only now, the sending line said again with it; a failure ends the run.
@@ -773,6 +815,8 @@ function madeAll(m) {
   showDetails();
 }
 function madeFor(m) {
+  if (prepping?.my === m.prep) prepping = null;
+  if (m.cancelled) return;
   const p = chosen;
   if (!p || p.pick !== m.pick) return;
   if (m.error) { p.failed = new Error(m.error); return; }
@@ -783,24 +827,32 @@ function madeFor(m) {
 // ai: file: the File and Folder tiles, and under them the selection's card (#sel), always (2026-11-07; while it held
 // ai: something before; "0 items" over a row's empty room, Clear dimmed, while it holds nothing): the count with Clear
 // ai: (its size after the count), then a square an item (its icon, its name with the stem cut and the ending kept, "N files" for
-// ai: a folder or its size, an x that removes it).
+// ai: a folder or its size, an x that removes it); after them a walk under way, a tile each (2026-11-16, the apps'
+// ai: loading UploadItem): a spinner for its icon, what it has found so far, its x cancelling it; the head's size
+// ai: then the bytes found so far.
+const filesText = (n) => `${n.toLocaleString("en-US")} ${n === 1 ? "file" : "files"}`;
 function renderPick() {
   // ai: the count, and the size of what goes after it, muted (2026-11-07: "2 items · 4.4 GB"; a line under the card before)
-  $("selSum").textContent = `${items.length} ${items.length === 1 ? "item" : "items"}`;
-  if (chosen && items.length) { const t = document.createElement("span"); t.className = "tot"; t.textContent = ` · ${bytes(chosen.size)}`; $("selSum").append(t); }
-  $("clearPick").disabled = !items.length;
-  $("pickList").replaceChildren(...items.map((it) => {
+  const n = items.length + walking.length;
+  $("selSum").textContent = `${n} ${n === 1 ? "item" : "items"}`;
+  const total = walking.length ? items.reduce((t, i) => t + i.size, 0) + walking.reduce((t, w) => t + w.size, 0) : chosen && items.length ? chosen.size : null;
+  if (total != null) { const t = document.createElement("span"); t.className = "tot"; t.textContent = ` · ${bytes(total)}`; $("selSum").append(t); }
+  $("clearPick").disabled = !n;
+  const tile = (it, loading) => {
     const li = document.createElement("li"), t = document.createElement("span"), stem = document.createElement("span");
     const end = document.createElement("span"), sub = document.createElement("span"), rm = document.createElement("button");
     const [a, b] = nameParts(it.name);
     li.className = "itile";
     t.className = "t fname"; t.title = it.name; stem.className = "stem"; stem.textContent = a; end.textContent = b; t.append(stem, end);
-    sub.className = "s"; sub.textContent = it.dir ? `${it.files} ${it.files === 1 ? "file" : "files"}` : bytes(it.size);
+    sub.className = "s"; sub.textContent = it.dir ? filesText(it.files) : bytes(it.size);
     rm.type = "button"; rm.className = "icon x"; rm.title = `Remove ${it.name}`; rm.append(icon("x"));
     rm.onclick = (e) => { e.stopPropagation(); remove(it.key); };
-    li.append(icon(it.dir ? "folder" : "file"), t, sub, rm);
+    let lead = icon(it.dir ? "folder" : "file");
+    if (loading) { lead = document.createElement("span"); lead.className = "spin"; }
+    li.append(lead, t, sub, rm);
     return li;
-  }));
+  };
+  $("pickList").replaceChildren(...items.map((it) => tile(it, false)), ...walking.map((w) => tile(w, true)));
 }
 function showChoice(painting) {
   $("pick").hidden = painting || isTest();
@@ -839,10 +891,23 @@ async function takeShared() {
   }
   if (got.length) add(got);
 }
-const canFolders = "webkitdirectory" in $("folder");
+// ai: Folder (2026-11-16): where the browser lends a folder (showDirectoryPicker: Chrome and Edge) the page walks it
+// ai: itself, its tile on the card at once, as a dropped folder's (walkIn); elsewhere the browser's folder input
+// ai: (webkitdirectory), which lists the whole folder before the page sees any of it (Chrome counting it for its own
+// ai: "upload N files" question), so nothing shows meanwhile and nothing stops it
+const canPickDir = typeof showDirectoryPicker === "function";
+const canFolders = canPickDir || "webkitdirectory" in $("folder");
 $("addFolder").hidden = !canFolders;
 $("addFiles").onclick = (e) => { e.stopPropagation(); $("file").click(); };
-$("addFolder").onclick = (e) => { e.stopPropagation(); $("folder").click(); };
+$("addFolder").onclick = (e) => { e.stopPropagation(); if (canPickDir) pickDir(); else $("folder").click(); };
+async function pickDir() {
+  let dir;
+  try { dir = await showDirectoryPicker({ id: "lizard-send", mode: "read" }); } catch (e) {
+    if (e?.name !== "AbortError") { console.error("sender: the folder could not be opened:", e); if (!running) { showReady(); showErr(`Folder unreadable: ${e?.message ?? e}`); } }
+    return;
+  }
+  walkIn([dir], "Folder unreadable: choose it again");
+}
 $("clearPick").onclick = (e) => { e.stopPropagation(); clearPick(); };
 $("pick").addEventListener("click", (e) => e.stopPropagation());   // ai: a tap on the list is not a tap on <main>
 $("payload").onchange = () => { if (running) stop(); showReady(); };
@@ -866,29 +931,58 @@ document.addEventListener("drop", (e) => {
   const roots = [...(e.dataTransfer?.items ?? [])].filter((i) => i.kind === "file").map((i) => i.webkitGetAsEntry?.() ?? null);
   const flat = [...(e.dataTransfer?.files ?? [])];
   if (!flat.length && !roots.length) return;
-  const walked = roots.length && roots.every(Boolean) ? walkDrop(roots)
-    : Promise.resolve(flat.map((f) => itemOf(f.name, [{ path: f.name, blob: f, mtime: f.lastModified / 1000 }])));
-  if (!running) { const sp = document.createElement("span"); sp.className = "spin"; $("state").replaceChildren(sp); }   // ai: a spinner, no words (2026-11-07)
-  // ai: a drop that cannot be read leaves the list and a run as they were, and says so where nothing is sending
-  walked.then(add, (err) => {
-    console.error("sender: the dropped files could not be read:", err);
-    if (!running) { showReady(); showErr("Drop unreadable: choose the files instead"); }
-  });
+  if (roots.length && roots.every(Boolean)) walkIn(roots, "Drop unreadable: choose the files instead");
+  else add(flat.map((f) => itemOf(f.name, [{ path: f.name, blob: f, mtime: f.lastModified / 1000 }])));
 });
-// ai: A drop's items, each dropped root with every folder walked, folders included (an empty one survives), under its
-// ai: own name. readEntries hands a folder's listing over in pieces, so it is asked until it hands none.
-async function walkDrop(roots) {
-  const listAll = async (dir) => {
-    const r = dir.createReader(), all = [];
-    for (;;) { const got = await new Promise((ok, no) => r.readEntries(ok, no)); if (!got.length) return all; all.push(...got); }
+// ai: Picks the page walks itself (2026-11-16): a drop's roots (FileSystemEntry) or a folder lent by
+// ai: showDirectoryPicker (FileSystemDirectoryHandle), each root its tile on the card at once (`walking`: its name,
+// ai: the files and bytes found so far, the card drawn again every WALK_MS meanwhile), its x cancelling its walk at
+// ai: the next entry; each walked whole an item, folders included (an empty one survives), under its own name. One
+// ai: that cannot be read leaves the list and a run as they were and says so (`why`) where nothing is sending.
+const WALK_MS = 250, WALK_STOPPED = new Error("cancelled");
+const isFileNode = (n) => n.isFile ?? n.kind === "file";
+const fileOf = (n) => (n.getFile ? n.getFile() : new Promise((ok, no) => n.file(ok, no)));
+// ai: a folder's children: a handle's by its iterator; an entry's by readEntries, which hands the listing over in
+// ai: pieces, so it is asked until it hands none; a cancelled walk (w) stops between them
+async function kidsOf(n, w) {
+  const all = [];
+  if (n.values) { for await (const c of n.values()) { if (w.cancelled) throw WALK_STOPPED; all.push(c); } return all; }
+  const r = n.createReader();
+  for (;;) {
+    const got = await new Promise((ok, no) => r.readEntries(ok, no));
+    if (w.cancelled) throw WALK_STOPPED;
+    if (!got.length) return all;
+    all.push(...got);
+  }
+}
+function walksShown() {
+  clearInterval(walkTimer);
+  walkTimer = walking.length ? setInterval(renderPick, WALK_MS) : 0;
+  renderPick();
+}
+function walksDone(ws) { walking = walking.filter((w) => !ws.includes(w)); walksShown(); }
+function walkIn(roots, why) {
+  const ws = roots.map((r) => ({ key: `w|${++walkSeq}`, name: r.name, dir: !isFileNode(r), files: 0, size: 0, cancelled: false }));
+  walking.push(...ws); walksShown();
+  const walkOne = async (root, w) => {
+    const out = [];
+    const walk = async (n, path) => {
+      if (w.cancelled) throw WALK_STOPPED;
+      if (isFileNode(n)) { const f = await fileOf(n); out.push({ path, blob: f, mtime: f.lastModified / 1000 }); w.files++; w.size += f.size; }
+      else { out.push({ path, dir: true }); for (const c of await kidsOf(n, w)) await walk(c, `${path}/${c.name}`); }
+    };
+    try { await walk(root, root.name); } catch (e) { if (w.cancelled) return null; throw e; }
+    return out.length ? itemOf(root.name, out) : null;
   };
-  const walk = async (en, path, out) => {
-    if (en.isFile) { const f = await new Promise((ok, no) => en.file(ok, no)); out.push({ path, blob: f, mtime: f.lastModified / 1000 }); }
-    else if (en.isDirectory) { out.push({ path, dir: true }); for (const c of await listAll(en)) await walk(c, `${path}/${c.name}`, out); }
-  };
-  const got = [];
-  for (const r of roots) { const out = []; await walk(r, r.name, out); if (out.length) got.push(itemOf(r.name, out)); }
-  return got;
+  (async () => {
+    const got = [];
+    for (let i = 0; i < roots.length; i++) { const it = ws[i].cancelled ? null : await walkOne(roots[i], ws[i]); if (it) got.push(it); }
+    return got;
+  })().then((got) => { walksDone(ws); add(got); }, (err) => {
+    walksDone(ws);
+    console.error("sender: the files could not be read:", err);
+    if (!running) { showReady(); showErr(why); }
+  });
 }
 
 // ai: Fullscreen: body.full shows <main> alone (the room grows, the ResizeObserver re-picks), and the page asks for

@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import dev.lizard.readout.Readout
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 // ai: What Send shows and does, the app's: the run (the sender's state), the platform's code area and how it is shown;
 // ai: the column, its settings and full screen are ToolHost's (Tool.kt), as Receive's
@@ -77,7 +78,6 @@ interface SendHost : ToolHost {
     // ai: stays, the desktop's missing native library, is said again each time Send opens)
     val error: String
     fun clearError() {}
-    val reading: Boolean get() = false // ai: the pick being read (a dropped folder walked): a spinner, no words
     val railCapacity: Double?
     // ai: (`alone`, ToolHost's: the code alone on the screen, the phone's send running, the desktop's full screen) the code
     // ai: alone drawn as the landscape layout bare (ToolLandscape's `bare`), the code area never moved in the tree:
@@ -180,11 +180,11 @@ internal fun SendSide(h: SendHost, home: Boolean = false) {
         }
         FullscreenBtn(h)
     }
-    // ai: what goes as elements (2026-11-07, Details; "Sending x, 2.4 GB (4.4 GB raw)" over "1.69 MB/s, pass 2" before),
-    // ai: or a spinner while the pick is read; an error a popup (SendScreen), never the column's
+    // ai: what goes as elements (2026-11-07, Details; "Sending x, 2.4 GB (4.4 GB raw)" over "1.69 MB/s, pass 2" before);
+    // ai: an error a popup (SendScreen), never the column's. A pick being read is its tile's on the upload's card
+    // ai: (2026-11-16; a spinner here before, the one sign, with no way to stop it)
     val d = h.details
     if (d != null) DetailsBlock(d, Modifier.padding(top = 12.dp))
-    else if (h.reading) CircularProgressIndicator(Modifier.padding(top = 12.dp).size(16.dp), color = Fg, strokeWidth = 2.dp, trackColor = Line)
     h.heat?.let { WarnRow(it, Modifier.padding(top = 8.dp)) }
     Spacer(Modifier.height(16.dp))
     ToolFolds(h, home)
@@ -203,7 +203,23 @@ internal fun SendSide(h: SendHost, home: Boolean = false) {
 // ai: tall; only the card scrolls. `total`: the selection's size, after the count in the card's head ("2 items · 4.4 GB",
 // ai: 2026-11-07; a line under the card named what goes and its size before).
 // ai: Both apps draw it in Compose (the desktop's with AWT on its code canvas until 2026-11-02).
-class UploadItem(val key: String, val name: String, val sub: String, val dir: Boolean)
+// ai: loading (2026-11-16): a pick still being read (a folder walked, the bundle made) shows as its tile at once, a
+// ai: spinner for its icon and what is found so far under its name (`sub`, the host's, kept moving by ticking), its x
+// ai: cancelling the read; the head's total counts with it (`total`, the host's), so a wrong pick shows in seconds.
+class UploadItem(val key: String, val name: String, val sub: String, val dir: Boolean, val loading: Boolean = false)
+
+// ai: a folder's line, "1,204,881 files" (the tile's, loading or read)
+fun filesText(n: Int) = "${String.format(Locale.ROOT, "%,d", n)} ${if (n == 1) "file" else "files"}"
+
+// ai: a value that changes every TICK_MS while `on`: read where a host builds a walk's figures from its thread's fields,
+// ai: it recomposes that scope as they move (a function with a value is not a scope of its own: the read is the caller's)
+@Composable
+fun ticking(on: Boolean): Int {
+    var n by remember { mutableStateOf(0) }
+    LaunchedEffect(on) { while (on) { delay(TICK_MS); n++ } }
+    return n
+}
+private const val TICK_MS = 250L
 
 @Composable
 fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, row: Boolean, onRemove: (String) -> Unit, onClear: () -> Unit,
@@ -228,7 +244,7 @@ fun Upload(tiles: List<Act>, items: List<UploadItem>, enabled: Boolean, row: Boo
                     }
                     val item: @Composable (Int, Dp) -> Unit = { i, iw ->
                         val it = items[i]
-                        ItemTile(it.name, it.sub, if (it.dir) Icons.folder else Icons.file, iw, enabled = enabled) { onRemove(it.key) }
+                        ItemTile(it.name, it.sub, if (it.dir) Icons.folder else Icons.file, iw, enabled = enabled, loading = it.loading) { onRemove(it.key) }
                     }
                     if (row && items.isEmpty()) Spacer(Modifier.padding(top = 4.dp).height(TILE.dp))   // ai: a row's room, empty
                     else if (row) {
@@ -272,15 +288,18 @@ fun Tile(icon: ImageVector, label: String, width: Dp, enabled: Boolean = true, s
     }
 }
 
-// ai: an ItemTile is one item on the selection's card: its icon, its name in medium with the stem cut and the ending
-// ai: kept (Readout.nameParts), the line under it regular, and an x at its corner that removes it
+// ai: an ItemTile is one item on the selection's card: its icon (a spinner while it is read, `loading`), its name in
+// ai: medium with the stem cut and the ending kept (Readout.nameParts), the line under it regular, and an x at its
+// ai: corner that removes it (a read under way cancelled)
 @Composable
-fun ItemTile(name: String, sub: String, icon: ImageVector, width: Dp, enabled: Boolean = true, onRemove: (() -> Unit)?) {
+fun ItemTile(name: String, sub: String, icon: ImageVector, width: Dp, enabled: Boolean = true, loading: Boolean = false, onRemove: (() -> Unit)?) {
     val (stem, end) = Readout.nameParts(name)
     val name13 = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium)
     Box(Modifier.width(width).height(TILE.dp).clip(RoundedCornerShape(12.dp)).background(Bg)) {
         Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(icon, contentDescription = null, Modifier.padding(bottom = 6.dp).size(28.dp), tint = Muted)
+            if (loading) CircularProgressIndicator(Modifier.padding(start = 2.dp, top = 2.dp, end = 2.dp, bottom = 8.dp).size(24.dp),
+                color = Fg, strokeWidth = 2.5.dp, trackColor = Line)
+            else Icon(icon, contentDescription = null, Modifier.padding(bottom = 6.dp).size(28.dp), tint = Muted)
             Row {
                 Text(stem, style = name13, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Text(end, style = name13, color = Fg, maxLines = 1)

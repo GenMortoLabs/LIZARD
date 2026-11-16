@@ -84,7 +84,9 @@ std::string unpackedName(const std::string& name) {
   return name.size() > 4 && name.compare(name.size() - 4, 4, ".zst") == 0 ? name.substr(0, name.size() - 4) : name;
 }
 
-Packed pack(const std::string& path, const std::string& name, const std::string& type, const std::string& dir) {
+Packed pack(const std::string& path, const std::string& name, const std::string& type, const std::string& dir,
+            const std::function<bool()>& stopped) {
+  const auto check = [&] { if (stopped && stopped()) throw std::runtime_error("cancelled"); };
   Packed r;
   r.path = path; r.name = name; r.type = type;
   std::ifstream f(fs::u8path(path), std::ios::binary);
@@ -95,6 +97,7 @@ Packed pack(const std::string& path, const std::string& name, const std::string&
   // ai: a type the header would drop (not printable ASCII) packs as none
   const std::string pt = packType(printable(type) ? type : "");
   if (!L || pt.empty()) return r;
+  check();
   {
     // ai: the sample: three slices of 1 MiB (start, middle, end) as one frame, the whole file under 3 MiB
     std::vector<uint8_t> s;
@@ -119,6 +122,7 @@ Packed pack(const std::string& path, const std::string& name, const std::string&
   try {
     // ai: P frames at a time, a worker each (each its own reader), written in order
     for (uint64_t b = 0; b < F; b += P) {
+      check();
       const unsigned n = static_cast<unsigned>(std::min<uint64_t>(P, F - b));
       std::vector<std::vector<uint8_t>> z(n);
       std::vector<std::string> why(n);

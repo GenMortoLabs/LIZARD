@@ -22,8 +22,10 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
 #include <cwchar>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -62,6 +64,10 @@ struct Tx {
   }
 };
 Tx* tx(jlong h) { return reinterpret_cast<Tx*>(h); }
+
+// ai: The makes' epoch (2026-11-16): txCancelMakes moves it on, and a txCreate begun under an older one stops at its
+// ai: next piece of work (pack's rounds of frames, the hash's chunks); a make of -1 nothing stops (the test stream's)
+std::atomic<int64_t> makes{0};
 
 // ai: the file to send mapped read-only for as long as the sender lives (the Sender reads it in place): "" or why not;
 // ai: an empty file maps nothing
@@ -131,22 +137,23 @@ lizard::mac::Place placeOf(JNIEnv* e, jfloatArray a) {
 
 // ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
 // ai: form goes where packing pays (pack.h, the default client's compression; removed at txDestroy), and the transfer's
-// ai: spill (xfer_tx.h: its symbols on disk, no encoder kept; its file unlinked as it is made). 0, with the reason in
-// ai: txError(), where it cannot go.
-FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir) {
+// ai: spill (xfer_tx.h: its symbols on disk, no encoder kept; its file unlinked as it is made). make: the epoch it was
+// ai: begun under (txCancelMakes), -1 none. 0, with the reason in txError(), where it cannot go or was cancelled.
+FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir, jlong make) {
   auto t = std::make_unique<Tx>();
   std::string p = str(e, path), n = str(e, name), ty = str(e, type);
   const std::string d = str(e, dir);
+  const std::function<bool()> stopped = [make] { return make >= 0 && makes.load(std::memory_order_relaxed) != make; };
   try {
     if (!p.empty()) {
-      const lizard::Packed k = lizard::pack(p, n, ty, d);
+      const lizard::Packed k = lizard::pack(p, n, ty, d, stopped);
       if (k.packed) { t->packed = k.path; p = k.path; n = k.name; ty = k.type; }
       t->bytes = k.size;
       const std::string why = mapFile(p, t->map, t->mapLen);
       if (!why.empty()) { setError(why); return 0; }
     }
     static const uint8_t empty = 0;
-    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, ty, p.empty() ? "" : d);
+    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, ty, p.empty() ? "" : d, stopped);
   } catch (const std::exception& x) {
     unmapFile(t->map, t->mapLen);
     setError(x.what());
@@ -156,6 +163,9 @@ FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type,
 }
 
 FN(jstring, txError)(JNIEnv* e, jclass) { return jstr(e, lizard::jni::lastError()); }
+
+// ai: every make under way stopped at its next piece of work; the epoch a new make takes
+FN(jlong, txCancelMakes)(JNIEnv*, jclass) { return ++makes; }
 
 // ai: the bytes the transfer carries (the packed file's where it was packed, else the file's; 0 the test stream)
 FN(jlong, txBytes)(JNIEnv*, jclass, jlong h) { return static_cast<jlong>(tx(h)->bytes); }

@@ -57,8 +57,9 @@ uint32_t Sender::carouselKey() {
   return carKey_;
 }
 
-Sender::Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir) {
-  if (data) xfer_ = std::make_unique<XferTx>(data, length, name, type, -1, spillDir);
+Sender::Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir,
+               const std::function<bool()>& stopped) {
+  if (data) xfer_ = std::make_unique<XferTx>(data, length, name, type, -1, spillDir, stopped);
   // ai: the test stream starts at a random id each start, as the page's (lizard-web/send.mjs), so a receiver takes a restarted
   // ai: one as new with no signal
   std::random_device rd;

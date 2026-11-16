@@ -167,9 +167,13 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             "vsync" -> s.chooseVsync(n(0..1) == 1)
             "enc" -> if (v in setOf("auto", "gpu", "cpu")) s.chooseEnc(v) else fail("LIZ_SENDER_TEST: step $act")
             "add" -> { s.pick(v.split(java.io.File.pathSeparatorChar).filter { it.isNotEmpty() }.map { java.io.File(it) }); return true }
-            "remove" -> { s.items.firstOrNull { it.name == v }?.let { s.remove(it.key) } ?: fail("LIZ_SENDER_TEST: no item $v"); return true }
+            // ai: an item by its name, or a pick being walked (its tile's x: the walk cancelled)
+            "remove" -> { (s.items.firstOrNull { it.name == v }?.key ?: s.walking.firstOrNull { it.name == v }?.key)?.let { s.remove(it) }
+                ?: fail("LIZ_SENDER_TEST: no item $v"); return true }
             "clear" -> { s.clearPicks(); return true }
-            "list" -> System.err.println("list: ${(s.items.map { "${it.name} (${if (it.dir) "${it.files} files, " else ""}${it.size} B${if (it.links > 0) ", ${it.links} links skipped" else ""})" } + (s.choice?.takeIf { !s.reading }?.let { "${it.name}, ${it.files} files, ${it.size} B" } ?: if (s.reading) "reading" else "")).joinToString(" | ")}")
+            "list" -> System.err.println("list: ${(s.items.map { "${it.name} (${if (it.dir) "${it.files} files, " else ""}${it.size} B${if (it.links > 0) ", ${it.links} links skipped" else ""})" } +
+                s.walking.map { "${it.name} (walking: ${it.files} files, ${it.bytes} B)" } +
+                (s.choice?.takeIf { !s.reading }?.let { "${it.name}, ${it.files} files, ${it.size} B" } ?: if (s.reading) "reading" else "")).joinToString(" | ")}")
             else -> fail("LIZ_SENDER_TEST: unknown step $act")
         }
         return stopped

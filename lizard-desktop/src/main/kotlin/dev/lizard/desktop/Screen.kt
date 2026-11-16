@@ -57,12 +57,11 @@ class DesktopSend(private val app: App) : SendHost {
     override val pauseShown = true
     override fun toggleFull() = app.full.toggle()
     // ai: what goes as elements (SendState.details: Show statistics, Receive's own setting, names the rows it adds), the
-    // ai: error a popup, and the spinner while a pick is walked or a bundle made (2026-11-07; the state line before)
+    // ai: error a popup (2026-11-07; the state line before); a pick being read is its tile's on the card (CodeArea)
     override val details get() = s.details(app.recv.showStats)
     // ai: no native library: nothing sends; said in the popup each time Send opens (2026-11-07; a cover before)
     override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: s.loadError
     override fun clearError() { if (s.phase is SendState.Phase.Error) s.phase = SendState.Phase.Idle }
-    override val reading get() = s.phase == SendState.Phase.Idle && !s.test && s.reading
     override val heat: Warn? = null
     override val railCapacity get() = s.capacityKBs
     // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
@@ -144,11 +143,19 @@ class DesktopSend(private val app: App) : SendHost {
             if (s.canvas.shown) SwingPanel(background = s.codeFill, factory = { s.canvas }, modifier = Modifier.fillMaxSize())
             else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare)
             else {
+                // ai: the items, then a tile a walk under way (loading, its counts read each tick, its x cancelling it); an
+                // ai: item added since the bundle was made loading too while it is made; the total the choice's once
+                // ai: made, the bytes found so far while picks are read (2026-11-16)
+                ticking(s.walking.isNotEmpty())
+                val total = s.choice?.takeIf { !s.reading }?.size
+                    ?: (s.items.sumOf { it.size } + s.walking.sumOf { it.bytes }).takeIf { s.items.isNotEmpty() || s.walking.isNotEmpty() }
                 if (s.test) TestStreamNote()
                 else Upload(listOf(Act("File", icon = Icons.file) { s.chooseFile() }, Act("Folder", icon = Icons.folder) { s.chooseFolder() }),
-                    s.items.map { UploadItem(it.key, it.name, if (it.dir) "${it.files} ${if (it.files == 1) "file" else "files"}" else Readout.bytes(it.size), it.dir) },
+                    s.items.map { UploadItem(it.key, it.name, if (it.dir) filesText(it.files) else Readout.bytes(it.size), it.dir,
+                        loading = s.bundleNow && it.key !in s.bundled) } +
+                        s.walking.map { UploadItem(it.key, it.name, filesText(it.files), dir = true, loading = true) },
                     enabled = !s.sending, row = false, onRemove = { s.remove(it) }, onClear = { s.clearPicks() },
-                    column = 576.dp, total = s.choice?.takeIf { !s.reading }?.let { Readout.bytes(it.size) } ?: "")
+                    column = 576.dp, total = total?.let { Readout.bytes(it) } ?: "")
                 if (s.dragOver) DropOutline()
             }
         }

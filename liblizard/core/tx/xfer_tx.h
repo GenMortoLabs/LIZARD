@@ -32,6 +32,7 @@
 #include <deque>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -58,8 +59,10 @@ class XferTx {
   // ai: after it by a worker a physical core, each taking the next chunk, until every one is (fault() says a failure);
   // ai: the destructor stops and joins them. chunkLog2 -1: xfer_chunk_log2_for's for the length (16 MiB).
   // ai: spillDir: a folder for the spill (above; "" none: every encoder kept), its file made there and unlinked at once.
+  // ai: stopped, where given, is asked before each chunk's hash: true stops the constructor with std::runtime_error
+  // ai: ("cancelled") (a make the app let go, 2026-11-16; the chunks after it stop at the destructor as before).
   XferTx(const uint8_t* data, size_t length, const std::string& name, const std::string& type, int chunkLog2 = -1,
-         const std::string& spillDir = "");
+         const std::string& spillDir = "", const std::function<bool()>& stopped = {});
   ~XferTx();
   // ai: The schedule drawn from seed in place of the random one; before the first frame only (false after: the ids a
   // ai: schedule in hand gave are not given again).
