@@ -200,8 +200,16 @@ static_assert(LIZ_REFRESH_MAX == lizard::Sender::REFRESH_MAX, "lizard.h's refres
 LIZ_API int liz_sender_refresh(liz_sender* s, const int every[4]) {
   return guard([&] {
     need(s && every, "a sender and four refreshes");
-    for (int r = 0; r < 4; r++) need(every[r] >= 1 && every[r] <= LIZ_REFRESH_MAX, "a refresh is 1 to LIZ_REFRESH_MAX frames");
+    for (int r = 0; r < 4; r++) need(every[r] >= 1 && every[r] <= LIZ_REFRESH_MAX, "a refresh is 1 to LIZ_REFRESH_MAX pictures");
     s->s->setRefresh(every);
+    return LIZ_OK;
+  });
+}
+LIZ_API int liz_sender_refresh_blocks(liz_sender* s, const int* every, int n) {
+  return guard([&] {
+    need(s && every && n > 0, "a sender and a refresh a block place");
+    for (int b = 0; b < n; b++) need(every[b] >= 1 && every[b] <= LIZ_REFRESH_MAX, "a refresh is 1 to LIZ_REFRESH_MAX pictures");
+    if (!s->s->setRefreshBlocks(std::vector<int>(every, every + n))) throw Error(LIZ_E_ARG, "a refresh for each block place of the configured format's symbol");
     return LIZ_OK;
   });
 }

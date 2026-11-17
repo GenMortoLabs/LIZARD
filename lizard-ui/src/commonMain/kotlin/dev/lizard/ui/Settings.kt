@@ -93,8 +93,7 @@ fun seedSetting(text: String, choose: (String) -> Unit): Setting = Typed("Seed",
 fun seedText(t: String): String? = t.trim().let { v -> if (v.isEmpty() || v.toUIntOrNull() != null) v else null }
 fun seedOf(text: String): Int? = text.trim().toUIntOrNull()?.toInt()
 
-// ai: Receive's Largest file (2026-11-15, both apps, the Files fold: look A of
-// ai: research/build/ui-proposal-2026-11-15-filelimit/mock.png; session.h fileLimit): a transfer whose file is over it is
+// ai: Receive's Largest file (2026-11-15, both apps, the Files fold; session.h fileLimit): a transfer whose file is over it is
 // ai: refused at its header, the camera stopped, the popup saying so. GB of 10^9 bytes, as the apps' figures; the stops a
 // ai: slider's, FILE_GB_NONE (0) the last, "No limit" (the format's own, 65,535 chunks of 16 MiB); 50 GB by default.
 const val FILE_GB_NONE = 0
@@ -120,28 +119,32 @@ fun replaySizeSetting(mb: Int, choose: (Int) -> Unit): Setting =
 // ai: the bytes the session takes for Replay size's MB
 fun replayBytes(mb: Int): Long = replayMb(mb).toLong() shl 20
 
-// ai: Send's Rate refresh (2026-11-12, both apps; liblizard/core/tx/sender.h Sender::setRefresh): for each code rate,
-// ai: from the picture's inside out (REFRESH_RATES), a block
-// ai: of that rate takes a new id in every n-th frame and repeats the frame before's otherwise, n 1 (each frame, the
-// ai: default) to REFRESH_MAX. A slider a rate in the Refresh fold, under FPS (a heading over them until the folds by
-// ai: topic, 2026-11-12), each value applied as it moves (the sender takes it from its next frame, no configure); kept
-// ai: as "a,b,c,d" (refreshText, refreshOf), as the sender's stats carry it ("refresh").
-const val REFRESH_MAX = 4
-val REFRESH_RATES = listOf("7/8", "3/4", "2/3", "1/2")
+// ai: Send's Refresh (2026-11-17; Rate refresh of 2026-11-12 before, a slider a code rate, 1 to 4): FPS sets the clock,
+// ai: and each group's delay is the pictures between its blocks' new ids, a whole number 1 (every picture, the default) to
+// ai: REFRESH_MAX (liblizard/core/tx/sender.h Sender::setRefresh), so a group's rate is FPS over a whole number. Three
+// ai: groups from the picture's inside out (REFRESH_GROUPS): 7/8 and 3/4 tied, the two rates that carry the pilots, so
+// ai: the phase lock reads them alike; then 2/3, then 1/2. A slider a group in the Refresh fold under FPS, each value
+// ai: applied as it moves (the sender takes it from its next frame, no configure); kept as the sender's four,
+// ai: "a,b,c,d" (refreshText, refreshOf; a kept 3/4 of its own read as its 7/8), as the sender's stats carry them.
+const val REFRESH_MAX = 60
+val REFRESH_GROUPS = listOf("7/8 + 3/4" to listOf(0, 1), "2/3" to listOf(2), "1/2" to listOf(3))
 
-// ai: a kept text to the four values: a missing or unreadable one 1, each held to 1..REFRESH_MAX
+// ai: a kept text to the four delays: a missing or unreadable one 1, each held to 1..REFRESH_MAX, the 3/4 the 7/8's
 fun refreshOf(text: String?): IntArray {
     val v = text?.split(',')?.map { it.trim().toIntOrNull() }
-    return IntArray(REFRESH_RATES.size) { r -> (v?.getOrNull(r) ?: 1).coerceIn(1, REFRESH_MAX) }
+    val every = IntArray(4) { r -> (v?.getOrNull(r) ?: 1).coerceIn(1, REFRESH_MAX) }
+    every[1] = every[0]
+    return every
 }
 
 fun refreshText(every: IntArray): String = every.joinToString(",")
 
-fun rateRefreshSettings(every: IntArray, choose: (rate: Int, value: Int) -> Unit): List<Setting> =
-    REFRESH_RATES.mapIndexed { r, title ->
-        val v = every[r]
+// ai: choose(rates, value): the group's code rates, each to take the value
+fun rateRefreshSettings(every: IntArray, choose: (rates: List<Int>, value: Int) -> Unit): List<Setting> =
+    REFRESH_GROUPS.map { (title, rates) ->
+        val v = every[rates[0]]
         Slide(title, "$v", v.toFloat(), 1f..REFRESH_MAX.toFloat(), REFRESH_MAX - 2) { x ->
-            val n = x.roundToInt().coerceIn(1, REFRESH_MAX); if (n != v) choose(r, n) }
+            val n = x.roundToInt().coerceIn(1, REFRESH_MAX); if (n != v) choose(rates, n) }
     }
 
 // ai: Send's Header, the animated header (2026-11-15, titled Animated header in Experimental until that afternoon; the

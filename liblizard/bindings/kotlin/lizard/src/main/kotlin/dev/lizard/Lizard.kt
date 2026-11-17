@@ -22,6 +22,10 @@ data class Geometry(val n: Int, val span: Int, val pxm: Int, val side: Int, val 
 
 data class Rect(val x: Int, val y: Int, val w: Int, val h: Int)
 
+// ai: where a block of a symbol lies (lizard.h liz_block_place): its code rate (0 7/8, 1 3/4, 2 2/3, 3 1/2; the 7/8 and
+// ai: 3/4 blocks carry the pilots), its first slot and slots (640 a sub-channel), the sub-channels it spans
+data class BlockPlace(val rate: Int, val firstSlot: Int, val slots: Int, val firstSubch: Int, val lastSubch: Int)
+
 object Lizard {
   const val BLOCK = 476
   const val ID_BYTES = 5
@@ -48,6 +52,9 @@ object Lizard {
     val n = Native.layoutRects(w, h, layout, r)
     return List(n) { Rect(r[4 * it], r[4 * it + 1], r[4 * it + 2], r[4 * it + 3]) }
   }
+  // ai: block b of a symbol of a format's size (Format.blocks)
+  fun blockPlace(blocks: Int, b: Int): BlockPlace = IntArray(5).also { Native.blockPlace(blocks, b, it) }.let { BlockPlace(it[0], it[1], it[2], it[3], it[4]) }
+  const val REFRESH_MAX = 65535
   // ai: the test stream's payload for an id
   fun streamFill(id: Long): ByteArray = ByteArray(PAYLOAD).also { Native.streamFill(id, it) }
 }

@@ -35,9 +35,22 @@ static int send(const char *assets, const char *painter, const char *device) {
   if (liz_sender_configure(snd, &f, painter_of(painter), 4, assets, device) != LIZ_OK) {
     printf("FAIL sender: %s\n", liz_last_error()); return 1;
   }
-  /* ai: Rate refresh's bounds: 11 refused, all 1 (every frame new, the default) taken */
-  const int past[4] = {1, 1, 1, LIZ_REFRESH_MAX + 1}, plain[4] = {1, 1, 1, 1};
-  if (liz_sender_refresh(snd, past) == LIZ_OK || liz_sender_refresh(snd, plain) != LIZ_OK) { printf("FAIL refresh: %s\n", liz_last_error()); return 1; }
+  /* ai: Refresh's bounds: 0 and LIZ_REFRESH_MAX + 1 refused, a delay a place for another count of places refused; every
+   * ai: picture (1, the default) taken by rate and by place */
+  const int zero[4] = {1, 1, 1, 0}, past[4] = {1, 1, 1, LIZ_REFRESH_MAX + 1}, plain[4] = {1, 1, 1, 1};
+  const int places = liz_blocks_for(f.blocks);
+  int *each = malloc(((size_t)places + 1) * sizeof(int));
+  for (int b = 0; b <= places; b++) each[b] = 1;
+  if (liz_sender_refresh(snd, zero) == LIZ_OK || liz_sender_refresh(snd, past) == LIZ_OK || liz_sender_refresh(snd, plain) != LIZ_OK ||
+      liz_sender_refresh_blocks(snd, each, places + 1) == LIZ_OK || liz_sender_refresh_blocks(snd, each, places) != LIZ_OK) {
+    printf("FAIL refresh: %s\n", liz_last_error()); return 1;
+  }
+  free(each);
+  /* ai: the block places: the first a 7/8 block at slot 0, the places packed in order, every one inside the format */
+  liz_block_place p0, pl;
+  if (liz_block_place_of(f.blocks, 0, &p0) != LIZ_OK || p0.rate != 0 || p0.first_slot != 0 || p0.first_subch != 0 ||
+      liz_block_place_of(f.blocks, places - 1, &pl) != LIZ_OK || pl.rate != 3 || pl.last_subch >= 16 * f.blocks ||
+      liz_block_place_of(f.blocks, places, &pl) == LIZ_OK) { printf("FAIL block place: %s\n", liz_last_error()); return 1; }
   liz_geometry g;
   liz_sender_geometry(snd, &g);
   liz_decoder *d = liz_decoder_new(0);

@@ -794,9 +794,9 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txConfigure
   return lizard::jni::jstr(e, err);
 }
 
-// ai: Rate refresh (Sender::setRefresh, 2026-11-12): the blocks of the code rates 7/8, 3/4, 2/3 and 1/2 new in every
-// ai: a-th, b-th, c-th and d-th frame (1 to Sender::REFRESH_MAX), the frame before's repeated between; from the next frame
-// ai: made, kept across configures
+// ai: Refresh (Sender::setRefresh, 2026-11-17; Rate refresh 2026-11-12): the delays of the code rates 7/8, 3/4, 2/3 and
+// ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to Sender::REFRESH_MAX; the UI ties a and b),
+// ai: the picture before's repeated between; from the next frame made, kept across configures
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txRefresh(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   const int every[4] = {a, b, c, d};
   if (h) tx(h)->s->setRefresh(every);

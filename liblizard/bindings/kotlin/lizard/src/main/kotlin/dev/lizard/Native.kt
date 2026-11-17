@@ -41,6 +41,7 @@ internal object Native {
   @JvmStatic external fun pick(w: Double, h: Double, codes: Int, ring: Int, top: Int): Int
   @JvmStatic external fun streamFill(id: Long, out: ByteArray)
   @JvmStatic external fun layoutRects(w: Int, h: Int, layout: Int, out: IntArray): Int
+  @JvmStatic external fun blockPlace(blocks: Int, b: Int, out: IntArray)
   @JvmStatic external fun encoderNew(blocks: Int, ring: Int, fps: Int, codes: Int): Long
   @JvmStatic external fun encoderFree(h: Long)
   @JvmStatic external fun encoderPaint(h: Long, blocks: ByteArray, picture: Int, out: ByteArray, stride: Int, fmt: Int)
@@ -84,5 +85,6 @@ internal object Native {
   @JvmStatic external fun senderTakeBuffer(h: Long, out: ByteBuffer, stride: Int, fmt: Int): Boolean
   @JvmStatic external fun senderStats(h: Long): String
   @JvmStatic external fun senderRefresh(h: Long, a: Int, b: Int, c: Int, d: Int)
+  @JvmStatic external fun senderRefreshBlocks(h: Long, every: IntArray)
   @JvmStatic external fun senderSeed(h: Long, seed: Int)
 }

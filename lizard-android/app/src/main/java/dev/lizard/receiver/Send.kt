@@ -137,8 +137,9 @@ class SendState(private val a: MainActivity) {
     // ai: MARGIN_MAX at most, MARGIN_DEFAULT unless set; kept (sendMargin). Not painted: the box keeps it round the code's
     // ai: surface (CodeBox), as the desktop's presenter keeps it round the frame.
     var margin by mutableStateOf(prefs.getInt("sendMargin", MARGIN_DEFAULT).coerceIn(Pick.QUIET, MARGIN_MAX))
-    // ai: Rate refresh (2026-11-12, the desktop's; lizard-ui rateRefreshSettings): each code rate's blocks new every n-th
-    // ai: frame, 7/8, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change, kept
+    // ai: Refresh (2026-11-17, the desktop's; lizard-ui rateRefreshSettings; Rate refresh of 2026-11-12 before): each code
+    // ai: rate's delay, its blocks new every n-th picture, 7/8, 3/4 (tied to the 7/8), 2/3, 1/2, 1 to REFRESH_MAX; handed
+    // ai: to the sender as it is made and at each change, kept
     // ai: (sendRates, "a,b,c,d"; sendRefresh until 2026-11-16, the Refresh fold's key too, unread since)
     var refresh by mutableStateOf(refreshOf(prefs.getString("sendRates", null)))
     // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting; Sender::setCarousel): frames each symbol of
@@ -352,10 +353,10 @@ class SendState(private val a: MainActivity) {
     fun chooseGap(g: Int) { gap = g.coerceIn(0, 64); prefs.edit().putInt("sendGap", gap).apply(); unsettled = true }
     // ai: at the slider's release (the box resized once: a resize mid-send reconfigures where the room changed)
     fun chooseMargin(m: Int) { margin = m.coerceIn(Pick.QUIET, MARGIN_MAX); prefs.edit().putInt("sendMargin", margin).apply() }
-    // ai: a rate's refresh, applied at once (the sender's next frame; no configure)
-    fun chooseRefresh(rate: Int, v: Int) {
-        if (refresh[rate] == v) return
-        refresh = refresh.copyOf().also { it[rate] = v.coerceIn(1, REFRESH_MAX) }
+    // ai: a group's delay (its code rates), applied at once (the sender's next frame; no configure)
+    fun chooseRefresh(rates: List<Int>, v: Int) {
+        if (rates.all { refresh[it] == v }) return
+        refresh = refresh.copyOf().also { e -> for (r in rates) e[r] = v.coerceIn(1, REFRESH_MAX) }
         prefs.edit().putString("sendRates", refreshText(refresh)).apply()
         refreshNow()
     }

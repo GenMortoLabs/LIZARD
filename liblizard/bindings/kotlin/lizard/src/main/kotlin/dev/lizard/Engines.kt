@@ -73,14 +73,16 @@ class Sender(bytes: ByteArray? = null, name: String = "", type: String = "") : H
     return Native.senderTakeBuffer(live(), out, stride, fmt.code)
   }
   val stats: String get() = Native.senderStats(live())
-  // ai: Rate refresh (lizard.h liz_sender_refresh): frames between new blocks of each code rate, 7/8, 3/4, 2/3, 1/2 in
-  // ai: that order, 1 to REFRESH_MAX each
+  // ai: Refresh (lizard.h liz_sender_refresh): each code rate's delay, the pictures between its new blocks, 7/8, 3/4, 2/3,
+  // ai: 1/2 in that order, 1 to Lizard.REFRESH_MAX each; kept across configures
   fun refresh(every: IntArray) {
-    require(every.size == 4 && every.all { it in 1..REFRESH_MAX }) { "four refreshes of 1 to $REFRESH_MAX" }
+    require(every.size == 4 && every.all { it in 1..Lizard.REFRESH_MAX }) { "four refreshes of 1 to ${Lizard.REFRESH_MAX}" }
     Native.senderRefresh(live(), every[0], every[1], every[2], every[3])
   }
+  // ai: each block place's delay, of the configured format's symbol (liz_sender_refresh_blocks), until a configure to
+  // ai: another block count
+  fun refreshBlocks(every: IntArray) = Native.senderRefreshBlocks(live(), every)
   // ai: A file's schedule from seed (lizard.h liz_sender_seed, an unsigned 32-bit value carried in an Int), before its
   // ai: first frame; throws after it, or for the test stream
   fun seed(seed: Int) = Native.senderSeed(live(), seed)
-  companion object { const val REFRESH_MAX = 4 }
 }

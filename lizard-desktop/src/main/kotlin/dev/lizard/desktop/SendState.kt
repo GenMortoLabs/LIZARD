@@ -210,8 +210,9 @@ class SendState(val full: FullScreen) {
     var margin by mutableStateOf(Prefs.margin.coerceIn(Pick.QUIET, Room.MARGIN_MAX))
     var ring by mutableStateOf(Prefs.ring.let { if (it in Pick.RINGS.indices) it else -1 })
     var codes by mutableStateOf(if (Prefs.codes == 2) 2 else 1)
-    // ai: Rate refresh (2026-11-12, lizard-ui rateRefreshSettings): each code rate's blocks new every n-th frame, 7/8,
-    // ai: 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender as it is made and at each change (refreshNow), kept
+    // ai: Refresh (2026-11-17, lizard-ui rateRefreshSettings; Rate refresh of 2026-11-12 before): each code rate's delay,
+    // ai: its blocks new every n-th picture, 7/8, 3/4 (tied to the 7/8), 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender
+    // ai: as it is made and at each change (refreshNow), kept
     var refresh by mutableStateOf(refreshOf(Prefs.refresh))
     // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting; Sender::setCarousel): frames each symbol of
     // ai: the format's own header carousel is shown, 0 the static word; handed to each sender made and at each change,
@@ -558,11 +559,11 @@ class SendState(val full: FullScreen) {
     fun chooseMargin(v: Int) { margin = v.coerceIn(Pick.QUIET, Room.MARGIN_MAX); Prefs.margin = margin }
     fun chooseRing(v: Int) { ring = if (v in Pick.RINGS.indices) v else -1; Prefs.ring = ring; repick() }
     fun chooseCodes(v: Int) { codes = if (v == 2) 2 else 1; Prefs.codes = codes; repick() }
-    // ai: a rate's refresh, applied at once (the sender's next frame; no configure): not while a prepare holds the
-    // ai: sender's lock (the UI thread would wait out the driver's compile), which hands it on as it ends
-    fun chooseRefresh(rate: Int, v: Int) {
-        if (refresh[rate] == v) return
-        refresh = refresh.copyOf().also { it[rate] = v.coerceIn(1, REFRESH_MAX) }
+    // ai: a group's delay (its code rates), applied at once (the sender's next frame; no configure): not while a prepare
+    // ai: holds the sender's lock (the UI thread would wait out the driver's compile), which hands it on as it ends
+    fun chooseRefresh(rates: List<Int>, v: Int) {
+        if (rates.all { refresh[it] == v }) return
+        refresh = refresh.copyOf().also { e -> for (r in rates) e[r] = v.coerceIn(1, REFRESH_MAX) }
         Prefs.refresh = refreshText(refresh)
         if (h != preparing) refreshNow()
     }

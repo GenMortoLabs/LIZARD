@@ -120,6 +120,12 @@ void geometry(JNIEnv* e, jclass, jint blocks, jint ring, jint fps, jint codes, j
   const jint v[8] = {g.n, g.span, g.pxm, g.side, g.width, g.height, g.gap, g.frame_blocks};
   e->SetIntArrayRegion(out, 0, 8, v);
 }
+void blockPlace(JNIEnv* e, jclass, jint blocks, jint b, jintArray out) {
+  liz_block_place p{};
+  if (ok(e, liz_block_place_of(blocks, b, &p)) < 0) return;
+  const jint v[5] = {p.rate, p.first_slot, p.slots, p.first_subch, p.last_subch};
+  e->SetIntArrayRegion(out, 0, 5, v);
+}
 jdouble roomFor(JNIEnv* e, jclass, jint blocks, jint ring) {
   const double v = liz_room_for(blocks, ring);
   if (v < 0) throwFor(e, int(v));
@@ -420,6 +426,12 @@ jboolean senderTakeBuffer(JNIEnv* e, jclass, jlong v, jobject out, jint stride, 
 }
 jstring senderStats(JNIEnv* e, jclass, jlong v) { return e->NewStringUTF(liz_sender_stats(h<liz_sender>(v))); }
 void senderRefresh(JNIEnv* e, jclass, jlong v, jint a, jint b, jint c, jint d) { const int every[4] = {a, b, c, d}; ok(e, liz_sender_refresh(h<liz_sender>(v), every)); }
+void senderRefreshBlocks(JNIEnv* e, jclass, jlong v, jintArray every) {
+  const jsize n = every ? e->GetArrayLength(every) : 0;
+  std::vector<jint> x(size_t(std::max<jsize>(n, 1)));
+  if (n) e->GetIntArrayRegion(every, 0, n, x.data());
+  ok(e, liz_sender_refresh_blocks(h<liz_sender>(v), reinterpret_cast<const int*>(x.data()), int(n)));
+}
 void senderSeed(JNIEnv* e, jclass, jlong v, jint seed) { ok(e, liz_sender_seed(h<liz_sender>(v), uint32_t(seed))); }
 
 #define M(name, sig) {const_cast<char*>(#name), const_cast<char*>(sig), reinterpret_cast<void*>(name)}
@@ -432,6 +444,7 @@ const JNINativeMethod METHODS[] = {
     M(pick, "(DDIII)I"),
     M(streamFill, "(J[B)V"),
     M(layoutRects, "(III[I)I"),
+    M(blockPlace, "(II[I)V"),
     M(encoderNew, "(IIII)J"),
     M(encoderFree, "(J)V"),
     M(encoderPaint, "(J[BI[BII)V"),
@@ -475,6 +488,7 @@ const JNINativeMethod METHODS[] = {
     M(senderTakeBuffer, "(JLjava/nio/ByteBuffer;II)Z"),
     M(senderStats, "(J)Ljava/lang/String;"),
     M(senderRefresh, "(JIIII)V"),
+    M(senderRefreshBlocks, "(J[I)V"),
     M(senderSeed, "(JI)V"),
 };
 #undef M

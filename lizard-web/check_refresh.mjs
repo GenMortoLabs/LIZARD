@@ -102,7 +102,7 @@ for (const codes of [1, 2]) for (const every of [[1, 2, 3, 4], [2, 3, 4, 4]]) fo
 }
 
 // ai: 5. bounds and the real profiles
-check(everyOf([0, 11, "3", NaN]).join() === `1,${REFRESH_MAX},3,1` && everyOf(undefined).join() === "1,1,1,1", `everyOf ${everyOf([0, 11, "3", NaN]).join()}`);
+check(everyOf([0, REFRESH_MAX + 7, "3", NaN]).join() === `1,${REFRESH_MAX},3,1` && everyOf([60, 13, 1, 2]).join() === "60,13,1,2" && everyOf(undefined).join() === "1,1,1,1", `everyOf ${everyOf([0, REFRESH_MAX + 7, "3", NaN]).join()}`);
 {
   let bad = 0, n = 0;
   for (let i = 0; i < VERSIONS.length; i += 5) {

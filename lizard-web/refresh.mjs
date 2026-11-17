@@ -1,5 +1,6 @@
-// ai: Rate refresh, the sender's setting (the native sender's alike: liblizard/core/tx/sender.cpp Sender::produce and
-// ai: sender.h setRefresh): every[r] for the code rate r (0 7/8, 1 3/4, 2 2/3, 3 1/2), 1 to REFRESH_MAX, 1 the default.
+// ai: Refresh, the sender's setting (2026-11-17; Rate refresh, 1 to 4, of 2026-11-12 before; the native sender's alike:
+// ai: liblizard/core/tx/sender.cpp Sender::produce and sender.h setRefresh): every[r] for the code rate r (0 7/8, 1 3/4,
+// ai: 2 2/3, 3 1/2), its delay, a whole number of pictures 1 to REFRESH_MAX, 1 the default (the page ties 7/8 and 3/4).
 // ai: A frame's blocks lie per code in the format's tier order from the inside out (sim/lizard_pick.mjs tiersFor: the
 // ai: 7/8 blocks first, then 3/4, 2/3, 1/2), code k's after code k - 1's. In the frame painted seq-th a block of rate r
 // ai: repeats the id at its place in the frame before where there is one in this run, every[r] > 1 and seq is no
@@ -7,7 +8,7 @@
 // ai: and a repeated block is one it has. Pure (no codec, no page): check_refresh.mjs runs it in node.
 import { tiersFor } from "../liblizard/sim/lizard_pick.mjs";
 
-export const REFRESH_MAX = 4;
+export const REFRESH_MAX = 65535;   // ai: the library's (lizard.h LIZ_REFRESH_MAX)
 // ai: a tier's rate code (src/lizard_phy.h: 6 7/8, 4 3/4, 3 2/3, 2 1/2) to its index in every
 const INDEX = { 6: 0, 4: 1, 3: 2, 2: 3 };
 

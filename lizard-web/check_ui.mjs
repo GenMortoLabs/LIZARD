@@ -7,8 +7,8 @@
 // ai:      unmoved by them (a resize re-picks
 // ai:      mid-stream), #c inside <main>; #tx's first line names the version (the lab line #lab did until 2026-10-02), the
 // ai:      numbers line (#nums) the speed;
-// ai:      the defaults LIZARD-480 at 60; the folds and their controls in order, no group headings; Rate refresh's four
-// ai:      sliders after FPS in Refresh, at 1, one kept over a reload and drawn before the first paint; Fullscreen, then
+// ai:      the defaults LIZARD-480 at 60; the folds and their controls in order, no group headings; Refresh's three delay
+// ai:      sliders after FPS (7/8 + 3/4 one), at 1, one kept over a reload and drawn before the first paint; Fullscreen, then
 // ai:      its end clearing body.full.
 // ai:   1. The receiver on Chrome's fake camera, its folds (Camera, Decoder) in order, closed then open: #v visible and above 100 x 100 px with
 // ai:      more than 10 frame callbacks a second; at the phone sizes #go and #view on screen with no scrolling.
@@ -151,7 +151,7 @@ const SIZES = [
     if (k === 0) check(idle.dev.every((o) => !o), `send ${z.name}: every settings fold closed on a fresh profile (${idle.dev.join()})`);
     if (k === 0) {
       const at = await evaluate(s, FOLDS_AT);
-      check(at === "foldCode Code: blocks subch ring codes size spacing margin pickHex ink paper | foldRefresh Refresh: fps refresh78 refresh34 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload seed", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
+      check(at === "foldCode Code: blocks subch ring codes size spacing margin pickHex ink paper | foldRefresh Refresh: fps refresh78 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload seed", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
     }
     check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles and the empty card ("0 items", Clear dimmed) shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);
@@ -225,20 +225,20 @@ const SIZES = [
       await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "0"; e.dispatchEvent(new Event("change")); })()`);
       const back = await evaluate(s, `[localStorage.getItem("recv:stats"), document.getElementById("blocksTitle").textContent, document.getElementById("blocksOut").textContent, document.getElementById("ring").value].join(" / ")`);
       check(back === `0 / Density / 27.3 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
-      // ai: Rate refresh (2026-11-12, refresh.mjs): four sliders 1 to 4 in Refresh after FPS, 1 each by default; one
-      // ai: moved to 3 kept over a reload (send:refresh34), its label 3 before the first paint (the inline script's) and
-      // ai: after the codec; set back to 1 for the steps after
-      const REF = `["refresh78", "refresh34", "refresh23", "refresh12"].map((id) => { const e = document.getElementById(id), o = document.getElementById(id + "Out"); return e ? [e.closest("details")?.id, e.type, e.min, e.max, e.value, o?.textContent].join(":") : "none"; }).join(" ")`;
+      // ai: Refresh's delays (2026-11-17, refresh.mjs; Rate refresh 2026-11-12): three sliders 1 to 60 in Refresh after
+      // ai: FPS (7/8 + 3/4 one, 2/3, 1/2), 1 each by default; one moved to 13 kept over a reload (send:refresh78), its
+      // ai: label 13 before the first paint (the inline script's) and after the codec; set back to 1 for the steps after
+      const REF = `["refresh78", "refresh23", "refresh12"].map((id) => { const e = document.getElementById(id), o = document.getElementById(id + "Out"); return e ? [e.closest("details")?.id, e.type, e.min, e.max, e.value, o?.textContent].join(":") : "none"; }).join(" ")`;
       const refAt = await evaluate(s, REF);
-      check(refAt === ["78", "34", "23", "12"].map(() => "foldRefresh:range:1:4:1:1").join(" "), `send ${z.name}: Rate refresh in Refresh, four sliders 1 to 4 at 1 (${refAt})`);
-      await evaluate(s, `(() => { const e = document.getElementById("refresh34"); e.value = "3"; e.dispatchEvent(new Event("change")); })()`);
-      await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstRefresh = document.getElementById("refresh34Out")?.textContent ?? null; });` });
+      check(refAt === ["78", "23", "12"].map(() => "foldRefresh:range:1:60:1:1").join(" "), `send ${z.name}: Refresh's delays in Refresh, three sliders 1 to 60 at 1 (${refAt})`);
+      await evaluate(s, `(() => { const e = document.getElementById("refresh78"); e.value = "13"; e.dispatchEvent(new Event("change")); })()`);
+      await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstRefresh = document.getElementById("refresh78Out")?.textContent ?? null; });` });
       await navigate(s, SEND);
       await until(s, `typeof window.__firstRefresh === "string" && document.getElementById("fpsOut").textContent !== ""`, 10000, "send.mjs run").catch(() => {});
       await sleep(300);
-      const refKept = await evaluate(s, `[localStorage.getItem("send:refresh34"), window.__firstRefresh, document.getElementById("refresh34").value, document.getElementById("refresh34Out").textContent].join(" / ")`);
-      check(refKept === "3 / 3 / 3 / 3", `send ${z.name}: a refresh of 3 kept over a reload, its label before the first paint and after (${refKept})`);
-      await evaluate(s, `(() => { const e = document.getElementById("refresh34"); e.value = "1"; e.dispatchEvent(new Event("change")); })()`);
+      const refKept = await evaluate(s, `[localStorage.getItem("send:refresh78"), window.__firstRefresh, document.getElementById("refresh78").value, document.getElementById("refresh78Out").textContent].join(" / ")`);
+      check(refKept === "13 / 13 / 13 / 13", `send ${z.name}: a delay of 13 kept over a reload, its label before the first paint and after (${refKept})`);
+      await evaluate(s, `(() => { const e = document.getElementById("refresh78"); e.value = "1"; e.dispatchEvent(new Event("change")); })()`);
       await evaluate(s, setFolds(SEND_FOLDS, false));
       await navigate(s, `${SEND}?fps=24&payload=test&auto`);
       await until(s, `/^LIZARD-\\d+/.test(document.getElementById("tx").textContent)`, 20000, "the test stream painted");

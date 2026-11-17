@@ -76,7 +76,7 @@ if(EMSCRIPTEN)
   # ai: promise), zstd's shim by name (the default client's pack, sim/pack.mjs: nothing in the library calls it, so its
   # ai: object is linked only for these), RaptorQ (src/rq.h: the transfer's fountain for sim/fountain.mjs), then the allocator
   set(LIZ_WASM_EXPORTS _liz_version _liz_last_error _liz_last_error_code _liz_simd _liz_ring_cells _liz_geometry_of _liz_room_for
-      _liz_pick _liz_blocks_for _liz_encoder_new _liz_encoder_free _liz_encoder_geometry _liz_encoder_paint _liz_decoder_new
+      _liz_pick _liz_blocks_for _liz_block_place_of _liz_encoder_new _liz_encoder_free _liz_encoder_geometry _liz_encoder_paint _liz_decoder_new
       _liz_decoder_free _liz_decoder_max_blocks _liz_decode _liz_layout_rects _liz_tx_new
       _liz_tx_new_test _liz_tx_free _liz_tx_next _liz_tx_info_get _liz_rx_new _liz_rx_free _liz_rx_frame
       _liz_rx_progress _liz_rx_chunks _liz_rx_meta _liz_rx_data _liz_rx_clear

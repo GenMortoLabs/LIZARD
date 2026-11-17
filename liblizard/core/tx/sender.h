@@ -103,13 +103,22 @@ class Sender {
   std::string painter() const { return onGpu_ ? "gpu" : "cpu"; }
   const std::string& gpuWhy() const { return gpuWhy_; }
   const XferTx* xfer() const { return xfer_.get(); }
-  // ai: Rate refresh (2026-11-12, the senders' setting): every[r] for the code rate r (0 7/8, 1 3/4, 2 2/3, 1/2 3; the
-  // ai: format's tiers from the inside out), 1 to REFRESH_MAX, 1 the default. A block of rate r takes a new id in a
-  // ai: frame whose count is a multiple of every[r] and repeats the frame before's otherwise (its pilots still the
-  // ai: picture's count, as every frame's): no format change, a receiver reads each frame as ever and a repeated block
-  // ai: is one it has. From the next frame made (frames already made ahead keep theirs); kept across configures.
-  void setRefresh(const int every[4]);
-  static constexpr int REFRESH_MAX = 4;   // ai: two bits a rate; 4 at 60 is 15 a second
+  // ai: Refresh (2026-11-17; Rate refresh of 2026-11-12, 1 to 4 a code rate, before): each block place of a symbol takes
+  // ai: a new block every `every` pictures, its delay, a whole number (1, the default, every picture), so its rate is the
+  // ai: format's fps over a whole number: picture k (the count) shows a new block there where k is a multiple of it, and
+  // ai: repeats the picture before's block otherwise. The pilots stay the picture's count (painted with the picture, not
+  // ai: kept with the block), so a receiver and its phase lock read every picture as ever: no format change, a repeated
+  // ai: block one a receiver has. Only new places take ids. From the next frame made (frames already made ahead keep
+  // ai: theirs). A client ties the two pilot rates (7/8 and 3/4) to one delay.
+  static constexpr int REFRESH_MAX = 65535;
+  // ai: per code rate (0 7/8, 1 3/4, 2 2/3, 3 1/2; the format's tiers from the inside out): every block of the rate takes
+  // ai: its rate's; kept across configures
+  void setRefresh(const int rate[4]);
+  // ai: per block place of this format's symbol (every code alike); a configure to a format of another block count ends
+  // ai: it, each place its rate's again. False where `place` is not this format's count.
+  bool setRefreshBlocks(const std::vector<int>& place);
+  // ai: whether picture k shows a new block at a place that takes one every `every` pictures
+  static bool due(int every, uint64_t k) { return every <= 1 || k % static_cast<uint64_t>(every) == 0; }
   // ai: The animated header (2026-11-15, the apps' Header in Send's Refresh fold; src/fmt.h, SPEC 5.5): frames each
   // ai: carousel symbol is shown, 1 to CAROUSEL_MAX, 0 the static word (the default). The header is the format's own
   // ai: (version, fps, extension bytes 0 and 0: k 3). Code c of frame seq shows slot codes x (seq / frames) + c (two codes
@@ -154,7 +163,9 @@ class Sender {
   TxFormat fmt_;
   int n_ = 0, side_ = 0, width_ = 0, gap_ = 0, blocks_ = 0, blockBytes_ = 0, gen_ = 0;
   std::string label_, error_, tiers_;   // ai: tiers_: the format's rate profile as text (the stats' tiers)
-  int refresh_[4] = {1, 1, 1, 1};   // ai: setRefresh's, under mu_
+  int byRate_[4] = {1, 1, 1, 1};    // ai: setRefresh's, under mu_
+  std::vector<int> byPlace_;        // ai: setRefreshBlocks's (empty: each place its rate's), under mu_
+  std::vector<int> scheduleLocked() const;   // ai: each block place's delay now (mu_ held)
   int carousel_ = 0;                // ai: setCarousel's, under mu_
   uint32_t carKey_ = 0;             // ai: the carousel's order's key (carouselPosition), under mu_
   bool gpuWords_ = false;           // ai: the GPU paints and can paint an animated header (gpu_painter.h wordsWhy)

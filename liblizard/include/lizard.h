@@ -106,6 +106,15 @@ LIZ_API int liz_geometry_of(const liz_format *format, liz_geometry *out);
 LIZ_API double liz_room_for(int blocks, int ring);
 /* ai: The blocks a symbol of a format's size (blocks, 2 to 64) carries: the format's rate profile's count; 0 outside. */
 LIZ_API int liz_blocks_for(int blocks);
+/* ai: Where block b (0 to liz_blocks_for(blocks) - 1) of a symbol of a format's size lies: its code rate (0 7/8, 1 3/4,
+ * ai: 2 2/3, 3 1/2; the 7/8 and 3/4 blocks carry the pilots), its first slot and its slots (640 slots a sub-channel,
+ * ai: the lowest frequencies first, the blocks packed from slot 0 inner rates first), and the first and last
+ * ai: sub-channel it spans. A block changes whole or not at all (one codeword), so a schedule is a block's, not a
+ * ai: sub-channel's. */
+typedef struct {
+  int rate, first_slot, slots, first_subch, last_subch;
+} liz_block_place;
+LIZ_API int liz_block_place_of(int blocks, int b, liz_block_place *out);
 /* ai: The largest size (blocks) a symbol may have, at most top_blocks, for codes symbols in a room of w x h display
  * ai: pixels (the web sender's pickVersion: each symbol's room is the width over codes and the gaps, against the
  * ai: height); at least LIZ_MIN_BLOCKS; top_blocks 4 to 64. */
@@ -309,11 +318,19 @@ LIZ_API int liz_sender_ready(liz_sender *s);
  * ai: yet (dst untouched). Each frame taken once; show them in order, each for as long as the display rate asks. */
 LIZ_API int liz_sender_take(liz_sender *s, uint8_t *dst, int stride, liz_pixfmt fmt);
 LIZ_API const char *liz_sender_stats(liz_sender *s);
-/* ai: Rate refresh: every[r] frames between new blocks of code rate r (0 7/8, 1 3/4, 2 2/3, 3 1/2), 1 to
- * ai: LIZ_REFRESH_MAX, 1 by default; a block of a held rate repeats the frame before's. No format change: a receiver
- * ai: reads each frame as ever. From the next frame made, kept across configures. */
-enum { LIZ_REFRESH_MAX = 4 };
+/* ai: Refresh: each block place of a symbol takes a new block every `every` pictures, its delay, a whole number 1 to
+ * ai: LIZ_REFRESH_MAX (1, the default, every picture), so its rate is the format's fps over a whole number: picture k
+ * ai: (the sender's count) shows a new block there where k is a multiple of it, the picture before's block again
+ * ai: otherwise. The pilots stay each picture's count, so a receiver and its phase lock read every picture as ever: no
+ * ai: format change, a repeated block one a receiver has. From the next frame made. A client ties the two pilot rates
+ * ai: (7/8 and 3/4) to one delay. */
+enum { LIZ_REFRESH_MAX = 65535 };
+/* ai: per code rate r (0 7/8, 1 3/4, 2 2/3, 3 1/2; liz_block_place's rate): every block of the rate; kept across
+ * ai: configures */
 LIZ_API int liz_sender_refresh(liz_sender *s, const int every[4]);
+/* ai: per block place b of the configured format's symbol, n = liz_blocks_for(the format's blocks), every code alike
+ * ai: (LIZ_E_ARG for another count); a configure to a format of another block count ends it, each place its rate's again */
+LIZ_API int liz_sender_refresh_blocks(liz_sender *s, const int *every, int n);
 /* ai: A file's schedule drawn from seed in place of the random one liz_sender_new draws (each chunk's first symbol, each
  * ai: round's order of the chunks, each frame's shuffle), so a run can be repeated: before the first frame is made
  * ai: (LIZ_E_STATE after, and for the test stream). The seed in use is the stats' "seed". */

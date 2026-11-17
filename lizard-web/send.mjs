@@ -1056,12 +1056,14 @@ $("subch").onchange = $("ring").onchange = () => roomChanged();
 // ai: and the page's pace and the word's rate follow it as they followed the box (both read #fps as they go)
 const showFps = () => { $("fpsOut").textContent = `${+$("fps").value}`; };   // ai: "FPS" over the bare count (2026-10-05; "Pictures a second", "60 a second" before)
 for (const ev of ["input", "change"]) $("fps").addEventListener(ev, showFps);
-// ai: Rate refresh (refresh.mjs; the native sender's setRefresh): four sliders 1 to 4, frames between new blocks of
-// ai: the 7/8, 3/4, 2/3 and 1/2 rates, each label the bare count as FPS's; kept as the other settings (send:<id>). A
-// ai: release tells the worker, which applies it from the next frame it makes; every start sends it too.
-const REFRESH = ["refresh78", "refresh34", "refresh23", "refresh12"];
-const refreshOf = () => everyOf(REFRESH.map((id) => $(id).value));
-const showRefresh = () => { refreshOf().forEach((v, r) => { $(`${REFRESH[r]}Out`).textContent = `${v}`; }); };
+// ai: Refresh's delays (2026-11-17; refresh.mjs; the native sender's setRefresh; Rate refresh's four 1-to-4 sliders
+// ai: of 2026-11-12 before): FPS is the clock, and three sliders 1 to 60 the pictures between new blocks of 7/8 and 3/4
+// ai: (tied: the two rates that carry the pilots), 2/3 and 1/2, each label the bare count as FPS's; kept as the other
+// ai: settings (send:<id>; a kept send:refresh34 unread). A release tells the worker the four, which applies them from
+// ai: the next frame it makes; every start sends them too.
+const REFRESH = ["refresh78", "refresh23", "refresh12"];
+const refreshOf = () => { const [p, a, b] = REFRESH.map((id) => $(id).value); return everyOf([p, p, a, b]); };
+const showRefresh = () => { const e = refreshOf(); REFRESH.forEach((id, g) => { $(`${id}Out`).textContent = `${e[g ? g + 1 : 0]}`; }); };
 for (const id of REFRESH) {
   $(id).addEventListener("input", showRefresh);
   $(id).addEventListener("change", () => { showRefresh(); sw?.postMessage({ type: "refresh", every: refreshOf() }); });

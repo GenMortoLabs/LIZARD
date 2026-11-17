@@ -30,9 +30,12 @@
 // ai:   LIZ_TYPE=<media type> tx_check paint <file> ...   the header carries that type, as the apps' files do (2026-10-10)
 // ai:   LIZ_SPILL=<dir> tx_check ids|paint <file> ...   the transfer's spill there (2026-11-14, xfer_tx.h: no encoder kept,
 // ai:   its symbols in segments on disk), the apps' path: the ids and bytes the same
-// ai:   LIZ_REFRESH=<7/8>,<3/4>,<2/3>,<1/2> tx_check paint ...   Rate refresh (2026-11-12, Sender::setRefresh) set before the
-// ai:       first frame: every read block's id held against the frame before's at its place, the same exactly where its
-// ai:       rate holds (the frame's count not a multiple of its refresh), a fault otherwise; the repeats a rate counted
+// ai:   LIZ_REFRESH=<7/8>,<3/4>,<2/3>,<1/2> tx_check paint ...   Refresh (2026-11-17, Sender::setRefresh; Rate refresh's
+// ai:       1-to-4 holds of 2026-11-12 before) set before the first frame, each rate's delay, a whole number of pictures:
+// ai:       every read block's id held against the frame before's at its place, the same exactly where its delay holds
+// ai:       (Sender::due false: the count no multiple of it), a fault otherwise; the repeats a rate counted.
+// ai:       LIZ_REFRESH_BLOCKS=<delay>,... in its place (Sender::setRefreshBlocks after the configure): place b takes entry
+// ai:       b mod their count
 // ai:   LIZ_CAROUSEL=<frames> tx_check paint ...   the animated header (2026-11-15, Sender::setCarousel): every word a
 // ai:       carousel symbol held that many frames (with two codes each its own: code c's slot codes x (frame / frames) + c,
 // ai:       its position the sender's order, Sender::carouselPosition, under the sender's key), read blind and held as the receivers hold it (codec.h cpu_hold_*): a
@@ -351,9 +354,20 @@ int main(int argc, char** argv) {
     f.assets = assets();
     // ai: the blocks a frame carries: the format's rate profile's (src/lizard_phy.h lizard_blocks_for)
     const int wantBlocks = lizard_blocks_for(subch), wantSubch = subch;
-    int every[4] = {1, 1, 1, 1};
-    const bool refresh = getenv("LIZ_REFRESH") && sscanf(getenv("LIZ_REFRESH"), "%d,%d,%d,%d", &every[0], &every[1], &every[2], &every[3]) == 4;
-    if (refresh) s.setRefresh(every);
+    // ai: LIZ_REFRESH and LIZ_REFRESH_BLOCKS: whole delays, comma-separated
+    const auto refreshes = [](const char* v) {
+      std::vector<int> r;
+      std::string all = v ? v : "", e;
+      for (size_t at = 0; at <= all.size(); at++) {
+        if (at < all.size() && all[at] != ',') { e += all[at]; continue; }
+        if (!e.empty()) r.push_back(std::max(1, std::atoi(e.c_str())));
+        e.clear();
+      }
+      return r;
+    };
+    const std::vector<int> byRate = refreshes(getenv("LIZ_REFRESH")), byEntry = refreshes(getenv("LIZ_REFRESH_BLOCKS"));
+    const bool refresh = byRate.size() == 4 || !byEntry.empty();
+    if (byRate.size() == 4) s.setRefresh(byRate.data());
     int car = 0, carOn = 0, carOff = -1;
     if (const char* c = getenv("LIZ_CAROUSEL")) sscanf(c, "%d@%d,%d", &car, &carOn, &carOff);
     const bool live = car > 0 && (carOn > 0 || carOff >= 0);
@@ -364,6 +378,12 @@ int main(int argc, char** argv) {
     const std::string err = s.configure(f);
     if (!err.empty()) { printf("FAIL configure: %s\n", err.c_str()); return 1; }
     printf("painter: %s%s%s\n", s.painter().c_str(), s.gpuWhy().empty() ? "" : ", not the GPU: ", s.gpuWhy().c_str());
+    // ai: each block place's schedule as the sender holds it: its rate's, or LIZ_REFRESH_BLOCKS's
+    std::vector<int> sched(static_cast<size_t>(wantBlocks), 1);
+    if (!byEntry.empty()) {
+      for (size_t b = 0; b < sched.size(); b++) sched[b] = byEntry[b % byEntry.size()];
+      if (!s.setRefreshBlocks(sched)) { printf("FAIL: the sender refused a schedule a place\n"); return 1; }
+    }
     const int W = s.side(), FW = s.width(), codes = f.codes, gap = codes > 1 ? (FW - codes * W) / (codes - 1) : 0;
     std::filesystem::create_directories(store);
     std::unique_ptr<XferRx> rx;
@@ -383,6 +403,7 @@ int main(int argc, char** argv) {
       if (lizard_init(&p, s.n(), subch, f.span)) { printf("FAIL: the codec refused the format\n"); return 1; }
       for (int t = 0; t < p.tiers; t++) rateAt.insert(rateAt.end(), static_cast<size_t>(p.tier[t].blocks), p.tier[t].rate == 6 ? 0 : p.tier[t].rate == 4 ? 1 : p.tier[t].rate == 3 ? 2 : 3);
       lizard_free(&p);
+      if (byEntry.empty()) for (size_t b = 0; b < sched.size() && b < rateAt.size(); b++) sched[b] = byRate[static_cast<size_t>(rateAt[b])];
     }
     std::unique_ptr<lizard::lizfile::Writer> runOut;
     std::string runWhy;
@@ -451,8 +472,9 @@ int main(int argc, char** argv) {
         const uint64_t seq = static_cast<uint64_t>(k / codes);
         for (int b = 0; b < fr.total && b < static_cast<int>(was.size()) && b < static_cast<int>(rateAt.size()); b++) {
           if (now[static_cast<size_t>(b)] < 0 || was[static_cast<size_t>(b)] < 0) continue;
-          const int r = rateAt[static_cast<size_t>(b)], e = std::clamp(every[r], 1, Sender::REFRESH_MAX);
-          const bool hold = e > 1 && seq % static_cast<uint64_t>(e) != 0, rep = now[static_cast<size_t>(b)] == was[static_cast<size_t>(b)];
+          const int r = rateAt[static_cast<size_t>(b)];
+          const int e = sched[static_cast<size_t>(b)];
+          const bool hold = !Sender::due(e, seq), rep = now[static_cast<size_t>(b)] == was[static_cast<size_t>(b)];
           // ai: a fresh block may name the control block the frame before named there (the header, every other control
           // ai: slot; the warm frames, xfer_tx.h, carry nothing else): no repeat
           if (rep && !hold && xfer_id_chunk(static_cast<xfer_id_t>(now[static_cast<size_t>(b)])) == XFER_CONTROL) continue;
@@ -479,7 +501,8 @@ int main(int argc, char** argv) {
       if (switches != want || animFrom < 0 || (carOff >= 0 && staticFrom < 0)) { faults++; printf("FAIL: %d switches of the word's kind, %d expected\n", switches, want); }
     } else if (car > 0) printf("carousel: a symbol every %d frames, %d symbols read, the header stood at frame %d (k %d)\n", car, symbols, stood, 3);
     printf("stats: %s\n", s.stats().c_str());
-    if (refresh) printf("refresh %d,%d,%d,%d: repeated 7/8 %ld of %ld, 3/4 %ld of %ld, 2/3 %ld of %ld, 1/2 %ld of %ld\n", every[0], every[1], every[2], every[3],
+    if (refresh) printf("refresh %s%s: repeated 7/8 %ld of %ld, 3/4 %ld of %ld, 2/3 %ld of %ld, 1/2 %ld of %ld\n", byEntry.empty() ? "by rate " : "by place ",
+                        byEntry.empty() ? getenv("LIZ_REFRESH") : getenv("LIZ_REFRESH_BLOCKS"),
                         same[0], seen[0], same[1], seen[1], same[2], seen[2], same[3], seen[3]);
     if (!test) {
       rx->drain();

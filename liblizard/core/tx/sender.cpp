@@ -180,6 +180,7 @@ std::string Sender::configure(const TxFormat& f) {
   gpuDevice_ = gpu_->device();
   depth_ = gpu_->depth();
   blocks_ = probe.blocks;
+  if (!byPlace_.empty() && byPlace_.size() != static_cast<size_t>(blocks_)) byPlace_.clear();   // ai: another format's places
   blockBytes_ = probe.block_bytes;
   side_ = probe.px + 2 * LIZARD_QUIET * probe.pxm;
   gap_ = f.codes > 1 ? f.gap * probe.pxm : 0;
@@ -228,8 +229,8 @@ void Sender::produce() {
   std::unique_lock<std::mutex> l(mu_);
   const int T = blocks_ * fmt_.codes, B = blockBytes_, room = std::max(1, depth_ - fmt_.margin);   // ai: a frame's blocks: its codes' one after the other
   std::vector<xfer_id_t> ids(T);
-  // ai: Rate refresh (setRefresh): the frame before's blocks, which a held rate's blocks repeat; none at a configure's
-  // ai: first frame (this thread is new), so it is new throughout
+  // ai: Refresh (setRefresh, setRefreshBlocks): the frame before's blocks, which a held place repeats; none at a
+  // ai: configure's first frame (this thread is new), so it is new throughout
   std::vector<uint8_t> last;
   std::vector<uint8_t> held(T);
   std::vector<xfer_id_t> hostIds;   // ai: a frame's data ids whose payloads the GPU encoder reads back (the CPU paints)
@@ -247,13 +248,11 @@ void Sender::produce() {
       if (slot / OB_CAR_N != orderOf || carKey_ != orderKey) { orderOf = slot / OB_CAR_N; orderKey = carKey_; carouselPass(orderKey, orderOf, order); }
       j.pos[c] = order[slot % OB_CAR_N];
     }
-    int every[4];
-    std::copy(refresh_, refresh_ + 4, every);
+    const std::vector<int> sched = scheduleLocked();
     l.unlock();
     int fresh = 0;
     for (int t = 0; t < T; t++) {
-      const int r = every[rateOf_[static_cast<size_t>(t % blocks_)]];
-      held[t] = !last.empty() && r > 1 && j.seq % static_cast<uint64_t>(r) != 0;
+      held[t] = !last.empty() && !due(sched[static_cast<size_t>(t % blocks_)], j.seq);
       fresh += !held[t];
     }
     std::string err;
@@ -611,10 +610,23 @@ std::shared_ptr<wg::Buffer> Sender::ring() const { return gpu_ ? gpu_->ring() : 
 uint32_t Sender::ringFrameWords() const { return gpu_ ? gpu_->frameWords() : 0; }
 uint32_t Sender::ringRowWords() const { return gpu_ ? gpu_->rowWords() : 0; }
 
-// ai: Rate refresh (sender.h setRefresh), clamped to 1 .. REFRESH_MAX
-void Sender::setRefresh(const int every[4]) {
+// ai: Refresh (sender.h setRefresh, setRefreshBlocks), each delay held to 1 .. REFRESH_MAX
+void Sender::setRefresh(const int rate[4]) {
   std::lock_guard<std::mutex> l(mu_);
-  for (int r = 0; r < 4; r++) refresh_[r] = std::clamp(every[r], 1, REFRESH_MAX);
+  for (int r = 0; r < 4; r++) byRate_[r] = std::clamp(rate[r], 1, REFRESH_MAX);
+}
+bool Sender::setRefreshBlocks(const std::vector<int>& place) {
+  std::lock_guard<std::mutex> l(mu_);
+  if (place.size() != static_cast<size_t>(blocks_)) return false;
+  byPlace_.clear();
+  for (const int e : place) byPlace_.push_back(std::clamp(e, 1, REFRESH_MAX));
+  return true;
+}
+std::vector<int> Sender::scheduleLocked() const {
+  if (byPlace_.size() == static_cast<size_t>(blocks_)) return byPlace_;
+  std::vector<int> s(static_cast<size_t>(blocks_));
+  for (size_t b = 0; b < s.size(); b++) s[b] = byRate_[b < rateOf_.size() ? rateOf_[b] : 3];
+  return s;
 }
 
 // ai: the animated header (sender.h setCarousel), clamped to 0 .. CAROUSEL_MAX; the producer's next frame takes it
@@ -640,9 +652,10 @@ bool Sender::seed(uint32_t seed) {
 // ai: asked for), ahead (painted, not shown), side, test, and for a file chunks, made (the chunks made so far), rq
 // ai: ("gpu": the GPU makes the blocks from the CPU's solved chunks, "cpu": the CPU's encoders; "" before the first
 // ai: configure), rqWhy (why not the GPU), lap (data blocks a lap), pass (laps
-// ai: shown, 1 the first), root, seed (the schedule's, 2026-11-14); refresh (Rate refresh's four, 7/8 to 1/2; offeredKBs counts new data blocks alone, a repeat none);
-// ai: fresh (the share of a frame's blocks new in each frame under Rate refresh, by the format's blocks of each rate: the
-// ai: sum of 1/every over them, over their count; 1 with none held), so a rate figured from blocks a frame counts new ones;
+// ai: shown, 1 the first), root, seed (the schedule's, 2026-11-14); refresh (setRefresh's four delays, 7/8 to 1/2) and
+// ai: refreshPlaces (setRefreshBlocks's per place in force; offeredKBs counts new data blocks alone, a repeat none);
+// ai: fresh (the share of a frame's blocks new in each frame: the sum of 1/delay over the places, over their count; 1
+// ai: with none held), so a rate figured from blocks a frame counts new ones;
 // ai: carousel (the animated header's frames a symbol, setCarousel, as frames made now paint it: 0 the static word, and
 // ai: 0 where the GPU paints and cannot); error, the last failure.
 std::string Sender::stats() {
@@ -665,13 +678,15 @@ std::string Sender::stats() {
     << ",\"painters\":" << fmt_.threads << ",\"painter\":\"" << (onGpu_ ? "gpu" : "cpu") << "\",\"device\":\"" << esc(gpuDevice_)
     << "\",\"gpuWhy\":\"" << esc(gpuWhy_) << "\",\"ahead\":" << ready_.size() << ",\"depth\":" << depth_ << ",\"side\":" << side_ << ",\"width\":" << width_
     << ",\"codes\":" << fmt_.codes << ",\"shown\":" << shown_ << ",\"blocks\":" << blocks_ << ",\"tiers\":\"" << tiers_ << "\""
-    << ",\"refresh\":\"" << refresh_[0] << "," << refresh_[1] << "," << refresh_[2] << "," << refresh_[3] << "\""
+    << ",\"refresh\":\"" << byRate_[0] << "," << byRate_[1] << "," << byRate_[2] << "," << byRate_[3] << "\""
+    << ",\"refreshPlaces\":" << (byPlace_.size() == static_cast<size_t>(blocks_) && blocks_ ? "true" : "false")
     << ",\"carousel\":" << (onGpu_ && !gpuWords_ ? 0 : carousel_)
     << ",\"test\":" << (xfer_ ? "false" : "true");
   double fresh = 0;
-  for (const uint8_t r : rateOf_) fresh += 1.0 / refresh_[r];
+  const std::vector<int> sched = scheduleLocked();
+  for (const int e : sched) fresh += 1.0 / e;
   o.precision(4);
-  o << ",\"fresh\":" << (rateOf_.empty() ? 1.0 : fresh / static_cast<double>(rateOf_.size()));
+  o << ",\"fresh\":" << (sched.empty() ? 1.0 : fresh / static_cast<double>(sched.size()));
   o.precision(1);
   if (xfer_) {
     std::lock_guard<std::mutex> x(xferMu_);

@@ -72,6 +72,33 @@ LIZ_API double liz_room_for(int blocks, int ring) {
 
 LIZ_API int liz_blocks_for(int blocks) { return blocks >= LIZ_MIN_BLOCKS && blocks <= LIZ_MAX_BLOCKS ? lizard_blocks_for(LIZARD_STEP * blocks) : 0; }
 
+// ai: The format's tiers in order (lizard_tiers_for, inner rates first), their blocks packed from slot 0, each its rate's
+// ai: slots (lizard_block_slots); a sub-channel 2 x LIZARD_SUB slots
+LIZ_API int liz_block_place_of(int blocks, int b, liz_block_place* out) {
+  return guard([&] {
+    needBlocks(blocks);
+    need(out, "a place for the block's place");
+    lizard_tier_t tier[LIZARD_TIERS];
+    const int tiers = lizard_tiers_for(LIZARD_STEP * blocks, tier);
+    need(b >= 0 && b < lizard_blocks_for(LIZARD_STEP * blocks), "a block of the format's symbol");
+    for (int t = 0, at = 0, first = 0; t < tiers; t++) {
+      const int slots = lizard_block_slots(tier[t].rate);
+      if (b < first + tier[t].blocks) {
+        const int start = at + (b - first) * slots;
+        out->rate = tier[t].rate == 6 ? 0 : tier[t].rate == 4 ? 1 : tier[t].rate == 3 ? 2 : 3;
+        out->first_slot = start;
+        out->slots = slots;
+        out->first_subch = start / (2 * LIZARD_SUB);
+        out->last_subch = (start + slots - 1) / (2 * LIZARD_SUB);
+        return LIZ_OK;
+      }
+      at += tier[t].blocks * slots;
+      first += tier[t].blocks;
+    }
+    throw Error(LIZ_E_INTERNAL, "the tiers lay fewer blocks than the format carries");
+  });
+}
+
 LIZ_API int liz_pick(double w, double h, int codes, int ring, int top) {
   return guard([&] {
     need(codes == 1 || codes == 2, "codes is 1 or 2");

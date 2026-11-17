@@ -80,7 +80,8 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         int("spacing", Room.SPACING_MIN..Room.SPACING_MAX)?.let { s.spacing = it }
         int("margin", Pick.QUIET..Room.MARGIN_MAX)?.let { s.margin = it }
         kv["ring"]?.let { v -> s.ring = if (v == "auto") -1 else Pick.RINGS.indexOf(v.toIntOrNull() ?: 0).takeIf { it >= 0 } ?: fail("LIZ_SENDER_TEST: ring=$v") }
-        // ai: Rate refresh (2026-11-12): four values 1 to REFRESH_MAX, 7/8 to 1/2, as the setting keeps them ("4,4,4,1")
+        // ai: Refresh's delays (2026-11-17; Rate refresh 2026-11-12): four values 1 to REFRESH_MAX, 7/8 to 1/2, as the setting
+        // ai: keeps them ("4,4,4,1"; the 3/4 taken as the 7/8's, the two tied)
         kv["refresh"]?.let { v ->
             if (v.split(',').let { e -> e.size != 4 || e.any { it.trim().toIntOrNull() !in 1..dev.lizard.ui.REFRESH_MAX } }) fail("LIZ_SENDER_TEST: refresh=$v")
             s.refresh = dev.lizard.ui.refreshOf(v)
