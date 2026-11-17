@@ -15,7 +15,7 @@ import { PYRAMID } from "./glsl/pyramid.mjs";
 import { VOTE, GATHER, COMPLETE, SCORE, PICK, REDO, PEAKS, TRACE } from "./glsl/finder.mjs";
 import { SELECT } from "./glsl/bank.mjs";
 import { NODES, REFIT, REFIT_POST, nodesSource } from "./glsl/register.mjs";
-import { WORD } from "./glsl/word.mjs";
+import { WORD, HELD } from "./glsl/word.mjs";
 import { ANCH_FIND, ANCH_PREDICT, ANCH_REFIT, ANCH_FIT } from "./glsl/anchors.mjs";
 import { classifySource } from "./glsl/classify.mjs";
 import { SLOTS } from "./plan/common.mjs";
@@ -235,7 +235,7 @@ export class FrontHalf {
     // ai: activations stored as halves (under 18,692 B; WebGPU promises only 16 KB) gets its FitError: no GPU decoder
     // ai: there, and the receiver decodes with the C.
     const bank = (async () => { this.bank = await import("./bank_fcn2.mjs"); await this.bank.build(this); })();
-    const [pyramid, large, twinLarge, vote, gather, complete, score, pick, redo, nodesP, refit, refitPost, wordP, select, peaks, trace] = await Promise.all([
+    const [pyramid, large, twinLarge, vote, gather, complete, score, pick, redo, nodesP, refit, refitPost, wordP, heldP, select, peaks, trace] = await Promise.all([
       // ai: The pyramid in one kernel (glsl/pyramid.mjs): the layer, the frame records, levels
       // ai: 1 to 4, the levels' dims.
       P(PYRAMID, ["tex", "ro", "rw", "rw", "rw", "rw", "uniform"]),
@@ -257,9 +257,12 @@ export class FrontHalf {
       // ai: F7's last step after the last round's REFIT (glsl/register.mjs REFIT_POST), on REFIT's bindings
       P(REFIT_POST, ["ro", "ro", "ro", "ro", "rw", "rw", "uniform"]),
       // ai: F8 (glsl/word.mjs): the levels, then maps, sel (read-write: sel.y = 1 + the version the frame decodes at, sel.z
-      // ai: its picture), resid, the word plan's points, the finder's results, the word code, the lattice and the lane's
-      // ai: held version.
-      P(WORD, [...LV, "ro", "rw", "ro", "ro", "rw", "uniform", "uniform", "uniform"]),
+      // ai: its picture, sel.w whether it waits for HELD), resid, the word plan's points, the finder's results, the word
+      // ai: code and the lattice.
+      P(WORD, [...LV, "ro", "rw", "ro", "ro", "rw", "uniform", "uniform"]),
+      // ai: F8's held version (glsl/word.mjs HELD): sel, the results, the decoder's CARRY (heldCarry), the word code and
+      // ai: the lane's Held uniform (version, post, frames, hold)
+      P(HELD, ["rw", "rw", "rw", "uniform", "uniform"]),
       // ai: F3 (glsl/bank.mjs SELECT)
       P(SELECT, ["ro", "ro", "rw", "rw", "uniform"]),
       // ai: F5b (glsl/finder.mjs PEAKS): a lane a cell, the merged rings' peaks into the frame's list
@@ -268,7 +271,7 @@ export class FrontHalf {
       P(TRACE, [...LV, "rw"]),
       bank,
     ]);
-    Object.assign(this, { pyramid, vote, gather, complete, score, pick, redo, nodesP, refit, refitPost, wordP, select, peaks, trace });
+    Object.assign(this, { pyramid, vote, gather, complete, score, pick, redo, nodesP, refit, refitPost, wordP, heldP, select, peaks, trace });
     this.classify = large.pipe;
     this.weightsBuf = large.buf;
     this.arch = large.plan.name;
@@ -334,6 +337,9 @@ export class FrontHalf {
     d.queue.writeBuffer(this.wordUni, 0, wu);
     this.wordLatUni = d.createBuffer({ size: wl.byteLength, usage: U.UNIFORM | U.COPY_DST });
     d.queue.writeBuffer(this.wordLatUni, 0, wl);
+    // ai: HELD's CARRY: the held version and the host's last post taken, every lane's, carried launch to launch (zeroed:
+    // ai: no version, post 0)
+    this.heldCarry = d.createBuffer({ size: 16, usage: U.STORAGE | U.COPY_DST });
     // Rounds of the node search: +-3 modules at half a module, one template sample a module; then +-0.6 at a
     // ai: fifth, all four. Each with every node's count of the light samples it takes (glsl/register.mjs Round's light).
     if (nodes.length / 4 > LIGHT_MAX) throw new Error(`${nodes.length / 4} nodes over the rings, room for ${LIGHT_MAX}`);

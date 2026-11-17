@@ -4,9 +4,14 @@
 // ai: clock against the host's, 0), format (grey, yuyv, nv12 or mjpeg, or several comma separated, each a mode at both
 // ai: sizes as a real camera lists its formats: the bytes its frames come in, so luma.h's and jpeg.h's paths run as a
 // ai: real camera's would).
-// ai: Capture k begins at the stream's start + k / (camfps (1 + camppm 1e-6)) and is handed over once its exposure and
-// ai: readout are over (sleepUntil, then the render); one handed over past the next one's hand-over time drops that
-// ai: next one, counted. Frame::ns is the capture's start on steadyNs's clock.
+// ai: Capture k begins at the scene's start + k / (camfps (1 + camppm 1e-6)), the first taken the first not yet begun
+// ai: when the stream's thread runs, and is handed over once its exposure and readout are over (sleepUntil, then the
+// ai: render); one handed over past the next one's hand-over time drops that next one, counted. Frame::ns is the
+// ai: capture's start on steadyNs's clock. On the scene's clock, the captures' phase against the display's refreshes is
+// ai: the scene's (Display::phaseMs, drawn from the seed), whatever the moment the thread starts: from the thread's own
+// ai: start it moved with that moment (1 to 3 ms under a busy CPU), and a phase whose captures straddle every picture
+// ai: change held for the whole run (the clocks never drift at camppm 0): about 0 blocks a frame where a quiet start
+// ai: read 7.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -187,8 +192,8 @@ class SimCamera : public Camera {
     std::vector<uint8_t> grey(size_t(w) * h), bytes, luma;
     if (mode_.pix == Pix::YUYV) bytes.assign(size_t(w) * 2 * h, 128);
     if (mode_.pix == Pix::NV12) bytes.assign(size_t(w) * h + size_t(w) * ((h + 1) / 2), 128);
-    const int64_t base = steadyNs();   // ai: capture 0
-    int64_t k = 0;
+    const int64_t base = scene_->startNs();   // ai: capture 0
+    int64_t k = std::max<int64_t>(0, int64_t(std::ceil(double(steadyNs() - base) / period)));
     uint64_t seq = 0;
     std::unique_lock<std::mutex> l(mu_);
     while (!quit_) {

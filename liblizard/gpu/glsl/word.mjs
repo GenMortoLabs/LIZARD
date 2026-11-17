@@ -1,7 +1,7 @@
 // F8, the format word, in GLSL: the band read through the final map, each word cell against its track pairs' grey;
 // the word, static or animated, by Gauss-Jordan over GF(256) from its most reliable bytes (../wordcode.mjs); the
-// side-aware gate, held to the C's false-word rate; sel written (a static word's version, else the batch's held one,
-// else none) with the result: r[5] the version, or 256 + the position of an animated word, r[6] the bytes after it
+// side-aware gate, held to the C's false-word rate; sel written (a static word's version, else HELD's, below) with
+// the result: r[5] the version, or 256 + the position of an animated word, r[6] the bytes after it
 // (fps + 256 ext0 + 65536 ext1, or the symbol's three bytes alike), 0 and 0 where no word is taken. One workgroup of
 // 256 a frame.
 // ai: The Word, Lattice and Held uniforms are std140, every member an array of uvec4 or vec4; the uniform's layout and
@@ -18,6 +18,12 @@ import { CON_MIN, WMAX, ROWS, MIDS_MAX, VECS, UNKNOWN, SWAP, PER, SETS, TOP, BYT
 
 const TOPS = Math.ceil(SLOTS / 4);
 const WORDS = ["x", "y", "z", "w"];
+// ai: the Word uniform's members (std140, ../plan/word.mjs's layout), WORD's and HELD's
+const WORD_UNI = `uvec4 code[${LAYOUT.range}]; uvec4 range[${RING_COUNT}]; uvec4 plan[${RING_COUNT}]; uvec4 tops[${TOPS}]; uvec4 gate[${(RING_COUNT * GATE) / 4}]; uvec4 gf[${LAYOUT.cols - LAYOUT.gf}]; uvec4 cols[${LAYOUT.size - LAYOUT.cols}];`;
+// ai: the picture slot a version decodes in (the Word uniform's tops)
+const SLOT_OF = `uint slotOf(uint v) {
+  return 0u${Array.from({ length: SLOTS - 1 }, (_, k) => ` + (v > W.tops[${k >> 2}].${WORDS[k & 3]} ? 1u : 0u)`).join("")};
+}`;
 
 // ai: Gauss-Jordan over GF(256) (2026-11-15; ordered statistics decoding over the code's bit rows before): RS(n, 5) is
 // ai: MDS, so the magic (byte 0) and any four other bytes give the word, for each magic in turn (the static word's and
@@ -147,9 +153,8 @@ layout(set = 0, binding = 8, std430) buffer Sel { uvec4 sel[]; };
 layout(set = 0, binding = 9, std430) readonly buffer Resid { vec4 resid[]; };
 layout(set = 0, binding = 10, std430) readonly buffer Pts { vec4 pts[]; };
 layout(set = 0, binding = 11, std430) buffer Results { Result result[]; };
-layout(set = 0, binding = 12, std140) uniform Word { uvec4 code[${LAYOUT.range}]; uvec4 range[${RING_COUNT}]; uvec4 plan[${RING_COUNT}]; uvec4 tops[${TOPS}]; uvec4 gate[${(RING_COUNT * GATE) / 4}]; uvec4 gf[${LAYOUT.cols - LAYOUT.gf}]; uvec4 cols[${LAYOUT.size - LAYOUT.cols}]; } W;
+layout(set = 0, binding = 12, std140) uniform Word { ${WORD_UNI} } W;
 layout(set = 0, binding = 13, std140) uniform Lattice { uvec4 at[${RING_COUNT}]; vec4 lat[${(RING_COUNT * LATTICE_MAX) / 4}]; } LT;
-layout(set = 0, binding = 14, std140) uniform Held { uint version; uint p0; uint p1; uint p2; } HB;
 float latAt(uint i) { return LT.lat[i >> 2u][i & 3u]; }
 float pix(uint l, uint f, int x, int y) {
   Frame F = frames[f];
@@ -222,9 +227,7 @@ uint leastSide(vec4 s, uint skip) {
   return b;
 }
 uint gateAt(uint r, uint m) { uint k = r * ${GATE}u + (m >> 1u); return (W.gate[k >> 2u][k & 3u] >> (16u * (m & 1u))) & 0xffffu; }
-uint slotOf(uint v) {
-  return 0u${Array.from({ length: SLOTS - 1 }, (_, k) => ` + (v > W.tops[${k >> 2}].${WORDS[k & 3]} ? 1u : 0u)`).join("")};
-}
+${SLOT_OF}
 vec2 imgAt(uint f, float M[16], uvec4 L, vec2 m) { vec2 p = toImage(M, m); return p + lensAt(lensOf(f), p) + coons(f, L.x, L.y, m); }
 void reduce(uint li) {
   barrier();
@@ -304,11 +307,48 @@ void main() {
     result[f].r[5] = ok ? float(wn.y == 0u ? b1 : 256u + b1) : 0.0;
     result[f].r[6] = ok ? float(wn.x >> 8u) : 0.0;
     result[f].r[7] = uintBitsToFloat(wn.w);
-    uint dv = own ? b1 : HB.version;
-    result[f].r[29] = float(dv);
-    result[f].r[30] = (!own && HB.version > 0u) ? 1.0 : 0.0;
-    if (dv > 0u) { sel[f] = uvec4(rg, 1u + dv, slotOf(dv), 0u); }
-    else { sel[f] = uvec4(rg, 0u, 0u, 0u); }
+    // ai: its own static word's version, sel.w 2; else HELD's (sel.w 1, waiting for it)
+    result[f].r[29] = own ? float(b1) : 0.0;
+    result[f].r[30] = 0.0;
+    sel[f] = own ? uvec4(rg, 1u + b1, slotOf(b1), 2u) : uvec4(rg, 0u, 0u, 1u);
   }
+}
+`;
+
+// ai: F8's held version (2026-11-16), after WORD in its pass: one invocation walks the launch's frames in capture order;
+// ai: a frame with its own static word (sel.w 2) makes its version the held one, a frame waiting (sel.w 1: found, no
+// ai: static word of its own) decodes at the held one (sel.y 1 + it, sel.z its picture; none where 0), record words
+// ai: 29 and 30 its version and whether it was held. The held version goes on from launch to launch in CARRY, one
+// ai: word pair for every lane of the decoder (x the version, y the host's last post taken), so a frame's held version
+// ai: is the last static word read before it, whatever the launch's size or how many are in flight (before, each
+// ai: launch took the host's version at its submit: a word read earlier in the same launch, or in one still in flight,
+// ai: was not seen). The host posts a version of its own (Held: version, post; a carousel's header, or 0 at a reset or
+// ai: for a launch alone) by a new post number, taken once in CARRY's place; hold 0 keeps no version (a lab's arm).
+// ai: Bindings: 0 sel, 1 the results, 2 CARRY, 3 the Word uniform, 4 Held (version, post, frames, hold).
+export const HELD = VERSION + /* glsl */ `
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+struct Result { float r[32]; };
+layout(set = 0, binding = 0, std430) buffer Sel { uvec4 sel[]; };
+layout(set = 0, binding = 1, std430) buffer Results { Result result[]; };
+layout(set = 0, binding = 2, std430) buffer Carry { uvec4 carry[]; };
+layout(set = 0, binding = 3, std140) uniform Word { ${WORD_UNI} } W;
+layout(set = 0, binding = 4, std140) uniform Held { uint version; uint post; uint frames; uint hold; } HB;
+${SLOT_OF}
+void main() {
+  uvec4 c = carry[0];
+  uint cur = HB.post != c.y ? HB.version : c.x;
+  for (uint f = 0u; f < HB.frames; f++) {
+    uvec4 s = sel[f];
+    if (s.w == 2u) {
+      if (HB.hold != 0u) { cur = s.y - 1u; }
+      sel[f].w = 0u;
+    } else if (s.w == 1u) {
+      uint v = HB.hold != 0u ? cur : 0u;
+      result[f].r[29] = float(v);
+      result[f].r[30] = v > 0u ? 1.0 : 0.0;
+      sel[f] = v > 0u ? uvec4(s.x, 1u + v, slotOf(v), 0u) : uvec4(s.x, 0u, 0u, 0u);
+    }
+  }
+  carry[0] = uvec4(cur, HB.post, 0u, 0u);
 }
 `;

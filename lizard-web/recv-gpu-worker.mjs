@@ -1,7 +1,8 @@
 // ai: The receiver's GPU decoder (recv.mjs Decoder GPU): one worker running the WebGPU host (../liblizard/gpu/host.mjs)
 // ai: over the packed tree (../liblizard/gpu/webgpu.zst), the native receiver's way: frames staged on the ring as they
 // ai: come, a batch launched as soon as a lane is free and a frame waits (at most the batcher's size), two in flight,
-// ai: each with the last word read (the held version). It only decodes: the page dedupes and the fountain worker
+// ai: a frame whose word does not read at the last static word read before it (the decoder's own, carried on the
+// ai: device in capture order: glsl/word.mjs HELD). It only decodes: the page dedupes and the fountain worker
 // ai: makes the file, as for the C pool. Blocks are judged from the light (sim/phy.mjs blockJudge) as the C's are.
 // ai:   page to worker: { type: "config", config } (as recv-worker.mjs); { type: "frame", tag, frame, x, y, w, h } (a
 // ai:     VideoFrame, transferred, and its crop, copied to luma here: vframes.mjs lumaOf) or { type: "frame", tag, w, h,
@@ -18,7 +19,10 @@ import { heapTop, init as initOb, carousel } from "../liblizard/sim/ob.mjs";
 import { greyLevels, lumaOf } from "./vframes.mjs";
 
 let fh = null, opening = null, dead = "";
-let held = 0, levelTick = 0;
+// ai: held: the version the frames' words left (static words, or the carousel's header); post: the version the next batch
+// ai: posts to the decoder's own (host.mjs run): 0 at the start, a carousel's header where one names it, -1 once
+// ai: posted, the device carrying static words on in capture order (glsl/word.mjs HELD)
+let held = 0, post = 0, levelTick = 0;
 const judge = blockJudge();
 const staged = [];   // ai: frames on the ring, not yet in a batch: { slot, tag, w, h, levels }
 const waiting = [];  // ai: frames larger than the ring holds, as luma, until the lanes are planned again
@@ -111,7 +115,7 @@ function launch() {
   while (staged.length && fh.freeLane() && inFlight < fh.inflightMax()) {
     const batch = staged.splice(0, fh.size());
     let f;
-    try { f = fh.run(batch.map((b) => b.slot), held); }
+    try { f = fh.run(batch.map((b) => b.slot), post); post = -1; }
     catch (e) { for (const b of batch) postMessage(undecoded(b.tag)); fail(`a batch failed: ${e?.message ?? e}`); return; }
     inFlight++;
     const done = fh.finish(f);
@@ -130,7 +134,7 @@ function answer(out, batch) {
     // ai: the held word (sim/phy.mjs makeBlind's rule): a static word's version, or the version of the header the
     // ai: animated words' carousel assembles (the wasm's one assembly, src/fmt.h)
     if (fo.hasWord && fo.word.kind === 0) held = fo.word.version;
-    else if (fo.hasWord) { const k = carousel.add(fo.word.pos, fo.word.sym), v = k ? carousel.header(k)[0] : 0; if (v >= 4 && v <= 64) held = v; }
+    else if (fo.hasWord) { const k = carousel.add(fo.word.pos, fo.word.sym), v = k ? carousel.header(k)[0] : 0; if (v >= 4 && v <= 64 && v !== held) { held = v; post = v; } }
     const n = fo.records.length, blocks = new Uint8Array(n * P);
     fo.records.forEach((r, k) => blocks.set(r.payload, k * P));
     const j = judge.frame(new Uint8Array(n).fill(1), blocks);

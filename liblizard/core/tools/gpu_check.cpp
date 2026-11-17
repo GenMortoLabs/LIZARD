@@ -784,6 +784,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   const int held0 = getenv("LIZ_HELD") ? atoi(getenv("LIZ_HELD")) : 0;
   auto fh = open(c, v);
   fh->xcheck = xcheck;
+  fh->holdWords = hold;
   std::string why;
   auto rec = openRecording(c.barcode, run, why);
   if (!rec) throw wg::Error(why);
@@ -806,7 +807,9 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   int rawMaxDiff = 0;
   if (rawFmt) printf("frames as %s at bin %u, %s\n", rawName.c_str(), rawFmt == RAW_FMT_P010 ? 1 : rawBin, rawCpu ? "the CPU's develop pushed as luma" : "developed on the GPU, held to the CPU's develop");
   std::deque<std::unique_ptr<InFlight>> flight;
-  int held = held0, found = 0, words = 0, heldFrames = 0, next = 0;
+  // ai: the held version posted to the first batch (LIZ_HELD's, or 0), then carried on the device (-1), posted again
+  // ai: where an animated word's carousel names a version (front.h run)
+  int post = held0, found = 0, words = 0, heldFrames = 0, next = 0;
   cpu_hold_t* holdW = cpu_hold_new();   // ai: static words, or the carousel's header (codec.h)
   long blocks = 0, codewords = 0, iterations = 0;   // ai: the LDPC's codewords run and iterations summed (the back half's COUNTS 3 and 7)
   std::vector<float> pilots, pilots2;   // ai: each frame's pilot readings where read (SPEC 7.3): the even blocks', the odd blocks'
@@ -899,7 +902,11 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
       found += fo.finder.found == 1;
       blocks += (long)fo.records.size();
       if (fo.backCounts.size() > 7) { codewords += fo.backCounts[3]; iterations += fo.backCounts[7]; }
-      if (fo.hasWord) { words++; if (hold) { const int v = cpu_hold_take(holdW, fo.word.kind, fo.word.version, fo.word.pos, fo.word.sym); if (v) held = v; } }
+      if (fo.hasWord) {
+        words++;
+        const int before = cpu_hold_version(holdW), v = cpu_hold_take(holdW, fo.word.kind, fo.word.version, fo.word.pos, fo.word.sym);
+        if (hold && fo.word.kind != 0 && v && v != before) post = v;
+      }
       heldFrames += fo.held;
       if (fo.pilotBlocks) { pilots.push_back(fo.pilotR); pilots2.push_back(fo.pilotR2); }
     }
@@ -935,7 +942,8 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
         if (!std::isnan(axes[next][0])) s->axis = axisWord(axes[next][0], axes[next][1]);
         slots.push_back(s);
       }
-      flight.push_back(fh->run(slots, held, env("PROFILE") == "1", rawFmt && !rawCpu ? (int)slots.size() : 0));
+      flight.push_back(fh->run(slots, hold ? post : 0, env("PROFILE") == "1", rawFmt && !rawCpu ? (int)slots.size() : 0));
+      post = -1;
     } else drain();
   }
   const double ms = fh->now() - t0;

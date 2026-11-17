@@ -51,7 +51,9 @@ struct Sender {
 struct Display {
   double hz = 60.0;         // ai: refreshes a second on the display's own clock
   double ppm = 0;           // ai: that clock against the host's (+: the display runs fast)
-  double phaseMs = -1;      // ai: the first refresh's start past the scene's start; < 0: drawn from the seed
+  // ai: the first refresh's start past the scene's start; < 0: drawn from the seed. The simulated camera's captures
+  // ai: start at the scene's start (sim.cpp), so this is their phase against the refreshes too.
+  double phaseMs = -1;
   double scan = 0.96;       // ai: the scan-out's share of a refresh, its first row to its last (1080 of 1125 lines)
   double responseMs = 3.0;  // ai: a pixel's settling after its row is scanned; 0 none
   uint32_t width = 1920, height = 1080;

@@ -82,7 +82,7 @@ struct Lane {
   std::vector<Level> level;
   uint32_t slots = 0, gx = 0, gy = 0;
   BufP rawBuf, accBuf;
-  GroupP selGroup, classifyGroup, scoreGroup, voteGroup, peaksGroup, gatherGroup, completeGroup, wordGroup, pyrGroup, traceGroup;
+  GroupP selGroup, classifyGroup, scoreGroup, voteGroup, peaksGroup, gatherGroup, completeGroup, wordGroup, heldGroup, pyrGroup, traceGroup;
   GroupP nodesGroup;
   struct Fcn2Level { uint32_t l, w, h; GroupP group, xgroup, group2, xgroup2; BufP plane, uni; };   // ai: group2, xgroup2: a level below coarseFrom's
   std::vector<Fcn2Level> fcn2Levels;
@@ -266,6 +266,10 @@ class FrontHalf {
   BufP developLut;
 
   int B = 0;        // ai: the lanes' size
+  // ai: HELD's (run): the last version posted's number (a new one each run given held >= 0, taken once on the device in
+  // ai: place of the carried version); holdWords false keeps no version (LIZ_HOLD=0, the finder's judges)
+  uint32_t heldPost = 0;
+  bool holdWords = true;
   std::vector<std::unique_ptr<Lane>> lanes;
   struct Planned { uint32_t W = 0, H = 0; };
   std::optional<Planned> planned;
@@ -303,7 +307,9 @@ class FrontHalf {
   std::mutex ringMu;
   void release(Slot* s);
   Lane* freeLane();
-  // ai: A batch of staged slots on a free lane: recorded and submitted. held: the held version (0 none).
+  // ai: A batch of staged slots on a free lane: recorded and submitted. held: -1 the held version carried on the device
+  // ai: (gpu/glsl/word.mjs HELD: the last static word read before each frame in capture order, launch to launch);
+  // ai: 0 or a version posted, the batch starting from it (a carousel's header, a reset, a batch on its own).
   // ai: profile: a pass and a timestamp pair a stage group (decoder.mjs batch's profile: STAGES), so the batch's
   // ai: out.stageMs says which stage costs what; its gpuMs is their sum. keep: the batch's first `keep` frames read
   // ai: back as the ring holds them (FrameOut::luma), for a replay.

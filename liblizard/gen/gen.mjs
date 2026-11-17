@@ -59,7 +59,9 @@ const MAIN = (() => { try { return fileURLToPath(import.meta.url) === realpathSy
 // ai: five unread words (both written by the host, so every later word moved).
 // ai: 11 since 2026-11-15: the word RS(n, 5) with two magics (src/fmt.h): F8's record words 5 and 6 carry an animated
 // ai: word's position (as 256 + it) and symbol beside a static word's version, rate and extension bytes.
-export const TREE_VERSION = 11;
+// ai: 12 since 2026-11-16: F8's held version on the device (glsl/word.mjs HELD, the front's `heldP` and its buffer
+// ai: `heldCarry`; WORD's layout without the lane's Held uniform, which HELD binds as version, post, frames, hold).
+export const TREE_VERSION = 12;
 
 const NDK = process.env.ANDROID_NDK_HOME || `${process.env.ANDROID_HOME || `${homedir()}/Android/Sdk`}/ndk/27.1.12297006`;
 // ai: SPIRV-Tools' spirv-val and shaderc's glslc: the Android NDK's shader-tools where there is an NDK, else the
@@ -222,11 +224,11 @@ function exportTree(fh, v) {
     weightsPrecision: fh.weights.precision,
     front: {
       pyramid: pb(fh.pyramid), classify: pbNet(fh.classify),
-      vote: pb(fh.vote), peaks: pb(fh.peaks), gather: pb(fh.gather), complete: pb(fh.complete), score: pb(fh.score), pick: pb(fh.pick), trace: pb(fh.trace), nodesP: pb(fh.nodesP), refit: pb(fh.refit), refitPost: pb(fh.refitPost), wordP: pb(fh.wordP), select: pb(fh.select),
+      vote: pb(fh.vote), peaks: pb(fh.peaks), gather: pb(fh.gather), complete: pb(fh.complete), score: pb(fh.score), pick: pb(fh.pick), trace: pb(fh.trace), nodesP: pb(fh.nodesP), refit: pb(fh.refit), refitPost: pb(fh.refitPost), wordP: pb(fh.wordP), heldP: pb(fh.heldP), select: pb(fh.select),
       // ai: the finder's second round (gpu/glsl/finder.mjs REDO; gpu/bank_fcn2.mjs COARSE_FROM)
       redo: pb(fh.redo), coarseFrom: fh.bank.COARSE_FROM,
       fcn2: pb(fh.fcn2), fcn2X: pb(fh.fcn2X), fcn2Form: { TX: f.TX, TY: f.TY, XB: f.XB, walk: f.walk, xplane: f.xplane, int8: f.int8, store: f.store, name: f.name },
-      buffers: Object.fromEntries(["planBuf", "planUni", "p4Uni", "pickUni", "nodesBuf", "tmplBuf", "wordPtsBuf", "wordUni", "wordLatUni", "fitUni", "weightsBuf"].map((k) => [k, idOf(fh[k])])),
+      buffers: Object.fromEntries(["planBuf", "planUni", "p4Uni", "pickUni", "nodesBuf", "tmplBuf", "wordPtsBuf", "wordUni", "wordLatUni", "heldCarry", "fitUni", "weightsBuf"].map((k) => [k, idOf(fh[k])])),
       round: idOf(fh.round),
       twins: tf ? { large: twin(tf.large) } : null,
     },

@@ -50,7 +50,9 @@ static constexpr double MiB = 1 << 20;
 // ai: 9 since 2026-11-09: the anchors by ring; 10 since 2026-11-14: the proposer's and the transform's uniforms without
 // ai: their unread words; 11 since 2026-11-15: the word RS(n, 5) with two magics, F8's record words 5 and 6 an animated
 // ai: word's position (256 + it) and symbol beside a static word's version, rate and extension bytes (gen.mjs TREE_VERSION).
-static constexpr int TREE_VERSION = 11;
+// ai: 12 since 2026-11-16: F8's held version on the device (HELD, the front's heldP and heldCarry; WORD's layout without
+// ai: the lane's Held uniform, which HELD binds).
+static constexpr int TREE_VERSION = 12;
 
 Consts Consts::of(const json& c) {
   Consts k;
@@ -438,7 +440,9 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
     }
     ln.nodesGroup = group(P("nodesP"), {FBP("nodesBuf"), FBP("tmplBuf"), ln.mapsBuf, ln.selBuf, ln.measBuf, S->bufPtr(S->tree["front"]["round"])}, true);
     ln.anchNodesGroup = group(P("nodesP"), {FBP("nodesBuf"), FBP("tmplBuf"), ln.mapsBuf, ln.selBuf, ln.measBuf, S->bufPtr(S->tree["anch"]["buffers"]["round"])}, true);
-    ln.wordGroup = group(P("wordP"), {ln.mapsBuf, ln.selBuf, ln.residBuf, FBP("wordPtsBuf"), ln.resultBuf, FBP("wordUni"), FBP("wordLatUni"), ln.heldUni}, true);
+    ln.wordGroup = group(P("wordP"), {ln.mapsBuf, ln.selBuf, ln.residBuf, FBP("wordPtsBuf"), ln.resultBuf, FBP("wordUni"), FBP("wordLatUni")}, true);
+    // ai: F8's held version (gpu/glsl/word.mjs HELD): sel, the results, the decoder's CARRY, the word code, the lane's Held
+    ln.heldGroup = group(P("heldP"), {ln.selBuf, ln.resultBuf, FBP("heldCarry"), FBP("wordUni"), ln.heldUni}, false);
     // ai: decoder.mjs ensure: the anchors' two stages read the frame texture (binding 0), so their groups are made here
     // ai: with it: the texture, frames, maps, sel, resid, F8's lattice and the anchors' uniform; then ANCH_FIND's
     // ai: records, or ANCH_FIT's reading of them, its records and the result
@@ -742,8 +746,8 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   const int nb = (int)slots.size();
   if (!nb) throw wg::Error("a batch of no slots");
   if (nb > B) throw wg::Error(std::to_string(nb) + " frames in a batch of " + std::to_string(B));
-  if (held < 0 || (held > 0 && held < (int)C.VERSION_MIN) || held > (int)C.VERSION_MAX)
-    throw wg::Error("held " + std::to_string(held) + ": 0, or a version " + std::to_string(C.VERSION_MIN) + " to " + std::to_string(C.VERSION_MAX));
+  if (held < -1 || (held > 0 && held < (int)C.VERSION_MIN) || held > (int)C.VERSION_MAX)
+    throw wg::Error("held " + std::to_string(held) + ": -1 (carried), 0, or a version " + std::to_string(C.VERSION_MIN) + " to " + std::to_string(C.VERSION_MAX));
   Lane* lnp = freeLane();
   if (!lnp) throw wg::Error(std::to_string(lanes.size()) + " batches in flight already");
   Lane& ln = *lnp;
@@ -753,7 +757,9 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   for (auto* s : slots) if (s) { W = std::max(W, s->w); H = std::max(H, s->h); }
   ensure(ln, W, H);
   const uint64_t Bl = ln.B;
-  { uint32_t hu[4] = {(uint32_t)held, 0, 0, 0}; dev.writeBuffer(*ln.heldUni, 0, hu, 16); }
+  // ai: HELD's uniform: a version posted (held >= 0) under a new post number, taken once in place of the carried one
+  if (held >= 0) heldPost++;
+  { uint32_t hu[4] = {(uint32_t)std::max(held, 0), heldPost, (uint32_t)nb, holdWords ? 1u : 0u}; dev.writeBuffer(*ln.heldUni, 0, hu, 16); }
   {
     std::vector<uint32_t> dims(4 * ln.slotsG, 0);
     for (int i = 0; i < nb; i++) if (slots[i]) { dims[4 * i] = slots[i]->w; dims[4 * i + 1] = slots[i]->h; dims[4 * i + 2] = slots[i]->axis; dims[4 * i + 3] = 1; }
@@ -948,6 +954,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   step(anchFit, ln.anchFitGroup, n);
   begin("word");
   step(P("wordP"), ln.wordGroup, n);
+  step(P("heldP"), ln.heldGroup, 1);
   encodeBack(e, ln, nb, begin);
   e.endPass();
   // ai: the readback's layout (the GPU back half's): counters, finder results, the back half's (REC, V, ITS, BCOUNTS,

@@ -7,7 +7,7 @@
 // ai: its own), the kept frames (run's keep, LIZ_DUMP, LIZ_DUMP_S), the int8 twins (the WebGPU tree is f32, which has
 // ai: none), the LDPC forms' cross-check and the trial (a WebGPU device validates every module before it runs).
 
-export const TREE_VERSION = 11;   // ai: front.cpp TREE_VERSION
+export const TREE_VERSION = 12;   // ai: front.cpp TREE_VERSION
 export const WEBGPU_VARIANT = "f32";   // ai: gen.mjs WEBGPU_VARIANT: the variant gen translates to WGSL
 
 // ai: front.cpp STAGES, the profile's stage groups, a timestamp pair each.
@@ -231,6 +231,8 @@ export class FrontHalf {
   static async create(device, read, { variant = WEBGPU_VARIANT, budget, log = () => {}, ldpcForm } = {}) {
     const fh = new FrontHalf();
     fh.log = log;
+    fh.heldPost = 0;   // ai: HELD's last post number (run); holdWords false keeps no version
+    fh.holdWords = true;
     fh.dev = new Dev(device, log);
     fh.variant = variant;
     const t0 = performance.now();
@@ -468,7 +470,9 @@ export class FrontHalf {
       ln.redoGroup = group(this.P("redo"), [ln.framesBuf, ln.selBuf, ln.frames2Buf, ln.accBuf, ln.readingsBuf, ln.candBuf, ln.quadsBuf, ln.p5Uni, ln.args2Buf, ln.r2Uni], false);
       ln.nodesGroup = group(this.P("nodesP"), [this.FBP("nodesBuf"), this.FBP("tmplBuf"), ln.mapsBuf, ln.selBuf, ln.measBuf, this.S.buf(this.S.tree.front.round)], true);
       ln.anchNodesGroup = group(this.P("nodesP"), [this.FBP("nodesBuf"), this.FBP("tmplBuf"), ln.mapsBuf, ln.selBuf, ln.measBuf, this.S.buf(this.S.tree.anch.buffers.round)], true);
-      ln.wordGroup = group(this.P("wordP"), [ln.mapsBuf, ln.selBuf, ln.residBuf, this.FBP("wordPtsBuf"), ln.resultBuf, this.FBP("wordUni"), this.FBP("wordLatUni"), ln.heldUni], true);
+      ln.wordGroup = group(this.P("wordP"), [ln.mapsBuf, ln.selBuf, ln.residBuf, this.FBP("wordPtsBuf"), ln.resultBuf, this.FBP("wordUni"), this.FBP("wordLatUni")], true);
+      // ai: F8's held version (glsl/word.mjs HELD): sel, the results, the decoder's CARRY, the word code, the lane's Held
+      ln.heldGroup = group(this.P("heldP"), [ln.selBuf, ln.resultBuf, this.FBP("heldCarry"), this.FBP("wordUni"), ln.heldUni], false);
       {
         const head = [ln.tex, ln.framesBuf, ln.mapsBuf, ln.selBuf, ln.residBuf, this.FBP("wordLatUni"), this.anchUni];
         ln.anchFindGroup = d.group(this.anchFind.bgl, [...head, ln.anchBuf]);
@@ -643,13 +647,15 @@ export class FrontHalf {
     b.rldpc.forEach((g, k) => stepOf(lsteps[k], g));
   }
 
-  // ai: front.cpp run: a batch of staged slots on a free lane, recorded and submitted. held: the held version (0
-  // ai: none). profile: a pass and a timestamp pair a stage group.
+  // ai: front.cpp run: a batch of staged slots on a free lane, recorded and submitted. held: -1 the held version carried
+  // ai: on the device (glsl/word.mjs HELD: the last static word read before each frame in capture order, launch to
+  // ai: launch), 0 or a version posted, the batch starting from it (a carousel's header, a reset, a batch on its own).
+  // ai: profile: a pass and a timestamp pair a stage group.
   run(slots, held, profile = false) {
     const C = this.C, d = this.dev, nb = slots.length;
     if (!nb) throw new Error("a batch of no slots");
     if (nb > this.B) throw new Error(`${nb} frames in a batch of ${this.B}`);
-    if (held < 0 || (held > 0 && held < C.VERSION_MIN) || held > C.VERSION_MAX) throw new Error(`held ${held}: 0, or a version ${C.VERSION_MIN} to ${C.VERSION_MAX}`);
+    if (held < -1 || (held > 0 && held < C.VERSION_MIN) || held > C.VERSION_MAX) throw new Error(`held ${held}: -1 (carried), 0, or a version ${C.VERSION_MIN} to ${C.VERSION_MAX}`);
     const ln = this.freeLane();
     if (!ln) throw new Error(`${this.lanes.length} batches in flight already`);
     const f = { t0: this.now(), lane: ln, nb, stages: [] };
@@ -657,7 +663,9 @@ export class FrontHalf {
     for (const s of slots) if (s) { W = Math.max(W, s.w); H = Math.max(H, s.h); }
     this.ensure(ln, W, H);
     const Bl = ln.B;
-    d.write(ln.heldUni, 0, new Uint32Array([held, 0, 0, 0]));
+    // ai: HELD's uniform: a version posted (held >= 0) under a new post number, taken once in place of the carried one
+    if (held >= 0) this.heldPost++;
+    d.write(ln.heldUni, 0, new Uint32Array([Math.max(held, 0), this.heldPost, nb, this.holdWords ? 1 : 0]));
     {
       const dims = new Uint32Array(4 * ln.slotsG);
       slots.forEach((s, i) => { if (s) dims.set([s.w, s.h, s.axis, 1], 4 * i); });
@@ -761,6 +769,7 @@ export class FrontHalf {
     step(this.anchFit, ln.anchFitGroup, n);
     e = begin("word");
     step(this.P("wordP"), ln.wordGroup, n);
+    step(this.P("heldP"), ln.heldGroup, 1);
     this.encodeBack(e, ln, (name) => (e = begin(name)));
     pass.end();
     // ai: the readback's layout: counters, finder results, the back half's (REC, V, ITS, BCOUNTS, PILOT), timestamps

@@ -223,6 +223,10 @@ class GpuReceiver : public Receiver {
   std::shared_mutex planMu;
   int held = 0;
   HoldPtr hold{cpu_hold_new()};           // ai: the held version's source: static words, or a carousel's header (codec.h)
+  // ai: the version the next batch posts to the device's held version (front.h run): 0 at the start and at a clear, a
+  // ai: carousel's header's where one names it; -1 once posted, the device carrying its static words on (gpu/glsl/word.mjs
+  // ai: HELD), so a frame decodes at the last word read before it whatever the batches and how many are in flight
+  int post = 0;
   int batchSize = 1;                      // ai: the batcher's size as the decoder thread last read it (push is another thread)
   std::atomic<int> cap{0};                // ai: Receiver::batchCap, set by the caller's thread and read by the decoder's; 0 for none
   // ai: camera buffers waiting for their ingest to finish before release: (timeline value, tag)
@@ -550,7 +554,7 @@ void GpuReceiver::decoderLoop() {
       }
       std::vector<Slot*> batch;
       std::vector<std::shared_ptr<Replay>> batchReplay;
-      int heldNow = 0;
+      int heldNow = -1;
       std::shared_ptr<Replay> recNow;
       {
         std::unique_lock<std::mutex> l(mu);
@@ -576,8 +580,9 @@ void GpuReceiver::decoderLoop() {
           stagingReplay.erase(stagingReplay.begin(), stagingReplay.begin() + n);
           stagingAt.erase(stagingAt.begin(), stagingAt.begin() + n);
           if (staging.empty()) flushNow = false;
+          heldNow = post;
+          post = -1;
         }
-        heldNow = held;
         recNow = rec;
         idle = batch.empty() && flight.empty() && staging.empty();
         if (batch.empty() && flight.empty()) cv.wait_for(l, std::chrono::milliseconds(5));
@@ -668,7 +673,9 @@ void GpuReceiver::deliver(BatchOut& out, const Kept& k) {
     totalBlocks += (long)fo.records.size();
     totalFrames++;
     if (fo.hasWord) {
+      const int before = held;
       held = cpu_hold_take(hold.get(), fo.word.kind, fo.word.version, fo.word.pos, fo.word.sym);
+      if (fo.word.kind && held && held != before) post = held;   // ai: the carousel's header, which the device cannot read
       lastWord = wordJson(fo.word.kind, fo.word.kind ? held : fo.word.version, fo.word.fps, fo.word.pos, fo.ring);
     }
   }
@@ -744,7 +751,7 @@ std::string GpuReceiver::stats() {
 }
 
 std::string GpuReceiver::file() { auto p = xfer->progress(); return p.done ? p.path : ""; }
-void GpuReceiver::clear() { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; cpu_hold_reset(hold.get()); }
+void GpuReceiver::clear() { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; post = 0; cpu_hold_reset(hold.get()); }
 void GpuReceiver::forget(const std::string& root) { xfer->forget(root); }
 
 // ai: The C on the CPU (cpu/pool.h: the web's worker pool natively): a frame's crop is copied to an idle worker or the
