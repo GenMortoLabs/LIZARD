@@ -96,7 +96,8 @@ fun TopBar(title: String?, onBack: (() -> Unit)? = null, actions: @Composable Ro
             Row(Modifier.weight(1f).offset(x = if (onBack != null) -gutter else 0.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (onBack != null) IconBtn(Icons.back, "Back", onClick = onBack)
                 if (title == null) {
-                    Image(Icons.mark, contentDescription = null, Modifier.size(28.dp))
+                    // ai: Home's mark 48 dp (2026-11-16, the web's Home the same; 28 before)
+                    Image(Icons.mark, contentDescription = null, Modifier.size(48.dp))
                     Spacer(Modifier.size(10.dp))
                     Text("LIZARD", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Fg)
                 } else Text(title, style = MaterialTheme.typography.titleLarge, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis,

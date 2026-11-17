@@ -253,7 +253,7 @@ private fun HomeWide(h: HomeHost) {
     Column(Modifier.fillMaxSize().background(Bg).safeDrawingPadding()) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             Row(Modifier.widthIn(max = WIDE).fillMaxWidth().height(64.dp).padding(horizontal = PAD), verticalAlignment = Alignment.CenterVertically) {
-                Image(Icons.mark, contentDescription = null, Modifier.size(28.dp))
+                Image(Icons.mark, contentDescription = null, Modifier.size(48.dp))   // ai: 48 dp since 2026-11-16, the web's Home the same
                 Spacer(Modifier.size(10.dp))
                 Text("LIZARD", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Fg, modifier = Modifier.weight(1f))
                 Row(Modifier.offset(x = 12.dp)) {
