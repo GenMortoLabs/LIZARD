@@ -8,8 +8,9 @@ import androidx.compose.ui.unit.dp
 
 // ai: LIZARD's mark (Icons.mark; the scales since 2026-11-16), the drawing of lizard-web/icon.svg, of the Android
 // ai: launcher's drawables and of the macOS package's icon: the symbol's four corner marks and the dark ring between
-// ai: them; inside them a lizard's scales in six greys, dark to light down the field, each scale its outline (a white
-// ai: edge to the next); a white edge between the scales and the corner marks.
+// ai: them; inside them a lizard's scales, shaded as a camera's capture of a LIZARD picture falls off from a bright
+// ai: spot, here below the bottom middle (lightest there, darker toward the top corners), each scale its outline (a white edge to the next);
+// ai: a white edge between the scales and the corner marks.
 // ai: In the mark's 36-unit drawing, scaled 1.24444 about the 64-unit square's centre: the ink spans 70% of the square
 // ai: (the standard of 2026-10-10). Written by the mark's generator with the other copies: change them together.
 private const val CLIP = "M19.85 19.85H44.15V44.15H19.85Z"
@@ -41,7 +42,7 @@ private val OUTLINES = arrayOf(
     "M27.14 10.454 C27.14 17.736 30.25 20.79 32 22.199 C33.75 20.79 36.86 17.736 36.86 10.454Z",
     "M36.86 10.454 C36.86 17.736 39.97 20.79 41.72 22.199 C43.47 20.79 46.58 17.736 46.58 10.454Z"
 )
-private val GREYS = longArrayOf(0xFFC3C3C3, 0xFFC3C3C3, 0xFFC3C3C3, 0xFFC3C3C3, 0xFFA5A5A5, 0xFFA5A5A5, 0xFFA5A5A5, 0xFF878787, 0xFF878787, 0xFF878787, 0xFF878787, 0xFF6E6E6E, 0xFF6E6E6E, 0xFF6E6E6E, 0xFF555555, 0xFF555555, 0xFF555555, 0xFF555555, 0xFF3C3C3C, 0xFF3C3C3C, 0xFF3C3C3C)
+private val GREYS = longArrayOf(0xFF999999, 0xFFA4A4A4, 0xFFA4A4A4, 0xFF999999, 0xFF9E9E9E, 0xFFA6A6A6, 0xFF9E9E9E, 0xFF929292, 0xFF9C9C9C, 0xFF9C9C9C, 0xFF929292, 0xFF898989, 0xFF909090, 0xFF898989, 0xFF717171, 0xFF797979, 0xFF797979, 0xFF717171, 0xFF636363, 0xFF696969, 0xFF636363)
 private val EDGE_WIDTHS = floatArrayOf(0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f, 0.68f)
 
 private fun ImageVector.Builder.scales() {
