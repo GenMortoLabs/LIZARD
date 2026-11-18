@@ -164,6 +164,86 @@ FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type,
 
 FN(jstring, txError)(JNIEnv* e, jclass) { return jstr(e, lizard::jni::lastError()); }
 
+// ai: A stream file played (Sender::play, 2026-11-18): a sender of its frames, configured by txConfigure as any (the
+// ai: format its own), presented as any; 0 with why in txError()
+FN(jlong, txPlay)(JNIEnv* e, jclass, jstring path) {
+  auto t = std::make_unique<Tx>();
+  std::string why;
+  try { t->s = lizard::Sender::play(str(e, path), why); } catch (const std::exception& x) { why = x.what(); }
+  if (!t->s) { setError(why); return 0; }
+  return reinterpret_cast<jlong>(t.release());
+}
+
+// ai: a played stream's meta.json, "" for a painting sender
+FN(jstring, txStream)(JNIEnv* e, jclass, jlong h) {
+  std::lock_guard<std::mutex> l(tx(h)->mu);
+  const lizard::StreamPlay* p = tx(h)->s->playing();
+  return jstr(e, p ? p->meta : "");
+}
+
+// ai: What a .lizard holds (2026-11-18): {"kind":"stream" or "replay","meta":<its meta.json>}; "" with why in txError()
+FN(jstring, lizardInfo)(JNIEnv* e, jclass, jstring path) {
+  std::string why;
+  auto r = lizard::lizfile::Reader::open(str(e, path), why);
+  if (!r) { setError(why); return jstr(e, ""); }
+  return jstr(e, std::string("{\"kind\":\"") + (r->kind() == lizard::lizfile::Kind::Stream ? "stream" : "replay") + "\",\"meta\":" + r->meta() + "}");
+}
+
+// ai: Export (Sender::exportStart, 2026-11-18, Send's Export): the sender's frames into a stream file at path, laps of
+// ai: the file's blocks, shown meanwhile (display) or not (the GPU drained, or each CPU painter packing), packed by zstd
+// ai: at level; name, type and the format as the stream's meta.json names them. "" or why not.
+FN(jstring, txExport)(JNIEnv* e, jclass, jlong h, jstring path, jdouble laps, jboolean display, jint level, jstring name, jstring type,
+                      jint blocks, jint ring, jint fps, jint codes, jint frameBlocks) {
+  lizard::Sender::ExportJob j;
+  j.path = str(e, path);
+  j.laps = laps;
+  j.display = display == JNI_TRUE;
+  if (level > 0) j.packing.level = level;
+  j.info.name = str(e, name); j.info.type = str(e, type);
+  j.info.blocks = blocks; j.info.ring = ring; j.info.fps = fps; j.info.codes = codes; j.info.frameBlocks = frameBlocks;
+  std::string r;
+  try {
+    std::lock_guard<std::mutex> l(tx(h)->mu);
+    r = tx(h)->s->exportStart(j);
+  } catch (const std::exception& x) { r = x.what(); }
+  return jstr(e, r);
+}
+
+// ai: the export now or the last one: {"on","done","written","frames","bytes","path","error"}
+FN(jstring, txExportState)(JNIEnv* e, jclass, jlong h) {
+  const lizard::Sender::ExportState st = tx(h)->s->exportState();
+  std::string err;
+  for (char c : st.error) { if (c == '"' || c == '\\') err += '\\'; if (static_cast<unsigned char>(c) >= 0x20) err += c; }
+  std::string p;
+  for (char c : st.path) { if (c == '"' || c == '\\') p += '\\'; if (static_cast<unsigned char>(c) >= 0x20) p += c; }
+  return jstr(e, std::string("{\"on\":") + (st.on ? "true" : "false") + ",\"done\":" + (st.done ? "true" : "false") +
+                     ",\"written\":" + std::to_string(st.written) + ",\"frames\":" + std::to_string(st.frames) + ",\"bytes\":" + std::to_string(st.bytes) +
+                     ",\"path\":\"" + p + "\",\"error\":\"" + err + "\"}");
+}
+
+// ai: Unpack with LIZARD (2026-11-18, Main.kt --unpack): a .lizard into dir (made, empty), a grey PNG a frame, its
+// ai: meta.json and stats.jsonl (lizfile.h unpack); "" or why not
+FN(jstring, lizardUnpack)(JNIEnv* e, jclass, jstring path, jstring dir) {
+  std::string why;
+  return jstr(e, lizard::lizfile::unpack(str(e, path), str(e, dir), why, true) ? "" : why);
+}
+
+// ai: the screen on or off mid-export (Sender::exportShow, Send's Hide codes): "" or why not
+FN(jstring, txExportShow)(JNIEnv* e, jclass, jlong h, jboolean show) {
+  std::string r;
+  try {
+    std::lock_guard<std::mutex> l(tx(h)->mu);
+    r = tx(h)->s->exportShow(show == JNI_TRUE);
+  } catch (const std::exception& x) { r = x.what(); }
+  return jstr(e, r);
+}
+
+// ai: the export ended where it is (its .part removed); the sender goes on
+FN(void, txExportStop)(JNIEnv*, jclass, jlong h) {
+  std::lock_guard<std::mutex> l(tx(h)->mu);
+  tx(h)->s->exportStop();
+}
+
 // ai: every make under way stopped at its next piece of work; the epoch a new make takes
 FN(jlong, txCancelMakes)(JNIEnv*, jclass) { return ++makes; }
 
@@ -235,6 +315,16 @@ FN(jboolean, txSeed)(JNIEnv*, jclass, jlong h, jint seed) {
 // ai: The blocks a frame of subch sub-channels carries under the format's rate profile (src/lizard_phy.h lizard_blocks_for),
 // ai: for the Blocks slider's figures before a configure
 FN(jint, blocksFor)(JNIEnv*, jclass, jint subch) { return lizard_blocks_for(subch); }
+
+// ai: A painted frame's side in pixels, a symbol and its quiet zone (sender.h side()), for an export's size before it
+// ai: is made; 0 where subch and span are no format
+FN(jint, frameSide)(JNIEnv*, jclass, jint subch, jint span) {
+  lizard_t f{};
+  if (lizard_init(&f, lizard_n_for(subch), subch, span)) return 0;
+  const int side = f.px + 2 * LIZARD_QUIET * f.pxm;
+  lizard_free(&f);
+  return side;
+}
 
 FN(jstring, txStats)(JNIEnv* e, jclass, jlong h) {
   std::string s;
@@ -353,6 +443,10 @@ FN(void, presentPlace)(JNIEnv* e, jclass, jlong p, jfloatArray place) {
 
 FN(void, presentFps)(JNIEnv*, jclass, jlong p, jint fps) { if (p) pr(p)->setFps(fps); }
 FN(void, presentVsync)(JNIEnv*, jclass, jlong p, jboolean on) { if (p) pr(p)->setVsync(on == JNI_TRUE); }
+// ai: Scaling (2026-11-17): 0 Bilinear, 1 Lanczos, 2 None (presenter.h Scaling, Unscaled)
+FN(void, presentScaling)(JNIEnv*, jclass, jlong p, jint how) {
+  if (p && how >= 0 && how <= 2) pr(p)->setScaling(static_cast<lizard::Scaling>(how));
+}
 FN(void, presentSize)(JNIEnv*, jclass, jlong p, jfloat size, jfloat edge) { if (p) pr(p)->setSize(size, edge); }
 FN(void, presentPause)(JNIEnv*, jclass, jlong p, jboolean on) { if (p) pr(p)->setPaused(on == JNI_TRUE); }
 // ai: presenter.h stats(): the last second's window as JSON

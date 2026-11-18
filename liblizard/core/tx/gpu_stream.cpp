@@ -155,53 +155,63 @@ bool GpuStream::put(uint32_t c, const rq_enc_t* enc) {
   size_t s;
   {
     std::unique_lock<std::mutex> l(mu_);
-    cv_.wait(l, [&] { return stop_ || std::find(slotOf_.begin(), slotOf_.end(), -1) != slotOf_.end(); });
+    cv_.wait(l, [&] { return stop_ || !failed_.empty() || std::find(slotOf_.begin(), slotOf_.end(), -1) != slotOf_.end(); });
     if (stop_) return false;
+    if (!failed_.empty()) throw std::runtime_error(failed_);
     s = static_cast<size_t>(std::find(slotOf_.begin(), slotOf_.end(), -1) - slotOf_.begin());
     slotOf_[s] = c;
   }
   spread(C, q.L, slot_[s]->mapped);
   VkCommandBuffer cb = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
-  {
-    std::lock_guard<std::mutex> p(poolMu_);
-    VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cai.commandPool = d.pool2;
-    cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cai.commandBufferCount = 1;
-    wg::check(vkAllocateCommandBuffers(d.dev, &cai, &cb), "vkAllocateCommandBuffers (rq copy)");
-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cb, &bi);
-    const VkBufferCopy bc{0, uint64_t{base_[c]} * SB, uint64_t{len_[c]} * SB};
-    vkCmdCopyBuffer(cb, slot_[s]->buf, sym_->buf, 1, &bc);
-    wg::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer (rq copy)");
-  }
+  bool submitted = false;
   const auto release = [&] {
     std::lock_guard<std::mutex> p(poolMu_);
     if (fence) vkDestroyFence(d.dev, fence, nullptr);
-    vkFreeCommandBuffers(d.dev, d.pool2, 1, &cb);
+    if (cb) vkFreeCommandBuffers(d.dev, d.pool2, 1, &cb);
   };
   try {
+    {
+      std::lock_guard<std::mutex> p(poolMu_);
+      VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      cai.commandPool = d.pool2;
+      cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      cai.commandBufferCount = 1;
+      wg::check(vkAllocateCommandBuffers(d.dev, &cai, &cb), "vkAllocateCommandBuffers (rq copy)");
+      VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+      bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+      vkBeginCommandBuffer(cb, &bi);
+      const VkBufferCopy bc{0, uint64_t{base_[c]} * SB, uint64_t{len_[c]} * SB};
+      vkCmdCopyBuffer(cb, slot_[s]->buf, sym_->buf, 1, &bc);
+      wg::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer (rq copy)");
+    }
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     wg::check(vkCreateFence(d.dev, &fci, nullptr, &fence), "vkCreateFence (rq copy)");
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cb;
     {
-      // ai: a queue takes one submitting thread at a time (Vulkan's external synchronisation): the workers' copies one
-      // ai: after another under this lock (two submitting at once hung NVIDIA's driver at 1 GiB, every thread in a futex),
-      // ai: and the device's own lock too where queue2 is the queue
+      // ai: a queue takes one submitting thread at a time (Vulkan's external synchronisation): queue2's lock, which the
+      // ai: desktop's presenter takes around its submits and presents on the same queue (wg.h queue2Mu)
       std::lock_guard<std::mutex> p(poolMu_);
-      std::unique_lock<std::mutex> q2(d.mu, std::defer_lock);
-      if (d.queue2 == d.queue) q2.lock();
+      std::lock_guard<std::mutex> q2(d.queue2Mu());
       wg::check(vkQueueSubmit(d.queue2, 1, &si, fence), "vkQueueSubmit (rq copy)");
+      submitted = true;
     }
     const VkResult r = vkWaitForFences(d.dev, 1, &fence, VK_TRUE, d.hangMs ? uint64_t{d.hangMs} * 1000000 : UINT64_MAX);
     if (r == VK_TIMEOUT) throw std::runtime_error("a chunk's copy to the device did not finish");
     wg::check(r, "vkWaitForFences (rq copy)");
-  } catch (...) {
-    release();
+  } catch (const std::exception& e) {
+    // ai: a copy that failed fails the stream: every put waiting for a slot, and every put after, throws its reason, so
+    // ai: the transfer's fault reaches the sender (until 2026-11-17 the slot was lost and nothing else knew: four lost,
+    // ai: the other workers waited for one for ever and the send hung). A copy submitted and not finished keeps its
+    // ai: slot, command buffer and fence, which the device may still use (wg's rule for a hung submit).
+    {
+      std::lock_guard<std::mutex> l(mu_);
+      if (failed_.empty()) failed_ = e.what();
+    }
+    cv_.notify_all();
+    if (!submitted) release();
     throw;
   }
   release();
@@ -219,12 +229,17 @@ bool GpuStream::done() {
   return onDevice_ == f_.chunks;
 }
 
-// ai: The ids of n blocks into IDS (grown as needed); a control block's payload into its symbol the first time it is
-// ai: named (a control block named is final: the header always, a manifest block once its group is made)
-void GpuStream::ids(const uint8_t* bl, uint32_t n, size_t stride, bool controlsToo) {
+// ai: The ids of n blocks into IDS, made to hold `room` (at least n) when it must grow; a control block's payload into
+// ai: its symbol the first time it is named (a control block named is final: the header always, a manifest block once
+// ai: its group is made). IDS and its bind group are replaced only to grow, which frees what a submission still in
+// ai: flight names (its write and its dispatch): the painter's room is the most blocks any of its encodes names, so
+// ai: IDS grows only when the painter is configured again, nothing in flight; host and the self-test wait for theirs.
+// ai: (Until 2026-11-18 IDS grew with the encodes: a larger one after a smaller, the smaller still in flight, crashed
+// ai: lavapipe in its write to the freed IDS.)
+void GpuStream::ids(const uint8_t* bl, uint32_t n, size_t stride, bool controlsToo, uint32_t room) {
   auto& d = dev_;
   if (!ids_ || ids_->size < 8ull * n) {
-    ids_ = d.createBuffer(8ull * n, wg::STORAGE | wg::COPY_DST, "rq IDS", false);
+    ids_ = d.createBuffer(8ull * std::max(room, n), wg::STORAGE | wg::COPY_DST, "rq IDS", false);
     group_.reset();
   }
   // ai: queue writes (landing at the head of the encode's submission), not a mapped buffer: the painter keeps several
@@ -262,9 +277,9 @@ void GpuStream::record(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& sym,
   enc.dispatch((n + 1) / 2);
 }
 
-void GpuStream::blocks(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& out, const uint8_t* bl, uint32_t n, size_t stride) {
+void GpuStream::blocks(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& out, const uint8_t* bl, uint32_t n, size_t stride, uint32_t room) {
   if (!done()) throw std::runtime_error("a data block named before every chunk's symbols were on the device");
-  ids(bl, n, stride, true);
+  ids(bl, n, stride, true, room);
   record(enc, sym_, tab_, chunks_, out, n, ctl_, f_.chunks, f_.controls);
 }
 

@@ -30,10 +30,10 @@ class ChipChoice<T>(val title: String, val value: T, val options: List<Pair<T, S
 
 // ai: a slider (Bar) under its title and the value as it reads: each value while dragged, `done` at the release
 class Slide(val title: String, val label: String, val value: Float, val range: ClosedFloatingPointRange<Float>, val steps: Int,
-            val done: (() -> Unit)? = null, val choose: (Float) -> Unit) : Setting
+            val done: (() -> Unit)? = null, val enabled: Boolean = true, val choose: (Float) -> Unit) : Setting
 
 // ai: a line of text (TextInput), done at Enter or as the focus leaves it changed
-class Typed(val title: String, val value: String, val placeholder: String, val done: (String) -> Unit) : Setting
+class Typed(val title: String, val value: String, val placeholder: String, val enabled: Boolean = true, val done: (String) -> Unit) : Setting
 
 // ai: a field of lines (the PC link's: its state on the right, its lines muted under it, one action under them)
 class Lines(val title: String, val value: String, val lines: List<String>, val act: Act? = null) : Setting
@@ -41,6 +41,25 @@ class Lines(val title: String, val value: String, val lines: List<String>, val a
 // ai: the lab's text (CodeBlock); a button across the fold (a run's Download, Show in folder)
 class Code(val text: String, val size: Int = 13) : Setting
 class Press(val act: Act, val enabled: Boolean = true) : Setting
+
+// ai: Grey, never hide (2026-11-18): a setting that does not apply now (one another choice turns on: Export's Laps and
+// ai: Display while it is off, what a stream fixes while it plays, Spacing with one code, Batch size on the CPU decoder,
+// ai: Replay size with Save replays off, a fixed camera's mode) keeps its row, greyed at the value it holds, so nothing
+// ai: jumps as choices change; hidden only where a row would show nothing (a button with nothing to act on, another
+// ai: device's field, an empty fold). The setting as it is, inert.
+fun greyed(s: Setting): Setting = when (s) {
+    is Choice<*> -> greyedChoice(s)
+    is ChipChoice<*> -> greyedChips(s)
+    is Slide -> Slide(s.title, s.label, s.value, s.range, s.steps, null, false) {}
+    is Typed -> Typed(s.title, s.value, s.placeholder, false) {}
+    is Press -> Press(s.act, false)
+    is Lines, is Code, is Colours -> s   // ai: (text; and the colours, which only say how a code is shown: live on any)
+}
+fun greyed(items: List<Setting>): List<Setting> = items.map(::greyed)
+// ai: s as it is where `on`, else greyed
+fun greyedUnless(on: Boolean, s: Setting): Setting = if (on) s else greyed(s)
+private fun <T> greyedChoice(c: Choice<T>): Setting = Choice(c.title, c.value, c.options, c.blank, false, c.enabledFor) {}
+private fun <T> greyedChips(c: ChipChoice<T>): Setting = ChipChoice(c.title, c.value, c.options, false, c.enabledFor) {}
 
 // ai: The settings folds by topic (2026-11-12; one Settings fold a screen before): each a fold's key and title in the
 // ai: column's order, before Experimental and Developer Tools. Receive's: the camera (its choice, its mode, Phase lock, Crop
@@ -50,7 +69,46 @@ class Press(val act: Act, val enabled: Boolean = true) : Setting
 // ai: Spacing, Margin; a Layout fold of their own until 2026-11-13), its refresh (FPS, Rate refresh), the painter
 // ai: (GPU acceleration, VSync). The web pages the same (lizard-web).
 val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvPerformance to "Performance", FoldKey.RecvFiles to "Files")
-val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendPerformance to "Performance")
+val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendControl to "Control", FoldKey.SendPerformance to "Performance")
+
+// ai: Send's Control fold (2026-11-18, both apps; named Stream that day before; the mockups
+// ai: research/build/ui-proposal-2026-11-18-streams): Source, Files (what is picked, painted as it goes) or Stream (a stream file played: frames
+// ai: painted ahead, sender.h play); Export, Off or On (Start writes the frames into a stream file too: Laps of the
+// ai: file's blocks, 1 to 5 in halves, 2.5 by default, its value the laps and the file's size where known; Display, On
+// ai: or Off: Off shows nothing, the painter running as fast as it goes and the run ending with the file). Export greyed
+// ai: while a stream plays or for the test stream (a stream is painted already; the test stream has no lap), Laps and
+// ai: Display while Export is off, the whole fold while a run goes (its settings are the run's).
+const val LAPS_MIN = 1.0
+const val LAPS_MAX = 5.0
+const val LAPS_DEFAULT = 2.5
+fun lapsOf(v: Double): Double = (Math.round(v.coerceIn(LAPS_MIN, LAPS_MAX) * 2) / 2.0)
+fun lapsText(v: Double): String = if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(java.util.Locale.ROOT, "%.1f", v)
+
+// ai: Maximum size (2026-11-18; named Largest file for an hour before): the
+// ai: biggest file an export takes, by its own size as picked (before the default client's compression), Receive's
+// ai: slider and stops (fileLimitSetting); an export of a larger one refused at Start ("File too large: 5 GB, over
+// ai: the 1 GB limit"). EXPORT_GB_DEFAULT 1 GB: a stream holds about 90 bytes a byte of file at 2.5 laps.
+const val EXPORT_GB_DEFAULT = 1
+fun exportTooLarge(fileBytes: Long, gb: Int): String? =
+    if (gb != FILE_GB_NONE && fileBytes > fileLimitBytes(gb)) "File too large: ${dev.lizard.readout.Readout.bytes(fileBytes)}, over the ${fileGbText(gb)} limit" else null
+
+// ai: Hide codes (2026-11-18, Display before; it saves the display's and the painter's work): On, an export
+// ai: shows nothing, the painter running as fast as it goes; Off (the default) the frames shown are the frames written.
+// ai: Greyed with Export off; live while an export runs (the sender's exportShow), every other setting of the fold
+// ai: greyed then.
+fun controlSettings(source: String, export: Boolean, laps: Double, size: String, limitGb: Int, hideCodes: Boolean, canExport: Boolean, running: Boolean,
+                   chooseSource: (String) -> Unit, chooseExport: (Boolean) -> Unit, chooseLaps: (Double) -> Unit, chooseLimit: (Int) -> Unit,
+                   chooseHideCodes: (Boolean) -> Unit): List<Setting> {
+    val files = source != "stream"
+    val out = listOf(
+        ChipChoice("Source", source, listOf("files" to "Files", "stream" to "Stream")) { chooseSource(it) },
+        greyedUnless(files && canExport, ChipChoice("Export", export, listOf(false to "Off", true to "On")) { chooseExport(it) }),
+        greyedUnless(files && canExport && export, Slide("Laps", lapsText(laps) + if (size.isNotEmpty()) " \u00b7 $size" else "", laps.toFloat(),
+            LAPS_MIN.toFloat()..LAPS_MAX.toFloat(), ((LAPS_MAX - LAPS_MIN) * 2).toInt() - 1) { v -> val l = lapsOf(v.toDouble()); if (l != laps) chooseLaps(l) }),
+        greyedUnless(files && canExport && export, fileLimitSetting(limitGb, "Maximum size") { chooseLimit(it) }))
+    val hide = greyedUnless(files && canExport && export, ChipChoice("Hide codes", hideCodes, listOf(false to "Off", true to "On")) { chooseHideCodes(it) })
+    return (if (running) greyed(out) else out) + hide
+}
 
 // ai: each fold of `order` that the app gives a setting, open as `folds` keeps it
 @Composable
@@ -104,9 +162,9 @@ fun fileGb(v: Int): Int = if (v in FILE_GB_STOPS) v else FILE_GB_DEFAULT
 fun fileGbText(gb: Int): String = when (gb) { FILE_GB_NONE -> "No limit"; 1000 -> "1 TB"; else -> "$gb GB" }
 // ai: the bytes the session takes (0 none)
 fun fileLimitBytes(gb: Int): Long = gb.toLong() * 1_000_000_000L
-fun fileLimitSetting(gb: Int, choose: (Int) -> Unit): Setting {
+fun fileLimitSetting(gb: Int, title: String = "Largest file", choose: (Int) -> Unit): Setting {
     val at = FILE_GB_STOPS.indexOf(fileGb(gb))
-    return Slide("Largest file", fileGbText(fileGb(gb)), at.toFloat(), 0f..(FILE_GB_STOPS.size - 1).toFloat(), FILE_GB_STOPS.size - 2) { v ->
+    return Slide(title, fileGbText(fileGb(gb)), at.toFloat(), 0f..(FILE_GB_STOPS.size - 1).toFloat(), FILE_GB_STOPS.size - 2) { v ->
         val g = FILE_GB_STOPS[v.roundToInt().coerceIn(0, FILE_GB_STOPS.size - 1)]
         if (g != gb) choose(g)
     }
@@ -195,8 +253,8 @@ private fun ColumnScope.SettingView(s: Setting) {
     when (s) {
         is Choice<*> -> ChoiceView(s)
         is ChipChoice<*> -> ChipsView(s)
-        is Slide -> Field(s.title, s.label) { Bar(s.value, s.range, s.steps, s.done, s.choose) }
-        is Typed -> Field(s.title) { TextInput(s.value, s.placeholder, s.done) }
+        is Slide -> Field(s.title, s.label, s.enabled) { Bar(s.value, s.range, s.steps, s.done, s.enabled, s.choose) }
+        is Typed -> Field(s.title, enabled = s.enabled) { TextInput(s.value, s.placeholder, s.enabled, s.done) }
         is Lines -> Field(s.title, s.value) {
             for (l in s.lines) Text(l, style = MaterialTheme.typography.bodyMedium, color = Muted)
             s.act?.let { a -> Btn(a.label, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { a.run() } }
@@ -212,7 +270,7 @@ private fun <T> ChoiceView(c: Choice<T>) =
     Select(c.title, c.value, c.options, c.blank, c.enabled, c.enabledFor, c.onOpen, c.choose)
 
 @Composable
-private fun <T> ChipsView(c: ChipChoice<T>) = Field(c.title) {
+private fun <T> ChipsView(c: ChipChoice<T>) = Field(c.title, enabled = c.enabled) {
     Chips { for ((k, label) in c.options) Chip(label, k == c.value, c.enabled && c.enabledFor(k)) { if (k != c.value) c.choose(k) } }
 }
 

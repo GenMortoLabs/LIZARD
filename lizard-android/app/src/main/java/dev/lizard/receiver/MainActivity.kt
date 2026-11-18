@@ -152,7 +152,7 @@ class MainActivity : ComponentActivity() {
     private var savingTree: Received.Entry? = null
     internal var shownBundle by mutableStateOf<Received.Entry?>(null)   // ai: the bundle the Files screen lists
     private var asked = false
-    private val main = Handler(Looper.getMainLooper())
+    internal val main = Handler(Looper.getMainLooper())
 
     private val ask = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         granted = ok
@@ -168,6 +168,9 @@ class MainActivity : ComponentActivity() {
     // ai: photos and videos through the system's photo picker (2026-10-23): no permission, each one a file item
     private val chooseMedia = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { us -> if (us.isNotEmpty()) send.pick(us) }
     internal fun pickMedia() { try { chooseMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) } catch (_: ActivityNotFoundException) {} }
+    // ai: Send's Source Stream (2026-11-18): one stream file (a .lizard has no type of its own: any document offered)
+    private val chooseStream = registerForActivityResult(ActivityResultContracts.OpenDocument()) { u -> if (u != null) send.openStream(u) }
+    internal fun pickStream() { try { chooseStream.launch(arrayOf("*/*")) } catch (_: ActivityNotFoundException) {} }
     // ai: Receive's File camera (2026-11-07; its camera area's File, Folder and Media since 2026-11-09): images, videos and
     // ai: .lizard replays to play as the camera (ReceiveState.addUris, addTree); a .lizard comes as a ZIP or untyped
     private val chooseReceived = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { us -> if (us.isNotEmpty()) receive.addUris(us) }
@@ -264,7 +267,9 @@ class MainActivity : ComponentActivity() {
         // ai: shortcuts' VIEW carries no data.
         val u = i?.data
         if (i?.action == Intent.ACTION_VIEW && u != null) {
-            if (receive.isReplay(u)) { receive.openReplays(listOf(u)); go(Screen.Receive) }
+            // ai: a stream file (2026-11-18) plays: Send's Source Stream
+            if (send.openStream(u, quiet = true)) go(Screen.Send)
+            else if (receive.isReplay(u)) { receive.openReplays(listOf(u)); go(Screen.Receive) }
             else { send.pick(listOf(u)); go(Screen.Send) }
             return
         }
@@ -542,6 +547,41 @@ class MainActivity : ComponentActivity() {
                 if (refileAgain) { refileAgain = false; refile() }
             }
         }
+    }
+
+    // ai: A file copied into Downloads under a name free there ("name (1).ext"), on a thread of its own, as
+    // ai: downloadReplay copies (through the file system from Android 11, a .part renamed at the end; MediaStore's
+    // ai: Downloads on Android 10); done on the main thread with the folder's name or why not. Send's Export (2026-11-18).
+    internal fun toDownloads(src: File, name: String, done: (Result<String>) -> Unit) {
+        val resolver = applicationContext.contentResolver
+        Thread({
+            val res = runCatching {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    @Suppress("DEPRECATION") val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    val stem = name.substringBeforeLast('.'); val ext = name.substringAfterLast('.', "")
+                    var dest = File(downloads, name)
+                    var k = 1
+                    while (dest.exists()) dest = File(downloads, "$stem ($k)${if (ext.isEmpty()) "" else ".$ext"}").also { k++ }
+                    val part = File(downloads, "${dest.name}.part")
+                    try {
+                        src.copyTo(part, overwrite = true)
+                        if (!part.renameTo(dest)) throw IOException("${part.name} could not be renamed")
+                    } catch (e: Throwable) { part.delete(); throw e }
+                    downloads.name
+                } else {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, name); put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream"); put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IOException("$name could not be written")
+                    try {
+                        (resolver.openOutputStream(uri) ?: throw IOException("$name could not be written")).use { out -> src.inputStream().use { it.copyTo(out) } }
+                        resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
+                    } catch (e: Throwable) { runCatching { resolver.delete(uri, null, null) }; throw e }
+                    "Download"
+                }
+            }
+            main.post { done(res) }
+        }, "lizard-to-downloads").start()
     }
 
     // ai: Download: a run's .lizard copied to Download/<run>.lizard (what a PC's Upload camera plays, 2026-10-28), on a

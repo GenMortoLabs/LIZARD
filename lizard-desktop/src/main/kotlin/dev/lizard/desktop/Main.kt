@@ -29,6 +29,19 @@ fun main(args: Array<String>) {
             if (recvTest != null) ReceiverTest.fail(why) else SenderTest.fail(why)
         }
     }
+    // ai: Unpack with LIZARD (2026-11-18, the file managers' action: packaging/lizard-unpack.nemo_action, the MSI's verb):
+    // ai: no window, each .lizard to a folder beside it named as it is (a free name: "five (1)"), a grey PNG a frame;
+    // ai: what failed on stderr, exit 1 where any did
+    if (args.firstOrNull() == "--unpack") {
+        try { Native.load() } catch (e: Throwable) { System.err.println("unpack: no native library: ${e.message}"); exitProcess(1) }
+        var bad = 0
+        for (f in args.drop(1).map { java.io.File(it).absoluteFile }) {
+            val dir = Received.free(f.parentFile ?: java.io.File("."), f.nameWithoutExtension.ifEmpty { f.name })
+            val why = Native.lizardUnpack(f.path, dir.path)
+            if (why.isEmpty()) println("unpack: ${f.name} into ${dir.path}") else { bad++; System.err.println("unpack: ${f.name}: $why") }
+        }
+        exitProcess(if (bad > 0) 1 else 0)
+    }
     val broadcast = args.firstOrNull() == "--send"
     val given = args.drop(if (broadcast) 1 else 0).map { java.io.File(it).absoluteFile }.filter { it.exists() }
     val testing = sendTest != null || recvTest != null

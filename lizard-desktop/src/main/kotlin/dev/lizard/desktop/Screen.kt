@@ -54,7 +54,8 @@ class DesktopSend(private val app: App) : SendHost {
     override fun start() = s.start()
     override fun stop() = s.stop()
     override fun pause(on: Boolean) = s.pause(on)
-    override val pauseShown = true
+    // ai: none while an export runs with no screen (nothing shown to hold)
+    override val pauseShown get() = !s.blind
     override fun toggleFull() = app.full.toggle()
     // ai: what goes as elements (SendState.details: Show statistics, Receive's own setting, names the rows it adds), the
     // ai: error a popup (2026-11-07; the state line before); a pick being read is its tile's on the card (CodeArea)
@@ -67,36 +68,55 @@ class DesktopSend(private val app: App) : SendHost {
     // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
     // ai: 2026-10-23): what the symbol carries and where it sits (Layout's own fold until 2026-11-13), how often its blocks
     // ai: change, how this machine paints it
-    override val settings: Map<FoldKey, List<Setting>> get() = mapOf(
+    override val settings: Map<FoldKey, List<Setting>> get() {
+        // ai: what a stream fixes (Source Stream: its format and rate, greyed at its own; lizard-ui greyed) and what an
+        // ai: export holds while it runs (the format: a configure ends it)
+        val sm = if (s.source == "stream") s.stream?.meta else null
+        val streamed = s.source == "stream"
+        val held = streamed || s.exportDetails != null && s.sending
+        val vBlocks = sm?.blocks ?: s.blocks
+        val vRing = sm?.ring ?: (if (s.ring == -1) Pick.RING_DEFAULT else s.ring)
+        val vCodes = sm?.codes ?: s.codes
+        val vFps = sm?.fps ?: s.fps
+        return mapOf(
         FoldKey.SendCode to listOfNotNull(
             // ai: Blocks a frame (send.html #blocks): a version 4 to 64, committed on release (its first step auto until
             // ai: 2026-11-07); Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
-            Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
-                Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, done = { s.repick() }) { s.chooseBlocks(it.roundToInt()) },
+            greyedUnless(!held, Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * vBlocks), stats), vBlocks.toFloat(),
+                Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, done = { s.repick() }) { s.chooseBlocks(it.roundToInt()) }),
             // ai: the rings alone (2026-10-05): none chosen shows the default
-            ChipChoice("Ring", if (s.ring == -1) Pick.RING_DEFAULT else s.ring, SendRows.rings(stats)) { s.chooseRing(it) },
+            greyedUnless(!held, ChipChoice("Ring", vRing, SendRows.rings(stats)) { s.chooseRing(it) }),
             // ai: two codes side by side for the receiver's 2:1 crop (send.html #codes)
-            ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) },
+            greyedUnless(!held, ChipChoice("Codes", vCodes, SendRows.CODES) { s.chooseCodes(it) }),
             Slide("Size", "${s.size}%", s.size.toFloat(), 25f..100f, 74, done = { s.commitSize() }) { s.chooseSize(it.roundToInt()) },
-            if (s.codes == 2) Slide("Spacing", "${s.spacing} modules", s.spacing.toFloat(), Room.SPACING_MIN.toFloat()..Room.SPACING_MAX.toFloat(),
-                Room.SPACING_MAX - Room.SPACING_MIN - 1, done = { s.repick() }) { s.chooseSpacing(it.roundToInt()) } else null,
+            // ai: greyed with one code (lizard-ui greyed), and for a stream (its spacing its own)
+            greyedUnless(vCodes == 2 && !held, Slide("Spacing", "${s.spacing} modules", s.spacing.toFloat(), Room.SPACING_MIN.toFloat()..Room.SPACING_MAX.toFloat(),
+                Room.SPACING_MAX - Room.SPACING_MIN - 1, done = { s.repick() }) { s.chooseSpacing(it.roundToInt()) }),
             Slide("Margin", "${s.margin} modules", s.margin.toFloat(), Pick.QUIET.toFloat()..Room.MARGIN_MAX.toFloat(), Room.MARGIN_MAX - Pick.QUIET - 1,
                 done = { s.repick() }) { s.chooseMargin(it.roundToInt()) },
-            // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once
+            // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once (a stream's too)
             Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui
-        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting)
-        FoldKey.SendRefresh to listOf(
-            if (s.vsync) ChipChoice("FPS", s.fps, Pick.FPS.map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
-            else Slide("FPS", "${s.fps}", s.fps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
+        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting); a stream's greyed
+        FoldKey.SendRefresh to (listOf(
+            if (s.vsync) ChipChoice("FPS", vFps, (Pick.FPS + vFps).distinct().map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
+            else Slide("FPS", "$vFps", vFps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
-            carouselSetting(s.carousel) { s.chooseCarousel(it) },
+            carouselSetting(s.carousel) { s.chooseCarousel(it) }).map { if (held) greyed(it) else it },
+        // ai: Control (2026-11-18; Stream that day until renamed; lizard-ui controlSettings)
+        FoldKey.SendControl to controlSettings(s.source, s.export, s.laps, if (s.export && s.canExport) s.exportSize else "", s.exportLimit, s.hideCodes, s.canExport, s.sending,
+            { s.chooseSource(it) }, { s.chooseExport(it) }, { s.chooseLaps(it) }, { s.chooseExportLimit(it) }, { s.chooseHideCodes(it) }),
         FoldKey.SendPerformance to listOf(
             // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's chunks either way, the
             // ai: GPU paints and makes each frame's blocks where it is on): with neither chosen the encoder is auto's and the
-            // ai: painter running is the chip marked (On before a first send); a choice takes that one outright
-            ChipChoice("GPU acceleration", if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc, listOf("gpu" to "On", "cpu" to "Off")) { s.chooseEnc(it) },
-            ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
+            // ai: painter running is the chip marked (On before a first send); a choice takes that one outright; greyed
+            // ai: Off for a stream, which paints nothing (its frames unpacked on the CPU)
+            greyedUnless(!streamed, ChipChoice("GPU acceleration", if (streamed) "cpu" else if (s.enc == "auto") s.painterNow.ifEmpty { "gpu" } else s.enc,
+                listOf("gpu" to "On", "cpu" to "Off")) { s.chooseEnc(it) }),
+            ChipChoice("VSync", s.vsync, listOf(true to "On", false to "Off")) { s.chooseVsync(it) },
+            // ai: Scaling (2026-11-17): the blit's linear filter, Lanczos-3, or the picture's own pixels (SendState.chooseScaling)
+            ChipChoice("Scaling", s.scaling, listOf("bilinear" to "Bilinear", "lanczos" to "Lanczos", "none" to "None")) { s.chooseScaling(it) }))
+    }
     // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15; Exclusive fullscreen, the
     // ai: one before, deleted 2026-11-13); the fold drawn only where it holds a setting
     override val experimental: List<Setting> get() = emptyList()
@@ -144,7 +164,17 @@ class DesktopSend(private val app: App) : SendHost {
         Box(modifier.onSizeChanged { s.areaChanged(it.width, it.height) }) {
             val stamp = s.stamp
             if (s.canvas.shown) SwingPanel(background = s.codeFill, factory = { s.canvas }, modifier = Modifier.fillMaxSize())
-            else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare, s.paper)
+            else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare, s.paper, fit = s.scaling != "none")
+            else if (s.blind) CodesHiddenNote()   // ai: an export with its codes hidden: the line in their place
+            else if (s.source == "stream") {
+                // ai: Source Stream (2026-11-18): the stream file chosen (one .lizard), its size on its line (its format the greyed Code's)
+                val st = s.stream
+                Upload(listOf(Act("File", icon = Icons.file) { s.chooseStream() }),
+                    listOfNotNull(st?.let { UploadItem("stream", it.file.name, Readout.bytes(it.file.length()), false) }),
+                    enabled = !s.sending, row = false, onRemove = { s.clearStream() }, onClear = { s.clearStream() },
+                    column = 576.dp, total = st?.let { Readout.bytes(it.file.length()) } ?: "")
+                if (s.dragOver) DropOutline()
+            }
             else {
                 // ai: the items, then a tile a walk under way (loading, its counts read each tick, its x cancelling it); an
                 // ai: item added since the bundle was made loading too while it is made; the total the choice's once
@@ -169,14 +199,17 @@ class DesktopSend(private val app: App) : SendHost {
 // ai: centred, the largest that fits with the edge's light round it (edge, a share of its height, each side), times
 // ai: the Size share, stretched linearly
 @Composable
-private fun Stamped(st: SendState.Stamp, share: Float, edge: Float, paper: Int) = Canvas(Modifier.fillMaxSize().background(colourOfRgb(paper))) {
+private fun Stamped(st: SendState.Stamp, share: Float, edge: Float, paper: Int, fit: Boolean) = Canvas(Modifier.fillMaxSize().background(colourOfRgb(paper))) {
+    // ai: as the presenter places it: fitted times Size, or with Scaling None at its own pixels, its middle where smaller
     val e = 2 * edge * st.h
-    val scale = minOf(size.width / (st.w + e), size.height / (st.h + e)) * share.coerceIn(0.25f, 1f)
+    val scale = if (fit) minOf(size.width / (st.w + e), size.height / (st.h + e)) * share.coerceIn(0.25f, 1f) else 1f
     val dw = minOf(size.width, st.w * scale).roundToInt()
     val dh = minOf(size.height, st.h * scale).roundToInt()
     if (dw <= 0 || dh <= 0) return@Canvas
-    drawImage(st.image, srcSize = IntSize(st.w, st.h), dstOffset = IntOffset(((size.width - dw) / 2).toInt(), ((size.height - dh) / 2).toInt()),
-        dstSize = IntSize(dw, dh), filterQuality = FilterQuality.Low)
+    val src = if (fit) IntOffset.Zero else IntOffset((st.w - dw) / 2, (st.h - dh) / 2)
+    drawImage(st.image, srcOffset = src, srcSize = if (fit) IntSize(st.w, st.h) else IntSize(dw, dh),
+        dstOffset = IntOffset(((size.width - dw) / 2).toInt(), ((size.height - dh) / 2).toInt()),
+        dstSize = IntSize(dw, dh), filterQuality = if (fit) FilterQuality.Low else FilterQuality.None)
 }
 
 // ai: a drag over the window: the web's dashed outline, 12 dp in

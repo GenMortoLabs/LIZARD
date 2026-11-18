@@ -47,6 +47,14 @@ bool x11KeepOnResize(unsigned long window);
 bool win32Fullscreen(void* hwnd, bool on);
 bool win32IsFullscreen(void* hwnd);
 
+// ai: Scaling (Send's Performance, 2026-11-17): how the picture is brought to its place. Bilinear, the expand kernel into an
+// ai: RGBA image and the blit's linear filter (the presenter's stretch before 2026-11-17, the default); Lanczos, Lanczos-3
+// ai: on the grey picture in two passes (liblizard/core/tx/scale_h.comp, scale_v.comp; a code in Colours coloured in the
+// ai: last pass, its colours the line from its ink to its paper; about 3.6 against 1.2 ms a picture on the 9950X's two-CU
+// ai: iGPU at 2:1 on a 1080p panel); None, the picture at its own pixels, centred, its middle where the place is smaller
+// ai: (Size and Margin then only pick the format). The values are the JNI's and present_check's.
+enum class Scaling { Bilinear = 0, Lanczos = 1, Unscaled = 2 };   // ai: Unscaled the UI's None (X11 defines None)
+
 struct PresentOptions {
   int fps = 60;            // ai: pictures a second asked; each held round(refreshHz / fps) refreshes where that is whole
                            // ai: within 1%, else a grid
@@ -54,6 +62,7 @@ struct PresentOptions {
   double edge = 0;         // ai: light kept at each edge of the area past the frame's own, a share of the frame's
                            // ai: height (the Margin past the codec's quiet zone, SendState.kt), 0 to 1
   bool vsync = false;      // ai: the monitor held at a refresh fps divides while presenting (setVsync)
+  Scaling scaling = Scaling::Bilinear;   // ai: setScaling
   std::function<void(const std::string&)> log;
   std::string csv;         // ai: a CSV line a present into this file, a UTF-8 path (LIZ_PRESENT_CSV, tx_jni.cpp), "" none
   bool mark = false;       // ai: present_check's: each present's picture count drawn in the image's top-left corner,
@@ -80,10 +89,13 @@ class Presenter {
   // ai: main display, for this app alone); a mode left set by a killed process on X11 stays until the desktop sets one.
   void setVsync(bool on);
   void setSize(double size, double edge);
+  // ai: Scaling (the enum above), taken from the next picture filled.
+  void setScaling(Scaling s);
   // ai: Paused: the last picture stays (no new pictures taken; presents go on a few times a second, uncounted).
   void setPaused(bool on);
   // ai: The picture on screen (2026-11-02; the app's window shows it as a still while paused): its RGBA bytes (the
-  // ai: code's colours in it since 2026-11-16; grey bytes before), w x 4 a row, read back from its slot image on the
+  // ai: code's colours in it since 2026-11-16; grey bytes before), w x 4 a row, read back from its slot (Lanczos's grey
+  // ai: words coloured on the CPU) on the
   // ai: presenter's thread. false where none is on screen or the thread did not answer within a second (stopped, or failed).
   bool snapshot(std::vector<unsigned char>* rgba, int* w, int* h);
   // ai: The last second's window, JSON (2026-10-31 beside the fields below: timing, true where the presents carry their

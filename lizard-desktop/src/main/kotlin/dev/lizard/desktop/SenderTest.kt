@@ -23,10 +23,15 @@ import dev.lizard.ui.*
 // ai: add=<path>[:<path>...] (as a pick adds; ';' on Windows), remove=<an item's name> (its Remove), clear (Clear),
 // ai: list (the items and what goes on stderr as "list: <name> | ... | <choice>, <n> files, <bytes> B", "reading" while the pick is walked); a change stops the run, as
 // ai: the app's does, until a start; each logged on stderr as "step <s>: <action>" when it is taken. Each second's
-// ai: presenter stats go to stderr as "present: {...}".
+// ai: presenter stats go to stderr as "present: {...}"; steps fold=<FoldKey>, shot=<path.png>, source=files|stream,
+// ai: export=0|1, hide=0|1 (2026-11-18; hide mid-export switches the screen at once). Stream (2026-11-18): stream=<path>
+// ai: (Source Stream, the stream file played), export=0|1, laps=<1 to 5>, hide=0|1 (Export, Laps, Hide codes; with hide=1 the run is waited
+// ai: on to its end, at most START_SECS + secs, and the line is {"export": {...}}); the last line's "export" the run's
+// ai: export state (null none).
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
     companion object {
-        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh", "carousel", "colours")
+        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh", "carousel", "colours", "scaling",
+            "stream", "export", "laps", "hide")
         // ai: how long the presenter may take to start (the canvas shown, the GPU painter made) before the check fails
         private const val START_SECS = 60.0
 
@@ -89,7 +94,17 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         // ai: Refresh's Header, the animated header (2026-11-15): frames a carousel symbol, 0 to CAROUSEL_MAX (0 the static word)
         int("carousel", 0..dev.lizard.ui.CAROUSEL_MAX)?.let { s.carousel = it }
         // ai: Code's Colours (2026-11-16): <ink>/<paper>, each RRGGBB (a step's commas are the steps'), not saved
+        kv["scaling"]?.let { v -> if (v in SendState.SCALINGS) s.scaling = v else fail("LIZ_SENDER_TEST: scaling=$v is not bilinear, lanczos or none") }
         kv["colours"]?.let { v -> colours(v)?.let { (i, p) -> s.ink = i; s.paper = p } ?: fail("LIZ_SENDER_TEST: colours=$v is not <ink>/<paper>") }
+        kv["stream"]?.let { v ->
+            val f = java.io.File(v)
+            if (!f.exists()) fail("LIZ_SENDER_TEST: stream=$v is not there")
+            s.openStream(f)
+            (s.phase as? SendState.Phase.Error)?.let { fail(it.why) }
+        }
+        int("export", 0..1)?.let { s.export = it == 1 }
+        kv["laps"]?.let { v -> s.laps = dev.lizard.ui.lapsOf(v.toDoubleOrNull() ?: fail("LIZ_SENDER_TEST: laps=$v")) }
+        int("hide", 0..1)?.let { s.hideCodes = it == 1 }
     }
 
     // ai: on the UI thread (Main.kt's LaunchedEffect)
@@ -102,6 +117,27 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         while (s.reading) { if (System.nanoTime() - t0 > START_SECS * 1e9) fail("the files were not read in ${START_SECS.toInt()} s"); delay(50) }
         (s.phase as? SendState.Phase.Error)?.let { fail(it.why) }
         s.start()
+        // ai: an export with no screen: no presenter; waited on to its end, its steps taken from Start
+        if (s.blind) {
+            val todo = steps().toMutableList()
+            while (s.sending) {
+                val at = (System.nanoTime() - t0) / 1e9
+                while (todo.isNotEmpty() && todo.first().first <= at) {
+                    val (t, act) = todo.removeAt(0)
+                    System.err.println("step %.1f: %s".format(java.util.Locale.ROOT, t, act))
+                    step(s, act, false)
+                }
+                (s.phase as? SendState.Phase.Error)?.let { fail(it.why) }
+                if (System.nanoTime() - t0 > (START_SECS + secs) * 1e9) fail("the export did not end in ${(START_SECS + secs).toInt()} s: ${s.exportNow}")
+                delay(100)
+            }
+            (s.phase as? SendState.Phase.Error)?.let { fail(it.why) }
+            val ex = s.exportNow
+            if (ex == null || !ex.flag("done")) fail("the export ended unfinished: $ex")
+            println("{\"export\": $ex}")
+            System.out.flush()
+            exitProcess(0)
+        }
         while (!s.presenting) {
             (s.phase as? SendState.Phase.Error)?.let { fail(it.why) }
             if (s.phase == SendState.Phase.Idle) fail("the sender did not start")
@@ -123,8 +159,11 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
                 stopped = step(s, act, stopped)
             }
             if (stopped && s.presenting) stopped = false
-            // ai: paused in the window there is no presenter (a still), and a Resume makes one a few frames on
-            if (s.presenting || stopped || s.paused || s.phase == SendState.Phase.Preparing) missing = 0L
+            // ai: an export that ended the run (its codes hidden at its end): the line printed as at secs
+            if (s.exportNow?.flag("done") == true && !s.sending) break
+            // ai: paused in the window there is no presenter (a still), and a Resume makes one a few frames on; nor with
+            // ai: an export's codes hidden (hide=1 mid-run)
+            if (s.presenting || stopped || s.paused || s.blind || s.phase == SendState.Phase.Preparing) missing = 0L
             else if (missing == 0L) missing = System.nanoTime()
             else if (System.nanoTime() - missing > 3_000_000_000L) fail("the presenter stopped")
             // ai: each second's presenter stats as they come (the poll's), on stderr: a cadence is read from all of them
@@ -133,7 +172,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         }
         if (s.presentRaw.isEmpty()) s.poll()
         (s.phase as? SendState.Phase.Error)?.let { fail(it.why) }
-        val line = "{\"present\": ${s.presentRaw.ifEmpty { "{}" }}, \"sender\": ${s.senderRaw.ifEmpty { "{}" }}}"
+        val line = "{\"present\": ${s.presentRaw.ifEmpty { "{}" }}, \"sender\": ${s.senderRaw.ifEmpty { "{}" }}, \"export\": ${s.exportNow ?: "null"}}"
         s.stop()
         println(line)
         System.out.flush()
@@ -157,6 +196,17 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         when (k) {
             "full" -> s.full.toggle()
             "max" -> s.maximize?.invoke()
+            // ai: (2026-11-18) a settings fold toggled by its FoldKey's name (fold=SendControl), the window saved as a PNG
+            // ai: (shot=<path>, AWT's Robot: what the screen shows, the presenter's canvas too), Stream's Source, Export and
+            // ai: Display as their chips set them
+            "fold" -> s.folds?.toggle(runCatching { dev.lizard.ui.FoldKey.valueOf(v) }.getOrNull() ?: fail("LIZ_SENDER_TEST: step $act"))
+            "shot" -> s.frame?.let { f ->
+                val at = f.locationOnScreen
+                javax.imageio.ImageIO.write(java.awt.Robot().createScreenCapture(java.awt.Rectangle(at.x, at.y, f.width, f.height)), "png", java.io.File(v))
+            } ?: fail("LIZ_SENDER_TEST: step $act: no window")
+            "source" -> s.chooseSource(v)
+            "export" -> s.chooseExport(n(0..1) == 1)
+            "hide" -> s.chooseHideCodes(n(0..1) == 1)
             "rail" -> s.toggleRail()
             "over" -> s.full.sideOver = true   // ai: in full screen the column over the code, as the edge strip's collapser opens it
             "pause" -> s.pause(true)
@@ -170,6 +220,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             "blocks" -> { val b = n(Pick.VERSION_MIN..Pick.VERSION_MAX); s.chooseBlocks(b); s.repick() }
             "fps" -> { s.chooseFps(n(1..60)); s.commitFps() }
             "vsync" -> s.chooseVsync(n(0..1) == 1)
+            "scaling" -> if (v in SendState.SCALINGS) s.chooseScaling(v) else fail("LIZ_SENDER_TEST: step $act")
             "enc" -> if (v in setOf("auto", "gpu", "cpu")) s.chooseEnc(v) else fail("LIZ_SENDER_TEST: step $act")
             "add" -> { s.pick(v.split(java.io.File.pathSeparatorChar).filter { it.isNotEmpty() }.map { java.io.File(it) }); return true }
             // ai: an item by its name, or a pick being walked (its tile's x: the walk cancelled)

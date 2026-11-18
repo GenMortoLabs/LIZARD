@@ -95,6 +95,15 @@
             <RegistryValue Type="string" Value="&quot;[INSTALLDIR]LIZARD.exe&quot; --send &quot;%1&quot;"/>
           </RegistryKey>
         </RegistryKey>
+        <!-- ai: Unpack with LIZARD on a .lizard's menu (2026-11-18): the app run to unpack it, no window, the file to a
+             folder of PNGs beside it (Main.kt) -->
+        <RegistryKey Root="HKMU" Key="Software\Classes\SystemFileAssociations\.lizard\shell\LIZARD.Unpack">
+          <RegistryValue Type="string" Value="Unpack with LIZARD"/>
+          <RegistryValue Name="Icon" Type="string" Value="[INSTALLDIR]LIZARD.exe"/>
+          <RegistryKey Key="command">
+            <RegistryValue Type="string" Value="&quot;[INSTALLDIR]LIZARD.exe&quot; --unpack &quot;%1&quot;"/>
+          </RegistryKey>
+        </RegistryKey>
         <RegistryKey Root="HKMU" Key="Software\Classes\Directory\shell\LIZARD.Broadcast">
           <RegistryValue Type="string" Value="Broadcast with LIZARD"/>
           <RegistryValue Name="Icon" Type="string" Value="[INSTALLDIR]LIZARD.exe"/>

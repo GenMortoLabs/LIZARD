@@ -52,7 +52,7 @@ class App {
     val send = SendState(full)
     val recv = ReceiveState(this)
     val home = DesktopHome(this)
-    val folds = DesktopFolds(this)
+    val folds = DesktopFolds(this).also { send.folds = it }
     val column = DesktopColumn()
     val receive = DesktopReceive(this)
     val sendUi = DesktopSend(this)
@@ -85,7 +85,11 @@ class App {
     // ai: until Start); anything else (a file manager's Open with on other files, a terminal's arguments) to Send, added
     // ai: to its selection. Broadcast (the file manager's Broadcast with LIZARD, `--send`): all of it to Send, a .lizard too.
     fun handIn(files: List<File>, broadcast: Boolean) {
-        if (!broadcast && files.isNotEmpty() && files.all { ReceiveState.isReplay(it) }) {
+        // ai: a stream file opened (2026-11-18): it plays, Send's Source Stream; a replay goes to Receive as before
+        if (!broadcast && files.size == 1 && send.streamOf(files[0]) != null) {
+            go(Screen.Send)
+            send.openStream(files[0])
+        } else if (!broadcast && files.isNotEmpty() && files.all { ReceiveState.isReplay(it) }) {
             recv.openReplays(files)
             go(Screen.Receive)
         } else {

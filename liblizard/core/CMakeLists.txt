@@ -188,20 +188,26 @@ target_link_libraries(lizard_cpu PUBLIC lizard_codec Threads::Threads)
 
 add_executable(lizard_cpu_check tools/cpu_check.cpp)
 target_include_directories(lizard_cpu_check SYSTEM PRIVATE ${TP})
-target_link_libraries(lizard_cpu_check PRIVATE lizard_codec lizard_replay Threads::Threads)
+target_link_libraries(lizard_cpu_check PRIVATE lizard_codec lizard_replay lizard_xfer_core Threads::Threads)
 endif()
 
 # ai: the sender (tx/sender.h, 2026-10-01): the transfer's sending end (tx/xfer_tx.h) and the frames painted by the C,
 # ai: or since 2026-10-02 on the GPU (tx/gpu_painter.h: the web's encoder kernels on wg, the tables from the C)
 if(LIZ_GPU)
-add_library(lizard_tx STATIC tx/sender.cpp tx/send_tables.cpp tx/gpu_painter.cpp tx/gpu_stream.cpp)
+add_library(lizard_tx STATIC tx/sender.cpp tx/send_tables.cpp tx/gpu_painter.cpp tx/gpu_stream.cpp tx/stream_export.cpp tx/gpu_zstd.cpp)
 target_include_directories(lizard_tx PUBLIC tx)
-target_include_directories(lizard_tx SYSTEM PRIVATE ${TP})
-target_link_libraries(lizard_tx PUBLIC lizard_xfer lizard_codec wg lizard_sys Threads::Threads)
+target_include_directories(lizard_tx SYSTEM PRIVATE ${TP} ${LZ}/vendor/zstd)   # ai: zstd: the GPU's frames' Huffman tables (tx/gpu_zstd.cpp)
+target_link_libraries(lizard_tx PUBLIC lizard_xfer lizard_codec wg lizard_sys lizard_replay Threads::Threads)   # ai: lizard_replay: a stream file's writer (tx/stream_export.cpp)
 
 add_executable(tx_check tools/tx_check.cpp)
 target_include_directories(tx_check SYSTEM PRIVATE ${TP})
 target_link_libraries(tx_check PRIVATE lizard_tx lizard_xfer lizard_codec lizard_replay)
+
+# ai: zstd_check (2026-11-18, tools/zstd_check.cpp): the GPU's packing of stream frames (tx/gpu_zstd.h) held to its CPU
+# ai: twin byte for byte and to libzstd's decoding, and timed against libzstd at a level
+add_executable(zstd_check tools/zstd_check.cpp)
+target_include_directories(zstd_check SYSTEM PRIVATE ${TP} ${LZ}/vendor/zstd)
+target_link_libraries(zstd_check PRIVATE lizard_tx lizard_replay)
 
 # ai: Save replays (rx/replay.h, 2026-10-03): the newest frames a receiver decodes, kept as a run's folder; its own
 # ai: target, which the app's libliz.so links beside lizard_rx. With it a replay as one file (rx/lizfile.h, .lizard,

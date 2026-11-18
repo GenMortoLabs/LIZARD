@@ -49,4 +49,26 @@ object SendRows {
         }
         return Details(name, spinning = preparing, rows = rows)
     }
+
+    // ai: An export (2026-11-18, Send's Export): the stream file's name, its share written at the head and as the meter,
+    // ai: Frames (written of all, "" until the lap is known), Size (the file's bytes so far), Folder (where it goes)
+    fun exportDetails(name: String, written: Int, frames: Int, bytes: Long, folder: String, done: Boolean): Details {
+        val frac = if (done) 1.0 else if (frames > 0) written.toDouble() / frames else 0.0
+        return Details(name, end = "${(frac * 100).toInt()}%", spinning = !done && frames <= 0, frac = frac,
+            rows = listOf("Frames" to if (frames > 0) "${String.format(Locale.ROOT, "%,d", written)} of ${String.format(Locale.ROOT, "%,d", frames)}" else "",
+                "Size" to if (bytes > 0) Readout.bytes(bytes) else "", "Folder" to folder))
+    }
+
+    // ai: a stream file's format as its line says it, "LIZARD-480 · 2:1 · 15 fps" (its meta.json's format, layout, fps)
+    fun streamLabel(blocks: Int, codes: Int, fps: Int): String = "LIZARD-${Pick.STEP * blocks} \u00b7 ${if (codes > 1) "2:1" else "1:1"} \u00b7 $fps fps"
+
+    // ai: an export's file size before it is made (Laps' value): its frames (laps of the file's blocks over a picture's,
+    // ai: odd) at a frame's raw bytes (frameBytes, the native side's: its squares) x 0.73, what MED and zstd at level 1
+    // ai: leave of these frames (72 to 74%, 2026-11-18)
+    fun exportEstimate(laps: Double, fileBytes: Long, pictureBlocks: Int, frameBytes: Long): Long {
+        if (fileBytes <= 0 || pictureBlocks <= 0 || frameBytes <= 0) return 0
+        val lap = (fileBytes + Pick.PAYLOAD - 1) / Pick.PAYLOAD
+        val frames = kotlin.math.ceil(laps * lap / pictureBlocks).toLong() or 1L
+        return (frames * frameBytes * 0.73).toLong()
+    }
 }

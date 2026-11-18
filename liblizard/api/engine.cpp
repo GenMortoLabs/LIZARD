@@ -10,6 +10,8 @@
 #include "api.hpp"
 #include "receiver.h"
 #include "sender.h"
+#include "stream_export.h"
+#include "lizfile.h"
 
 struct liz_receiver {
   std::unique_ptr<lizard::Receiver> r;
@@ -21,6 +23,7 @@ struct liz_receiver {
 
 struct liz_sender {
   std::vector<uint8_t> owned;
+  std::string name, type;   // ai: the file's, as liz_sender_new took them (an export's meta.json)
   std::unique_ptr<lizard::Sender> s;
   liz_format fmt{};
   liz_geometry g{};
@@ -126,6 +129,7 @@ LIZ_API liz_sender* liz_sender_new(const uint8_t* data, size_t length, const cha
     if (data && !length) data = &empty;
     try {
       s->s = std::make_unique<lizard::Sender>(data, data ? length : 0, name ? name : "", type ? type : "");
+      s->name = name ? name : ""; s->type = type ? type : "";
     } catch (const std::runtime_error& e) {
       throw Error(LIZ_E_TOOBIG, e.what());
     }
@@ -135,8 +139,42 @@ LIZ_API liz_sender* liz_sender_new(const uint8_t* data, size_t length, const cha
 
 LIZ_API void liz_sender_free(liz_sender* s) { delete s; }
 
-LIZ_API int liz_sender_configure(liz_sender* s, const liz_format* f, int painter, int threads, const char* assets, const char* device) {
+LIZ_API liz_sender* liz_sender_play(const char* path) {
+  return guardNew<liz_sender>([&] {
+    need(path, "a stream file's path");
+    std::string why;
+    auto s = std::make_unique<liz_sender>();
+    s->s = lizard::Sender::play(path, why);
+    if (!s->s) throw Error(why.find("does not read") != std::string::npos || why.find("open ") == 0 ? LIZ_E_IO : LIZ_E_FORMAT, why);
+    const lizard::StreamPlay* p = s->s->playing();
+    s->name = p->name; s->type = p->type;
+    return s.release();
+  });
+}
+
+LIZ_API const char* liz_sender_stream(liz_sender* s) {
+  const char* r = "";
+  guard([&] { need(s, "a sender"); if (const lizard::StreamPlay* p = s->s->playing()) r = p->meta.c_str(); return LIZ_OK; });
+  return r;
+}
+
+LIZ_API int liz_lizard_kind(const char* path) {
   return guard([&] {
+    need(path, "a path");
+    std::string why;
+    auto r = lizard::lizfile::Reader::open(path, why);
+    if (!r) throw Error(why.find("open ") == 0 ? LIZ_E_IO : LIZ_E_FORMAT, why);
+    return r->kind() == lizard::lizfile::Kind::Stream ? LIZ_LIZARD_STREAM : LIZ_LIZARD_REPLAY;
+  });
+}
+
+LIZ_API int liz_sender_configure(liz_sender* s, const liz_format* fIn, int painter, int threads, const char* assets, const char* device) {
+  return guard([&] {
+    // ai: a stream's format is its own (liz_sender_play): fIn may be NULL, and is not read
+    liz_format fs{};
+    const lizard::StreamPlay* p = s ? s->s->playing() : nullptr;
+    if (p) fs = {p->blocks, p->ring, p->fps, p->codes};
+    const liz_format* f = p ? &fs : fIn;
     need(s && f, "a sender and a format");
     need(painter >= LIZ_PAINTER_CPU && painter <= LIZ_PAINTER_AUTO, "painter is a LIZ_PAINTER_* value");
     const liz_geometry g = geometryOf(*f);
@@ -193,6 +231,32 @@ LIZ_API int liz_sender_seed(liz_sender* s, uint32_t seed) {
     need(s, "a sender");
     if (!s->s->seed(seed)) throw Error(LIZ_E_STATE, "a seed before a file's first frame");
     return LIZ_OK;
+  });
+}
+
+LIZ_API int64_t liz_sender_lap(liz_sender* s) {
+  int64_t r = 0;
+  guard([&] { need(s, "a sender"); r = s->s->xfer() ? int64_t(s->s->xfer()->lapWhenMade()) : 0; return LIZ_OK; });
+  return r;
+}
+
+LIZ_API int liz_sender_export(liz_sender* s, const char* path, int frames, int level, int (*progress)(void*, int, int), void* user) {
+  return guard([&] {
+    need(s && path && frames >= 0, "a sender, a path and frames to export");
+    lizard::lizfile::Packing packing;
+    if (level > 0) packing.level = level;
+    if (!s->g.width) throw Error(LIZ_E_STATE, "not configured");
+    lizard::StreamInfo info;
+    info.name = s->name; info.type = s->type;
+    info.blocks = s->fmt.blocks; info.ring = s->fmt.ring; info.fps = s->fmt.fps; info.codes = s->fmt.codes; info.frameBlocks = s->g.frame_blocks;
+    bool stopped = false;
+    std::string why;
+    const int64_t n = lizard::exportStream(*s->s, info, path, frames, [&](int done, int all) {
+      if (progress && !progress(user, done, all)) { stopped = true; return false; }
+      return true;
+    }, why, packing);
+    if (n < 0) throw Error(stopped || why.find("no frame") != std::string::npos || why.find("level") != std::string::npos ? LIZ_E_STATE : LIZ_E_IO, why);
+    return int(n);
   });
 }
 

@@ -1,0 +1,22 @@
+// ai: Stream files packed on the GPU (gpu_zstd.h), stage 2: each 128 KiB block of each square's residuals (zstd's
+// ai: largest block) counted, a workgroup a block: hist[(q nb + b) 256 + v] the residuals of value v.
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer Res { uint w[]; } res;
+layout(set = 0, binding = 1) writeonly buffer Hist { uint h[]; } hist;
+// ai: a: squares, n, wps, nb
+layout(set = 0, binding = 2) uniform P { uvec4 a; } p;
+shared uint h[256];
+const uint BLOCK = 131072u;
+void main() {
+  const uint b = gl_WorkGroupID.x, q = gl_WorkGroupID.y, t = gl_LocalInvocationID.x;
+  h[t] = 0u;
+  barrier();
+  const uint start = b * BLOCK, end = min(p.a.y, start + BLOCK), base = q * p.a.z;
+  for (uint i = start + t * 4u; i < end; i += 1024u) {
+    const uint w = res.w[base + (i >> 2u)];
+    for (uint j = 0u; j < 4u && i + j < end; j++) atomicAdd(h[(w >> (8u * j)) & 0xffu], 1u);
+  }
+  barrier();
+  hist.h[(q * p.a.w + b) * 256u + t] = h[t];
+}

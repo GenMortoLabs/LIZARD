@@ -11,7 +11,7 @@ import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMA
 import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
 import { bundle } from "./tar.mjs";
 import { everyOf, ratesFor } from "./refresh.mjs";
-import { remember, persist, say, bytes, rate, registerApp, collapser, sideResizer, scrollbarRoom, icon, nameParts, slider, details, chips } from "./ui.mjs";
+import { remember, persist, say, bytes, rate, registerApp, collapser, sideResizer, scrollbarRoom, icon, nameParts, slider, details, chips, greyOut } from "./ui.mjs";
 // ai: the sliders filled to their values as the apps draw them (ui.mjs slider), before the codec's load
 for (const el of document.querySelectorAll('input[type="range"]')) slider(el);
 // ai: the few-choice settings as chips (ui.mjs chips; the inline script drew them before the first paint)
@@ -1074,7 +1074,7 @@ $("size").addEventListener("input", showSize);
 $("size").addEventListener("change", () => { showSize(); roomChanged(); });
 // ai: the spacing and margin sliders: their labels live while dragged, a new canvas and the room changed on release;
 // ai: Spacing shown with two codes
-const showMargin = () => { $("spacingOut").textContent = `${spacingOf()} modules`; $("spacingRow").hidden = codesOf() < 2; $("marginOut").textContent = `${marginOf()} modules`; };
+const showMargin = () => { $("spacingOut").textContent = `${spacingOf()} modules`; greyOut($("spacingRow"), codesOf() < 2); $("marginOut").textContent = `${marginOf()} modules`; };
 for (const id of ["spacing", "margin"]) {
   $(id).addEventListener("input", showMargin);
   $(id).addEventListener("change", () => { showMargin(); image = null; roomChanged(); });

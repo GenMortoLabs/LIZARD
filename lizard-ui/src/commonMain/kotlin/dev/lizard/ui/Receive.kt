@@ -48,7 +48,7 @@ import dev.lizard.readout.Readout
 // ai: each its own before)
 enum class FoldKey {
     RecvCamera, RecvPerformance, RecvFiles, RecvExperimental, RecvTools,
-    SendCode, SendRefresh, SendPerformance, SendExperimental, SendTools,
+    SendCode, SendRefresh, SendControl, SendPerformance, SendExperimental, SendTools,
     Collapsed, HomeUnfinished, HomeFiles
 }
 

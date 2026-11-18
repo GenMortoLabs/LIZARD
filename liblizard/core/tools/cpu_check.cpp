@@ -12,6 +12,13 @@
 // ai: with the first, the vector build's check against the scalar one. time (one thread): seq without that hash, which
 // ai: hashes every coefficient and soft value of a frame (about 4 ms a frame on an S26 core): the stage times as the
 // ai: receivers run.
+//   lizard_cpu_check blocks [threads]
+// ai: blocks: frames from stdin in groups, as lizard_gpu_check blocks takes them (a u32 count, 0 ends, then a frame
+// ai: each: u32 w, h, tag and w h bytes of luma), each decoded once on `threads` threads (8) with nothing held and the
+// ai: lens's axis at the frame's centre (as a replay's axes give it): a frame's reading to stdout, u32 tag, found, the
+// ai: version decoded at (0 none), verified blocks, and of them those not the test stream's (the receiver's judge,
+// ai: XferJudge), then u32 0xFFFFFFFF and the records' count after each group: the print lab's in-process decode
+// ai: (research/build/print-2026-11-18).
 // ai: info runs on its own; replay reads a recording, the lab's research/ (LIZ_BARCODE), which is not published.
 // ai: Env: LIZ_BARCODE (../research), LIZ_PASSES (1: timing passes over the frames), LIZ_NMAX (1536: every picture of the ladder, as the receiver's pool).
 // ai: LIZ_PERFRAME=1 (replay): a line a frame after the run (below).
@@ -19,8 +26,10 @@
 #include "json.hpp"
 #include "axes.h"
 #include "recording.h"
+#include "xfer_rx_core.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -155,6 +164,59 @@ static int replay(const std::string& run, int want, int threads, std::string mod
   return 0;
 }
 
+static int blocksFromStdin(int threads) {
+  const int nmax = atoi(envOr("LIZ_NMAX", "1536").c_str());
+  std::vector<cpu_dec_t*> decs;
+  for (int t = 0; t < threads; t++) {
+    decs.push_back(cpu_dec_new(nmax));
+    if (!decs.back()) { fprintf(stderr, "the codec refused a decoder\n"); return 1; }
+  }
+  const int bb = cpu_dec_block_bytes(decs[0]), top = cpu_dec_top(decs[0]);
+  std::atomic<uint64_t> gen{0};
+  lizard::XferJudge judge(gen);
+  auto readAll = [](void* p, size_t n) { return fread(p, 1, n, stdin) == n; };
+  long frames = 0;
+  const double t0 = nowMs();
+  for (;;) {
+    uint32_t n = 0;
+    if (!readAll(&n, 4) || n == 0) break;
+    std::vector<std::array<uint32_t, 3>> hd(n);
+    std::vector<std::vector<uint8_t>> px(n), packed(n);
+    std::vector<cpu_frame_t> fr(n);
+    std::vector<int> got(n, 0);
+    for (uint32_t i = 0; i < n; i++) {
+      if (!readAll(hd[i].data(), 12) || !hd[i][0] || !hd[i][1]) { fprintf(stderr, "blocks: a frame's header cut short\n"); return 1; }
+      px[i].resize((size_t)hd[i][0] * hd[i][1]);
+      if (!readAll(px[i].data(), px[i].size())) { fprintf(stderr, "blocks: a frame cut short\n"); return 1; }
+    }
+    std::atomic<uint32_t> next{0};
+    std::vector<std::thread> th;
+    for (int t = 0; t < threads; t++) th.emplace_back([&, t] {
+      std::vector<uint8_t> blocks((size_t)top * bb), ok(top);
+      for (uint32_t i; (i = next++) < n;) {
+        const int w = (int)hd[i][0], h = (int)hd[i][1];
+        cpu_dec_set_axis(w * 0.5f, h * 0.5f);
+        got[i] = cpu_dec_frame(decs[(size_t)t], px[i].data(), w, h, 0, blocks.data(), ok.data(), &fr[i]);
+        for (int b = 0; b < std::min(fr[i].total, top); b++)
+          if (ok[(size_t)b]) packed[i].insert(packed[i].end(), blocks.begin() + (size_t)b * bb, blocks.begin() + (size_t)b * bb + 476);
+      }
+    });
+    for (auto& x : th) x.join();
+    for (uint32_t i = 0; i < n; i++) {
+      const auto jv = judge.frame(packed[i].data(), packed[i].size() / 476, [](const uint8_t*) {});
+      const uint32_t rec[5] = {hd[i][2], fr[i].found ? 1u : 0u, (uint32_t)std::max(fr[i].version, 0), (uint32_t)(packed[i].size() / 476), (uint32_t)jv.bad};
+      fwrite(rec, sizeof rec, 1, stdout);
+    }
+    const uint32_t tail[2] = {0xFFFFFFFFu, n};
+    fwrite(tail, sizeof tail, 1, stdout);
+    fflush(stdout);
+    frames += n;
+  }
+  fprintf(stderr, "blocks: %ld frames, %.0f a second on %d threads\n", frames, frames / std::max(1e-3, (nowMs() - t0) / 1000), threads);
+  for (auto* d : decs) cpu_dec_free(d);
+  return 0;
+}
+
 int main(int argc, char** argv) {
   const std::string cmd = argc > 1 ? argv[1] : "info";
   if (cmd == "info") {
@@ -164,7 +226,8 @@ int main(int argc, char** argv) {
     cpu_dec_free(d);
     return 0;
   }
+  if (cmd == "blocks") return blocksFromStdin(argc > 2 ? std::max(1, atoi(argv[2])) : 8);
   if (cmd == "replay" && argc > 2) return replay(argv[2], argc > 3 ? atoi(argv[3]) : 0, argc > 4 ? std::max(1, atoi(argv[4])) : 1, argc > 5 ? argv[5] : "");
-  fprintf(stderr, "lizard_cpu_check info | replay <run> [frames] [threads] [seq|none|time]  (the recording $LIZ_BARCODE/replays/real/<run>.lizard, ../research by default)\n");
+  fprintf(stderr, "lizard_cpu_check info | blocks [threads] | replay <run> [frames] [threads] [seq|none|time]  (the recording $LIZ_BARCODE/replays/real/<run>.lizard, ../research by default)\n");
   return 2;
 }

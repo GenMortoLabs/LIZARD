@@ -58,6 +58,11 @@ for deb in "$1"/*.deb; do
     install -D -m 644 "$(dirname "$0")/lizard.nemo_action" "$t/x/usr/share/nemo/actions/lizard-sender.nemo_action"
     changed=1
   fi
+  # ai: since 2026-11-18: Unpack with LIZARD on a .lizard's menu (packaging/lizard-unpack.nemo_action)
+  if [ ! -f "$t/x/usr/share/nemo/actions/lizard-unpack.nemo_action" ]; then
+    install -D -m 644 "$(dirname "$0")/lizard-unpack.nemo_action" "$t/x/usr/share/nemo/actions/lizard-unpack.nemo_action"
+    changed=1
+  fi
   for entry in "$t"/x/opt/*/lib/*.desktop; do
     [ -f "$entry" ] || continue
     if ! grep -q '^Exec=.*%F' "$entry"; then

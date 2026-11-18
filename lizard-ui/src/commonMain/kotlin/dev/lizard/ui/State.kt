@@ -25,6 +25,25 @@ fun JsonObject.flag(k: String) = (this[k] as? JsonPrimitive)?.booleanOrNull ?: f
 fun JsonObject.obj(k: String) = this[k] as? JsonObject
 fun JsonObject.objs(k: String) = (this[k] as? JsonArray)?.mapNotNull { it as? JsonObject }
 
+// ai: A stream file's meta.json as Send reads it (2026-11-18, liblizard/core/tx/stream_export.h): the format it was
+// ai: painted in (blocks a version's, the ring 0 to 2, codes, fps), its pictures and their shape (a code's side and the gap
+// ai: between two, pixels), and the file it carries (its name, bytes, whether the test stream); null where it is not a
+// ai: stream's
+class StreamMeta(val blocks: Int, val ring: Int, val codes: Int, val fps: Int, val pictures: Int, val name: String, val length: Long, val test: Boolean,
+                 val side: Int = 0, val gap: Int = 0) {
+    val label get() = SendRows.streamLabel(blocks, codes, fps)
+    // ai: a picture's width over its height (its codes and the gap between them)
+    val aspect get() = if (side > 0) (codes * side + gap).toDouble() / side else codes.toDouble()
+}
+fun streamMetaOf(m: JsonObject?): StreamMeta? {
+    val f = m?.obj("format") ?: return null
+    if (m.str("kind") != "stream") return null
+    val file = m.obj("file")
+    return StreamMeta(f.num("blocks").toInt(), f.num("ring").toInt(), f.num("codes").toInt().coerceIn(1, 2), m.num("fps").toInt(),
+        m.num("pictures").toInt(), file?.str("name").orEmpty().ifEmpty { m.str("run") }, file?.num("length")?.toLong() ?: 0L, m.flag("test"),
+        m.num("h").toInt(), m.num("gap").toInt())
+}
+
 // ai: The receiver's phase as a screen shows it (the session's "phase" and "why"; Starting while an app's own start
 // ai: order runs before the session's start, `opening`)
 sealed interface RxPhase {

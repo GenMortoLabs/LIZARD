@@ -282,6 +282,17 @@ export function slider(el) {
   fill();
 }
 
+// ai: greyOut(row, off): grey, never hide (2026-11-18, lizard-ui Settings.kt greyed): a setting that does not apply now
+// ai: keeps its row and its value, its title faded (.greyed) and its controls disabled; only the controls this greyed
+// ai: are enabled again (a select disabled for its own reason, Phase lock's "Not supported", stays so).
+export function greyOut(row, off) {
+  row.classList.toggle("greyed", off);
+  for (const el of row.querySelectorAll("input, select")) {
+    if (off && !el.disabled) { el.disabled = true; el.dataset.greyed = "1"; }
+    else if (!off && el.dataset.greyed) { el.disabled = false; delete el.dataset.greyed; }
+  }
+}
+
 // ai: chips(sel): a choice among a few as the apps' chips (lizard-ui Parts.kt Chip, 2026-11-10; the rule: a few fixed
 // ai: choices chips, a spectrum a slider, a menu the last resort). The <select data-chips> stays the value (its
 // ai: handlers, persist and restoreSaved, the checks), not drawn (ui.css); the row after it, a page's inline script's

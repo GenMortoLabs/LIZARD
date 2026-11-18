@@ -67,7 +67,10 @@ select[data-chips]{display:none}
 .chip{font:inherit;font-size:15px;line-height:20px;font-weight:400;color:var(--fg);background:var(--soft);border:0;border-radius:8px;
   min-height:36px;padding:0 14px;margin:0;cursor:pointer}
 .chip.on{background:var(--fg);color:var(--bg);font-weight:600}
-.chip:disabled{color:rgba(17,17,17,.38);cursor:default}.chip.on:disabled{color:var(--bg)}
+.chip:disabled{color:rgba(17,17,17,.38);cursor:default}.chip.on:disabled{color:var(--bg);background:#a5a5a5}
+/* ai: a setting greyed (ui.mjs greyOut, 2026-11-18: grey, never hide): its title and value at 38%, its controls disabled;
+   a chosen chip greyed keeps its mark, the ink at 38% on the page (#a5a5a5, lizard-ui GreyInk) */
+label.greyed,details.dev label.greyed,.settings label.greyed,.blocks.greyed .row>span{color:rgba(102,102,102,.38)}
 @media (hover:hover){.chip:not(.on):not(:disabled):hover{background:var(--pressed)}}
 .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 

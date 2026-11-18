@@ -1,11 +1,12 @@
 // A .lizard read in node (the format: core/rx/lizfile.h; SPEC 15): a ZIP of stored entries whose comment is
-// "LIZARD replay 1", frames NNNN.zst (JPEG-LS median prediction residuals mod 256 as one zstd frame), stats.jsonl and
-// meta.json. Synchronous; a frame read when asked. Needs node's zlib.zstdDecompressSync (node 22.15 and later).
+// "LIZARD replay 1" (a stream's "LIZARD stream 1" read alike), frames NNNN.zst (JPEG-LS median prediction residuals mod
+// 256 as one zstd frame), stats.jsonl and meta.json; ZIP64 past 4 GB or 65,534 entries. Synchronous; a frame read when
+// asked. Needs node's zlib.zstdDecompressSync (node 22.15 and later).
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 
-const COMMENT = 'LIZARD replay 1';
-const LOCAL = 0x04034b50, CENTRAL = 0x02014b50, END = 0x06054b50;
+const COMMENT = 'LIZARD replay 1', STREAM = 'LIZARD stream 1';
+const LOCAL = 0x04034b50, CENTRAL = 0x02014b50, END = 0x06054b50, END64 = 0x06064b50, LOCATOR64 = 0x07064b50;
 
 // ZIP's CRC-32
 const CRC = (() => {
@@ -49,15 +50,33 @@ export function openLizard(path) {
   for (let i = tailN - 22; i >= 0; i--) if (tail.readUInt32LE(i) === END && i + 22 + tail.readUInt16LE(i + 20) === tailN) { e = i; break; }
   if (e < 0) throw new Error(`${path} is not a ZIP archive`);
   const comment = tail.toString('latin1', e + 22, e + 22 + tail.readUInt16LE(e + 20));
-  if (!comment.startsWith('LIZARD replay ')) throw new Error(`${path} is not a .lizard`);
-  if (comment !== COMMENT) throw new Error(`${path} is a ${comment}, newer than this reader's ${COMMENT}`);
-  const count = tail.readUInt16LE(e + 10), cdSize = tail.readUInt32LE(e + 12), cdAt = tail.readUInt32LE(e + 16);
+  if (!comment.startsWith('LIZARD replay ') && !comment.startsWith('LIZARD stream ')) throw new Error(`${path} is not a .lizard`);
+  if (comment !== COMMENT && comment !== STREAM) throw new Error(`${path} is a ${comment}, newer than this reader's ${COMMENT} and ${STREAM}`);
+  let count = tail.readUInt16LE(e + 10), cdSize = tail.readUInt32LE(e + 12), cdAt = tail.readUInt32LE(e + 16);
+  if (count === 0xffff || cdSize === 0xffffffff || cdAt === 0xffffffff) {
+    if (e < 20 || tail.readUInt32LE(e - 20) !== LOCATOR64) throw new Error(`${path}: its ZIP64 end does not read`);
+    const e64 = read(Number(tail.readBigUInt64LE(e - 12)), 56);
+    if (e64.readUInt32LE(0) !== END64) throw new Error(`${path}: its ZIP64 end does not read`);
+    count = Number(e64.readBigUInt64LE(32)); cdSize = Number(e64.readBigUInt64LE(40)); cdAt = Number(e64.readBigUInt64LE(48));
+  }
   const cd = read(cdAt, cdSize);
   const entries = new Map();
   for (let at = 0, k = 0; k < count; k++) {
     if (cd.readUInt32LE(at) !== CENTRAL) throw new Error(`${path}: its central directory does not read`);
     const method = cd.readUInt16LE(at + 10), crc = cd.readUInt32LE(at + 16), csize = cd.readUInt32LE(at + 20), usize = cd.readUInt32LE(at + 24);
-    const nl = cd.readUInt16LE(at + 28), el = cd.readUInt16LE(at + 30), cl = cd.readUInt16LE(at + 32), local = cd.readUInt32LE(at + 42);
+    const nl = cd.readUInt16LE(at + 28), el = cd.readUInt16LE(at + 30), cl = cd.readUInt16LE(at + 32);
+    let local = cd.readUInt32LE(at + 42);
+    // a ZIP64 extra field (id 1): the 8-byte values of the fields that read 0xffffffff, in order (sizes, then the offset)
+    for (let x = at + 46 + nl, xe = x + el; x + 4 <= xe;) {
+      const id = cd.readUInt16LE(x), len = cd.readUInt16LE(x + 2);
+      if (id === 1) {
+        let v = x + 4;
+        if (usize === 0xffffffff) v += 8;
+        if (csize === 0xffffffff) v += 8;
+        if (local === 0xffffffff && v + 8 <= x + 4 + len) local = Number(cd.readBigUInt64LE(v));
+      }
+      x += 4 + len;
+    }
     const name = cd.toString('utf8', at + 46, at + 46 + nl);
     if (method !== 0 || csize !== usize) throw new Error(`${path}: ${name} is compressed by the ZIP (a .lizard stores its entries)`);
     const lh = read(local, 30);

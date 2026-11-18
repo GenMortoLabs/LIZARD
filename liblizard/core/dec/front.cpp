@@ -574,7 +574,10 @@ void FrontHalf::makeRing(int R, uint32_t W, uint32_t H) {
 
 void FrontHalf::destroyRing() {
   std::lock_guard<std::mutex> lock(ringMu);
-  if (ring && ingest && !dev.abandoned) vkQueueWaitIdle(dev.queue2);   // ai: no ingest may still write the ring that goes
+  if (ring && ingest && !dev.abandoned) {   // ai: no ingest may still write the ring that goes
+    std::lock_guard<std::mutex> q2(dev.queue2Mu());
+    vkQueueWaitIdle(dev.queue2);
+  }
   ring.reset();
 }
 

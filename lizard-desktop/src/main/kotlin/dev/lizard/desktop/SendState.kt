@@ -133,6 +133,10 @@ class SendState(val full: FullScreen) {
     sealed interface Phase { data object Idle : Phase; data object Preparing : Phase; data object On : Phase; data class Error(val why: String) : Phase }
     // ai: what is painted: the format configured (its picture the sender's own, lizard_n_for, in its stats)
     data class Format(val subch: Int, val span: Int, val fps: Int, val codes: Int, val gap: Int, val painter: Int)
+    companion object {
+        // ai: Scaling's choices in the presenter's order (presenter.h Scaling: 0 Bilinear, 1 Lanczos, 2 None)
+        val SCALINGS = listOf("bilinear", "lanczos", "none")
+    }
 
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
     // ai: (../liblizard/kotlin/Tar.kt Bundle, the web sender's rule), made from the selection (items); `reading` while
@@ -175,6 +179,9 @@ class SendState(val full: FullScreen) {
         @Suppress("UNCHECKED_CAST")
         val files = runCatching { t.getTransferData(DataFlavor.javaFileListFlavor) as List<File> }.getOrNull().orEmpty()
         if (files.isEmpty()) return false
+        // ai: a stream file dropped plays (Source Stream); anything else is a pick
+        if (files.size == 1 && streamOf(files[0]) != null) { openStream(files[0]); return true }
+        if (source == "stream") { chooseSource("files") }
         if (test) chooseTest(false)
         pick(files)
         return true
@@ -194,6 +201,25 @@ class SendState(val full: FullScreen) {
     private var closing = false
     var test by mutableStateOf(Prefs.payload == "test")
     var enc by mutableStateOf(Prefs.enc.let { if (it == "gpu" || it == "cpu") it else "auto" })
+    // ai: Send's Control fold (2026-11-18, lizard-ui controlSettings): Source, files (the picks, painted as they go) or
+    // ai: stream (a stream file played, `stream`: chosen in the code area, dropped, or opened with LIZARD, App.handIn);
+    // ai: Export (Start writes the frames into a stream file in Downloads, named after what goes, "<name>.lizard" under a
+    // ai: free name), Laps, Maximum size, Hide codes (On: no screen, the frames made as fast as the painter goes, the run ending with the
+    // ai: file). exportNow: the run's export as the sender says it (txExportState), kept after the run until the next
+    // ai: Start or change, so its block says where the file went.
+    class StreamPick(val file: File, val meta: StreamMeta)
+    var source by mutableStateOf(if (Prefs.source == "stream") "stream" else "files")
+    var stream by mutableStateOf<StreamPick?>(null)
+    var export by mutableStateOf(Prefs.export)
+    var laps by mutableStateOf(lapsOf(Prefs.laps))
+    var hideCodes by mutableStateOf(Prefs.hideCodes)
+    var exportLimit by mutableStateOf(fileGb(Prefs.exportLimit))
+    var exportNow by mutableStateOf<JsonObject?>(null)
+    private var exportFile: File? = null
+    private var runPlay = false     // ai: the run plays `stream`
+    private var runExport = false   // ai: the run exports
+    private var runDisplay = true   // ai: the run shows its frames
+    private var madeType = ""       // ai: the made transfer's type, as its header carries it (an export's meta.json)
     // ai: the painter the sender runs on now, "gpu" or "cpu" ("" before a send): the Encoder chip auto marks (2026-10-05)
     val painterNow: String get() = sender?.str("painter") ?: ""
     // ai: a version 4 to 64 (16 sub-channels a step, Pick.STEP), Pick.VERSION_DEFAULT unless chosen; no auto since
@@ -205,6 +231,9 @@ class SendState(val full: FullScreen) {
     // ai: back at the stop (presenter.h setVsync); off, the monitor is left as it is. FPS is Pick.FPS's chips under VSync,
     // ai: a 1 to 60 slider without it; VSync turned on takes a slider's rate to the nearest chip.
     var vsync by mutableStateOf(Prefs.vsync)
+    // ai: Scaling (2026-11-17, Performance): "bilinear", the blit's linear filter (the default); "lanczos", Lanczos-3 on the
+    // ai: grey picture; "none", the picture at its own pixels (presenter.h Scaling), handed to the presenter at once
+    var scaling by mutableStateOf(Prefs.scaling.takeIf { it in SCALINGS } ?: "bilinear")
     var size by mutableStateOf(Prefs.size.coerceIn(25, 100))
     var spacing by mutableStateOf(Prefs.spacing.coerceIn(Room.SPACING_MIN, Room.SPACING_MAX))
     var margin by mutableStateOf(Prefs.margin.coerceIn(Pick.QUIET, Room.MARGIN_MAX))
@@ -262,12 +291,18 @@ class SendState(val full: FullScreen) {
     private val timer = Timer(1000) { poll() }
 
     val presenting get() = p != 0L
+    // ai: the pictures a second the run shows: a stream's own, else FPS
+    private val runFps get() = if (runPlay) stream?.meta?.fps ?: fps else fps
     // ai: the code area's colour at its left edge (the column's margin beside it takes it, SendHost.codeFill; the canvas's
     // ai: X background): the soft fill under the test stream's note, white under the file upload, the code's paper round
     // ai: the presenter's code (it clears to the paper) and round a paused run's still
-    val codeFill: Color get() = if (canvas.shown || stamp != null) colourOfRgb(paper) else if (test) Soft else Bg
+    val codeFill: Color get() = if (canvas.shown || stamp != null) colourOfRgb(paper) else if (test && source != "stream") Soft else Bg
     val sending get() = phase == Phase.On || phase == Phase.Preparing
-    val canStart get() = loadError.isEmpty() && !sending && (test || (choice != null && !reading))
+    val canStart get() = loadError.isEmpty() && !sending && (if (source == "stream") stream != null else (test || (choice != null && !reading)))
+    // ai: Export offered: files painted as they go (a stream is painted already), not the test stream (it has no lap)
+    val canExport get() = source != "stream" && !test
+    // ai: the run exports with no screen: the code area blank, no presenter, no Pause
+    val blind get() = sending && runExport && !runDisplay
     val railShown get() = collapsed
     val ringIndex get() = if (ring in Pick.RINGS.indices) ring else Pick.RING_DEFAULT
     // ai: the margin past the quiet zone the presenter keeps at the area's edges, for the ring configured
@@ -293,6 +328,8 @@ class SendState(val full: FullScreen) {
     // ai: The chooser (Chooser.kt): several files, or several folders, over the sender's window
     // ai: the window (App.kt sets it): the choosers' owner (the canvas has a window only while codes play)
     var frame: java.awt.Component? = null
+    // ai: the app's folds (App.kt sets it), for the test hook's fold step
+    var folds: Folds? = null
     fun chooseFile() = frame?.let { Chooser.choose(it, "Choose files", false, true) { f -> pick(f) } }
     fun chooseFolder() = frame?.let { Chooser.choose(it, "Choose folders", true, true) { f -> pick(f) } }
 
@@ -387,6 +424,7 @@ class SendState(val full: FullScreen) {
         val tar = if (one != null) null else File(Native.cache, "send-${ProcessHandle.current().pid()}-$my.tar")
         val path = one?.path ?: tar!!.path
         val type = if (one == null) TAR_TYPE else runCatching { Files.probeContentType(one.toPath()) }.getOrNull() ?: ""
+        madeType = type
         thread(name = "lizard-send-make", isDaemon = true) {
             val wrote = if (tar == null) null else runCatching {
                 tar.parentFile.mkdirs(); tar.deleteOnExit()
@@ -421,6 +459,19 @@ class SendState(val full: FullScreen) {
     // ai: Start (the column's, the rail's play, the hook's); no tip before it since 2026-11-03
     fun start() {
         if (!canStart) return
+        runPlay = source == "stream"
+        runExport = !runPlay && export && !test
+        runDisplay = !runExport || !hideCodes
+        exportNow = null; exportFile = null
+        if (runPlay) {
+            val st = stream!!
+            runTest = st.meta.test; runName = st.meta.name
+            phase = Phase.Preparing; paused = false
+            goPlay(st)
+            return
+        }
+        // ai: Largest file: an export of a file past it refused, by the file's own size (before compression)
+        if (runExport) exportTooLarge(choice!!.size, exportLimit)?.let { phase = Phase.Error(it); return }
         runTest = test
         runName = if (test) "" else choice!!.name
         dropTar()
@@ -454,8 +505,83 @@ class SendState(val full: FullScreen) {
         }
     }
 
+    // ai: A stream played (Source Stream): its sender made off the UI thread (txPlay, the GPU's device for the frame ring
+    // ai: and the presenter, txPrepare), then the presenter once the canvas has a size, as go's
+    private fun goPlay(st: StreamPick) {
+        val my = ++gen
+        thread(name = "lizard-send-play", isDaemon = true) {
+            val hnd = Native.txPlay(st.file.path)
+            val err = if (hnd == 0L) Native.txError() else ""
+            val why = if (hnd != 0L) Native.txPrepare(hnd, Native.assets) else ""
+            EventQueue.invokeLater {
+                if (my != gen) { if (hnd != 0L) Native.txDestroy(hnd); return@invokeLater }
+                if (hnd == 0L) { phase = Phase.Error("Not playable: $err"); return@invokeLater }
+                h = hnd; gpuWhy = why; prepared = true; fmt = null; phase = Phase.On
+                refreshNow()
+                areaNow()
+            }
+        }
+    }
+
+    // ai: Source (lizard-ui controlSettings): a run stops first, as a pick does
+    fun chooseSource(v: String) { if (sending) stop(); source = if (v == "stream") "stream" else "files"; Prefs.source = source; exportNow = null }
+    fun chooseExport(on: Boolean) { export = on; Prefs.export = on; exportNow = null }
+    fun chooseLaps(v: Double) { laps = lapsOf(v); Prefs.laps = laps }
+    // ai: Hide codes (lizard-ui controlSettings): kept, and mid-export the screen turned off or on at once (txExportShow:
+    // ai: the sender's intake switched, the export going on): off, the presenter stopped first and the canvas out; on,
+    // ai: the sender switched first, then the presenter begun as at a Start
+    fun chooseHideCodes(on: Boolean) {
+        hideCodes = on; Prefs.hideCodes = on
+        if (!sending || !runExport || runDisplay == !on) return
+        if (exportFile == null || exportNow?.flag("done") == true) { runDisplay = !on; return }
+        if (on) {
+            if (p != 0L) { Native.presentStop(p); p = 0L }
+            canvas.want(false)
+            stamp = null
+        }
+        val e = Native.txExportShow(h, !on)
+        if (e.isNotEmpty()) { fail("Export failed: $e"); return }
+        runDisplay = !on
+        if (!on) repick()
+    }
+    fun chooseExportLimit(gb: Int) { exportLimit = fileGb(gb); Prefs.exportLimit = exportLimit }
+    // ai: the stream file chooser (one .lizard) over the sender's window
+    fun chooseStream() = frame?.let { Chooser.choose(it, "Choose a stream", false, false) { f -> f.firstOrNull()?.let { openStream(it) } } }
+    // ai: what a .lizard is (its kind and meta.json, read by the native side): a stream's StreamMeta, else null
+    fun streamOf(f: File): StreamMeta? = if (!ReceiveState.isReplay(f) || loadError.isNotEmpty()) null else
+        parse(Native.lizardInfo(f.path))?.takeIf { it.str("kind") == "stream" }?.obj("meta")?.let { streamMetaOf(it) }
+    // ai: a stream file chosen, dropped or opened with LIZARD: Source Stream with it; a replay or another file refused
+    fun openStream(f: File) {
+        if (sending) stop()
+        val m = streamOf(f)
+        if (m == null) { phase = Phase.Error("Not a stream: ${f.name}${if (ReceiveState.isReplay(f)) " is a replay (Receive's Upload decodes it)" else ""}"); return }
+        if (phase is Phase.Error) phase = Phase.Idle
+        stream = StreamPick(f, m)
+        source = "stream"; Prefs.source = source
+        exportNow = null
+    }
+    fun clearStream() { if (sending) stop(); stream = null }
+    // ai: the export's block (lizard-ui SendRows.exportDetails), from the run's Start until the next Start or change
+    val exportDetails: Details? get() {
+        val e = exportNow ?: return null
+        val f = exportFile ?: return null
+        return SendRows.exportDetails(f.name, e.num("written").toInt(), e.num("frames").toInt(), e.num("bytes").toLong(),
+            f.parentFile?.name.orEmpty(), e.flag("done"))
+    }
+    // ai: Laps' value: the stream file's size before it is made (SendRows.exportEstimate), its bytes once written
+    val exportSize: String get() {
+        exportNow?.takeIf { it.flag("done") }?.let { return Readout.bytes(it.num("bytes").toLong()) }
+        val bytes = if (compressed > 0) compressed else choice?.size ?: 0L
+        val subch = Pick.STEP * blocks
+        val side = runCatching { Native.frameSide(subch, Pick.span(ringIndex)) }.getOrDefault(0)
+        val est = SendRows.exportEstimate(laps, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
+        return if (est > 0) Readout.bytes(est) else ""
+    }
+
     fun stop() {
         gen++
+        // ai: an export stopped short leaves no block (a whole one's stays, saying where it went)
+        if (exportNow?.flag("done") != true) exportNow = null
         timer.stop()
         settle.stop()
         if (p != 0L) { Native.presentStop(p); p = 0L }
@@ -554,6 +680,11 @@ class SendState(val full: FullScreen) {
         if (on && fps !in Pick.FPS) { chooseFps(Pick.fpsOf(fps)); commitFps() }
         if (p != 0L) Native.presentVsync(p, on)
     }
+    fun chooseScaling(v: String) {
+        if (v !in SCALINGS) return
+        scaling = v; Prefs.scaling = v
+        if (p != 0L) Native.presentScaling(p, SCALINGS.indexOf(v))
+    }
     fun chooseSize(v: Int) { size = v.coerceIn(25, 100); Prefs.size = size }
     fun chooseSpacing(v: Int) { spacing = v.coerceIn(Room.SPACING_MIN, Room.SPACING_MAX); Prefs.spacing = spacing }
     fun chooseMargin(v: Int) { margin = v.coerceIn(Pick.QUIET, Room.MARGIN_MAX); Prefs.margin = margin }
@@ -621,9 +752,12 @@ class SendState(val full: FullScreen) {
     // ai: the launch (the hook's) comes before AWT counts the window as showing. None while paused (a still; Resume).
     private fun begin() {
         if (h == 0L || p != 0L || paused || areaW <= 0 || areaH <= 0) return
+        // ai: an export with no screen: configured (the export started there), polled, nothing presented
+        if (runExport && !runDisplay) { if (configure()) timer.start(); return }
         if (!canvas.isDisplayable) { canvas.want(true); return }
         if (!configure()) return
-        val pr = Native.presentStart(canvas, h, fps, size / 100f, edge, vsync, canvas.place())
+        val pr = Native.presentStart(canvas, h, runFps, size / 100f, edge, vsync, canvas.place())
+        if (pr != 0L) Native.presentScaling(pr, SCALINGS.indexOf(scaling))
         if (pr == 0L) { fail("Display failed: ${Native.txError()}"); return }
         p = pr
         stamp = null
@@ -635,14 +769,26 @@ class SendState(val full: FullScreen) {
     // ai: why).
     private fun configure(): Boolean {
         if (h == 0L) return false
-        val subch = Pick.STEP * blocks
-        val f = Format(subch, Pick.span(ringIndex), fps, codes, if (codes > 1) Room.gapOf(spacing) else 0,
-            when (enc) { "cpu" -> 0; "gpu" -> 1; else -> 2 })
+        // ai: a stream's format is its own (the native side takes it from the file; these say it to the presenter's room)
+        val sm = if (runPlay) stream?.meta else null
+        val f = if (sm != null) Format(Pick.STEP * sm.blocks, Pick.span(sm.ring), sm.fps, sm.codes, 0, 0)
+            else Format(Pick.STEP * blocks, Pick.span(ringIndex), fps, codes, if (codes > 1) Room.gapOf(spacing) else 0,
+                when (enc) { "cpu" -> 0; "gpu" -> 1; else -> 2 })
         if (f == fmt) return true
         val threads = min(8, maxOf(1, Runtime.getRuntime().availableProcessors() - 2))
         val err = Native.txConfigure(h, f.subch, f.span, f.fps, f.codes, f.gap, threads, f.painter, Native.assets)
         if (err.isNotEmpty()) { fail(err); return false }
         fmt = f
+        // ai: Export: started at the run's first configure, into Downloads (a later configure, a change of format, ends
+        // ai: it: the sender's error says so)
+        if (runExport && exportFile == null) {
+            val dir = Received.downloads.apply { mkdirs() }
+            val out = Received.free(dir, (File(runName).nameWithoutExtension.ifEmpty { runName }.ifEmpty { "LIZARD" }) + ".lizard")
+            val e = Native.txExport(h, out.path, laps, runDisplay, 0, runName, madeType, blocks, ringIndex, fps, codes, codes * sentBlocks)
+            if (e.isNotEmpty()) { fail("Export failed: $e"); return false }
+            exportFile = out
+            exportNow = parse(Native.txExportState(h))
+        }
         val st = parse(Native.txStats(h))
         System.err.println("send: LIZARD-${f.subch}${if (f.codes > 1) " x ${f.codes}, spacing $spacing" else ""}, margin $margin" +
             " at ${f.fps} a second, ring ${f.span / 2}, painting on the " +
@@ -658,15 +804,28 @@ class SendState(val full: FullScreen) {
         senderRaw = Native.txStats(h); sender = parse(senderRaw)
         if (p != 0L) { presentRaw = Native.presentStats(p); present = parse(presentRaw) }
         val e = sender?.str("error").orEmpty().ifEmpty { if (p != 0L) present?.str("error").orEmpty() else "" }
-        if (e.isNotEmpty()) fail(e)
+        if (e.isNotEmpty()) { fail(e); return }
+        // ai: the export's state; finished with no screen, the run ends (its block kept); with one, the send goes on
+        if (runExport && exportFile != null) {
+            val es = parse(Native.txExportState(h)) ?: return
+            exportNow = es
+            val ee = es.str("error")
+            if (ee.isNotEmpty()) { fail("Export failed: $ee"); return }
+            if (es.flag("done") && !runDisplay) stop()
+        }
     }
 
     // ai: What goes, as elements from Start until Stop (lizard-ui SendRows.details, 2026-11-07; the state line "Sending
     // ai: <name>, <compressed> (<raw> raw)" over the figures before): the name, a spinner while it is made, Size, Files,
     // ai: Speed, and with Show statistics on Compressed (the bytes that go), Pass and Pass time; null otherwise
     fun details(stats: Boolean): Details? {
+        exportDetails?.let { return it }
         if (phase != Phase.Preparing && phase != Phase.On) return null
         val sd = sender
+        // ai: a stream's file is the one it carries (its meta.json's)
+        if (runPlay) stream?.meta?.let { m ->
+            return SendRows.details(m.name, m.test, phase == Phase.Preparing, m.length, 0, 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("lap") ?: 0.0, stats)
+        }
         return SendRows.details(runName, runTest, phase == Phase.Preparing, fileSize, compressed,
             choice?.takeIf { it.single == null }?.files ?: 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("lap") ?: 0.0, stats)
     }

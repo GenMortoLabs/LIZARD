@@ -761,6 +761,76 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIE
 
 extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txError(JNIEnv* e, jclass) { return lizard::jni::jstr(e, gTxError); }
 
+// ai: Stream files (2026-11-18, the desktop's tx_jni.cpp alike): a sender playing one (Sender::play: its frames
+// ai: unpacked into the ring, posted as painted ones are; 0 with why in txError), a played stream's meta.json ("" for a
+// ai: painting sender), what a .lizard holds ({"kind":"stream" or "replay","meta":...}; "" with txError), Export
+// ai: (Sender::exportStart: "" or why), its state ({"on","done","written","frames","bytes","path","error"}) and its stop,
+// ai: and a painted frame's side (an export's size before it is made). A path may be /proc/self/fd/<n> (a document's).
+extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txPlay(JNIEnv* e, jclass, jstring path) {
+  applyDebugEnv();
+  auto t = std::make_unique<Tx>();
+  std::string why;
+  try { t->s = lizard::Sender::play(str(e, path), why); } catch (const std::exception& x) { why = x.what(); }
+  if (!t->s) { gTxError = why; return 0; }
+  return reinterpret_cast<jlong>(t.release());
+}
+extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txStream(JNIEnv* e, jclass, jlong h) {
+  const lizard::StreamPlay* p = tx(h)->s->playing();
+  return lizard::jni::jstr(e, p ? p->meta : "");
+}
+extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_lizardInfo(JNIEnv* e, jclass, jstring path) {
+  std::string why;
+  auto r = lizard::lizfile::Reader::open(str(e, path), why);
+  if (!r) { gTxError = why; return lizard::jni::jstr(e, ""); }
+  return lizard::jni::jstr(e, std::string("{\"kind\":\"") + (r->kind() == lizard::lizfile::Kind::Stream ? "stream" : "replay") + "\",\"meta\":" + r->meta() + "}");
+}
+extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txExport(JNIEnv* e, jclass, jlong h, jstring path, jdouble laps, jboolean display, jint level,
+                                                                               jstring name, jstring type, jint blocks, jint ring, jint fps, jint codes, jint frameBlocks) {
+  lizard::Sender::ExportJob j;
+  j.path = str(e, path);
+  j.laps = laps;
+  j.display = display == JNI_TRUE;
+  if (level > 0) j.packing.level = level;
+  j.info.name = str(e, name); j.info.type = str(e, type);
+  j.info.blocks = blocks; j.info.ring = ring; j.info.fps = fps; j.info.codes = codes; j.info.frameBlocks = frameBlocks;
+  Tx* t = tx(h);
+  // ai: the GPU ring's filler stopped across the export's configure, as txConfigure's
+  if (t->gring) stopFiller(*t->gring);
+  std::string r;
+  try { r = t->s->exportStart(j); } catch (const std::exception& x) { r = x.what(); }
+  if (t->gring && t->s->side() == t->ringSide && t->s->width() == t->ringW) startFiller(t, t->gring);
+  return lizard::jni::jstr(e, r);
+}
+extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txExportState(JNIEnv* e, jclass, jlong h) {
+  const lizard::Sender::ExportState st = tx(h)->s->exportState();
+  const auto esc = [](const std::string& v) {
+    std::string o;
+    for (char c : v) { if (c == '"' || c == '\\') o += '\\'; if (static_cast<unsigned char>(c) >= 0x20) o += c; }
+    return o;
+  };
+  return lizard::jni::jstr(e, std::string("{\"on\":") + (st.on ? "true" : "false") + ",\"done\":" + (st.done ? "true" : "false") +
+                                  ",\"written\":" + std::to_string(st.written) + ",\"frames\":" + std::to_string(st.frames) + ",\"bytes\":" + std::to_string(st.bytes) +
+                                  ",\"path\":\"" + esc(st.path) + "\",\"error\":\"" + esc(st.error) + "\"}");
+}
+extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txExportStop(JNIEnv*, jclass, jlong h) { tx(h)->s->exportStop(); }
+// ai: the screen on or off mid-export (Sender::exportShow, Send's Hide codes), the GPU ring's filler stopped across it as
+// ai: across a configure: "" or why not
+extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txExportShow(JNIEnv* e, jclass, jlong h, jboolean show) {
+  Tx* t = tx(h);
+  if (t->gring) stopFiller(*t->gring);
+  std::string r;
+  try { r = t->s->exportShow(show == JNI_TRUE); } catch (const std::exception& x) { r = x.what(); }
+  if (t->gring && t->s->side() == t->ringSide && t->s->width() == t->ringW) startFiller(t, t->gring);
+  return lizard::jni::jstr(e, r);
+}
+extern "C" JNIEXPORT jint JNICALL Java_dev_lizard_receiver_Native_frameSide(JNIEnv*, jclass, jint subch, jint span) {
+  lizard_t f{};
+  if (lizard_init(&f, lizard_n_for(subch), subch, span)) return 0;
+  const int side = f.px + 2 * LIZARD_QUIET * f.pxm;
+  lizard_free(&f);
+  return side;
+}
+
 // ai: the bytes the transfer carries (the packed file's where it was packed, else the file's; 0 the test stream)
 extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txBytes(JNIEnv*, jclass, jlong h) { return static_cast<jlong>(tx(h)->bytes); }
 

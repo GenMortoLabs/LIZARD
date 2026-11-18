@@ -1,0 +1,11 @@
+# ai: Unpack with LIZARD on a .lizard's menu in Nemo (2026-11-18): the app run with `--unpack` (Main.kt), no window:
+# ai: each .lizard (a replay or a stream) to a folder beside it named as it is (a free name), a grey PNG a frame and
+# ai: its meta.json and stats.jsonl (rx/lizfile.h unpack). Installed by the .deb (deb-deps.sh) beside Broadcast's.
+[Nemo Action]
+Active=true
+Name=Unpack with LIZARD
+Exec=/opt/lizard-sender/bin/LIZARD --unpack %F
+Icon-Name=application-x-lizard-replay
+Selection=notnone
+Extensions=lizard;
+Quote=double

@@ -83,6 +83,9 @@ class XferTx {
 
   uint32_t chunks() const { return chunks_; }
   uint32_t lap() const { return lap_; }           // ai: data blocks a lap of the schedule (0 until every chunk is made)
+  // ai: the lap the schedule will have, once every chunk is made and before the schedule is drawn (at the first frame
+  // ai: after): what an export waits on before it paints, so its first frame carries data (0 until then)
+  uint32_t lapWhenMade() const;
   const uint8_t* root() const { return root_; }   // ai: 32 bytes, b3sum's answer for the file
   std::string rootHex() const;
   bool made() const { return made_.load(std::memory_order_acquire) == chunks_; }   // ai: every chunk made
@@ -109,6 +112,7 @@ class XferTx {
   void chunkDone(uint32_t c);   // ai: chunk c's slots written: its manifest group, made_
   void makeAll();          // ai: makeOnCpu's thread: the spill opened, then the workers
   void work();        // ai: a worker: the next chunk until none is left, or a failure stops them
+  std::vector<uint32_t> weights() const;   // ai: each chunk's visits a lap (schedule's)
   void schedule();    // ai: the schedule, once every chunk is made (frameIds')
   void warm(xfer_id_t* out, int n);   // ai: a frame's ids before that
   void took(uint32_t c);             // ai: a symbol of chunk c named (the spill's count, and its next segment asked for)
@@ -133,7 +137,7 @@ class XferTx {
   std::vector<uint64_t> cnt_;
   uint32_t i_ = 0, max_ = 0, seed_s_ = 0, rs_ = 1;
   // ai: the control cycle: how many data blocks between control slots, since the last, which control is next
-  uint32_t every_ = 1, since_ = UINT32_MAX, ctl_ = 0, frame_ = 0;
+  uint32_t every_ = 1, since_ = UINT32_MAX, ctl_ = 0, frame_ = 0;   // ai: since_: frames since the last control block (UINT32_MAX: none yet)
   // ai: streaming: a chunk's slots written before its ready_ is set, a manifest block's before its mready_ (the
   // ai: workers'); left_, chunks of a manifest group not yet made; next_, the next chunk a worker takes
   std::unique_ptr<std::atomic<uint8_t>[]> ready_, mready_;

@@ -309,30 +309,33 @@ fun Fields(content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMa
 // ai: drop frames for nothing).
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Bar(value: Float, range: ClosedFloatingPointRange<Float>, steps: Int, done: (() -> Unit)? = null, choose: (Float) -> Unit) {
-    Slider(value, choose, modifier = Modifier.fillMaxWidth(), steps = steps, valueRange = range, onValueChangeFinished = done,
-        thumb = { Box(Modifier.size(20.dp).background(Fg, CircleShape)) },
+fun Bar(value: Float, range: ClosedFloatingPointRange<Float>, steps: Int, done: (() -> Unit)? = null, enabled: Boolean = true, choose: (Float) -> Unit) {
+    val ink = if (enabled) Fg else GreyInk
+    Slider(value, choose, modifier = Modifier.fillMaxWidth(), enabled = enabled, steps = steps, valueRange = range, onValueChangeFinished = done,
+        thumb = { Box(Modifier.size(20.dp).background(ink, CircleShape)) },
         track = { st ->
             val span = st.valueRange.endInclusive - st.valueRange.start
             val f = if (span > 0) ((st.value - st.valueRange.start) / span).coerceIn(0f, 1f) else 0f
             Canvas(Modifier.fillMaxWidth().height(6.dp)) {
                 val y = size.height / 2
                 drawLine(Line, Offset(0f, y), Offset(size.width, y), strokeWidth = size.height, cap = StrokeCap.Round)
-                drawLine(Fg, Offset(0f, y), Offset(size.width * f, y), strokeWidth = size.height, cap = StrokeCap.Round)
+                drawLine(ink, Offset(0f, y), Offset(size.width * f, y), strokeWidth = size.height, cap = StrokeCap.Round)
             }
         })
 }
 
 // ai: A setting's field (2026-10-02): its title over its control (14 sp semibold, muted), the title row 36 dp whatever
 // ai: is in it (the value on the right, cut at its end; the title on one line whatever the value's length), 4 dp over
-// ai: the control, in the fields' rhythm (Fields)
+// ai: the control, in the fields' rhythm (Fields). Greyed (`enabled` false, 2026-11-18): the title and value faded as the
+// ai: control is (a setting that does not apply now keeps its row and its value, Settings.kt greyed)
 @Composable
-fun Field(title: String, value: String = "", content: @Composable () -> Unit) {
+fun Field(title: String, value: String = "", enabled: Boolean = true, content: @Composable () -> Unit) {
+    val tone = if (enabled) Muted else Muted.copy(alpha = .38f)
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, color = Muted, maxLines = 1, softWrap = false)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = tone, maxLines = 1, softWrap = false)
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                if (value.isNotEmpty()) Text(value, style = MaterialTheme.typography.bodyMedium, color = Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (value.isNotEmpty()) Text(value, style = MaterialTheme.typography.bodyMedium, color = tone, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         Spacer(Modifier.height(4.dp))
@@ -352,7 +355,7 @@ fun <T> Select(title: String, value: T, options: List<Pair<T, String>>, blank: S
     var open by remember { mutableStateOf(false) }
     var width by remember { mutableStateOf(0) }
     val density = LocalDensity.current
-    Field(title) {
+    Field(title, enabled = enabled) {
         Box(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().heightIn(min = LocalTarget.current).onSizeChanged { width = it.width }.clip(RoundedCornerShape(8.dp)).background(Soft)
                 .clickable(enabled = enabled, role = Role.Button) { onOpen(); open = true }.padding(start = 12.dp, end = 12.dp),
@@ -427,10 +430,11 @@ fun CodeBlock(text: String, size: Int = 13) =
 
 // ai: A choice among a few (Send's FPS, Ring, Codes, Encoder, VSync, Payload; Receive's Decoder, Codes and the camera's
 // ai: few; Show statistics, Exclusive fullscreen): 36 dp, 8 dp corners, on the soft fill, the
-// ai: chosen one solid with its label semibold; Chips lays them in a row that wraps, 8 dp apart.
+// ai: chosen one solid with its label semibold (greyed, GreyInk: still marked, faded); Chips lays them in a row that wraps,
+// ai: 8 dp apart.
 @Composable
 fun Chip(text: String, on: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
-    Box(Modifier.heightIn(min = 36.dp).clip(RoundedCornerShape(8.dp)).background(if (on) Fg else Soft)
+    Box(Modifier.heightIn(min = 36.dp).clip(RoundedCornerShape(8.dp)).background(if (on) (if (enabled) Fg else GreyInk) else Soft)
         .selectable(selected = on, enabled = enabled, role = Role.RadioButton, onClick = onClick).padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center) {
         Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
@@ -446,10 +450,11 @@ fun Chips(content: @Composable () -> Unit) =
 // ai: A line of text in the select's look (2026-10-27, the phone's address): the soft fill, 8 dp corners, the
 // ai: placeholder muted while empty; done with the text at Enter, or as the focus leaves it changed
 @Composable
-fun TextInput(value: String, placeholder: String, done: (String) -> Unit) {
+fun TextInput(value: String, placeholder: String, enabled: Boolean = true, done: (String) -> Unit) {
     var text by remember(value) { mutableStateOf(value) }
     val target = LocalTarget.current
-    BasicTextField(text, { text = it }, singleLine = true, textStyle = MaterialTheme.typography.bodyLarge.copy(color = Fg), cursorBrush = SolidColor(Fg),
+    BasicTextField(text, { text = it }, enabled = enabled, singleLine = true, textStyle = MaterialTheme.typography.bodyLarge.copy(color = if (enabled) Fg else Fg.copy(alpha = .38f)),
+        cursorBrush = SolidColor(Fg),
         modifier = Modifier.fillMaxWidth().heightIn(min = target).clip(RoundedCornerShape(8.dp)).background(Soft)
             .onPreviewKeyEvent { e -> if (e.key == Key.Enter && e.type == KeyEventType.KeyUp) { done(text.trim()); true } else false }
             .onFocusChanged { if (!it.isFocused && text.trim() != value) done(text.trim()) },

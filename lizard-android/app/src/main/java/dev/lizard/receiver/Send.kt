@@ -8,6 +8,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.text.style.TextAlign
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
@@ -100,6 +101,104 @@ class SendState(private val a: MainActivity) {
     private var makingNow = false
     private var startWhenMade = false     // ai: Start pressed while the transfer was being made
     var test by mutableStateOf(false)
+    // ai: Send's Control fold (2026-11-18, lizard-ui controlSettings, the desktop's alike): Source, files (the picks, painted
+    // ai: as they go) or stream (a stream file played: its document chosen in the code's box or opened with LIZARD from
+    // ai: another app, MainActivity.handle, read in place through /proc/self/fd, never copied); Export (Start writes the
+    // ai: frames into a stream file too, in the cache, copied to Downloads under a free name when whole), Laps,
+    // ai: Hide codes (On: no screen, the frames made as fast as the painter goes, the run ending with the file). Kept
+    // ai: ("sendSource", "sendExport", "sendLaps", "sendHideCodes"). exportNow: the run's export as the sender says it,
+    // ai: kept after the run until the next Start or change, so its block says where the file went.
+    class StreamPick(val uri: Uri, val name: String, val size: Long, val pfd: ParcelFileDescriptor, val meta: StreamMeta) {
+        val path get() = "/proc/self/fd/${pfd.fd}"
+    }
+    var source by mutableStateOf(if (prefs.getString("sendSource", "files") == "stream") "stream" else "files")
+    var stream by mutableStateOf<StreamPick?>(null)
+    var export by mutableStateOf(prefs.getBoolean("sendExport", false))
+    var laps by mutableStateOf(lapsOf(prefs.getFloat("sendLaps", LAPS_DEFAULT.toFloat()).toDouble()))
+    var hideCodes by mutableStateOf(prefs.getBoolean("sendHideCodes", false))
+    // ai: Largest file an export takes, GB ("sendExportLimit"; lizard-ui EXPORT_GB_DEFAULT unless set)
+    var exportLimit by mutableStateOf(fileGb(prefs.getInt("sendExportLimit", EXPORT_GB_DEFAULT)))
+    fun chooseExportLimit(gb: Int) { exportLimit = fileGb(gb); prefs.edit().putInt("sendExportLimit", exportLimit).apply() }
+    var exportNow by mutableStateOf<JSONObject?>(null)
+    var exportFolder by mutableStateOf("")   // ai: where the finished file went ("Download"), "" until copied
+    private var exportFile: File? = null
+    private var runPlay = false     // ai: the run plays `stream`
+    private var runExport = false   // ai: the run exports
+    private var runDisplay = true   // ai: the run shows its frames
+    private val sendingNow get() = phase == Phase.On || phase == Phase.Preparing
+    // ai: the run exports with no screen: no surface, nothing posted, its state polled (exportPoll)
+    val blind get() = sendingNow && runExport && !runDisplay
+    val canExport get() = source != "stream" && !test
+    // ai: the stream the box is shaped for and a run plays: Source Stream's
+    private val playMeta get() = if (source == "stream") stream?.meta else null
+    fun chooseSource(v: String) { if (sendingNow) stop(); source = if (v == "stream") "stream" else "files"; prefs.edit().putString("sendSource", source).apply(); exportNow = null }
+    fun chooseExport(on: Boolean) { export = on; prefs.edit().putBoolean("sendExport", on).apply(); exportNow = null }
+    fun chooseLaps(v: Double) { laps = lapsOf(v); prefs.edit().putFloat("sendLaps", laps.toFloat()).apply() }
+    // ai: Hide codes (lizard-ui controlSettings): kept ("sendHideCodes"), and mid-export the screen turned off or on at once
+    // ai: (txExportShow: the sender's intake switched, the export going on): off, the posting stopped first, the screen's
+    // ai: bars back and its state polled; on, the sender switched first, then the posting begun as at a Start
+    fun chooseHideCodes(on: Boolean) {
+        hideCodes = on; prefs.edit().putBoolean("sendHideCodes", on).apply()
+        if (!sendingNow || !runExport || runDisplay == !on) return
+        if (exportFile == null || exportNow?.optBoolean("done") == true) { runDisplay = !on; return }
+        if (on) {
+            Choreographer.getInstance().removeFrameCallback(frame)
+            if (Build.VERSION.SDK_INT >= 33) Choreographer.getInstance().removeVsyncCallback(vsync)
+            screenFor(false)
+            a.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        val e = Native.txExportShow(h, !on)
+        if (e.isNotEmpty()) { stop(); phase = Phase.Error("Export failed: $e"); return }
+        runDisplay = !on
+        if (on) { a.main.removeCallbacks(exportPoll); a.main.post(exportPoll); return }
+        a.main.removeCallbacks(exportPoll)
+        shown = false; placed = false
+        vsynced = Build.VERSION.SDK_INT >= 33
+        screenFor(true)
+        reconfigure()
+        due = 0; lastStats = 0; lastTimeline = 0; vsyncNs = 0
+        if (vsynced && Build.VERSION.SDK_INT >= 33) Choreographer.getInstance().postVsyncCallback(vsync)
+        else Choreographer.getInstance().postFrameCallback(frame)
+    }
+    // ai: a document as a stream: its descriptor kept open for the run (the native reader opens /proc/self/fd/<n> on each
+    // ai: of its threads), its meta.json read; false (the descriptor closed) where it is not one. quiet: no error said (a
+    // ai: replay opened from another app goes to Receive)
+    fun openStream(u: Uri, quiet: Boolean = false): Boolean {
+        val pfd = runCatching { a.contentResolver.openFileDescriptor(u, "r") }.getOrNull()
+        val meta = pfd?.let { p -> runCatching { JSONObject(Native.lizardInfo("/proc/self/fd/${p.fd}")) }.getOrNull() }
+            ?.takeIf { it.optString("kind") == "stream" }?.optJSONObject("meta")?.let { streamMetaOf(parse(it.toString())) }
+        if (pfd == null || meta == null) {
+            pfd?.close()
+            if (!quiet) phase = Phase.Error("Not a stream: ${nameOf(u)}${if (nameOf(u).endsWith(".lizard", true)) " is a replay (Receive's Upload decodes it)" else ""}")
+            return false
+        }
+        if (sendingNow) stop()
+        if (phase is Phase.Error) phase = Phase.Idle
+        stream?.pfd?.close()
+        stream = StreamPick(u, nameOf(u), runCatching { pfd.statSize }.getOrDefault(0L), pfd, meta)
+        source = "stream"; prefs.edit().putString("sendSource", source).apply()
+        exportNow = null
+        return true
+    }
+    fun clearStream() { if (sendingNow) stop(); stream?.pfd?.close(); stream = null }
+    private fun nameOf(u: Uri): String = runCatching {
+        a.contentResolver.query(u, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }.getOrNull() ?: u.lastPathSegment.orEmpty()
+    // ai: the export's block (lizard-ui SendRows.exportDetails)
+    val exportDetails: Details? get() {
+        val e = exportNow ?: return null
+        val f = exportFile ?: return null
+        return SendRows.exportDetails(f.name, e.optInt("written"), e.optInt("frames"), e.optLong("bytes"), exportFolder, e.optBoolean("done") && exportFolder.isNotEmpty())
+    }
+    // ai: Laps' value: the stream file's size before it is made (SendRows.exportEstimate), its bytes once written
+    val exportSize: String get() {
+        exportNow?.takeIf { it.optBoolean("done") }?.let { return Readout.bytes(it.optLong("bytes")) }
+        val bytes = if (compressed > 0) compressed else size
+        val subch = Pick.STEP * blocks
+        val side = runCatching { Native.frameSide(subch, Pick.span(ringIndex)) }.getOrDefault(0)
+        val est = SendRows.exportEstimate(laps, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
+        return if (est > 0) Readout.bytes(est) else ""
+    }
     // ai: The format's size (2026-10-02), the web sender's slider (send.html #blocks): a version 4 to 64 (16
     // ai: sub-channels a step, Pick.STEP), painted as set whatever the square (the web's too), Pick.VERSION_DEFAULT
     // ai: (LIZARD-480) unless chosen; no auto since 2026-11-07 (0 was the largest the square held: a kept 0 reads as the
@@ -160,11 +259,11 @@ class SendState(private val a: MainActivity) {
         prefs.edit().putInt("sendInk", ink).putInt("sendPaper", paper).apply()
         if (h != 0L) Native.txColours(h, ink, paper)
     }
-    private val sideModules get() = Pick.modules(ringIndex) + 2.0 * Pick.QUIET   // ai: a painted symbol's side, its quiet zone in
+    private val sideModules get() = Pick.modules(playMeta?.ring ?: ringIndex) + 2.0 * Pick.QUIET   // ai: a painted symbol's side, its quiet zone in
     private val past get() = (margin - Pick.QUIET).toDouble()           // ai: the margin past that quiet zone, modules
     // ai: the painted frame's width over its height: the codes and the gaps between them, each code as tall as the frame
     // ai: (a gap of `gap` modules a share of one code's side: the web's gapFrac)
-    private val frameAspect get() = codes + (codes - 1) * gap / sideModules
+    private val frameAspect get() = playMeta?.aspect ?: (codes + (codes - 1) * gap / sideModules)
     // ai: the code box's: the frame and the margin past its quiet zone at each edge
     val aspect get() = (frameAspect * sideModules + 2 * past) / (sideModules + 2 * past)
     // ai: that margin a share of the box's height (CodeBox's padding round the surface)
@@ -188,7 +287,8 @@ class SendState(private val a: MainActivity) {
     private var assets = ""             // ai: the generated tree (Assets.ensure), the GPU painter's kernels and tables
     private var vw = 0                  // ai: the view's size in pixels, the vsync-locked present's destination
     private var vh = 0
-    val fps get() = rate
+    // ai: the pictures a second shown: a stream's own while it plays, else FPS
+    val fps get() = if (runPlay && sendingNow) playMeta?.fps ?: rate else rate
 
     // ai: The selection (2026-10-23; until then a pick replaced the last): items added by each pick, share or photo pick,
     // ai: in order, each a file or a folder with its entries under its own name, so files and folders mix; the choice is
@@ -418,8 +518,21 @@ class SendState(private val a: MainActivity) {
 
     fun start() {
         if (phase == Phase.Preparing || phase == Phase.On) return
+        runPlay = source == "stream"
+        runExport = !runPlay && export && !test
+        runDisplay = !runExport || !hideCodes
+        exportNow = null; exportFile = null; exportFolder = ""
+        if (runPlay) {
+            val st = stream ?: return
+            phase = Phase.Preparing
+            shown = false; placed = false
+            goPlay(st)
+            return
+        }
         val b = choice
         if (!test && (b == null || reading)) return
+        // ai: Largest file: an export of a file past it refused, by the file's own size (before compression)
+        if (runExport && b != null) exportTooLarge(b.size, exportLimit)?.let { phase = Phase.Error(it); return }
         phase = Phase.Preparing
         shown = false; placed = false
         // ai: the file's transfer still being made (or its make let go): Start waits for it
@@ -446,21 +559,64 @@ class SendState(private val a: MainActivity) {
             a.runOnUiThread {
                 if (hnd == 0L) { phase = Phase.Error("Not sendable: $err"); return@runOnUiThread }
                 if (phase != Phase.Preparing || my != making) { Native.txDestroy(hnd); return@runOnUiThread }   // ai: stopped meanwhile
-                h = hnd; configured = 0; phase = Phase.On
-                vsynced = Build.VERSION.SDK_INT >= 33
-                refused = ""
-                screenFor(true)
-                refreshNow()
-                reconfigure()
-                due = 0; lastStats = 0; lastTimeline = 0; vsyncNs = 0
-                Log.i(TAG, "send: ${if (vsynced) "frames posted for their vsync" else "frames into the window's queue"}")
-                if (vsynced && Build.VERSION.SDK_INT >= 33) Choreographer.getInstance().postVsyncCallback(vsync)
-                else Choreographer.getInstance().postFrameCallback(frame)
+                begin(hnd)
             }
         }
     }
+    // ai: A stream played (Source Stream): its sender made off the main thread (txPlay; the GPU's device for the frame
+    // ai: ring, txPrepare), then as go's
+    private fun goPlay(st: StreamPick) {
+        val my = making
+        thread(name = "lizard-send-play") {
+            val hnd = Native.txPlay(st.path)
+            val err = if (hnd == 0L) Native.txError() else ""
+            if (hnd != 0L) { assets = Assets.ensure(a).path; Native.txPrepare(hnd, assets) }
+            a.runOnUiThread {
+                if (hnd == 0L) { phase = Phase.Error("Not playable: $err"); return@runOnUiThread }
+                if (phase != Phase.Preparing || my != making) { Native.txDestroy(hnd); return@runOnUiThread }
+                begin(hnd)
+            }
+        }
+    }
+    // ai: the run begun on its sender: the format, then the posting; an export with no screen posts nothing, its state
+    // ai: polled instead (exportPoll), the screen kept on
+    private fun begin(hnd: Long) {
+        h = hnd; configured = 0; phase = Phase.On
+        vsynced = Build.VERSION.SDK_INT >= 33 && !blind
+        refused = ""
+        if (blind) a.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) else screenFor(true)
+        refreshNow()
+        reconfigure()
+        due = 0; lastStats = 0; lastTimeline = 0; vsyncNs = 0
+        if (blind) { a.main.post(exportPoll); return }
+        Log.i(TAG, "send: ${if (vsynced) "frames posted for their vsync" else "frames into the window's queue"}")
+        if (vsynced && Build.VERSION.SDK_INT >= 33) Choreographer.getInstance().postVsyncCallback(vsync)
+        else Choreographer.getInstance().postFrameCallback(frame)
+    }
+    // ai: the export's state (twice a second with no screen, else each second with the stats): an error ends the run;
+    // ai: whole, the file copied to Downloads (MainActivity.toDownloads) and, with no screen, the run ended
+    private val exportPoll: Runnable = object : Runnable {
+        override fun run() {
+            if (h == 0L || !runExport) return
+            exportCheck()
+            if (h != 0L && blind) a.main.postDelayed(this, 500)
+        }
+    }
+    private fun exportCheck() {
+        if (exportFile == null || exportNow?.optBoolean("done") == true) return
+        val e = runCatching { JSONObject(Native.txExportState(h)) }.getOrNull() ?: return
+        exportNow = e
+        if (e.optString("error").isNotEmpty()) { val why = e.optString("error"); stop(); phase = Phase.Error("Export failed: $why"); return }
+        if (!e.optBoolean("done")) return
+        val f = exportFile ?: return
+        if (blind) stop()
+        a.toDownloads(f, f.name) { r -> r.fold({ exportFolder = it; f.delete() }, { phase = Phase.Error("Export not saved to Downloads: ${it.message}") }) }
+    }
 
     fun stop() {
+        a.main.removeCallbacks(exportPoll)
+        // ai: an export stopped short leaves no block (a whole one's stays, saying where it went)
+        if (exportNow?.optBoolean("done") != true) exportNow = null
         Choreographer.getInstance().removeFrameCallback(frame)
         if (Build.VERSION.SDK_INT >= 33) Choreographer.getInstance().removeVsyncCallback(vsync)
         if (h != 0L) { Native.txDestroy(h); h = 0 }
@@ -476,13 +632,26 @@ class SendState(private val a: MainActivity) {
     // ai: the format the code's square holds now (a turn of the phone re-picks it; the transfer goes on)
     private fun reconfigure() {
         room = roomOf()
-        if (h == 0L || room <= 0) return
-        val subch = Pick.STEP * blocks
+        if (h == 0L || (room <= 0 && !blind)) return
+        // ai: a stream's format is its own (the native side takes it from the file)
+        val pm = if (runPlay) playMeta else null
+        val subch = Pick.STEP * (pm?.blocks ?: blocks)
         val threads = min(4, maxOf(1, Runtime.getRuntime().availableProcessors() - 2))
-        val err = Native.txConfigure(h, subch, Pick.span(ringIndex), fps, threads, when (painter) { "cpu" -> 0; "gpu" -> 1; else -> 2 }, assets, codes, gap, vsynced, vsyncOn)
+        val err = Native.txConfigure(h, subch, Pick.span(pm?.ring ?: ringIndex), fps, threads, if (pm != null) 0 else when (painter) { "cpu" -> 0; "gpu" -> 1; else -> 2 },
+            assets, pm?.codes ?: codes, gap, vsynced, vsyncOn)
         if (err.isNotEmpty()) { phase = Phase.Error(err); stop(); return }
-        configured = room
+        configured = maxOf(1, room)
         picked = subch
+        // ai: Export: started at the run's first configure, into the cache (a later configure, a change of format, ends
+        // ai: it: the sender's error says so)
+        if (runExport && exportFile == null) {
+            val dir = File(a.cacheDir, "export").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+            val out = File(dir, (name.substringBeforeLast('.').ifEmpty { name }.ifEmpty { "LIZARD" }) + ".lizard")
+            val e = Native.txExport(h, out.path, laps, runDisplay, 0, name, type, blocks, ringIndex, fps, codes, codes * Native.blocksFor(subch))
+            if (e.isNotEmpty()) { phase = Phase.Error("Export failed: $e"); stop(); return }
+            exportFile = out
+            exportNow = runCatching { JSONObject(Native.txExportState(h)) }.getOrNull()
+        }
         // ai: the window's queue's vote (the vsync-locked present votes on its own surface, jni.cpp): the switch always
         // ai: made from Android 12 (the default makes it only where seamless, which can leave the panel at another rate);
         // ai: VSync off, 0, no vote
@@ -572,6 +741,7 @@ class SendState(private val a: MainActivity) {
             if (p?.optBoolean("gpu") == true) Log.i(TAG, "send: posted ${stats.posted}, held {${held}}, late ${stats.late}, behind ${stats.behind}, ${stats.filled} of ${stats.slots} buffers filled, ${j.optInt("ahead")} of ${j.optInt("depth")} frames painted ahead")
             if (j.optString("error").isNotEmpty()) phase = Phase.Error(j.optString("error"))
         }
+        if (runExport) exportCheck()
     }
     // ai: The vsync present refused for this send (jni.cpp txPost -1; its child surface let go): the frames go into the
     // ai: window's own queue from here, by the frame callback, the painters keeping host frames again (the configure
@@ -634,7 +804,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val on get() = s.phase == SendState.Phase.On
     override val busy get() = on || s.phase == SendState.Phase.Preparing
     override val paused get() = s.paused
-    override val canStart get() = s.phase != SendState.Phase.Preparing && (s.test || s.ready)
+    override val canStart get() = s.phase != SendState.Phase.Preparing && (if (s.source == "stream") s.stream != null else (s.test || s.ready))
     override fun start() = s.start()
     override fun stop() = s.stop()
     override fun pause(on: Boolean) = s.pause(on)
@@ -644,8 +814,13 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     // ai: Speed (the rate the code carries, none while paused), and with Show statistics on (Receive's setting)
     // ai: Compressed, Pass and Pass time; what went wrong in red; a spinner while a pick is walked
     override val details: Details? get() {
+        s.exportDetails?.let { return it }
         val preparing = s.phase == SendState.Phase.Preparing
         if (!preparing && !on) return null
+        // ai: a stream's file is the one it carries (its meta.json's), its rate the sender's
+        val st = s.stream?.meta?.takeIf { s.source == "stream" }
+        if (st != null) return SendRows.details(st.name, st.test, preparing, st.length, 0, 1, if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.lap,
+            a.settings.stats == "on")
         return SendRows.details(s.name, s.test, preparing, s.size, s.compressed, s.choice?.takeIf { it.single == null }?.files ?: 1,
             if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.lap, a.settings.stats == "on")
     }
@@ -656,37 +831,53 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     // ai: the settings by topic (2026-11-12, lizard-ui SEND_FOLDS; one list from 2026-11-01, headed Code and Display from
     // ai: 2026-10-23): what the symbol carries and where it sits (Layout's own fold until 2026-11-13), how often its blocks
     // ai: change, how this phone paints it
-    override val settings: Map<FoldKey, List<Setting>> get() = mapOf(
+    override val settings: Map<FoldKey, List<Setting>> get() {
+        // ai: what a stream fixes (Source Stream: its format and rate, greyed at its own; lizard-ui greyed) and what an
+        // ai: export holds while it runs (the format: a configure ends it)
+        val sm = if (s.source == "stream") s.stream?.meta else null
+        val streamed = s.source == "stream"
+        val held = streamed || (s.exportDetails != null && busy)
+        val vBlocks = sm?.blocks ?: s.blocks
+        val vCodes = sm?.codes ?: s.codes
+        val vFps = sm?.fps ?: s.rate
+        return mapOf(
         FoldKey.SendCode to listOfNotNull(
             // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size
             // ai: carries, Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
-            Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * s.blocks), stats), s.blocks.toFloat(),
-                Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) },
-            ChipChoice("Ring", s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) },
+            greyedUnless(!held, Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * vBlocks), stats), vBlocks.toFloat(),
+                Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) }),
+            greyedUnless(!held, ChipChoice("Ring", sm?.ring ?: s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) }),
             // ai: one code, or two side by side for a receiver's 2:1 crop (the web's #codes)
-            ChipChoice("Codes", s.codes, SendRows.CODES) { s.chooseCodes(it) },
+            greyedUnless(!held, ChipChoice("Codes", vCodes, SendRows.CODES) { s.chooseCodes(it) }),
             autoSlide("Brightness", s.brightness, 0, 1..100, { "$it%" }, {}, auto = "System") { if (it != s.brightness) s.chooseBrightness(it) },
-            // ai: the space between two codes' rings, modules (the web's #spacing): the painter's gap and the two quiet zones
-            if (s.codes == 2) Slide("Spacing", "${s.gap + SPACING_PAST} modules", (s.gap + SPACING_PAST).toFloat(), SPACING_PAST.toFloat()..(64f + SPACING_PAST), 63, { s.settle() }) { v ->
-                val g = v.roundToInt() - SPACING_PAST; if (g != s.gap) s.chooseGap(g) } else null,
+            // ai: the space between two codes' rings, modules (the web's #spacing): the painter's gap and the two quiet zones;
+            // ai: greyed with one code and for a stream (lizard-ui greyed)
+            greyedUnless(vCodes == 2 && !held, Slide("Spacing", "${s.gap + SPACING_PAST} modules", (s.gap + SPACING_PAST).toFloat(), SPACING_PAST.toFloat()..(64f + SPACING_PAST), 63, { s.settle() }) { v ->
+                val g = v.roundToInt() - SPACING_PAST; if (g != s.gap) s.chooseGap(g) }),
             // ai: the light round the code (SendState.margin), its label live and the box resized at the release
             Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Pick.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Pick.QUIET - 1,
                 { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() },
-            // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once
+            // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once (a stream's too)
             Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui
-        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting)
-        FoldKey.SendRefresh to listOf(
-            if (s.vsyncOn) ChipChoice("FPS", s.rate, Pick.FPS.map { it to "$it" }) { s.chooseRate(it) }
-            else Slide("FPS", "${s.rate}", s.rate.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
+        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting); a stream's greyed
+        FoldKey.SendRefresh to (listOf(
+            if (s.vsyncOn) ChipChoice("FPS", vFps, (Pick.FPS + vFps).distinct().map { it to "$it" }) { s.chooseRate(it) }
+            else Slide("FPS", "$vFps", vFps.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
-            carouselSetting(s.carousel) { s.chooseCarousel(it) },
+            carouselSetting(s.carousel) { s.chooseCarousel(it) }).map { if (held) greyed(it) else it },
+        // ai: Control (2026-11-18; Stream that day until renamed; lizard-ui controlSettings)
+        FoldKey.SendControl to controlSettings(s.source, s.export, s.laps, if (s.export && s.canExport) s.exportSize else "", s.exportLimit, s.hideCodes, s.canExport, busy,
+            { s.chooseSource(it) }, { s.chooseExport(it) }, { s.chooseLaps(it) }, { s.chooseExportLimit(it) }, { s.chooseHideCodes(it) }),
         FoldKey.SendPerformance to listOf(
             // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's chunks either way, the
             // ai: GPU paints and makes each frame's blocks where it is on): with nothing chosen the setting stays auto and the
-            // ai: painter running is the chip marked; a choice takes it outright
-            ChipChoice("GPU acceleration", if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter, listOf("gpu" to "On", "cpu" to "Off")) { s.choosePainter(it) },
+            // ai: painter running is the chip marked; a choice takes it outright; greyed Off for a stream, which paints
+            // ai: nothing (its frames unpacked on the CPU)
+            greyedUnless(!streamed, ChipChoice("GPU acceleration", if (streamed) "cpu" else if (s.painter == "auto") s.stats.painter.ifEmpty { "gpu" } else s.painter,
+                listOf("gpu" to "On", "cpu" to "Off")) { s.choosePainter(it) }),
             ChipChoice("VSync", s.vsyncOn, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
+    }
     private var marginDrag by mutableStateOf<Int?>(null)
     // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15); the fold drawn only where
     // ai: it holds a setting
@@ -700,7 +891,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val readout get() = sendLab(s).takeIf { it.isNotEmpty() }?.let { Code(it) }
     // ai: While a send runs the code is the whole screen (2026-10-26): the code alone, the bars hidden (SendState.screenFor);
     // ai: the page only while paused; the collapser over it pauses and opens the page with the column
-    override val alone get() = on && !s.paused
+    override val alone get() = on && !s.paused && !s.blind
     override val edgeTap = true
     override fun leaveCodeAlone() { s.pause(true); if (a.isOpen("collapsed")) a.toggle("collapsed") }
     override val codePadding = 16.dp
@@ -724,7 +915,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
 
     // ai: whether the code's box holds the file upload: no picture shown yet and a file the payload. A pick being read
     // ai: shows there as its tile (CodeArea)
-    private fun uploading() = !(sending() && s.shown) && !s.test
+    private fun uploading() = !(sending() && s.shown) && (!s.test || s.source == "stream")
     private fun sending() = s.phase == SendState.Phase.On || s.phase == SendState.Phase.Preparing
 
     // ai: The code's box: while sending the code itself, painted into a SurfaceView the box's size (SendState.holder), the
@@ -736,7 +927,18 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
         val sending = sending()
         val shown = sending && s.shown
         BoxWithConstraints(modifier.clipToBounds().background(if (shown) colourOfRgb(s.paper) else if (uploading()) Bg else Soft), contentAlignment = Alignment.Center) {
+            // ai: an export with its codes hidden: no surface, the line in their place
+            if (s.blind) { CodesHiddenNote(); return@BoxWithConstraints }
             if (sending) AndroidView({ ctx -> SurfaceView(ctx).apply { holder.addCallback(s.holder) } }, Modifier.fillMaxSize().padding(maxHeight * s.edgeShare.toFloat()))
+            // ai: Source Stream (2026-11-18): the stream file chosen (one document), its size on its line (its format the greyed Code's)
+            if (s.source == "stream") {
+                val st = s.stream
+                if (uploading()) Upload(listOf(Act("File", icon = Icons.file) { a.pickStream() }),
+                    listOfNotNull(st?.let { UploadItem("stream", it.name, Readout.bytes(it.size), false) }),
+                    enabled = !sending, row = true, onRemove = { s.clearStream() }, onClear = { s.clearStream() },
+                    total = st?.let { Readout.bytes(it.size) } ?: "")
+                return@BoxWithConstraints
+            }
             // ai: the items, then a tile a read under way (loading, its counts read each tick, its x cancelling it); an item
             // ai: added since the bundle was made loading too while it is made; the total the choice's once made, the
             // ai: bytes found so far while picks are read (2026-11-16)

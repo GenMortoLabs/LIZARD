@@ -7,6 +7,9 @@
 // ai: A file's chunks (2026-11-16): solved by the transfer's CPU workers at the first configure; where the GPU paints and
 // ai: holds the file, each chunk's symbols go up as it is made and the GPU makes every frame's blocks from their ids
 // ai: (gpu_stream.h; read back where the CPU paints later), else the CPU's encoders; the stats' rq and rqWhy say which.
+// ai: A stream file played (2026-11-18, play): a .lizard of frames painted ahead (stream_export.h) shown in turn and
+// ai: looped at its fps, nothing painted: its frames unpacked on the CPU into the same ring by the upload path, so every
+// ai: host (the desktop presenter's slots, the phone's and the C API's take) shows them as it shows painted ones.
 #pragma once
 #include <atomic>
 #include <condition_variable>
@@ -22,6 +25,9 @@
 
 #include "gpu_stream.h"
 #include "gpu_painter.h"
+#include "gpu_zstd.h"
+#include "lizfile.h"
+#include "stream_export.h"
 #include "xfer_tx.h"
 
 namespace lizard {
@@ -50,8 +56,22 @@ struct TxFormat {
   bool hostFrames = true;
 };
 
+// ai: What a stream file's meta.json says (stream_export.h; liz_sender_play): the format it was painted in (blocks a
+// ai: version's, the ring 0 to 2, fps, codes; the gap between two codes in pixels and in modules), its pictures and their
+// ai: size (a picture's w x h, two entries a picture at 2:1), its blocks a picture, and the file it carries.
+struct StreamPlay {
+  std::string path, meta, name, type, root;
+  int blocks = 0, ring = 0, fps = 0, codes = 1, gap = 0, gapModules = 0, side = 0, pictures = 0, frameBlocks = 0;
+  uint64_t length = 0, lap = 0;
+  bool test = false;
+};
+
 class Sender {
  public:
+  // ai: A stream file to show (StreamPlay): null with why where it is not one or its frames are not its format's. A
+  // ai: configure takes its format (TxFormat's subch, span, fps, codes, gap and painter are the stream's; threads unpack)
+  static std::unique_ptr<Sender> play(const std::string& path, std::string& why);
+  const StreamPlay* playing() const { return play_.get(); }
   // ai: A file (data alive as long as this: the app maps it) or, with data null, the test stream.
   // ai: spillDir: where the transfer's spill goes (xfer_tx.h: no encoder kept, symbols in segments on disk); "" none.
   // ai: stopped: the transfer's (xfer_tx.h), its hash stopped where it says so
@@ -148,6 +168,42 @@ class Sender {
   uint32_t ink() const { return ink_; }
   uint32_t paper() const { return paper_; }
 
+  // ai: Export (2026-11-18: the apps' Export, liz_sender_export, lizard_stream export): this sender's frames into a
+  // ai: stream file (stream_export.h) at path (through path.part, renamed at the end): from the first frame made once
+  // ai: the file's lap is known (every chunk made; frames made before carry the header alone, and those made ahead
+  // ai: meanwhile drop out), `frames` of them (0: laps x the lap over a picture's blocks), the count made odd so a
+  // ai: camera taking every other frame meets every frame across two loops; every frame packed by `packing` on `packers`
+  // ai: threads (0: the machine's cores) and written in order. display: the screen shows them meanwhile, each frame a
+  // ai: host takes (take, takeSlot) going to the file too, at the screen's pace; else no screen: the sender drains its
+  // ai: own ring as fast as the GPU paints (host copies made, TxFormat.hostFrames), or each CPU painter packs the frame it
+  // ai: painted itself (painting and packing a frame on one core, so the cores split between the two as the work asks).
+  // ai: Starting configures again (as the last configure asked) to lay the threads out for it; a configure from outside
+  // ai: with another format ends it (the .part removed: a stream has one format), one with the same format keeps it
+  // ai: (what was pending settled first: sinkSettle). The test stream needs `frames`.
+  // ai: gpu: with no screen and the GPU painting, the frames packed on the GPU too (gpu_zstd.h: straight from the ring,
+  // ai: literals alone, about a tenth larger than zstd at level 1) where it can; else packing's level on the CPU
+  struct ExportJob {
+    std::string path;
+    double laps = 2.5;
+    int frames = 0;
+    lizfile::Packing packing;
+    bool display = true;
+    bool gpu = true;
+    int packers = 0;
+    StreamInfo info;
+  };
+  std::string exportStart(const ExportJob& job);
+  // ai: the export now or the last one: on (running), done (the file whole at path), frames written of all (0 until the
+  // ai: lap is known), the file's bytes so far; error where it stopped short
+  struct ExportState { bool on = false, done = false; int written = 0, frames = 0; uint64_t bytes = 0; std::string path, error; };
+  ExportState exportState();
+  // ai: an export ended where it is (its .part removed); the sender goes on
+  void exportStop();
+  // ai: the screen on or off mid-export (2026-11-18, Send's Hide codes): the export goes on, its frames from here taken
+  // ai: as the screen shows them (show) or drained as fast as the painter goes (not); "" (also where the export has
+  // ai: ended meanwhile) or why not
+  std::string exportShow(bool show);
+
  private:
   std::atomic<uint32_t> ink_{0}, paper_{0xffffffu};
   // ai: car: setCarousel's when it was made; pos: each code's carousel position where car > 0
@@ -157,6 +213,29 @@ class Sender {
   void paint(int k);
   void paintGpu();
   void upload();
+  void playProduce();
+  void playUnpack(int k);
+  struct Sink;
+  std::unique_ptr<Sink> sink_;      // ai: the export running (exportStart), under mu_
+  std::unique_ptr<GpuZstd> zstd_;   // ai: the GPU's packer for an export with no screen (gpu_zstd.h), made at its configure
+  ExportState lastExport_;          // ai: the last export's end, under mu_
+  TxFormat asked_;                  // ai: the last configure's format as asked (exportStart configures with it again)
+  bool keepSink_ = false;           // ai: configure from exportStart: the sink stays
+  bool sinkAdmit(uint64_t seq);     // ai: (mu_ held) whether frame seq goes to the file
+  void sinkTake(uint64_t seq, std::vector<uint8_t>&& buf);   // ai: (mu_ held) a frame taken, to the file or back to spare_
+  void sinkStart();
+  void joinSink();
+  void sinkPack();
+  void sinkWrite();
+  int sinkWriteOne(std::unique_lock<std::mutex>& l);
+  void sinkSettle(std::unique_lock<std::mutex>& l);
+  void sinkDrain();
+  void sinkDrainGpu();
+  void sinkEnd(std::unique_lock<std::mutex>& l, const std::string& error);   // ai: the export's threads let go (mu_ let go meanwhile), its state kept in lastExport_
+  std::vector<std::vector<uint8_t>> sinkEntries(lizfile::FrameCodec& c, const std::vector<uint8_t>& buf);
+  Sender() = default;
+  std::unique_ptr<StreamPlay> play_;
+  uint64_t playBase_ = 0;          // ai: the count at the configure whose frames show the stream's picture 0
 
   std::unique_ptr<XferTx> xfer_;
   uint32_t nextId_;                 // ai: the test stream's next id (a random first one)

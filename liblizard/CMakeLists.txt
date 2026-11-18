@@ -233,6 +233,12 @@ if(LIZ_TESTS AND NOT EMSCRIPTEN)
   # ai: the engines on a recording and the GPU (api/tests/engine.c says how): run by hand, not by ctest
   add_executable(lizard_engine api/tests/engine.c)
   target_link_libraries(lizard_engine PRIVATE lizard)
+  # ai: lizard_stream (2026-11-18, api/tools/stream.cpp): stream files exported (the C API's liz_sender_export) and
+  # ai: checked (every frame through the C into a transfer: whole from all, the even, the odd frames); the .lizard reader
+  # ai: (core/rx/lizfile.h) linked in from the core's static target
+  add_executable(lizard_stream api/tools/stream.cpp)
+  target_link_libraries(lizard_stream PRIVATE lizard lizard_replay)
+  target_compile_definitions(lizard_stream PRIVATE LIZ_ASSETS="${CMAKE_CURRENT_SOURCE_DIR}/out")
   if(LIZ_PICK)
     set_tests_properties(roundtrip PROPERTIES FIXTURES_REQUIRED pick)
   endif()

@@ -10,8 +10,12 @@
 // ai: flush()), and the command pool is touched by that thread alone. Any thread may create and destroy buffers and
 // ai: textures, write a buffer and drop a Ticket: the pending writes and fills and the queue are under `mu`, and a
 // ai: dropped Ticket's command buffers wait in `retired` for the recording thread to free (Vulkan wants a pool's
-// ai: allocations, frees and recording in one thread at a time). The camera ingest has its own pool and, where the
-// ai: family has two, its own queue (core/ingest/camera.cpp); where it has one, its submit takes `mu` too.
+// ai: allocations, frees and recording in one thread at a time). The camera ingest has its own pool (pool2) and, where
+// ai: the family has two, the second queue (queue2, core/ingest/camera.cpp); the sender's device has two users of
+// ai: queue2, the desktop's presenter and the stream's chunk copies (core/tx/gpu_stream.cpp). Every submit, present and
+// ai: wait on queue2 takes queue2Mu(): `mu2` where it is a queue of its own, `mu` where it is the queue itself.
+// ai: (Until 2026-11-17 a user of a queue of its own took no lock, as if it were the queue's one thread: the
+// ai: presenter's presents and the copies of a 3.1 GB file's chunks raced on the 4090's, a SIGSEGV in NVIDIA's submit.)
 // ai: (Until 2026-09-30 nothing was locked: the receiver's camera thread freed command buffers through a slot's
 // ai: ticket and, on the host-luma path, recorded and submitted its uploads, against the decoder thread on the
 // ai: same pool and queue; the 4090 lost the device once in a run of the receiver on it, Xid 69.)
@@ -212,8 +216,9 @@ struct Device {
   VkPhysicalDevice phys = VK_NULL_HANDLE;
   VkDevice dev = VK_NULL_HANDLE;
   VkQueue queue = VK_NULL_HANDLE;
-  // ai: the ingest's queue (the family's second where it has one, else queue itself) and its own command pool, for
-  // ai: the camera thread: a camera frame is sampled into the ring there without waiting behind a batch
+  // ai: the second queue (the family's second where it has one, else queue itself) and its own command pool: the
+  // ai: receiver's camera thread samples a frame into the ring there without waiting behind a batch; the sender's
+  // ai: presenter presents there and the stream copies a file's chunks there. Submits, presents and waits under queue2Mu().
   VkQueue queue2 = VK_NULL_HANDLE;
   VkCommandPool pool2 = VK_NULL_HANDLE;
   bool twoQueues = false;
@@ -236,8 +241,11 @@ struct Device {
   double timestampPeriod = 1.0;   // ai: ns a tick
   uint64_t timestampMask = ~0ull;
   std::atomic<uint64_t> allocated{0};   // ai: bytes of device memory this device holds (the web's fh.allocated)
-  // ai: guards writes, inits, staging and retired, and the queue's submits where the ingest shares the queue
+  // ai: guards writes, inits, staging and retired, and the queue's submits where queue2 is the queue
   std::mutex mu;
+  // ai: queue2's submits, presents and waits where it is a queue of its own
+  std::mutex mu2;
+  std::mutex& queue2Mu() { return twoQueues ? mu2 : mu; }
   // ai: command buffers of dropped Tickets, freed by the recording thread at its next encoder()
   std::vector<VkCommandBuffer> retired;
   std::function<void(const std::string&)> log;

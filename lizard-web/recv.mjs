@@ -27,7 +27,7 @@ import { PoolPolicy } from "./pool.mjs";
 import { logPost } from "./devlog.mjs";
 import { R_RING, SPAN, MODULES, N_FOR, NAME, PICTURE_SIZES, subchOf } from "../liblizard/sim/lizard_pick.mjs";
 import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
-import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings, icon, chips } from "./ui.mjs";
+import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings, icon, chips, greyOut } from "./ui.mjs";
 import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
 // ai: The folds (Camera, Decoder, Developer Tools; one Settings fold, recv:dev, until 2026-11-12; the Developer panel
@@ -426,9 +426,9 @@ let camLabel = "", camRate = 0;
 function showCamera() {
   const a = $("cam").querySelector('option[value="auto"]');
   if (a) a.textContent = camLabel || "Camera";
-  // ai: a file has no resolution, rate, phase lock or zoom of the camera's (the apps' hide theirs)
-  $("resRow").hidden = $("fpsRow").hidden = $("lockRow").hidden = fileChosen();
-  if (fileChosen()) $("zoomRow").hidden = true;
+  // ai: a file has no resolution, rate, phase lock or zoom of the camera's: greyed at the camera's (ui.mjs greyOut,
+  // ai: 2026-11-18; hidden before, as the apps')
+  for (const r of ["resRow", "fpsRow", "lockRow", "zoomRow"]) greyOut($(r), fileChosen());
   $("fps").querySelector('option[value="auto"]').textContent = String(camRate || 60);
 }
 // ai: The camera's frame as a VideoFrame (lizard-web/vframes.mjs), with the crop the grab would have read back, in place of the

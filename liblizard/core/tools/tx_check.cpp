@@ -16,10 +16,11 @@
 // ai:   tx_check gputables <dir>   tx/send_tables.cpp's tables against gen/send_tables_ref.mjs's, every format in its
 // ai:       index, section by section (exact; the twiddles to a float's last bit, the border's picture, which the GPU
 // ai:       paints again, within a grey level)
-// ai:   tx_check gpucheck <subch> [ring] [frames]   the GPU's frames of the test stream's blocks against
+// ai:   tx_check gpucheck <subch> [ring] [frames] [codes] [encode]   the GPU's frames of the test stream's blocks against
 // ai:       the C's paint at the same counts (the border to the byte, the square within a grey level: the web's auto
 // ai:       rule), then its GPU ms a frame over encodes of its most, the test stream made on the device and the blocks
-// ai:       given whole alternately (their difference the device's BLAKE3); ring an index into src/lizard_phy.h
+// ai:       given whole alternately (their difference the device's BLAKE3), `encode` frames an encode (4 unset; 2026-11-18);
+// ai:       ring an index into src/lizard_phy.h
 // ai:       LIZARD_RING, the default ring (LIZARD_RING_DEFAULT, the 128) unset
 // ai:   LIZ_PAINTER=gpu|auto tx_check paint ...   the Sender painting on the GPU (or auto), every frame read blind as before
 // ai:   LIZ_CODES=2 [LIZ_GAP=<modules>] tx_check paint ...   two codes a frame (2026-10-03), the gap between them set
@@ -586,11 +587,12 @@ int main(int argc, char** argv) {
   }
   if (mode == "gpucheck" && argc >= 3) {
     const int subch = atoi(argv[2]), ring = argc > 3 ? atoi(argv[3]) : LIZARD_RING_DEFAULT, frames = argc > 4 ? atoi(argv[4]) : 8, codes = argc > 5 ? atoi(argv[5]) : 1;
+    const int encode = argc > 6 ? std::max(1, atoi(argv[6])) : 4;   // ai: frames an encode (2026-11-18: batching's GPU cost a frame)
     if (ring < 0 || ring >= LIZARD_RINGS) { printf("FAIL ring %d: an index of LIZARD_RING, 0 to %d\n", ring, LIZARD_RINGS - 1); return 1; }
     std::unique_ptr<GpuPainter> g;
     try { g = GpuPainter::create(assets(), [](const std::string& m) { printf("%s\n", m.c_str()); }); }
     catch (const std::exception& e) { printf("FAIL no GPU painter: %s\n", e.what()); return 1; }
-    const std::string ce = g->configure(subch, 2 * LIZARD_RING[ring], 60, 4, codes, GAP_MODULES, 0, 0, 0, false);
+    const std::string ce = g->configure(subch, 2 * LIZARD_RING[ring], 60, encode, codes, GAP_MODULES, 0, 0, 0, false);
     if (!ce.empty()) { printf("FAIL configure: %s\n", ce.c_str()); return 1; }
     const int V = subch / 8 * codes, R = g->frames();
     const auto blocks = testBlocks(std::max(frames, R), V);

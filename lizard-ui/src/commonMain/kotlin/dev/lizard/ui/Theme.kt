@@ -38,6 +38,9 @@ val Soft = Color(0xFFF1F1F1)
 val Card = Color(0xFFF6F6F6)
 // ai: a pressed button's grey: the Soft fill under the foreground's pressed state layer (10%), as a tonal Btn shows it
 val Pressed = Fg.copy(alpha = 0.10f).compositeOver(Soft)
+// ai: a greyed control's ink (2026-11-18): a chosen chip, a slider's fill and thumb where the setting does not apply now
+// ai: (the foreground at 38%, Material's disabled alpha, laid on the page)
+val GreyInk = Fg.copy(alpha = 0.38f).compositeOver(Bg)
 val Bad = Color(0xFFB00020)
 // ai: a finished transfer (the web's --good, 2026-10-25 with the desktop's receiver): the received line and the rail's check
 val Good = Color(0xFF0A7A2F)

@@ -2,6 +2,8 @@ package dev.lizard.desktop
 
 import dev.lizard.pick.Pick
 import dev.lizard.ui.INK_DEFAULT
+import dev.lizard.ui.LAPS_DEFAULT
+import dev.lizard.ui.EXPORT_GB_DEFAULT
 import dev.lizard.ui.PAPER_DEFAULT
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -143,8 +145,18 @@ object Prefs {
     // ai: Code's Colours (2026-11-16, lizard-ui Colours): the code's ink and paper, 0xRRGGBB, black and white unless set
     var ink: Int get() = int("ink", INK_DEFAULT) and 0xFFFFFF; set(v) { p?.putInt("ink", v) }
     var paper: Int get() = int("paper", PAPER_DEFAULT) and 0xFFFFFF; set(v) { p?.putInt("paper", v) }
+    // ai: Control (2026-11-18, lizard-ui controlSettings): Source ("files", "stream"), Export (off unless set), Laps (2.5
+    // ai: unless set), Display (on unless set)
+    var source: String get() = str("source", "files"); set(v) { p?.put("source", v) }
+    var export: Boolean get() = bool("export", false); set(v) { p?.putBoolean("export", v) }
+    var laps: Double get() = p?.getDouble("laps", LAPS_DEFAULT) ?: LAPS_DEFAULT; set(v) { p?.putDouble("laps", v) }
+    // ai: Hide codes (2026-11-18; Display, kept as "display", before it): off unless set
+    var hideCodes: Boolean get() = bool("hideCodes", false); set(v) { p?.putBoolean("hideCodes", v) }
+    // ai: Largest file an export takes, GB (lizard-ui EXPORT_GB_DEFAULT unless set; FILE_GB_NONE no limit)
+    var exportLimit: Int get() = int("exportLimit", EXPORT_GB_DEFAULT); set(v) { p?.putInt("exportLimit", v) }
     var experimentalOpen: Boolean get() = bool("experimental", false); set(v) { p?.putBoolean("experimental", v) }
     var vsync: Boolean get() = bool("vsync", true); set(v) { p?.putBoolean("vsync", v) }   // ai: on unless turned off
+    var scaling: String get() = str("scaling", "bilinear"); set(v) { p?.put("scaling", v) }   // ai: Scaling, bilinear unless chosen (2026-11-17)
     var toolsOpen: Boolean get() = bool("logs", false); set(v) { p?.putBoolean("logs", v) }
     var collapsed: Boolean get() = bool("collapsed", false); set(v) { p?.putBoolean("collapsed", v) }
     // ai: the settings folds by topic (2026-11-12, Receive's and Send's), each under its FoldKey's name ("fold.RecvCamera"),

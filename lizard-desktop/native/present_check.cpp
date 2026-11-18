@@ -4,7 +4,7 @@
 // ai: on stderr, its CSV a line a present (csv=), and with mark=1 the picture's count drawn into the window's top-left
 // ai: corner (PresentOptions::mark) for tools that read the screen back.
 // ai:   present_check [secs=30] [fps=60] [version=41] [ring=256] [codes=2] [gap=12] [x=0] [y=0] [w=1600] [h=900]
-// ai:                 [full=0] [above=0] [size=0.9] [margin=2] [vsync=0] [mark=0] [csv=<path>] [device=<name>]
+// ai:                 [full=0] [above=0] [size=0.9] [margin=2] [vsync=0] [scaling=bilinear] [mark=0] [csv=<path>] [device=<name>]
 // ai:                 [assets=<liblizard/out>]
 // ai: TERM or INT end the run. Exit 0 after secs with a summary line on stdout (the presenter's last stats and the
 // ai: sender's), 1 with FAIL <why>.
@@ -152,6 +152,12 @@ int main(int argc, char** argv) {
   // ai: Margin (Room.edgeShare: a share of the frame's height, the ring's span and its border and quiet zones)
   o.edge = (num(kv, "margin", 2) - 2) / (2.0 * ring + 2 * 15 + 2 * 2);
   o.vsync = num(kv, "vsync", 0) != 0;
+  if (kv.count("scaling")) {   // ai: Scaling: bilinear (the default), lanczos or none
+    const std::string& v = kv.at("scaling");
+    if (v == "lanczos") o.scaling = lizard::Scaling::Lanczos;
+    else if (v == "none") o.scaling = lizard::Scaling::Unscaled;
+    else if (v != "bilinear") { std::fprintf(stderr, "scaling=%s is not bilinear, lanczos or none\n", v.c_str()); return 2; }
+  }
   o.mark = num(kv, "mark", 0) != 0;
   o.csv = str(kv, "csv", "");
   o.log = [](const std::string& m) { std::fprintf(stderr, "lizard: %s\n", m.c_str()); };

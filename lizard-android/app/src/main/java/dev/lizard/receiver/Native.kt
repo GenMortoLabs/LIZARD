@@ -39,6 +39,17 @@ object Native {
     @JvmStatic external fun txSeed(h: Long, seed: Int): Boolean
     // ai: the blocks a frame of subch sub-channels carries (the format's rate profile, src/lizard_phy.h lizard_blocks_for)
     @JvmStatic external fun blocksFor(subch: Int): Int
+    // ai: stream files (2026-11-18, jni.cpp txPlay ...): a sender playing one (0: txError), its meta.json, what a .lizard
+    // ai: holds ({"kind","meta"}, "" with txError), Export and its state and stop, a painted frame's side
+    @JvmStatic external fun txPlay(path: String): Long
+    @JvmStatic external fun txStream(h: Long): String
+    @JvmStatic external fun lizardInfo(path: String): String
+    @JvmStatic external fun txExport(h: Long, path: String, laps: Double, display: Boolean, level: Int, name: String, type: String,
+                                     blocks: Int, ring: Int, fps: Int, codes: Int, frameBlocks: Int): String
+    @JvmStatic external fun txExportState(h: Long): String
+    @JvmStatic external fun txExportStop(h: Long)
+    @JvmStatic external fun txExportShow(h: Long, show: Boolean): String
+    @JvmStatic external fun frameSide(subch: Int, span: Int): Int
     @JvmStatic external fun txPresent(h: Long, surface: android.view.Surface): Boolean
     // ai: the vsync path's post (2026-10-07, jni.cpp txPost): a picture due at the frame timeline `vsync` (expected on
     // ai: screen at `expected` ns, the display's period `vsyncNs`, into the view's w x h2 pixels): the next GPU-filled

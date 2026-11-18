@@ -13,8 +13,9 @@
 // ai: a frame). STATUS "RaptorQ's encoder on the GPU in the sender" (a GPU solve built, measured and taken out).
 // ai: Memory: the file's symbols must fit one buffer and a share of the device's memory (a quarter where the device
 // ai: shares the system's, a half on a discrete one; create says why not), else the CPU's path (its spill past RAM).
-// ai: Threads: create anywhere; put on any thread (a worker; on a discrete GPU it waits for a free slot and for its copy, on Device::queue2
-// ai: and pool2 under this stream's lock); selfTest, blocks and host on the device's recording thread (wg.h) alone.
+// ai: Threads: create anywhere; put on any thread (a worker; on a discrete GPU it waits for a free slot and for its copy:
+// ai: pool2 under this stream's lock, Device::queue2 under the device's queue2Mu, which the presenter shares);
+// ai: selfTest, blocks and host on the device's recording thread (wg.h) alone.
 #pragma once
 #include <condition_variable>
 #include <cstddef>
@@ -51,13 +52,15 @@ class GpuStream {
   std::string selfTest();
   // ai: Chunk c solved (a worker's): its intermediate symbols written into SYM in place where the device shares the
   // ai: system's memory, else into a free slot (waiting for one), copied onto the device on its second queue and waited
-  // ai: for. False where the stream stopped (its destructor).
+  // ai: for. False where the stream stopped (its destructor). Throws where a copy failed, its own or another worker's
+  // ai: (the first failure fails the stream: every put after throws its reason).
   bool put(uint32_t c, const rq_enc_t* enc);
   void stop();    // ai: a put waiting for a slot returns false, and every put after (the sender's teardown)
   bool done();    // ai: every chunk's symbols on the device
   // ai: The recording thread's, once done(): an encode's blocks (n, `stride` bytes apart, each its id's five bytes, a
-  // ai: control block's payload after it) recorded into enc, written into out (the painter's BLOCKS, 480 B a block).
-  void blocks(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& out, const uint8_t* blocks, uint32_t n, size_t stride);
+  // ai: control block's payload after it) recorded into enc, written into out (the painter's BLOCKS, 480 B a block);
+  // ai: room: the most blocks an encode of this configuration names (encodes in flight: ids()).
+  void blocks(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& out, const uint8_t* blocks, uint32_t n, size_t stride, uint32_t room);
   // ai: The recording thread's, once done(): data ids' payloads (471 B each) into out, a submission of its own.
   void host(const xfer_id_t* ids, uint32_t n, uint8_t* out);
   uint64_t symbolBytes() const { return symBytes_; }
@@ -67,7 +70,7 @@ class GpuStream {
   // ai: the blocks' dispatch over a set of SYM, TAB and CHUNKS (the file's, or the self-test's) into out
   void record(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& sym, const std::shared_ptr<wg::Buffer>& tab, const std::shared_ptr<wg::Buffer>& chunks,
               const std::shared_ptr<wg::Buffer>& out, uint32_t n, uint32_t ctl, uint32_t nchunks, uint32_t controls);
-  void ids(const uint8_t* blocks, uint32_t n, size_t stride, bool controlsToo);
+  void ids(const uint8_t* blocks, uint32_t n, size_t stride, bool controlsToo, uint32_t room = 0);
 
   wg::Device& dev_;
   File f_;
@@ -89,6 +92,7 @@ class GpuStream {
   std::vector<int64_t> slotOf_;
   uint32_t onDevice_ = 0;
   bool stop_ = false;
+  std::string failed_;   // ai: the first copy's failure (put)
   std::mutex mu_;
   std::condition_variable cv_;
 };

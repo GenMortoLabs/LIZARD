@@ -121,7 +121,7 @@
         <div class="blocks"><span class="row"><span>Size</span><span id="sizeOut">100%</span></span><input id="size" type="range" min="25" max="100" step="1" value="100" aria-label="size"></div>
         <!-- ai: the light between two codes' rings, 4 to 68 modules (send.mjs spacingOf), shown with two codes; and between a
              ring and the area's edge, 2 to 34 (marginOf) -->
-        <div class="blocks" id="spacingRow" hidden><span class="row"><span>Spacing</span><span id="spacingOut">16 modules</span></span><input id="spacing" type="range" min="4" max="68" step="1" value="16" aria-label="spacing"></div>
+        <div class="blocks" id="spacingRow"><span class="row"><span>Spacing</span><span id="spacingOut">16 modules</span></span><input id="spacing" type="range" min="4" max="68" step="1" value="16" aria-label="spacing"></div>
         <div class="blocks"><span class="row"><span>Margin</span><span id="marginOut">8 modules</span></span><input id="margin" type="range" min="2" max="34" step="1" value="8" aria-label="margin"></div>
         <!-- ai: Colours (2026-11-16, the apps' lizard-ui Colours): the code's ink and paper as tiles, the picker under them (send.mjs showColours) -->
         <div class="blocks"><span class="row"><span>Colours</span></span>
@@ -203,7 +203,7 @@
       for (const k of ["78", "23", "12"]) $(`refresh${k}Out`).textContent = `${Math.max(1, Math.min(60, Math.round(+$(`refresh${k}`).value) || 1))}`;
       $("sizeOut").textContent = `${+$("size").value}%`;
       $("spacingOut").textContent = `${+$("spacing").value} modules`;
-      $("spacingRow").hidden = $("codes").value !== "2";
+      { const one = $("codes").value !== "2"; $("spacingRow").classList.toggle("greyed", one); if (one) { $("spacing").disabled = true; $("spacing").dataset.greyed = "1"; } }
       $("marginOut").textContent = `${+$("margin").value} modules`;
       // ai: the chips drawn before the first paint, as ui.mjs chips draws them (it takes these rows over at the module's start)
       for (const sel of document.querySelectorAll("select[data-chips]")) {

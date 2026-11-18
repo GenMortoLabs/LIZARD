@@ -443,19 +443,33 @@ std::string XferTx::fault() const {
 // ai: once; a chunk of fewer in proportion to its blocks, plus 2 sqrt(K) visits a lap and at least 64. The symbols a
 // ai: chunk sent while the others were made go on (cnt_), so none is sent twice. Each round visits the chunks in an order
 // ai: of its own (newRound).
+std::vector<uint32_t> XferTx::weights() const {
+  std::vector<uint32_t> w;
+  const uint32_t mx = chunks_ ? *std::max_element(K_.begin(), K_.end()) : 0;
+  for (uint32_t c = 0; c < chunks_; c++) {
+    const uint32_t k = K_[c];
+    w.push_back(k >= mx ? mx : std::min(mx, std::max<uint32_t>(64, k + static_cast<uint32_t>(std::ceil(2 * std::sqrt(static_cast<double>(k)))))));
+  }
+  return w;
+}
+
+uint32_t XferTx::lapWhenMade() const {
+  if (!made()) return 0;   // ai: (made_'s acquire: K_ written before it; scheduled_ and lap_ are the painters' thread's)
+  uint32_t lap = 0;
+  for (uint32_t v : weights()) lap += v;
+  return lap;
+}
+
 void XferTx::schedule() {
   scheduled_ = true;
   const uint32_t C = chunks_;
   acc_.assign(C, 0);
-  w_.clear();
   max_ = C ? *std::max_element(K_.begin(), K_.end()) : 0;
+  w_ = weights();
   uint32_t lap = 0;
-  for (uint32_t c = 0; c < C; c++) {
-    const uint32_t k = K_[c];
-    w_.push_back(k >= max_ ? max_ : std::min(max_, std::max<uint32_t>(64, k + static_cast<uint32_t>(std::ceil(2 * std::sqrt(static_cast<double>(k)))))));
-    lap += w_[c];
-  }
-  // ai: the whole control cycle (the header every other block, the manifest between) within an eighth of a lap
+  for (uint32_t v : w_) lap += v;
+  // ai: the whole control cycle (the header every third control block, the manifest's between; frameIds) within an
+  // ai: eighth of a lap
   every_ = std::max<uint32_t>(1, std::min<uint32_t>(CONTROL_EVERY, lap / (8 * std::max<uint32_t>(1, static_cast<uint32_t>(manifest_.size())))));
   i_ = 0; since_ = UINT32_MAX;
   newRound();
@@ -553,14 +567,22 @@ void XferTx::frameIds(xfer_id_t* out, int n) {
   if (!scheduled_ && made()) schedule();
   if (!scheduled_) warm(out, n);
   else {
+    // ai: A control block every P frames, P odd (2026-11-18): the frames that carry every_ data blocks between controls,
+    // ai: rounded up to an odd count, and among the control blocks the header every third (the manifest's blocks the
+    // ai: other two), so the header's frames are an odd count apart too. A camera taking every other frame, in either
+    // ai: phase, then meets the header. Before, a control block every frame (116 blocks a frame at 2:1, every_ at most
+    // ai: 63) alternated header and manifest, so the header rode every other frame alone and a camera in step with the
+    // ai: other half never met it; with one code (58), a control every second frame, so that half met no control block
+    // ai: at all (a stream file's odd frames alone, 2026-11-18, research/build/stream-ui-2026-11-18).
     int first = 0;
-    if (since_ >= every_ && n > 1) {
+    const uint32_t per = static_cast<uint32_t>(std::max(1, n - 1));
+    const uint32_t P = ((every_ + per - 1) / per) | 1u;
+    if ((since_ == UINT32_MAX || ++since_ >= P) && n > 1) {
       const uint32_t m = static_cast<uint32_t>(manifest_.size()), j = ctl_++;
-      out[first++] = !m || !(j & 1) ? ID_HEADER : ID_HEADER + 1 + ((j >> 1) % m);
+      out[first++] = !m || j % 3 == 0 ? ID_HEADER : ID_HEADER + 1 + ((j - j / 3 - 1) % m);
       since_ = 0;
     }
     for (int k = first; k < n; k++) out[k] = next();
-    if (since_ != UINT32_MAX) since_ += static_cast<uint32_t>(n - first);
   }
   // ai: Fisher-Yates over every slot, the control block's too, from a generator seeded by the frame count and the seed
   // ai: (xorshift32).

@@ -48,6 +48,8 @@ import dev.lizard.ui.num
 import dev.lizard.ui.obj
 import dev.lizard.ui.phaseLockSetting
 import dev.lizard.ui.replaySizeSetting
+import dev.lizard.ui.greyed
+import dev.lizard.ui.greyedUnless
 import dev.lizard.ui.runLine
 import dev.lizard.ui.str
 import java.util.Locale
@@ -64,7 +66,7 @@ internal class AndroidFolds(private val a: MainActivity) : Folds {
     private fun key(k: FoldKey) = when (k) {
         FoldKey.RecvCamera -> "recvCamera"; FoldKey.RecvPerformance -> "recvPerformance"; FoldKey.RecvFiles -> "recvFiles"
         FoldKey.RecvExperimental -> "recvExperimental"; FoldKey.RecvTools -> "recvAdvanced"
-        FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefreshFold"
+        FoldKey.SendCode -> "sendCode"; FoldKey.SendRefresh -> "sendRefreshFold"; FoldKey.SendControl -> "sendControl"
         FoldKey.SendPerformance -> "sendPerformance"; FoldKey.SendExperimental -> "sendExperimental"; FoldKey.SendTools -> "sendAdvanced"
         FoldKey.Collapsed -> "collapsed"   // ai: one for both screens (2026-11-07; recvCollapsed and sendCollapsed before)
         FoldKey.HomeUnfinished -> "homeUnfinished"; FoldKey.HomeFiles -> "homeFiles"
@@ -227,14 +229,17 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         val onPc = s.decoder == "pc"
         // ai: the phone back on its own decoder by auto (the GPU where it runs)
         if (a.pcPresent || onPc) decoder += ChipChoice("Decode on", if (onPc) "pc" else "phone", listOf("phone" to "Phone", "pc" to "PC")) { a.change(s.copy(decoder = if (it == "pc") "pc" else "auto")) }
-        if (!onPc) decoder += ChipChoice("GPU acceleration", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder, listOf("gpu" to "On", "cpu" to "Off")) { a.change(s.copy(decoder = it)) }
-        // ai: the most frames a GPU launch takes (Settings.batch); the C decodes a frame at a time: not shown with it
-        if (s.decoder != "cpu" && !onPc) decoder += Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
+        // ai: the phone's decoder, greyed while the PC decodes (lizard-ui greyed, 2026-11-18; hidden before)
+        decoder += greyedUnless(!onPc, ChipChoice("GPU acceleration", if (s.decoder == "auto") a.autoRan.ifEmpty { "GPU" }.lowercase() else s.decoder,
+            listOf("gpu" to "On", "cpu" to "Off")) { a.change(s.copy(decoder = it)) })
+        // ai: the most frames a GPU launch takes (Settings.batch); greyed on the C, which decodes a frame at a time, and the PC
+        decoder += greyedUnless(s.decoder != "cpu" && !onPc, Slide("Batch size", "${s.frames}", s.frames.toFloat(), 1f..32f, 30) { v ->
             val n = v.roundToInt().coerceIn(1, 32); if (n != s.frames) a.change(s.copy(batch = n.toString()))
-        }
+        })
         if (a.usb.connected) decoder += pcLink()
-        // ai: the PC decoder's frames packed as .lizard frames or raw (Settings.pcPack): raw for a phone too weak or too warm
-        if (onPc) decoder += ChipChoice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) }
+        // ai: the PC decoder's frames packed as .lizard frames or raw (Settings.pcPack): raw for a phone too weak or too warm;
+        // ai: greyed while the phone decodes, none with no PC to decode on
+        if (a.pcPresent || onPc) decoder += greyedUnless(onPc, ChipChoice("Compression", s.pcPack, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(pcPack = it)) })
         // ai: the back cameras by lens (the closest-focusing where none is chosen: the session's first listed), then File
         // ai: (2026-11-07: images, videos and .lizard replays played as the camera; since 2026-11-09 picked in the camera's
         // ai: area, ReceiveState.picks, the field saying File and no file named here)
@@ -249,9 +254,14 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
             }
         }
         // ai: the crop, 1:1 or 2:1 (Codes, 1 and 2, from 2026-11-09 to 11-13); a file's one mode is its own and it has no
-        // ai: lens: none of the camera's settings but the crop
+        // ai: lens: the lens's settings greyed at what they hold (lizard-ui greyed; hidden before 2026-11-18), the crop live
         val crop = ChipChoice("Crop", s.layout, Settings.LAYOUTS.map { it to it }) { a.change(s.copy(layout = it)) }
-        if (!r.fileMode) cameraSettings(camera, res, fmt, sizes, crop) else camera += crop
+        if (!r.fileMode) cameraSettings(camera, res, fmt, sizes, crop)
+        else {
+            val lens = mutableListOf<Setting>()
+            cameraSettings(lens, res, fmt, sizes, crop)
+            camera += lens.map { if (it === crop) it else greyed(it) }
+        }
         // ai: Largest file (2026-11-15, the Files fold)
         val files = listOf(fileLimitSetting(s.fileGb) { a.change(s.copy(fileLimit = it.toString())) })
         return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder, FoldKey.RecvFiles to files)
@@ -265,22 +275,22 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
         val fmts = Settings.FORMATS.filter { (k, _) ->
             r.modes.any { it.format == k && (k.startsWith("raw") || it.size == res) } && !(k == "private" && (s.decoder == "cpu" || s.decoder == "pc"))
         }
-        if (fmts.size > 1 || fmt != "auto") out += ChipChoice("Format", fmt, listOf("auto" to "Auto") + fmts) { r.chooseFormat(it) }
+        out += greyedUnless(fmts.size > 1 || fmt != "auto", ChipChoice("Format", fmt, listOf("auto" to "Auto") + fmts) { r.chooseFormat(it) })
         // ai: Phase lock (2026-11-08), above the rates: On or Off where the lens can delay a capture, else greyed "Not
         // ai: supported" (as if it can until the session describes the lens)
         val locks = r.lockBar?.isEmpty() ?: true
         out += phaseLockSetting(s.lock != "off", locks) { on -> a.change(s.copy(lock = if (on) "on" else "off")) }
         // ai: the rates the lens offers at this size and format (cam/android.cpp ratesOf: fixed rates, and the variable
         // ai: range "15–60" after its top's), in the lens's order; while it holds the lock at most 60 and no range (the
-        // ai: session runs the fixed in its place: session.cpp lockMode); shown where there is a choice
+        // ai: session runs the fixed in its place: session.cpp lockMode); greyed where there is no choice
         val held = locks && s.lock != "off"
         val all = r.modes.filter { it.size == res && it.format == fmt }
         val shown = lockedRates(all.map { it.fps }.distinct(), held).toSet()
         val rates = all.filter { it.fps in shown && !(held && it.varies) }.fold(listOf<ReceiveState.Mode>()) { acc, m -> if (acc.any { it.sameRate(m) }) acc else acc + m }
         val cur = r.mode?.let { m -> rates.firstOrNull { it.sameRate(m) } } ?: rates.firstOrNull()
-        if (rates.size > 1) out += ChipChoice("Frame rate", cur?.let { rateText(it) } ?: "", rates.map { rateText(it) to rateText(it) }) { v ->
+        if (rates.isNotEmpty()) out += greyedUnless(rates.size > 1, ChipChoice("Frame rate", cur?.let { rateText(it) } ?: "", rates.map { rateText(it) to rateText(it) }) { v ->
             rates.firstOrNull { rateText(it) == v }?.let { r.chooseRate(it) }
-        }
+        })
         out += crop
         out += zoom(r.zoomRange)
         // ai: Focus (2026-11-16, lizard-ui focusSetting): Auto, the camera's continuous autofocus on the code (the
@@ -324,10 +334,10 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
     override val tools: List<Setting> get() {
         val out = mutableListOf<Setting>()
         out += ChipChoice("Show statistics", s.stats, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(stats = it)) }
-        if (s.decoder != "pc" && !r.fileMode) {
-            out += ChipChoice("Save replays", s.replays, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(replays = it)) }
-            if (s.replays == "on") out += replaySizeSetting(s.replayMb) { a.change(s.copy(replaySize = it.toString())) }
-        }
+        // ai: greyed for the PC decoder (the PC's own records them) and a file (no light captured); Replay size while off
+        val records = s.decoder != "pc" && !r.fileMode
+        out += greyedUnless(records, ChipChoice("Save replays", s.replays, listOf("on" to "On", "off" to "Off")) { a.change(s.copy(replays = it)) })
+        out += greyedUnless(records && s.replays == "on", replaySizeSetting(s.replayMb) { a.change(s.copy(replaySize = it.toString())) })
         for (rp in r.runs) {
             if (s.stats == "on") out += Code(runLine(rp), 12)
             if (rp.state == RunState.Ready) out += Press(Act(if (MainActivity.exporting == rp.run) "Downloading" else "Download") { a.downloadReplay(rp) },

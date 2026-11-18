@@ -120,9 +120,14 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
       // ai: the ring's depth: the budget's, floored at 2R + margin + 1 (an encode's frames twice over and the slots a
       // ai: reader may still hold); halved on refusal down to that floor before R is
       const int floorDepth = 2 * R + std::max(0, margin) + 1;
+      // ai: the ring is bound whole (rsh, words, the GPU packer), so it stays inside the device's largest binding
+      // ai: (lavapipe's 128 MiB, some phones' too): past it a kernel's reads and writes are undefined
+      const uint64_t range = std::min<uint64_t>(d.limits.maxStorageBufferRange, d.limits.maxBufferSize ? d.limits.maxBufferSize : UINT64_MAX);
+      const uint64_t byRange = range / (4ull * t.FS);
+      if (uint64_t(floorDepth) > byRange) continue;
       int depth = floorDepth;
       if (aheadFrames > 0 && aheadBytes > 0) {
-        const uint64_t byBytes = aheadBytes / (4ull * t.FS);
+        const uint64_t byBytes = std::min<uint64_t>(aheadBytes / (4ull * t.FS), byRange);
         depth = static_cast<int>(std::min<uint64_t>(static_cast<uint64_t>(aheadFrames), byBytes));
         depth = std::max(depth, floorDepth);
       }

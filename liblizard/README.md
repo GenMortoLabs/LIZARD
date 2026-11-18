@@ -152,5 +152,18 @@ some of the decoder variants, chosen among as an install's are.
 - `api/tests/engine.c` (by hand, on a machine with the GPU files): `lizard_engine send <assets> <gpu|cpu|auto>
   [device]` paints a file with the sender (through the GPU's frame ring, so the assets, whichever painter) and reads
   every frame back into memory. `<assets>` is `out/` or an install's `share/lizard`.
+- `api/tools/stream.cpp`, `lizard_stream`: stream files, a sender's frames painted ahead into a `.lizard` whose ZIP
+  comment is "LIZARD stream 1" (`core/rx/lizfile.h`), for a player that shows them in turn at their fps instead of
+  painting. `lizard_stream export FILE OUT.lizard [--blocks N] [--ring 0|1|2] [--fps F] [--codes 1|2] [--frames N |
+  --laps L] [--painter auto|gpu|cpu] [--seed S]` (`liz_sender_export`; by default LIZARD-480 in the 128 ring at 15
+  frames a second, 2.5 laps of the file's blocks, the count odd); at two codes a picture is kept as its two squares, as
+  a 2:1 replay keeps a capture's halves. `lizard_stream check OUT.lizard [--threads N]`: every frame through the C into
+  a transfer, whether all the frames, the even ones alone and the odd ones alone each make the file whole. Any
+  receiver's Upload reads a stream as it reads a replay. `--level L` (2026-11-18) zstd's level on the CPU; where the
+  GPU paints, the GPU packs (meta.json "zstd": "gpu"). `lizard_stream play OUT.lizard [--frames N] [--threads N]`:
+  the stream played (`liz_sender_play`) and every frame taken held to the file's own picture. The C API (2026-11-18):
+  `liz_sender_play(path)` (a sender of a stream's frames; `liz_sender_configure` takes its format, `format` may be
+  NULL), `liz_sender_stream` (its meta.json), `liz_lizard_kind(path)` (`LIZ_LIZARD_REPLAY` or `LIZ_LIZARD_STREAM`),
+  `liz_sender_export(s, path, frames, level, progress, user)` (frames 0: 2.5 laps).
 - `bindings/wasm/test/`, `bindings/kotlin/lizard/src/test/`: the same round trips through each binding (the Kotlin one's
   `Session` too). The session with cameras is checked by `lizard-desktop`'s `cam_check` and `lizard_receive`.

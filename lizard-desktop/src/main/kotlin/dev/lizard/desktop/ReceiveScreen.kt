@@ -40,6 +40,7 @@ import dev.lizard.ui.Warn
 import dev.lizard.ui.lockedRates
 import dev.lizard.ui.phaseLockSetting
 import dev.lizard.ui.replaySizeSetting
+import dev.lizard.ui.greyedUnless
 import dev.lizard.ui.runLine
 import java.util.Locale
 import kotlin.math.exp
@@ -162,39 +163,39 @@ class DesktopReceive(private val app: App) : ReceiveHost {
         // ai: a phone by its address (ReceiveState.askAddress): asked for, or the camera already one
         if (r.askAddress || r.typedPhone != null)
             camera += Typed("Phone address", r.typedPhone?.removePrefix("phone:")?.removeSuffix(":${ReceiveState.PHONE_PORT}").orEmpty(), "IP address") { r.choosePhoneAddress(it) }
-        // ai: the sizes and rates the camera offers, once one has been opened. None for a phone or an upload: their
-        // ai: frames are a camera's crop already (cam/phone.cpp, upload.cpp), not a UVC device's modes; none for a file,
-        // ai: whose one mode is its frames' size
-        if (ci != null && m != null && !r.fixed && !r.played) {
+        // ai: the sizes and rates the camera offers, once one has been opened. Greyed at the camera's own (lizard-ui
+        // ai: greyed, 2026-11-18; hidden before) for a phone or an upload, whose frames are a camera's crop already
+        // ai: (cam/phone.cpp, upload.cpp), not a UVC device's modes, and for a file, whose one mode is its frames' size
+        if (ci != null && m != null) {
+            val own = !r.fixed && !r.played
             val sizes = ci.modes.distinctBy { it.size }.sortedBy { it.w.toLong() * it.h }
-            camera += Choice("Resolution", m.size, sizes.map { it.size to "${it.w} x ${it.h}" }) { r.chooseRes(it) }
-            // ai: the pixel formats at this size, where there is a choice (a webcam's uncompressed one against its Motion-JPEG)
+            camera += greyedUnless(own, Choice("Resolution", m.size, sizes.map { it.size to "${it.w} x ${it.h}" }) { r.chooseRes(it) })
+            // ai: the pixel formats at this size, greyed where there is no choice (a webcam's uncompressed one against its
+            // ai: Motion-JPEG is one)
             val formats = ci.modes.filter { it.size == m.size }.map { it.format }.distinct()
-            if (formats.size > 1) camera += ChipChoice("Format", m.format, formats.map { it to it }) { r.chooseFormat(it) }
+            camera += greyedUnless(own && formats.size > 1, ChipChoice("Format", m.format, formats.map { it to it }) { r.chooseFormat(it) })
             // ai: Phase lock (2026-11-08), above the rates: On or Off on a camera that can delay a capture (Aravis on its
             // ai: software trigger), greyed "Not supported" on one that cannot (UVC); with it on, the rates at most 60
             val locks = ci.lockBar.isEmpty()
-            camera += phaseLockSetting(r.lockOn, locks) { r.chooseLock(it) }
+            camera += greyedUnless(own, phaseLockSetting(r.lockOn, locks) { r.chooseLock(it) })
             val rates = lockedRates(ci.modes.filter { it.size == m.size && it.format == m.format }.map { it.fps }.distinctBy { ReceiveState.fpsText(it) }.sorted(),
                 locks && r.lockOn)
-            camera += ChipChoice("Frame rate", ReceiveState.fpsText(m.fps), rates.map { ReceiveState.fpsText(it) to ReceiveState.fpsText(it) }) { v ->
+            camera += greyedUnless(own, ChipChoice("Frame rate", ReceiveState.fpsText(m.fps), rates.map { ReceiveState.fpsText(it) to ReceiveState.fpsText(it) }) { v ->
                 rates.firstOrNull { ReceiveState.fpsText(it) == v }?.let { r.chooseFps(it) }
-            }
+            })
         }
-        // ai: a phone crops on its side, an upload was cropped when recorded (the receiver takes their crop): no Crop
-        // ai: here (1:1, 2:1; Codes, 1 and 2, from 2026-11-09 to 11-13), nor the camera's controls
-        if (!r.fixed) {
-            camera += ChipChoice("Crop", r.layout, listOf("1:1" to "1:1", "2:1" to "2:1")) { r.chooseLayout(it) }
-            ci?.control("zoom")?.let { camera += zoom(it) }
-            // ai: Focus (2026-11-16, lizard-ui focusSetting): Auto, the camera's own autofocus, then by hand in its units
-            ci?.control("focus")?.takeIf { it.max > it.min }?.let { c ->
-                camera += focusSetting(c.min, c.max, r.focus, c.canAuto, dioptres = false) { v -> r.focusTo(v?.let { snap(c, it) }) }
-            }
-            ci?.control("exposure")?.let { camera += exposure(it) }
-            ci?.control("gain")?.let { camera += gain(it) }
+        // ai: a phone crops on its side, an upload was cropped when recorded (the receiver takes their crop): Crop greyed
+        // ai: at theirs (1:1, 2:1; Codes, 1 and 2, from 2026-11-09 to 11-13), and the camera's controls where it lists any
+        camera += greyedUnless(!r.fixed, ChipChoice("Crop", r.layout, listOf("1:1" to "1:1", "2:1" to "2:1")) { r.chooseLayout(it) })
+        ci?.control("zoom")?.let { camera += greyedUnless(!r.fixed, zoom(it)) }
+        // ai: Focus (2026-11-16, lizard-ui focusSetting): Auto, the camera's own autofocus, then by hand in its units
+        ci?.control("focus")?.takeIf { it.max > it.min }?.let { c ->
+            camera += greyedUnless(!r.fixed, focusSetting(c.min, c.max, r.focus, c.canAuto, dioptres = false) { v -> r.focusTo(v?.let { snap(c, it) }) })
         }
-        // ai: the most frames a GPU launch takes: none for the C, which decodes a frame at a time
-        if (!r.cpu) decoder += Slide("Batch size", "${r.batch}", r.batch.toFloat(), 1f..32f, 30, done = { r.commitBatch() }) { r.chooseBatch(it.roundToInt()) }
+        ci?.control("exposure")?.let { camera += greyedUnless(!r.fixed, exposure(it)) }
+        ci?.control("gain")?.let { camera += greyedUnless(!r.fixed, gain(it)) }
+        // ai: the most frames a GPU launch takes: greyed for the C, which decodes a frame at a time
+        decoder += greyedUnless(!r.cpu, Slide("Batch size", "${r.batch}", r.batch.toFloat(), 1f..32f, 30, done = { r.commitBatch() }) { r.chooseBatch(it.roundToInt()) })
         // ai: Largest file (2026-11-15, the Files fold)
         val files = listOf(fileLimitSetting(r.fileGb) { r.chooseFileGb(it) })
         return mapOf(FoldKey.RecvCamera to camera, FoldKey.RecvPerformance to decoder, FoldKey.RecvFiles to files)
@@ -251,11 +252,9 @@ class DesktopReceive(private val app: App) : ReceiveHost {
     override val tools: List<Setting> get() {
         val out = mutableListOf<Setting>()
         out += ChipChoice("Show statistics", r.showStats, listOf(true to "On", false to "Off")) { r.chooseStats(it) }
-        // ai: none for a file: no light is captured
-        if (!r.played) {
-            out += ChipChoice("Save replays", r.replays, listOf(true to "On", false to "Off")) { r.chooseReplays(it) }
-            if (r.replays) out += replaySizeSetting(r.replayMb) { r.chooseReplayMb(it) }
-        }
+        // ai: greyed for a file (no light is captured); Replay size greyed while Save replays is off
+        out += greyedUnless(!r.played, ChipChoice("Save replays", r.replays, listOf(true to "On", false to "Off")) { r.chooseReplays(it) })
+        out += greyedUnless(!r.played && r.replays, replaySizeSetting(r.replayMb) { r.chooseReplayMb(it) })
         if (r.showStats) {
             for (run in r.runs) {
                 out += Code(runLine(run), 12)

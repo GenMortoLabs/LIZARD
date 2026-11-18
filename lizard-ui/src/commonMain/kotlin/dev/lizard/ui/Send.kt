@@ -272,6 +272,14 @@ fun TestStreamNote() {
     }
 }
 
+// ai: the code area while an export runs with its codes hidden (2026-11-18, Send's Hide codes): one line centred on
+// ai: the soft fill, as exclusive fullscreen's control window's "Playing on <monitor>" was
+@Composable
+fun CodesHiddenNote() = Box(Modifier.fillMaxSize().background(Soft), contentAlignment = Alignment.Center) {
+    Text("Codes hidden", style = MaterialTheme.typography.bodyLarge, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(horizontal = 16.dp))
+}
+
 // ai: the upload's height with one row of items: its padding, the tiles, the gap, the card's head and one row
 val UPLOAD_ONE_ROW = (16 + 104 + 16 + 4 + 48 + 4 + 104 + 12 + 16).dp
 

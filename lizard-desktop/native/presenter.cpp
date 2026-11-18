@@ -94,7 +94,7 @@ std::string fmt(const char* f, double v) {
   X(vkGetSwapchainImagesKHR) X(vkAcquireNextImageKHR) X(vkQueuePresentKHR) X(vkQueueSubmit) X(vkCreateSemaphore)      \
   X(vkDestroySemaphore) X(vkCreateFence) X(vkDestroyFence) X(vkWaitForFences) X(vkResetFences) X(vkCreateCommandPool)  \
   X(vkDestroyCommandPool) X(vkAllocateCommandBuffers) X(vkFreeCommandBuffers) X(vkResetCommandBuffer)                  \
-  X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdBlitImage)      \
+  X(vkBeginCommandBuffer) X(vkEndCommandBuffer) X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdBlitImage) X(vkCmdCopyBuffer)      \
   X(vkAllocateMemory) X(vkFreeMemory) X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements)               \
   X(vkBindImageMemory) X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateShaderModule) X(vkDestroyShaderModule)     \
   X(vkCreateDescriptorSetLayout) X(vkDestroyDescriptorSetLayout) X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) \
@@ -124,13 +124,22 @@ struct Chain {
   std::vector<VkSemaphore> done;   // ai: per image: its commands finished, which its present waits on
 };
 
-// ai: A picture's home on the device: an RGBA8 image the expand kernel fills from the sender's ring (grey on the
-// ai: device, no host copy; 2026-10-07) once, and the blit reads at every refresh it is held. Three, so the one being
-// ai: filled is never one in flight; each remade at the frame's size when a re-pick changes it.
+// ai: A picture's home on the device, filled once from the sender's ring (no host copy) and read at every refresh it
+// ai: is held. Scaling Lanczos (2026-11-17): the ring's grey frame copied into `buf` (four pixels a word, rows `rw`
+// ai: words apart), which the Lanczos-3 stretch reads; Bilinear (the default) and None: an RGBA8 image the expand kernel
+// ai: fills (2026-10-07), which the blit stretches by its linear filter or copies 1:1. Three, so
+// ai: the one being filled is never one in flight; each remade at the frame's size when a re-pick changes it. The
+// ai: stretch's own images and buffers (Stretch) are Slots too.
 struct Slot {
   VkImage img = VK_NULL_HANDLE;
   VkDeviceMemory imgMem = VK_NULL_HANDLE;
   VkImageView view = VK_NULL_HANDLE;
+  VkBuffer buf = VK_NULL_HANDLE;
+  VkDeviceMemory bufMem = VK_NULL_HANDLE;
+  VkDeviceSize bufBytes = 0;
+  uint32_t rw = 0;
+  bool grey = false;   // ai: a picture slot: filled grey for Lanczos (buf), or RGBA for Bilinear and None (img)
+  bool none = false;   // ai: Scaling None: shown at its own pixels
   int w = 0, h = 0;
   int64_t usedBy = -2;   // ai: the last frame whose commands read or wrote it
 };
@@ -333,6 +342,33 @@ void barrier(const DevFns& D, VkCommandBuffer cb, VkImage img, VkImageLayout fro
   b.image = img;
   b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   D.vkCmdPipelineBarrier(cb, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
+}
+
+// ai: The stretch's taps an axis (s source pixels to d): Lanczos-3's support of 3, widened by s / d where it shrinks, in
+// ai: whole pixels with one to spare
+int stretchTaps(int s, int d) { return static_cast<int>(std::ceil(6.0 * std::max(1.0, static_cast<double>(s) / d))) + 1; }
+
+// ai: One axis of the stretch's table (scale_h.comp, scale_v.comp): for each of d destination pixels its first source
+// ai: pixel, then `taps` weights: Lanczos-3 at the source pixels about the destination pixel's centre (in source pixels,
+// ai: (o + 0.5) s / d - 0.5), the argument divided by the widening, normalised to sum 1, zero past the support. A whole
+// ai: scale's centres fall on source pixels and every weight but the centre's is 0: an exact copy.
+void stretchAxis(float* out, int s, int d, int taps) {
+  constexpr double PI = 3.14159265358979323846;
+  const double k = std::max(1.0, static_cast<double>(s) / d);
+  std::vector<double> w(static_cast<size_t>(taps));
+  for (int o = 0; o < d; o++) {
+    const double c = (o + 0.5) * s / d - 0.5;
+    const int lo = static_cast<int>(std::floor(c - 3 * k)) + 1;
+    double sum = 0;
+    for (int j = 0; j < taps; j++) {
+      const double x = std::abs((lo + j - c) / k);
+      w[static_cast<size_t>(j)] = x < 1e-9 ? 1.0 : x >= 3 ? 0.0 : 3 * std::sin(PI * x) * std::sin(PI * x / 3) / (PI * PI * x * x);
+      sum += w[static_cast<size_t>(j)];
+    }
+    float* row = out + static_cast<size_t>(o) * static_cast<size_t>(taps + 1);
+    row[0] = static_cast<float>(lo);
+    for (int j = 0; j < taps; j++) row[1 + j] = static_cast<float>(w[static_cast<size_t>(j)] / sum);
+  }
 }
 
 // ai: whether a refresh shows fps pictures a second evenly, each held a whole number of refreshes (period()'s 1%)
@@ -595,6 +631,7 @@ struct Presenter::Impl {
   std::atomic<bool> paused{false}, quit{false};
   // ai: VSync (setVsync), and a change of it or of fps for the loop to take at its next present
   std::atomic<bool> vsync{false}, vsyncDirty{false};
+  std::atomic<int> scaling{0};   // ai: Scaling (setScaling)
   std::mutex wakeMu;
   std::condition_variable wake;
   std::thread thread;
@@ -611,7 +648,7 @@ struct Presenter::Impl {
   // ai: the sender's device (wg's): the painter's frames and the presents on one GPU (2026-10-07); its handles below
   // ai: are that device's, freed by it, and this presenter frees only what it made on them
   wg::Device* W = nullptr;
-  bool shareQueue = false;   // ai: one queue in the family: the painter's too, taken under W->mu around a submit or present
+  bool shareQueue = false;   // ai: one queue in the family: the painter's too (the log line says which)
   InstFns I;
   DevFns D;
   VkInstance inst = VK_NULL_HANDLE;
@@ -642,6 +679,27 @@ struct Presenter::Impl {
   VkPipeline expandPipe = VK_NULL_HANDLE;
   VkDescriptorPool dpool = VK_NULL_HANDLE;
   std::vector<VkDescriptorSet> dsets;
+  // ai: Scaling Lanczos's stretch (2026-11-17; Bilinear the blit's linear filter, the stretch before): the grey picture to its
+  // ai: place on screen by Lanczos-3 in two passes on one channel (the code's colours applied in the last), across (liblizard/core/tx/scale_h.comp,
+  // ai: send_scale_h.spv) into a buffer of floats the place's width by the picture's height, then down (scale_v.comp)
+  // ai: into an RGBA8 image the place's size, copied 1:1 to the swapchain's image; the taps' weights a table made on the
+  // ai: CPU for the sizes (stretchAxis), so no kernel computes one. All of it a frame in flight (Stretch), made again
+  // ai: where the sizes change.
+  struct Stretch {
+    Slot mid, out;   // ai: mid a buffer, dw x sh floats; out an RGBA8 image, dw x dh
+    VkBuffer tab = VK_NULL_HANDLE;
+    VkDeviceMemory tabMem = VK_NULL_HANDLE;
+    float* tabPtr = nullptr;
+    size_t tabCap = 0;   // ai: floats
+    int key[4] = {0, 0, 0, 0}, tx = 0, ty = 0, yo = 0;
+    VkDescriptorSet set = VK_NULL_HANDLE;   // ai: the picture's buffer, mid, the table, out
+  };
+  VkShaderModule scaleHSm = VK_NULL_HANDLE, scaleVSm = VK_NULL_HANDLE;
+  VkDescriptorSetLayout scaleDsl = VK_NULL_HANDLE;
+  VkPipelineLayout scalePl = VK_NULL_HANDLE;
+  VkPipeline scaleHPipe = VK_NULL_HANDLE, scaleVPipe = VK_NULL_HANDLE;
+  VkDescriptorPool scalePool = VK_NULL_HANDLE;
+  std::vector<Stretch> stretches;
   std::vector<std::shared_ptr<wg::Buffer>> ringHeld;
   Waiter waiter;
   Tally win;
@@ -749,8 +807,10 @@ struct Presenter::Impl {
   void qIdle();
   void makeChain(const VkSurfaceCapabilitiesKHR& caps, VkExtent2D ext);
   void remake(const VkSurfaceCapabilitiesKHR& caps, VkExtent2D ext);
-  void makeSlot(Slot& s, int w, int h);
+  void makeSlot(Slot& s, int w, int h, VkFormat format = VK_FORMAT_R8G8B8A8_UNORM);
   void freeSlot(Slot& s);
+  void freeStretch(Stretch& t);
+  void makeBuffer(Slot& s, VkDeviceSize bytes, VkBufferUsageFlags usage);
   void freeMark();
   VkExtent2D windowSize();
   void queryMode();
@@ -769,27 +829,26 @@ struct Presenter::Impl {
   void pollTiming();
 };
 
+// ai: q is the sender's queue2 (the queue itself where the family has one): the stream's chunk copies submit there
+// ai: too, so every call takes its lock (wg.h queue2Mu)
 VkResult Presenter::Impl::qSubmit(const VkSubmitInfo& si, VkFence f) {
-  if (!shareQueue) return D.vkQueueSubmit(q, 1, &si, f);
-  std::lock_guard<std::mutex> l(W->mu);
+  std::lock_guard<std::mutex> l(W->queue2Mu());
   return D.vkQueueSubmit(q, 1, &si, f);
 }
 
 VkResult Presenter::Impl::qPresent(const VkPresentInfoKHR& pi) {
-  if (!shareQueue) return D.vkQueuePresentKHR(q, &pi);
-  std::lock_guard<std::mutex> l(W->mu);
+  std::lock_guard<std::mutex> l(W->queue2Mu());
   return D.vkQueuePresentKHR(q, &pi);
 }
 
 void Presenter::Impl::qIdle() {
-  if (!shareQueue) { D.vkQueueWaitIdle(q); return; }
-  std::lock_guard<std::mutex> l(W->mu);
+  std::lock_guard<std::mutex> l(W->queue2Mu());
   D.vkQueueWaitIdle(q);
 }
 
 // ai: The sender's device (wg's, made by Sender::prepareGpu with deviceExtras()): the surface on its instance, the
-// ai: presents on the family's second queue where it has one (the 4090's), else on the painter's own under its lock
-// ai: (RADV, lavapipe); the swapchain, pool, fences and semaphores this presenter's own.
+// ai: presents on the family's second queue where it has one (the 4090's), else on the painter's own (RADV, lavapipe),
+// ai: either under queue2's lock (wg.h queue2Mu); the swapchain, pool, fences and semaphores this presenter's own.
 void Presenter::Impl::setup() {
   W = sender->device();
   if (!W) throw std::runtime_error("the sender has no Vulkan device to present from" + (sender->prepareWhy().empty() ? std::string() : ": " + sender->prepareWhy()));
@@ -799,7 +858,7 @@ void Presenter::Impl::setup() {
   qf = W->family;
   name = W->name;
   shareQueue = !W->twoQueues;
-  q = shareQueue ? W->queue : W->queue2;
+  q = W->queue2;   // ai: the queue itself where the family has one
 #define LIZ_LOADI(f)                                                                     \
   I.f = reinterpret_cast<PFN_##f>(vkGetInstanceProcAddr(inst, #f));                      \
   if (!I.f) throw std::runtime_error("the sender's Vulkan instance has no " #f " (no window surface extension)");
@@ -904,6 +963,54 @@ void Presenter::Impl::setup() {
     dpi.poolSizeCount = 2;
     dpi.pPoolSizes = ps;
     vkCheck(D.vkCreateDescriptorPool(dev, &dpi, nullptr, &dpool), "vkCreateDescriptorPool");
+  }
+  {
+    // ai: the stretch's two passes: one layout (the source image, the destination image, the table), two pipelines
+    auto module = [&](const char* name) {
+      const std::string path = sender->assets() + "/spv/" + name;
+      std::ifstream in(std::filesystem::u8path(path), std::ios::binary);
+      std::vector<char> code((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      if (code.empty() || code.size() % 4) throw std::runtime_error("no stretch kernel at " + path);
+      VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+      smi.codeSize = code.size();
+      smi.pCode = reinterpret_cast<const uint32_t*>(code.data());
+      VkShaderModule m = VK_NULL_HANDLE;
+      vkCheck(D.vkCreateShaderModule(dev, &smi, nullptr, &m), "vkCreateShaderModule");
+      return m;
+    };
+    scaleHSm = module("send_scale_h.spv");
+    scaleVSm = module("send_scale_v.spv");
+    VkDescriptorSetLayoutBinding b[4]{};
+    for (int k = 0; k < 4; k++) {
+      b[k].binding = static_cast<uint32_t>(k); b[k].descriptorCount = 1; b[k].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+      b[k].descriptorType = k < 3 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    }
+    VkDescriptorSetLayoutCreateInfo dli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dli.bindingCount = 4;
+    dli.pBindings = b;
+    vkCheck(D.vkCreateDescriptorSetLayout(dev, &dli, nullptr, &scaleDsl), "vkCreateDescriptorSetLayout");
+    VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 40};   // ai: sw, sh, dw, dh, the taps across and down, the table's second part, rw, ink, paper
+    VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &scaleDsl;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &pcr;
+    vkCheck(D.vkCreatePipelineLayout(dev, &pli, nullptr, &scalePl), "vkCreatePipelineLayout");
+    for (int k = 0; k < 2; k++) {
+      VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+      cpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+      cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+      cpi.stage.module = k ? scaleVSm : scaleHSm;
+      cpi.stage.pName = "main";
+      cpi.layout = scalePl;
+      vkCheck(D.vkCreateComputePipelines(dev, VK_NULL_HANDLE, 1, &cpi, nullptr, k ? &scaleVPipe : &scaleHPipe), "vkCreateComputePipelines");
+    }
+    VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 48}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 16}};
+    VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    dpi.maxSets = 16;
+    dpi.poolSizeCount = 2;
+    dpi.pPoolSizes = ps;
+    vkCheck(D.vkCreateDescriptorPool(dev, &dpi, nullptr, &scalePool), "vkCreateDescriptorPool");
   }
   if (!opt.csv.empty()) {
 #if defined(_WIN32)
@@ -1426,6 +1533,20 @@ void Presenter::Impl::makeChain(const VkSurfaceCapabilitiesKHR& caps, VkExtent2D
   dai.pSetLayouts = layouts.data();
   dsets.assign(n, VK_NULL_HANDLE);
   vkCheck(D.vkAllocateDescriptorSets(dev, &dai, dsets.data()), "vkAllocateDescriptorSets");
+  {
+    // ai: the stretch's own a frame in flight: its buffers, image and table made at its first use, one set
+    for (auto& t : stretches) freeStretch(t);
+    stretches.assign(n, Stretch{});
+    vkCheck(D.vkResetDescriptorPool(dev, scalePool, 0), "vkResetDescriptorPool");
+    std::vector<VkDescriptorSetLayout> sl(n, scaleDsl);
+    std::vector<VkDescriptorSet> sets(n, VK_NULL_HANDLE);
+    VkDescriptorSetAllocateInfo sai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    sai.descriptorPool = scalePool;
+    sai.descriptorSetCount = n;
+    sai.pSetLayouts = sl.data();
+    vkCheck(D.vkAllocateDescriptorSets(dev, &sai, sets.data()), "vkAllocateDescriptorSets");
+    for (uint32_t i = 0; i < n; i++) stretches[i].set = sets[i];
+  }
   ringHeld.assign(n, nullptr);
   if (timing) timingSetup(sc);
   if (opt.mark) {
@@ -1478,15 +1599,47 @@ void Presenter::Impl::freeSlot(Slot& s) {
   if (s.view) D.vkDestroyImageView(dev, s.view, nullptr);
   if (s.img) D.vkDestroyImage(dev, s.img, nullptr);
   if (s.imgMem) D.vkFreeMemory(dev, s.imgMem, nullptr);
+  if (s.buf) D.vkDestroyBuffer(dev, s.buf, nullptr);
+  if (s.bufMem) D.vkFreeMemory(dev, s.bufMem, nullptr);
   s = Slot{};
 }
 
+// ai: a slot's buffer, device-local, of at least `bytes` (made again only where it is smaller); the slot's image kept
+void Presenter::Impl::makeBuffer(Slot& s, VkDeviceSize bytes, VkBufferUsageFlags usage) {
+  if (s.buf && s.bufBytes >= bytes) return;
+  if (s.buf) D.vkDestroyBuffer(dev, s.buf, nullptr);
+  if (s.bufMem) D.vkFreeMemory(dev, s.bufMem, nullptr);
+  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+  bci.size = bytes;
+  bci.usage = usage;
+  vkCheck(D.vkCreateBuffer(dev, &bci, nullptr, &s.buf), "vkCreateBuffer");
+  VkMemoryRequirements r;
+  D.vkGetBufferMemoryRequirements(dev, s.buf, &r);
+  VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+  ai.allocationSize = r.size;
+  ai.memoryTypeIndex = memType(r.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  vkCheck(D.vkAllocateMemory(dev, &ai, nullptr, &s.bufMem), "vkAllocateMemory");
+  vkCheck(D.vkBindBufferMemory(dev, s.buf, s.bufMem, 0), "vkBindBufferMemory");
+  s.bufBytes = bytes;
+}
+
 // ai: a slot's image: RGBA8, written by the expand kernel (storage), read by the blit (transfer source)
-void Presenter::Impl::makeSlot(Slot& s, int w, int h) {
-  freeSlot(s);
+void Presenter::Impl::freeStretch(Stretch& t) {
+  freeSlot(t.mid);
+  freeSlot(t.out);
+  if (t.tab) D.vkDestroyBuffer(dev, t.tab, nullptr);
+  if (t.tabMem) D.vkFreeMemory(dev, t.tabMem, nullptr);   // ai: (unmapped with it)
+  t = Stretch{};
+}
+
+void Presenter::Impl::makeSlot(Slot& s, int w, int h, VkFormat format) {
+  if (s.view) D.vkDestroyImageView(dev, s.view, nullptr);
+  if (s.img) D.vkDestroyImage(dev, s.img, nullptr);
+  if (s.imgMem) D.vkFreeMemory(dev, s.imgMem, nullptr);
+  s.view = VK_NULL_HANDLE; s.img = VK_NULL_HANDLE; s.imgMem = VK_NULL_HANDLE;
   VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
   ii.imageType = VK_IMAGE_TYPE_2D;
-  ii.format = VK_FORMAT_R8G8B8A8_UNORM;
+  ii.format = format;
   ii.extent = {static_cast<uint32_t>(w), static_cast<uint32_t>(h), 1};
   ii.mipLevels = 1;
   ii.arrayLayers = 1;
@@ -1505,7 +1658,7 @@ void Presenter::Impl::makeSlot(Slot& s, int w, int h) {
   VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
   vi.image = s.img;
   vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+  vi.format = format;
   vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   vkCheck(D.vkCreateImageView(dev, &vi, nullptr, &s.view), "vkCreateImageView");
   s.w = w;
@@ -1651,7 +1804,18 @@ void Presenter::Impl::presentOnce(bool live) {
         ring = sender->ring();
         ringFS = sender->ringFrameWords();
         ringRW = sender->ringRowWords();
-        if (slots[p].w != fw || slots[p].h != fh) makeSlot(slots[p], fw, fh);
+        // ai: Scaling Lanczos: the grey picture into the slot's buffer for the Lanczos-3 stretch (a code in Colours
+        // ai: coloured in its last pass); Bilinear and None: the expand kernel into the slot's RGBA image for the blit
+        Slot& sp = slots[p];
+        const int how = scaling.load();
+        sp.grey = how == static_cast<int>(Scaling::Lanczos);
+        sp.none = how == static_cast<int>(Scaling::Unscaled);
+        if (sp.grey) {
+          makeBuffer(sp, static_cast<VkDeviceSize>(ringFS) * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+          sp.w = fw; sp.h = fh; sp.rw = ringRW;
+        } else if (!sp.img || sp.w != fw || sp.h != fh) {
+          makeSlot(sp, fw, fh);
+        }
         if (cur >= 0) picture++;
         cur = p;
         fresh = true;
@@ -1671,7 +1835,23 @@ void Presenter::Impl::presentOnce(bool live) {
   VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
   bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   D.vkBeginCommandBuffer(cb, &bi);
-  if (fresh && ring) {
+  if (fresh && ring && slots[cur].grey) {
+    // ai: the grey picture: the ring's frame (painted on the painter's queue and complete before the sender marked it
+    // ai: ready, its fence waited there) copied into the slot's buffer, then made visible to the stretch's compute stage
+    Slot& s = slots[cur];
+    ringHeld[fl] = ring;
+    VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mb.srcAccessMask = 0;
+    mb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    D.vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mb, 0, nullptr, 0, nullptr);
+    const VkBufferCopy rg{static_cast<VkDeviceSize>(ringSlot) * ringFS * 4, 0, static_cast<VkDeviceSize>(ringFS) * 4};
+    D.vkCmdCopyBuffer(cb, ring->buf, s.buf, 1, &rg);
+    VkMemoryBarrier mc{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+    mc.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    mc.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
+    D.vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &mc, 0, nullptr, 0,
+                           nullptr);
+  } else if (fresh && ring) {
     Slot& s = slots[cur];
     ringHeld[fl] = ring;
     VkDescriptorBufferInfo bi{ring->buf, 0, VK_WHOLE_SIZE};
@@ -1709,12 +1889,13 @@ void Presenter::Impl::presentOnce(bool live) {
   D.vkCmdClearColorImage(cb, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &bg, 1, &whole1);
   if (cur >= 0) {
     // ai: where the picture goes: centred, the largest that fits with the edge's light round it, times the size share,
-    // ai: stretched (linear) as the page's fit=stretch
+    // ai: stretched by Scaling's choice: Lanczos by Lanczos-3, Bilinear by the blit's linear filter (below); None at its own
+    // ai: pixels, its middle where the place is smaller
     const Slot& s = slots[cur];
     const double e = 2 * edge.load() * s.h;
     const double fit = std::min(static_cast<double>(c.extent.width) / (s.w + e), static_cast<double>(c.extent.height) / (s.h + e));
     const double share = std::clamp(size.load(), 0.25, 1.0);
-    const double scale = fit * share;
+    const double scale = s.none ? 1.0 : fit * share;
     const int dw = std::min(static_cast<int>(c.extent.width), static_cast<int>(std::lround(s.w * scale)));
     const int dh = std::min(static_cast<int>(c.extent.height), static_cast<int>(std::lround(s.h * scale)));
     if (dw > 0 && dh > 0) {
@@ -1726,7 +1907,77 @@ void Presenter::Impl::presentOnce(bool live) {
       blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
       blit.dstOffsets[0] = {(static_cast<int>(c.extent.width) - dw) / 2, (static_cast<int>(c.extent.height) - dh) / 2, 0};
       blit.dstOffsets[1] = {blit.dstOffsets[0].x + dw, blit.dstOffsets[0].y + dh, 1};
-      D.vkCmdBlitImage(cb, s.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+      if (s.none) {
+        // ai: Scaling None: the slot's RGBA image copied 1:1, its middle dw x dh where the place is smaller
+        blit.srcOffsets[0] = {(s.w - dw) / 2, (s.h - dh) / 2, 0};
+        blit.srcOffsets[1] = {blit.srcOffsets[0].x + dw, blit.srcOffsets[0].y + dh, 1};
+        D.vkCmdBlitImage(cb, s.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+      } else if (s.grey) {
+        // ai: Scaling Lanczos: the grey picture's Lanczos-3 stretch, across then down (the code's colours in its last pass), into this frame's own buffer and image, the image
+        // ai: copied 1:1; the table, buffer and image made again where the sizes change (this frame's fence waited above,
+        // ai: so none is in use)
+        Stretch& st = stretches[fl];
+        const int key[4] = {s.w, s.h, dw, dh};
+        if (!std::equal(key, key + 4, st.key)) {
+          const int tx = stretchTaps(s.w, dw), ty = stretchTaps(s.h, dh);
+          const size_t need = static_cast<size_t>(dw) * static_cast<size_t>(tx + 1) + static_cast<size_t>(dh) * static_cast<size_t>(ty + 1);
+          if (need > st.tabCap) {
+            if (st.tab) D.vkDestroyBuffer(dev, st.tab, nullptr);
+            if (st.tabMem) D.vkFreeMemory(dev, st.tabMem, nullptr);
+            VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            bci.size = need * sizeof(float);
+            bci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            vkCheck(D.vkCreateBuffer(dev, &bci, nullptr, &st.tab), "vkCreateBuffer");
+            VkMemoryRequirements r;
+            D.vkGetBufferMemoryRequirements(dev, st.tab, &r);
+            VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            ai.allocationSize = r.size;
+            ai.memoryTypeIndex = memType(r.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkCheck(D.vkAllocateMemory(dev, &ai, nullptr, &st.tabMem), "vkAllocateMemory");
+            vkCheck(D.vkBindBufferMemory(dev, st.tab, st.tabMem, 0), "vkBindBufferMemory");
+            void* mp = nullptr;
+            vkCheck(D.vkMapMemory(dev, st.tabMem, 0, VK_WHOLE_SIZE, 0, &mp), "vkMapMemory");
+            st.tabPtr = static_cast<float*>(mp);
+            st.tabCap = need;
+          }
+          stretchAxis(st.tabPtr, s.w, dw, tx);
+          stretchAxis(st.tabPtr + static_cast<size_t>(dw) * static_cast<size_t>(tx + 1), s.h, dh, ty);
+          st.tx = tx; st.ty = ty; st.yo = dw * (tx + 1);
+          makeBuffer(st.mid, static_cast<VkDeviceSize>(dw) * static_cast<VkDeviceSize>(s.h) * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+          if (!st.out.img || st.out.w != dw || st.out.h != dh) makeSlot(st.out, dw, dh);
+          std::copy(key, key + 4, st.key);
+        }
+        VkDescriptorBufferInfo bufs[3] = {{s.buf, 0, VK_WHOLE_SIZE}, {st.mid.buf, 0, VK_WHOLE_SIZE}, {st.tab, 0, VK_WHOLE_SIZE}};
+        VkDescriptorImageInfo oi{VK_NULL_HANDLE, st.out.view, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[4]{};
+        for (int k = 0; k < 4; k++) {
+          w[k].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET; w[k].dstSet = st.set; w[k].dstBinding = static_cast<uint32_t>(k); w[k].descriptorCount = 1;
+          w[k].descriptorType = k < 3 ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+          if (k < 3) w[k].pBufferInfo = &bufs[k]; else w[k].pImageInfo = &oi;
+        }
+        D.vkUpdateDescriptorSets(dev, 4, w, 0, nullptr);
+        barrier(D, cb, st.out.img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL, 0, VK_ACCESS_SHADER_WRITE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        const uint32_t sp[10] = {static_cast<uint32_t>(s.w), static_cast<uint32_t>(s.h), static_cast<uint32_t>(dw), static_cast<uint32_t>(dh),
+                                 static_cast<uint32_t>(st.tx), static_cast<uint32_t>(st.ty), static_cast<uint32_t>(st.yo), s.rw, sender->ink(), sender->paper()};
+        D.vkCmdPushConstants(cb, scalePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 40, sp);
+        D.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, scalePl, 0, 1, &st.set, 0, nullptr);
+        D.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, scaleHPipe);
+        D.vkCmdDispatch(cb, (static_cast<uint32_t>(dw) + 127) / 128, (static_cast<uint32_t>(s.h) + 15) / 16, 1);   // ai: scale_h.comp's ROWS
+        VkMemoryBarrier mm{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        mm.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        mm.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        D.vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &mm, 0, nullptr, 0, nullptr);
+        D.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, scaleVPipe);
+        D.vkCmdDispatch(cb, (static_cast<uint32_t>(dw) + 63) / 64, (static_cast<uint32_t>(dh) + 3) / 4, 1);
+        barrier(D, cb, st.out.img, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        blit.srcOffsets[1] = {dw, dh, 1};
+        D.vkCmdBlitImage(cb, st.out.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+      } else {
+        // ai: Scaling Bilinear: the slot's RGBA image (the expand kernel's) stretched by the blit's linear filter
+        D.vkCmdBlitImage(cb, s.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+      }
     }
     slots[cur].usedBy = frame;
   }
@@ -1870,10 +2121,11 @@ void Presenter::Impl::takeSnapshot() {
   VkCommandBuffer cb = VK_NULL_HANDLE;
   VkFence f = VK_NULL_HANDLE;
   try {
-    if (cur >= 0 && slots[cur].img && slots[cur].w > 0 && slots[cur].h > 0) {
+    if (cur >= 0 && (slots[cur].grey ? slots[cur].buf != VK_NULL_HANDLE : slots[cur].img != VK_NULL_HANDLE) && slots[cur].w > 0 && slots[cur].h > 0) {
       const Slot& s = slots[cur];
       VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-      bci.size = static_cast<VkDeviceSize>(s.w) * s.h * 4;
+      // ai: the grey picture's words as they lie (rw a row), or the RGBA image's pixels
+      bci.size = s.grey ? static_cast<VkDeviceSize>(s.rw) * s.h * 4 : static_cast<VkDeviceSize>(s.w) * s.h * 4;
       bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
       vkCheck(D.vkCreateBuffer(dev, &bci, nullptr, &buf), "vkCreateBuffer");
       VkMemoryRequirements r;
@@ -1894,10 +2146,15 @@ void Presenter::Impl::takeSnapshot() {
       VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
       bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       D.vkBeginCommandBuffer(cb, &bi);
-      VkBufferImageCopy rg{};
-      rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      rg.imageExtent = {static_cast<uint32_t>(s.w), static_cast<uint32_t>(s.h), 1};
-      D.vkCmdCopyImageToBuffer(cb, s.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &rg);
+      if (s.grey) {
+        const VkBufferCopy rg{0, 0, static_cast<VkDeviceSize>(s.rw) * s.h * 4};
+        D.vkCmdCopyBuffer(cb, s.buf, buf, 1, &rg);
+      } else {
+        VkBufferImageCopy rg{};
+        rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        rg.imageExtent = {static_cast<uint32_t>(s.w), static_cast<uint32_t>(s.h), 1};
+        D.vkCmdCopyImageToBuffer(cb, s.img, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &rg);
+      }
       VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
       mb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
       mb.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
@@ -1910,8 +2167,27 @@ void Presenter::Impl::takeSnapshot() {
       vkCheck(D.vkWaitForFences(dev, 1, &f, VK_TRUE, 1000000000ull), "vkWaitForFences");
       void* m = nullptr;
       vkCheck(D.vkMapMemory(dev, bmem, 0, VK_WHOLE_SIZE, 0, &m), "vkMapMemory");
-      const auto* rgba = static_cast<const unsigned char*>(m);
-      px.assign(rgba, rgba + static_cast<size_t>(s.w) * s.h * 4);
+      if (s.grey) {   // ai: the grey words along the line from the code's ink to its paper, as the expand kernel draws them
+        const auto* words = static_cast<const uint32_t*>(m);
+        const uint32_t ink = sender->ink(), paper = sender->paper();
+        unsigned char lut[256][3];
+        for (int g = 0; g < 256; g++)
+          for (int c = 0; c < 3; c++) {
+            const int a = static_cast<int>((ink >> (16 - 8 * c)) & 0xffu), b = static_cast<int>((paper >> (16 - 8 * c)) & 0xffu);
+            lut[g][c] = static_cast<unsigned char>(std::lround(a + (b - a) * g / 255.0));
+          }
+        px.resize(static_cast<size_t>(s.w) * s.h * 4);
+        for (int y = 0; y < s.h; y++)
+          for (int x = 0; x < s.w; x++) {
+            const unsigned g = (words[static_cast<size_t>(y) * s.rw + (x >> 2)] >> (8 * (x & 3))) & 0xffu;
+            unsigned char* q = &px[(static_cast<size_t>(y) * s.w + x) * 4];
+            q[0] = lut[g][0]; q[1] = lut[g][1]; q[2] = lut[g][2];
+            q[3] = 255;
+          }
+      } else {
+        const auto* rgba = static_cast<const unsigned char*>(m);
+        px.assign(rgba, rgba + static_cast<size_t>(s.w) * s.h * 4);
+      }
       w = s.w;
       h = s.h;
     }
@@ -1962,6 +2238,17 @@ void Presenter::Impl::teardown() {
     if (dsl) D.vkDestroyDescriptorSetLayout(dev, dsl, nullptr);
     if (expandSm) D.vkDestroyShaderModule(dev, expandSm, nullptr);
     dpool = VK_NULL_HANDLE; expandPipe = VK_NULL_HANDLE; pl = VK_NULL_HANDLE; dsl = VK_NULL_HANDLE; expandSm = VK_NULL_HANDLE;
+    for (auto& t : stretches) freeStretch(t);
+    stretches.clear();
+    if (scalePool) D.vkDestroyDescriptorPool(dev, scalePool, nullptr);
+    if (scaleHPipe) D.vkDestroyPipeline(dev, scaleHPipe, nullptr);
+    if (scaleVPipe) D.vkDestroyPipeline(dev, scaleVPipe, nullptr);
+    if (scalePl) D.vkDestroyPipelineLayout(dev, scalePl, nullptr);
+    if (scaleDsl) D.vkDestroyDescriptorSetLayout(dev, scaleDsl, nullptr);
+    if (scaleHSm) D.vkDestroyShaderModule(dev, scaleHSm, nullptr);
+    if (scaleVSm) D.vkDestroyShaderModule(dev, scaleVSm, nullptr);
+    scalePool = VK_NULL_HANDLE; scaleHPipe = scaleVPipe = VK_NULL_HANDLE; scalePl = VK_NULL_HANDLE; scaleDsl = VK_NULL_HANDLE;
+    scaleHSm = scaleVSm = VK_NULL_HANDLE;
   }
   if (surf && I.vkDestroySurfaceKHR) I.vkDestroySurfaceKHR(inst, surf, nullptr);
   surf = VK_NULL_HANDLE;
@@ -2018,6 +2305,7 @@ std::unique_ptr<Presenter> Presenter::start(const PresentTarget& target, Sender*
   // ai: VSync's first look on the present thread's first turn, after start returns (a mode change takes a second or
   // ai: two, which the caller, the UI's thread, would wait out here)
   p->vsync = opt.vsync;
+  p->scaling = static_cast<int>(opt.scaling);
   p->vsyncDirty = opt.vsync;
   std::promise<std::string> ready;
   std::future<std::string> started = ready.get_future();
@@ -2055,6 +2343,7 @@ void Presenter::setVsync(bool on) {
   p_->vsync = on;
   p_->vsyncDirty = true;
 }
+void Presenter::setScaling(Scaling s) { p_->scaling = static_cast<int>(s); }
 void Presenter::setSize(double size, double edge) {
   p_->size = std::clamp(size, 0.25, 1.0);
   p_->edge = std::clamp(edge, 0.0, 1.0);

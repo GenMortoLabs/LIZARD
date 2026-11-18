@@ -1,0 +1,31 @@
+// ai: Stream files packed on the GPU (gpu_zstd.h, 2026-11-18), stage 1: each square of each frame in the sender's ring
+// ai: (grey, four pixels a u32, rows rw words apart; frame i at slot slot[i], frameWords words a slot; code k's square
+// ai: at x0 = k step pixels, side x side) as the residuals of JPEG-LS's median predictor (rx/lizfile.h: of a, b, c, the
+// ai: neighbours left, above and above-left, a neighbour outside the square 0), each the pixel less its prediction mod
+// ai: 256, in rows, four a u32 (the residual i in word i / 4, byte i mod 4), a square wps words from word q wps.
+#version 450
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) readonly buffer Ring { uint w[]; } ring;
+layout(set = 0, binding = 1) readonly buffer Slots { uint s[]; } slots;
+layout(set = 0, binding = 2) writeonly buffer Res { uint w[]; } res;
+// ai: a: squares, side, rw, frameWords; b: codes, step, n (side x side), wps
+layout(set = 0, binding = 3) uniform P { uvec4 a; uvec4 b; } p;
+int px(uint base, uint y, uint x) { return int((ring.w[base + y * p.a.z + (x >> 2u)] >> ((x & 3u) * 8u)) & 0xffu); }
+void main() {
+  const uint q = gl_GlobalInvocationID.y, wi = gl_GlobalInvocationID.x;
+  if (q >= p.a.x || wi >= p.b.w) return;
+  const uint side = p.a.y, base = slots.s[q / p.b.x] * p.a.w, x0 = (q % p.b.x) * p.b.y;
+  uint o = 0u;
+  for (uint j = 0u; j < 4u; j++) {
+    const uint i = wi * 4u + j;
+    if (i >= p.b.z) break;
+    const uint y = i / side, x = i - y * side;
+    const int a = x > 0u ? px(base, y, x0 + x - 1u) : 0;
+    const int b = y > 0u ? px(base, y - 1u, x0 + x) : 0;
+    const int c = x > 0u && y > 0u ? px(base, y - 1u, x0 + x - 1u) : 0;
+    const int mx = max(a, b), mn = min(a, b);
+    const int pred = c >= mx ? mn : (c <= mn ? mx : a + b - c);
+    o |= (uint(px(base, y, x0 + x) - pred) & 0xffu) << (8u * j);
+  }
+  res.w[q * p.b.w + wi] = o;
+}

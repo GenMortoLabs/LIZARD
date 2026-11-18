@@ -21,6 +21,17 @@ object Native {
     // ai: under (txCancelMakes), -1 one nothing cancels; 0, why in txError() (cancelled too)
     @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String, make: Long): Long
     @JvmStatic external fun txError(): String
+    // ai: stream files (2026-11-18): a sender playing one (0: txError), its meta.json, what a .lizard holds
+    // ai: ({"kind","meta"}, "" with txError), and Export (tx_jni.cpp txExport, txExportState, txExportStop)
+    @JvmStatic external fun txPlay(path: String): Long
+    @JvmStatic external fun txStream(h: Long): String
+    @JvmStatic external fun lizardInfo(path: String): String
+    @JvmStatic external fun txExport(h: Long, path: String, laps: Double, display: Boolean, level: Int, name: String, type: String,
+                                     blocks: Int, ring: Int, fps: Int, codes: Int, frameBlocks: Int): String
+    @JvmStatic external fun txExportState(h: Long): String
+    @JvmStatic external fun txExportStop(h: Long)
+    @JvmStatic external fun txExportShow(h: Long, show: Boolean): String
+    @JvmStatic external fun lizardUnpack(path: String, dir: String): String
     // ai: every make under way (a txCreate's pack and hash) stopped at its next piece of work; the epoch a new make takes
     @JvmStatic external fun txCancelMakes(): Long
     // ai: the bytes the transfer carries: the packed file's where it was packed, else the file's
@@ -37,6 +48,7 @@ object Native {
     @JvmStatic external fun txColours(h: Long, ink: Int, paper: Int)
     // ai: the blocks a frame of subch sub-channels carries (the format's rate profile, src/lizard_phy.h lizard_blocks_for)
     @JvmStatic external fun blocksFor(subch: Int): Int
+    @JvmStatic external fun frameSide(subch: Int, span: Int): Int
     @JvmStatic external fun txStats(h: Long): String
     @JvmStatic external fun txDestroy(h: Long)
 
@@ -64,6 +76,8 @@ object Native {
     @JvmStatic external fun windowKeep(component: java.awt.Component): Boolean
     @JvmStatic external fun presentFps(p: Long, fps: Int)
     @JvmStatic external fun presentVsync(p: Long, on: Boolean)
+    // ai: Scaling (2026-11-17, Send's Performance): 0 Bilinear, 1 Lanczos, 2 None (presenter.h Scaling)
+    @JvmStatic external fun presentScaling(p: Long, how: Int)
     @JvmStatic external fun presentSize(p: Long, size: Float, edge: Float)
     @JvmStatic external fun presentPause(p: Long, on: Boolean)
     @JvmStatic external fun presentStats(p: Long): String

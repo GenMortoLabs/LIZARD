@@ -3,9 +3,10 @@
 // ai:   lizard_receive list
 // ai:     every camera every backend lists, a JSON line each ({info, modes, pick, controls}, the camera opened
 // ai:     to read them; {info, error} where it would not open), then {"notes": [...]}: why a backend saw none
-// ai:   lizard_receive pack RUN FILE.lizard | unpack FILE.lizard RUN
+// ai:   lizard_receive pack RUN FILE.lizard | unpack FILE.lizard RUN [--png]
 // ai:     a replay's folder (Save replays: meta.json, stats.jsonl, NNNN.gray) as one .lizard, and back
-// ai:     (liblizard/core/rx/lizfile.h; 2026-10-28): "packed N frames, B B" or "unpacked N frames", exit 0; FAIL, exit 1
+// ai:     (liblizard/core/rx/lizfile.h; 2026-10-28): "packed N frames, B B" or "unpacked N frames", exit 0; FAIL, exit 1;
+// ai:     --png (2026-11-18): the frames as 8-bit grey PNGs; a stream (lizard_stream export) unpacks as a replay does
 // ai:   lizard_receive [--camera ID] [--mode INDEX|WxH[@FPS]] [--layout 1:1|2:1] [--decoder auto|gpu|cpu]
 // ai:                  [--assets DIR] [--data DIR] [--out DIR] [--secs S] [--set CONTROL=VALUE|auto]... [--lock on|off]
 // ai:                  [--batch N] [--replays MB] [--json]
@@ -77,6 +78,7 @@ std::atomic<bool> gQuit{false};
 struct Args {
   bool list = false, json = false;
   std::string tool, from, to;   // ai: pack or unpack, its two paths
+  bool png = false;              // ai: unpack --png: the frames as PNGs
   std::string camera, mode, layout = "1:1", decoder = "auto", assets = LIZ_ASSETS, data, out = ".", lock = "on";
   int batch = 0, replayMb = 0;
   double secs = 0;
@@ -86,7 +88,7 @@ struct Args {
 [[noreturn]] void usage(const std::string& why) {
   std::fprintf(stderr,
                "%s%susage: lizard_receive list\n"
-               "       lizard_receive pack RUN FILE.lizard | unpack FILE.lizard RUN\n"
+               "       lizard_receive pack RUN FILE.lizard | unpack FILE.lizard RUN [--png]\n"
                "       lizard_receive [--camera ID] [--mode INDEX|WxH[@FPS]] [--layout 1:1|2:1] [--decoder auto|gpu|cpu]\n"
                "                      [--assets DIR] [--data DIR] [--out DIR] [--secs S] [--set CONTROL=VALUE|auto]... [--lock on|off]\n"
                "                      [--batch N] [--replays MB] [--json]\n",
@@ -102,10 +104,12 @@ Args parse(int argc, char** argv) {
     return a;
   }
   if (argc >= 2 && (std::string(argv[1]) == "pack" || std::string(argv[1]) == "unpack")) {
-    if (argc != 4) usage(std::string(argv[1]) + " takes two paths");
+    const bool png = argc == 5 && std::string(argv[1]) == "unpack" && std::string(argv[4]) == "--png";
+    if (argc != 4 && !png) usage(std::string(argv[1]) + " takes two paths (unpack: and --png)");
     a.tool = argv[1];
     a.from = argv[2];
     a.to = argv[3];
+    a.png = png;
     return a;
   }
   for (int i = 1; i < argc; i++) {
@@ -350,7 +354,7 @@ static int run(int argc, char** argv) {
       std::printf("packed %zu frames, %lld B\n", r ? r->frames().size() : size_t(0), (long long)n);
       return 0;
     }
-    if (!lizard::lizfile::unpack(a.from, a.to, why)) { std::printf("FAIL %s\n", why.c_str()); return 1; }
+    if (!lizard::lizfile::unpack(a.from, a.to, why, a.png)) { std::printf("FAIL %s\n", why.c_str()); return 1; }
     auto r = lizard::lizfile::Reader::open(a.from, why);
     std::printf("unpacked %zu frames\n", r ? r->frames().size() : size_t(0));
     return 0;

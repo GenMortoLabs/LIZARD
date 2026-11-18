@@ -232,9 +232,8 @@ uint64_t CameraIngest::ingest(AHardwareBuffer* hb, uint32_t x, uint32_t y, uint3
   si.commandBufferCount = 1; si.pCommandBuffers = &cb;
   si.signalSemaphoreCount = 1; si.pSignalSemaphores = &timeline;
   {
-    // ai: a family with one queue: the decoder's thread submits on the same VkQueue (wg.h "Threads")
-    std::unique_lock<std::mutex> l(dev.mu, std::defer_lock);
-    if (!dev.twoQueues) l.lock();
+    // ai: queue2's lock (wg.h "Threads"; the decoder's thread submits on the same VkQueue where the family has one)
+    std::lock_guard<std::mutex> l(dev.queue2Mu());
     wg::check(vkQueueSubmit(dev.queue2, 1, &si, VK_NULL_HANDLE), "vkQueueSubmit (ingest)");
   }
   pending.push_back({cb, value});

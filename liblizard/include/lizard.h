@@ -335,6 +335,35 @@ LIZ_API int liz_sender_refresh_blocks(liz_sender *s, const int *every, int n);
  * ai: round's order of the chunks, each frame's shuffle), so a run can be repeated: before the first frame is made
  * ai: (LIZ_E_STATE after, and for the test stream). The seed in use is the stats' "seed". */
 LIZ_API int liz_sender_seed(liz_sender *s, uint32_t seed);
+/* ai: The transfer's data blocks a lap of its schedule (each of the file's blocks once), 0 until every chunk is made
+ * ai: (and for the test stream): what sizes an export (frames = laps x lap / the format's blocks a frame). The chunks
+ * ai: are made once the sender is configured: an export configures, waits for the lap, then configures again (the
+ * ai: frames painted ahead meanwhile, the header and manifest alone, dropped), so its first frame carries data. */
+LIZ_API int64_t liz_sender_lap(liz_sender *s);
+/* ai: A stream file (a .lizard whose ZIP comment is "LIZARD stream 1", 2026-11-18): the configured sender's next frames,
+ * ai: `frames` of them as liz_sender_take gives them (grey, in order), written to path (through path.part, renamed at the
+ * ai: end), with a meta.json a player shows them by (kind "stream"; fps, layout, the format; the file's name, type,
+ * ai: length, chunks and BLAKE3 root; the colours; the seed; w, h, frames, sizes as a replay's). A player shows the
+ * ai: frames in turn at fps and loops, painting nothing; any receiver's Upload decodes the file as frames.
+ * ai: The frames from the first one made once every chunk is (frames made before carry the header alone), `frames` of
+ * ai: them (0: 2.5 laps of the file's blocks; the test stream needs a count), made odd; each packed by zstd at `level`
+ * ai: (0: 1; every frame of the file the same, meta.json's "zstd") on the machine's cores, or where the CPU paints, by
+ * ai: each painter as it paints. progress(user, done, frames) as frames are written (NULL none): 0 from it stops the
+ * ai: export (the .part removed, LIZ_E_STATE). Blocks until done (not on a UI thread); the sender makes its frames for
+ * ai: the export alone, so a screen's sender is not the one to export from. Returns frames, or an error. */
+LIZ_API int liz_sender_export(liz_sender *s, const char *path, int frames, int level, int (*progress)(void *user, int done, int frames), void *user);
+/* ai: A stream file played (2026-11-18): a sender that shows path's frames in turn at its fps and loops, painting
+ * ai: nothing (LIZ_E_FORMAT where path is a replay or its frames are not its format's). liz_sender_configure takes its
+ * ai: format from the stream (format may be NULL; painter and threads: its frames unpacked on that many CPU threads into
+ * ai: the frame ring); take, ready, geometry and stats as a painting sender's (the stats' "stream", "pictures",
+ * ai: "picture", "lap", "pass"). Seed, refresh and the carousel change nothing: the frames are painted already. */
+LIZ_API liz_sender *liz_sender_play(const char *path);
+/* ai: a played stream's meta.json (its format, fps, layout, pictures, file), "" for a painting sender */
+LIZ_API const char *liz_sender_stream(liz_sender *s);
+/* ai: What a .lizard holds, by its ZIP comment: LIZ_LIZARD_REPLAY (a camera's frames: Upload decodes it) or
+ * ai: LIZ_LIZARD_STREAM (a sender's: opened, it sends; Upload decodes it too), else an error */
+enum { LIZ_LIZARD_REPLAY = 0, LIZ_LIZARD_STREAM = 1 };
+LIZ_API int liz_lizard_kind(const char *path);
 
 /* ---- 5. the receive session: a camera into a receiver, with what a receiving app does around it ---------------- */
 /* ai: What every app's receive screen runs (core/rx/session.h): a camera of the system's (UVC through V4L2, Media
