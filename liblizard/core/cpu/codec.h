@@ -10,10 +10,10 @@ extern "C" {
 typedef struct cpu_dec cpu_dec_t;
 
 // ai: What a frame's decode found. ring: the ring that registered (an index into src/lizard_phy.h LIZARD_RING), -1 none. n: the picture it was finished
-// ai: at, 0 not finished. held: the caller's held word stood in for the frame's own. word: the frame's own word read,
-// ai: kind 0 static (version = sub-channels / 16, fps the display rate it states, ext its two extension bytes) or 1
-// ai: animated (a carousel symbol, src/fmt.h: pos its position, sym its bytes; version 0). total: the blocks the version it was finished at
-// ai: carries under the rate profile (ok[] and blocks[] hold that many). quad: the symbol's corners in the image, TL
+// ai: at, 0 not finished. held: the frame (its word animated) was finished at the caller's held configuration. word: the
+// ai: frame's own word read, kind 0 static (version = sub-channels / 16, fps the display rate it states, count its 7/8,
+// ai: 2/3 and 1/2 blocks) or 1 animated (a carousel symbol, src/fmt.h: id, sym its bytes; version 0). total: the blocks
+// ai: of the layout it was finished at (ok[] and blocks[] hold that many; cpu_dec_top the most). quad: the symbol's corners in the image, TL
 // ai: TR BR BL. pilot_*: what the block tails read (liblizard/src/any.h lizard_any_pilot: r of the even blocks and of
 // ai: the odd, their standard errors, the blocks read, 0 none).
 typedef struct {
@@ -21,20 +21,21 @@ typedef struct {
   float quad[8];
   int pilot_blocks;
   float pilot_r[2], pilot_sd[2];
-  int kind, pos;
-  uint8_t ext[2], sym[3];
+  int kind, id, count[3];
+  uint8_t sym[3];
 } cpu_frame_t;
 
-// ai: The held configuration, the one state a receiver carries from frame to frame (src/any.h): a static word's version,
-// ai: or, from animated words, the version of the header their carousel assembled (src/fmt.h ob_car_rx_t; the
-// ai: header's first byte, outside the ladder ignored). take: a frame's word (kind 0 static, 1 animated; none, the
-// ai: hold as it was) and returns the version held after it, 0 none. One a receiver; reset for a new stream.
+// ai: The held configuration, the one state a receiver carries from frame to frame (src/any.h), for its animated frames:
+// ai: a static word's configuration (src/fmt.h ob_fmt_held: version and counts as one int), or that of the header the
+// ai: animated words' carousel assembled (src/fmt.h ob_car_rx_t, ob_car_config). take: a frame's word (kind 0 static,
+// ai: 1 animated; none, the hold as it was) and returns the configuration held after it, 0 none. One a receiver; reset
+// ai: for a new stream.
 typedef struct cpu_hold cpu_hold_t;
 cpu_hold_t *cpu_hold_new(void);
 void cpu_hold_free(cpu_hold_t *h);
 void cpu_hold_reset(cpu_hold_t *h);
-int cpu_hold_take(cpu_hold_t *h, int kind, int version, int pos, const uint8_t sym[3]);
-int cpu_hold_version(const cpu_hold_t *h);
+int cpu_hold_take(cpu_hold_t *h, int kind, int version, const int count[3], int id, const uint8_t sym[3]);
+int cpu_hold_held(const cpu_hold_t *h);
 
 // ai: nmax: the largest picture decoded (1536 for every format; smaller saves memory). NULL where the codec refuses.
 cpu_dec_t *cpu_dec_new(int nmax);
@@ -42,8 +43,9 @@ void cpu_dec_free(cpu_dec_t *d);
 // ai: The most blocks a frame can carry (the size of ok[], and of blocks[] in cpu_dec_block_bytes each).
 int cpu_dec_top(const cpu_dec_t *d);
 int cpu_dec_block_bytes(const cpu_dec_t *d);
-// ai: One frame: img is iw x ih luma, rows iw apart, alive for the call. held: the version field of the last word the
-// ai: caller read, 0 none (a frame whose own word does not read is decoded at it, and with none held is not decoded).
+// ai: One frame: img is iw x ih luma, rows iw apart, alive for the call. held: the configuration the caller holds
+// ai: (cpu_hold_take), 0 none: a frame whose word is animated is decoded at it; a frame whose own word does not read is
+// ai: not decoded (the word before the frame, 2026-11-18).
 // ai: Returns the blocks that verified; block b is good where ok[b] is 1.
 int cpu_dec_frame(cpu_dec_t *d, const uint8_t *img, int iw, int ih, int held, uint8_t *blocks, uint8_t *ok, cpu_frame_t *out);
 // ai: Where the camera's optical axis falls in the next image this thread decodes (NaN: its centre), the lens

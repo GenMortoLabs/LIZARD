@@ -67,7 +67,7 @@ const BLOCK_BYTES = 480;
 // ai: codes in CODES' order): word 0 the whitening's offset; 16 words a code at 16 + 16 c, (n, k, m, z, mb, rows,
 // ai: lay, perm, slots, nt: slots a block's); a code's block rows' first entries (mb + 1), its entries (col | shift << 16), its bit map
 // ai: (slot i's codeword bit, back/bitmap.mjs sentBit of perm[i], in the half i & 1 of word i >> 1, over the nt sent bits); the whitening, a
-// ai: bit a slot of the frame over 1024 sub-channels and a word past them. The same for every format: gen/sender.mjs
+// ai: bit a slot of the frame over the ladder's largest (plan/back_tiers.mjs WHITE_SLOTS) and a word past them. The same for every format: gen/sender.mjs
 // ai: bakes it for the native painter.
 export function sendTab({ codes }) {
   if (codes.length !== CODES.length) throw new Error(`the paint takes ${CODES.length} codes, got ${codes.length}`);
@@ -197,7 +197,7 @@ export class GpuEncoder {
     codec.lizard = null;
     codesOnce ??= await ruleTables();
     const rt = codesOnce, profile = subch % STEP ? null : rt.profiles[versionOf(subch)];
-    if (!profile) throw new Unavailable(`the GPU encoder paints the format's ladder (LIZARD-16 to -1024), not LIZARD-${subch}`);
+    if (!profile) throw new Unavailable(`the GPU encoder paints the format's ladder (LIZARD-64 to -1072), not LIZARD-${subch}`);
     // ai: TAB, the encoder's for its life (the same for every format; release leaves it, destroy takes the device)
     if (!this.TAB) { const tab = sendTab(rt); this.TAB = this.device.createBuffer({ size: tab.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); this.device.queue.writeBuffer(this.TAB, 0, tab); }
     const [tb] = await transformTables([{ n, subch }]);

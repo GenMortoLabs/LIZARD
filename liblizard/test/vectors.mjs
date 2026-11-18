@@ -51,21 +51,22 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
 // ai: 4 floor(c / 8) + s (5.3).
 {
   const pDims = M._malloc(24);
-  // ai: [subch, ring, fps, word (null the static word with extension bytes 0, 0; [kind, b0, b1, b2, b3] through
-  // ai: _lizard_fmt_word_set), the codeword]; since 2026-11-15 RS(n, 5), the static word's two extension bytes and the
-  // ai: animated word (5.5)
-  for (const [subch, B, fps, word, exp] of [
-    [512, 64, 24, null, "4c201800004a685403041798f79b39df"],
-    [1024, 64, 240, null, "4c40f00000ba24eaca54e7d8c0886607"],
-    [576, 64, 30, null, "4c241e0000aa3ffde705e15348876fee"],
-    [64, 64, 0, null, "4c04000000bf41ac831f30d5b8e2d2eb"],
-    [64, 128, 60, null, "4c043c00007970e62d759327abd7751683e8cd7f5c51bc7ead987d6af0ea0345"],
-    [256, 256, 120, null, "4c107800004ce9a5c42b816d66f3985c40eb1d2335e3bd13946a82fbb25560c49ad985b4bea486174c1e2da3946dbd714e0109d5ae066f742eeea3caffdd6387"],
-    [656, 64, 60, [0, 1, 2, 0, 0], "4c293c01029a08a85e1c659bfd8f923c"],
-    [656, 64, 60, [1, 0, 0x29, 0x3c, 0], "b300293c00fd2497856e92072e177dd2"],
-    [64, 128, 0, [1, 254, 1, 2, 3], "b3fe0102037b7cb2a17921eed7b08d874b477f2cd0f8d419b67a407300ff063e"],
+  // ai: [subch, ring, fps, layout (null the default senders'; [7/8, 2/3, 1/2] through _lizard_layout_set), word (null
+  // ai: the static word; [kind, b0, b1, b2, b3] through _lizard_fmt_word_set), the codeword]; since 2026-11-18 the
+  // ai: static word's 32 bits (version, rate code, counts) and the animated word's id (5.5); RS(n, 5) since 2026-11-15
+  for (const [subch, B, fps, layout, word, exp] of [
+    [512, 64, 24, null, null, "4c72070489ff4bafb5169a22ec41140d"],
+    [1024, 64, 60, null, null, "4cf3ee4891d77e66de79fa905a10fa3a"],
+    [576, 64, 30, null, null, "4c8288050ac88b24ade31b1087c3d7f8"],
+    [64, 64, 1, null, null, "4c000100819b51c3e0640815e05d2fce"],
+    [64, 128, 60, null, null, "4c03e10081ce315f0ebd05dea9666935945bda86d54607f35921028a9ed3b28f"],
+    [256, 256, 50, null, null, "4c338382042554f915f150f736cec3512dd8f38105e282e246f1c402266203d91e5098fc29dbbfbb33347b78ad3d6c6ab77be7bce86da5112cf6d865e3d6d35d"],
+    [1072, 64, 45, [90, 0, 30], null, "4cff56801e0cace093089fcd3d70cd72"],
+    [656, 64, 60, null, [1, 0, 0x4c, 0x97, 0xe9], "b3004c97e9e1cfce9d46a576420bd1f1"],
+    [64, 128, 60, null, [1, 254, 1, 2, 3], "b3fe0102037b7cb2a17921eed7b08d874b477f2cd0f8d419b67a407300ff063e"],
   ]) {
     if (setup(nFor(subch), subch, 2 * B) < 0 || M._lizard_fmt_fps_set(fps)) throw new Error(`setup LIZARD-${subch} ring ${B}`);
+    if (layout && M._lizard_layout_set(...layout)) throw new Error(`layout ${layout}`);
     if (word && M._lizard_fmt_word_set(...word)) throw new Error(`word ${word}`);
     M._ob_test_mesh_tables_out(pDims, 0, 0, 0, 0);
     const d = M.HEAP32.slice(pDims >> 2, (pDims >> 2) + 5), S = d[2];
@@ -81,7 +82,7 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
     }
     const cw = new Uint8Array(exp.length / 2);
     for (let k = 0; k < cw.length; k++) for (let b = 0; b < 8; b++) cw[k] |= (sides[k % 4][8 * Math.floor(k / 4) + b] ?? 0) << (7 - b);
-    want(`5.2 LIZARD-${subch} ring ${B} fps ${fps}${word ? ` word ${word}` : ""} (${sides[0].length} word cells a side)`, hex(cw), exp);
+    want(`5.2 LIZARD-${subch} ring ${B} fps ${fps}${layout ? ` layout ${layout}` : ""}${word ? ` word ${word}` : ""} (${sides[0].length} word cells a side)`, hex(cw), exp);
   }
   M._free(pDims);
 }
@@ -102,7 +103,8 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
   const sq = greySquare(e, 24, 548);
   want("P2 square sha256", sha(sq), "9fd1323dcf7e1c422da633e4f4d60f6dbd54ba4b631a3ea010b43d7154a1c34b");
   want("P2 square zeros / 255s", `${sq.filter((v) => v === 0).length} / ${sq.filter((v) => v === 255).length}`, "5869 / 6486");
-  want("P2 whole drive sha256", sha(greySquare(e, 0, 572)), "8dd1f3c8d21c72d74b8604af24f23450d88ac991d06203b5d92242b6f268cf0f");
+  // ai: (2026-11-18: the border's word moved with its 32 bits, version, rate and counts; 8dd1f3c8... the RS(n, 5) word before)
+  want("P2 whole drive sha256", sha(greySquare(e, 0, 572)), "9c086111160db668a23a1945c43629c959ad2a7063c9c7075448c4fc235cb066");
 }
 // ai: 6.12 P3, LIZARD-64, every payload byte zero: n 384 in the 64 ring, side 474, pxm 3 (a copy), the picture
 // ai: from pixel 45, the resampled square [36, 438), the anchors (SPEC 6.13) 3 x 3 of 4 modules from modules 34, 77,
@@ -115,7 +117,7 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
   want("P3 grey row 45 cols 45..60", greyRow(e, 45, 45, 16), "128 163 255 255 139 81 199 255 184 67 76 141 153 135 144 175");
   want("P3 grey row 107 cols 100..115 (anchor 0, 0)", greyRow(e, 107, 100, 16), "177 181 255 255 0 0 0 255 255 0 0 0 255 255 143 102");
   want("P3 square sha256", sha(greySquare(e, 36, 438)), "d2614e0c291e3da3868c5d85a691d3dd8d33dc60baee923fa1f2d5837d4a01df");
-  want("P3 whole drive sha256", sha(greySquare(e, 0, 474)), "6e1dd56c432520dc90a1ace5a0aa5996090d0213223ef922ff85fb01808633d3");
+  want("P3 whole drive sha256", sha(greySquare(e, 0, 474)), "0472f8019168532711f64af5267e7f530c6cc6c0cfae9cf802767fe7a53385ec");   // ai: (6e1dd56c... before 2026-11-18)
 }
 // ai: 7.4, LIZARD-64 (7/8 x 4, 3/4, 2/3 and 1/2 blocks from frame slots 0, 4496, 8992, 13,488, 17,984, 23,136 and
 // ai: 28,896, the padding from 36,576 to 40,960; LIZARD-32 until 2026-11-01, LIZARD-16 until 2026-10-31), block b = id b
@@ -162,7 +164,7 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
   for (const subch of VERSIONS) {
     const n = nFor(subch);
     if ((blockBytes = setup(n, subch)) < 0) throw new Error(`setup ${n}/${subch}`);
-    for (const fps of [24, 30, 60, 240, 0]) {
+    for (const fps of [24, 30, 60, 45, 1]) {
       if (M._lizard_fmt_fps_set(fps)) throw new Error("fps");
       M._ob_test_mesh_tables_out(pDims, 0, 0, 0, 0);
       const d = M.HEAP32.subarray(pDims >> 2, (pDims >> 2) + 5), w = d[2], h = d[3];

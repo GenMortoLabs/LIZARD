@@ -14,7 +14,7 @@
 // capture. usefulBytes is what one block hands the fountain: headers and ids are not payload.
 import { init as initOb, Lizard, LizardAny, prof, streamBlock, streamMatches, carousel } from "./ob.mjs";
 import { isControlId, PAYLOAD, ID_BYTES, idGet, idPut } from "./xfer.mjs";
-import { PICTURE_SIZES, VERSIONS, versionOf } from "./lizard_pick.mjs";
+import { PICTURE_SIZES } from "./lizard_pick.mjs";
 
 // What the sender paints outside a LIZARD frame, in SAMPLES: the codec's margin (fc.quiet modules, src/lizard_phy.h
 // LIZARD_QUIET), or spec.quiet modules where an experiment overrides it. Specs give modules; the painters take samples,
@@ -108,7 +108,8 @@ export function blockJudge(payload = PAYLOAD, stream = "blake3") {
 // ai: one as it is): the one piece of state that carries from frame to frame, so frames go through one of these in the
 // ai: order they were captured. Nothing else carries. An animated word (a carousel symbol, src/fmt.h) names no version:
 // ai: its symbol goes to the carousel's assembly (sim/ob.mjs carousel, reset with the receiver), and once a header
-// ai: stands its first byte, the version, is held as a static word's is. Blocks are judged from the light
+// ai: stands the configuration it states (its first five bytes, a static word's) is held as a static word's is; a frame
+// ai: whose word does not read is not decoded (2026-11-18: the word before the frame). Blocks are judged from the light
 // ai: (blockJudge); spec.stream names a replay's generator, BLAKE3 when left out.
 async function makeBlind(spec) {
   await initOb();
@@ -119,10 +120,10 @@ async function makeBlind(spec) {
     label: `lizard blind to ${nmax}`, family: "lizard", variants: ["blind"], usefulBytes: fa.blockBytes - ID_BYTES, nmax,
     decode(img, iw, ih, truth, rgba = false, axis = null) {
       const t = performance.now(), r = fa.decode(img, iw, ih, { held, rgba, axis }), total = performance.now() - t;
-      if (r.fmt && r.fmt.kind === 0) held = r.fmt.version;
+      if (r.fmt && r.fmt.kind === 0) held = r.fmt.held;
       else if (r.fmt) {
-        const k = carousel.add(r.fmt.pos, r.fmt.sym);
-        if (k) { const v = carousel.header(k)[0]; if (v >= versionOf(VERSIONS[0]) && v <= versionOf(VERSIONS.at(-1))) held = v; }
+        const k = carousel.add(r.fmt.id, r.fmt.sym);
+        if (k) held = carousel.held() || held;
       }
       // ai: built: this frame built a picture's codec (its first sight of that ring and picture; src/wasm.c pic_for).
       const built = r.builds > builds;

@@ -52,7 +52,10 @@ static constexpr double MiB = 1 << 20;
 // ai: word's position (256 + it) and symbol beside a static word's version, rate and extension bytes (gen.mjs TREE_VERSION).
 // ai: 12 since 2026-11-16: F8's held version on the device (HELD, the front's heldP and heldCarry; WORD's layout without
 // ai: the lane's Held uniform, which HELD binds).
-static constexpr int TREE_VERSION = 12;
+// ai: 13 since 2026-11-18: a frame's configuration in F8's sel and record word 29 (src/fmt.h ob_fmt_held: version and
+// ai: the word's counts), HELD carrying it, the gate's lists and the rule stage's layout from it (TAB's TT table and the
+// ai: gate's codes table gone, the rule's blocks a version gone); word 6 the static word's 32 bits.
+static constexpr int TREE_VERSION = 13;
 
 Consts Consts::of(const json& c) {
   Consts k;
@@ -749,8 +752,9 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   const int nb = (int)slots.size();
   if (!nb) throw wg::Error("a batch of no slots");
   if (nb > B) throw wg::Error(std::to_string(nb) + " frames in a batch of " + std::to_string(B));
-  if (held < -1 || (held > 0 && held < (int)C.VERSION_MIN) || held > (int)C.VERSION_MAX)
-    throw wg::Error("held " + std::to_string(held) + ": -1 (carried), 0, or a version " + std::to_string(C.VERSION_MIN) + " to " + std::to_string(C.VERSION_MAX));
+  { ob_fmt_t g;
+    if (held < -1 || (held > 0 && !ob_fmt_unheld(held, &g)))
+      throw wg::Error("held " + std::to_string(held) + ": -1 (carried), 0, or a configuration (src/fmt.h ob_fmt_held)"); }
   Lane* lnp = freeLane();
   if (!lnp) throw wg::Error(std::to_string(lanes.size()) + " batches in flight already");
   Lane& ln = *lnp;
@@ -760,7 +764,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   for (auto* s : slots) if (s) { W = std::max(W, s->w); H = std::max(H, s->h); }
   ensure(ln, W, H);
   const uint64_t Bl = ln.B;
-  // ai: HELD's uniform: a version posted (held >= 0) under a new post number, taken once in place of the carried one
+  // ai: HELD's uniform: a configuration posted (held >= 0) under a new post number, taken once in place of the carried one
   if (held >= 0) heldPost++;
   { uint32_t hu[4] = {(uint32_t)std::max(held, 0), heldPost, (uint32_t)nb, holdWords ? 1u : 0u}; dev.writeBuffer(*ln.heldUni, 0, hu, 16); }
   {
@@ -1084,28 +1088,39 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
     if (!f->slots[i]) { fo.empty = true; continue; }
     const float* r = res + C.RESULT * i;
     fo.ring = r[0] == 1 ? (int)r[2] : -1;
-    fo.version = (int)r[29];
+    // ai: the configuration decoded at, record word 29 as a float's bits (src/fmt.h ob_fmt_held; 0 none)
+    uint32_t cfg;
+    std::memcpy(&cfg, &r[29], 4);
+    fo.config = (int)cfg;
+    fo.version = (int)(cfg >> 21);
     fo.size = fo.version > 0 ? slotOf(fo.version) : -1;
     fo.n = fo.size >= 0 ? pics[fo.size]["n"].get<int>() : 0;
     fo.held = r[30] == 1;
     fo.finder.found = r[0]; fo.finder.ring = r[2];
     for (int k = 0; k < 8; k++) fo.finder.corners[k] = r[17 + k];
-    // ai: F8's word (glsl/word.mjs): r[5] a static word's version, or 256 + an animated word's position; r[6] the three
-    // ai: bytes after it, low first (the rate and the extension bytes, or the symbol)
+    // ai: F8's word (glsl/word.mjs): r[5] a static word's version, or 256 + an animated word's id; r[6] its bits as a
+    // ai: float's (uintBitsToFloat): a static word's 32 bits after its magic (src/fmt.h: version, rate code, counts), or
+    // ai: an animated word's three bytes, low first
     if (r[5] > 0) {
       const int a = (int)r[5];
-      const uint32_t b = (uint32_t)r[6];
+      uint32_t b;
+      std::memcpy(&b, &r[6], 4);
       fo.hasWord = true;
       fo.word.kind = a >= 256 ? 1 : 0;
-      if (fo.word.kind) { fo.word.pos = a - 256; for (int j = 0; j < 3; j++) fo.word.sym[j] = (uint8_t)(b >> (8 * j)); }
-      else { fo.word.version = a; fo.word.fps = (int)(b & 255); fo.word.ext[0] = (uint8_t)(b >> 8); fo.word.ext[1] = (uint8_t)(b >> 16); }
+      if (fo.word.kind) { fo.word.id = a - 256; for (int j = 0; j < 3; j++) fo.word.sym[j] = (uint8_t)(b >> (8 * j)); }
+      else {
+        fo.word.version = OB_FMT_VERSION_MIN + (int)(b >> 26); fo.word.fps = OB_FMT_RATE[(b >> 21) & 31];
+        fo.word.count[0] = (int)(b >> 14) & 127; fo.word.count[1] = (int)(b >> 7) & 127; fo.word.count[2] = (int)b & 127;
+      }
     }
     fo.anchors = (int)r[31];   // ai: ANCH_FIT's count (PICK zeroes the record: 0 on a frame not found)
     // ai: decoder.mjs pilotOf: over the blocks the version carries, where the soft stage ran (its count column 6)
     // ai: the even blocks (bit 0 of the painted count) and the odd (bit 1), each its own mean and standard error
-    // ai: the blocks the frame carries: its version's under the format's rate profile (gpu/back/tiers.mjs blocks)
-    const json& rb = bk["rule"]["blocks"];
-    const int nblk = fo.version > 0 && fo.version < (int)rb.size() ? rb[fo.version].get<int>() : fo.version;
+    // ai: the blocks the frame carries: its configuration's layout (src/fmt.h ob_fmt_layout)
+    int nblk = 0;
+    { ob_fmt_t g;
+      int m = 0;
+      if (ob_fmt_unheld(fo.config, &g) && ob_fmt_layout(g.version, g.count, &m)) nblk = g.count[0] + m + g.count[1] + g.count[2]; }
     if (fo.version > 0 && fo.backCounts.size() > 6 && fo.backCounts[6] > 0) {
       // ai: a parity with no finite pilot reads NaN, as lizard_pilot's does
       fo.pilotR = fo.pilotSd = fo.pilotR2 = fo.pilotSd2 = NAN;

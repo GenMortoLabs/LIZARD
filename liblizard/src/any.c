@@ -45,22 +45,25 @@ int lizard_any_frame(lizard_any_t *a, const uint8_t *img, int iw, int ih, float 
   a->which = -1; a->n = 0; a->held = 0; a->last = 0;
   if (!a->ready || !lizard_acquire_ring(rs, LIZARD_RINGS, img, iw, ih, gamma, res, &wi)) return 0;
   a->which = wi;
-  // ai: a static word names the frame's version; an animated one (a carousel symbol, fmt.h) names none, so the frame is
-  // ai: finished at the held configuration as one whose word did not read
+  // ai: the word before the frame (2026-11-18): a static word names the frame's version and layout, which it is
+  // ai: finished at; an animated one (a carousel symbol, fmt.h) names none, so the frame is finished at the held
+  // ai: configuration (the caller's: its carousel's header); a frame whose word did not read is not finished. (Until
+  // ai: 2026-11-18 such a frame was finished at the held version; the 18 of 10,887 frames found on the ten real
+  // ai: replays it took then verified no block.)
   const ob_fmt_t *fm = lizard_fmt_rx(&a->ring[wi]);
-  const int own = fm && fm->kind == OB_FMT_STATIC;
-  const int version = own ? fm->version : held, known = version >= OB_FMT_VERSION_MIN && version <= OB_FMT_VERSION_MAX;
+  ob_fmt_t cfg;
+  const int own = fm && fm->kind == OB_FMT_STATIC, known = own ? (cfg = *fm, 1) : fm ? ob_fmt_unheld(held, &cfg) : 0;
   a->held = !own && known;
-  const int n = known ? lizard_n_for(LIZARD_STEP * version) : 0;
-  lizard_t *pic = n && n <= a->nmax ? pic_for(a, wi, n, LIZARD_STEP * version) : 0;
-  if (!pic || (pic != &a->ring[wi] && !lizard_hand_over(&a->ring[wi], pic))) { lizard_release(&a->ring[wi]); return 0; }
+  const int n = known ? lizard_n_for(LIZARD_STEP * cfg.version) : 0;
+  lizard_t *pic = n && n <= a->nmax ? pic_for(a, wi, n, LIZARD_STEP * cfg.version) : 0;
+  if (!pic || lizard_layout(pic, cfg.count) || (pic != &a->ring[wi] && !lizard_hand_over(&a->ring[wi], pic))) { lizard_release(&a->ring[wi]); return 0; }
   a->last = pic; a->n = n;
   return lizard_finish(pic, NULL, blocks, ok, res);
 }
 int lizard_any_top(const lizard_any_t *a) {
   if (!a->ready) return 0;
   int top = 0;
-  for (int s = LIZARD_STEP * OB_FMT_VERSION_MIN; s <= LIZARD_STEP * OB_FMT_VERSION_MAX; s += LIZARD_STEP) if (lizard_n_for(s) <= a->nmax && lizard_blocks_for(s) > top) top = lizard_blocks_for(s);
+  for (int s = LIZARD_STEP * OB_FMT_VERSION_MIN; s <= LIZARD_STEP * OB_FMT_VERSION_MAX; s += LIZARD_STEP) if (lizard_n_for(s) <= a->nmax && lizard_blocks_max_for(s) > top) top = lizard_blocks_max_for(s);
   return top;
 }
 const ob_fmt_t *lizard_any_word(const lizard_any_t *a) { return a->which >= 0 ? lizard_fmt_rx(&a->ring[a->which]) : 0; }

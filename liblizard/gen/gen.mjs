@@ -61,7 +61,9 @@ const MAIN = (() => { try { return fileURLToPath(import.meta.url) === realpathSy
 // ai: word's position (as 256 + it) and symbol beside a static word's version, rate and extension bytes.
 // ai: 12 since 2026-11-16: F8's held version on the device (glsl/word.mjs HELD, the front's `heldP` and its buffer
 // ai: `heldCarry`; WORD's layout without the lane's Held uniform, which HELD binds as version, post, frames, hold).
-export const TREE_VERSION = 12;
+// ai: 13 since 2026-11-18: a frame's configuration (src/fmt.h ob_fmt_held) in F8's sel, record word 29 and HELD, the
+// ai: gate's lists and the rule stage's layout from it (no TT table, no codes table, no rule blocks a version).
+export const TREE_VERSION = 13;
 
 const NDK = process.env.ANDROID_NDK_HOME || `${process.env.ANDROID_HOME || `${homedir()}/Android/Sdk`}/ndk/27.1.12297006`;
 // ai: SPIRV-Tools' spirv-val and shaderc's glslc: the Android NDK's shader-tools where there is an NDK, else the

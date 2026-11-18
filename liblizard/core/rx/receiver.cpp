@@ -36,9 +36,13 @@ struct HoldFree { void operator()(cpu_hold_t* h) const { cpu_hold_free(h); } };
 using HoldPtr = std::unique_ptr<cpu_hold_t, HoldFree>;
 // ai: the last word for the page: a static word's version and rate, or an animated word's position and the version its
 // ai: carousel's header names (null until one stands)
-nlohmann::json wordJson(int kind, int version, int fps, int pos, int ring) {
-  nlohmann::json w = {{"version", version > 0 ? nlohmann::json(version) : nlohmann::json()}, {"fps", fps}, {"ring", ring}};
-  if (kind) { w["animated"] = true; w["position"] = pos; }
+// ai: a frame's word for the stats: a static word's version, rate and counts, or an animated one's id with the held
+// ai: configuration's version and counts (src/fmt.h ob_fmt_held: version << 21 | the counts, 7 bits each)
+nlohmann::json wordJson(int kind, int version, int fps, const int count[3], int id, int held, int ring) {
+  const int v = kind ? held >> 21 : version;
+  const nlohmann::json c = kind ? nlohmann::json::array({held >> 14 & 127, held >> 7 & 127, held & 127}) : nlohmann::json::array({count[0], count[1], count[2]});
+  nlohmann::json w = {{"version", v > 0 ? nlohmann::json(v) : nlohmann::json()}, {"fps", kind ? 0 : fps}, {"ring", ring}, {"count", v > 0 ? c : nlohmann::json()}};
+  if (kind) { w["animated"] = true; w["id"] = id; }
   return w;
 }
 }  // namespace
@@ -674,9 +678,9 @@ void GpuReceiver::deliver(BatchOut& out, const Kept& k) {
     totalFrames++;
     if (fo.hasWord) {
       const int before = held;
-      held = cpu_hold_take(hold.get(), fo.word.kind, fo.word.version, fo.word.pos, fo.word.sym);
+      held = cpu_hold_take(hold.get(), fo.word.kind, fo.word.version, fo.word.count, fo.word.id, fo.word.sym);
       if (fo.word.kind && held && held != before) post = held;   // ai: the carousel's header, which the device cannot read
-      lastWord = wordJson(fo.word.kind, fo.word.kind ? held : fo.word.version, fo.word.fps, fo.word.pos, fo.ring);
+      lastWord = wordJson(fo.word.kind, fo.word.version, fo.word.fps, fo.word.count, fo.word.id, held, fo.ring);
     }
   }
   std::lock_guard<std::mutex> l(mu);
@@ -935,8 +939,8 @@ void CpuReceiver::done(CpuFrameOut&& out) {
   totalBlocks += (long)blocks.size();
   totalFrames++;
   if (out.hasWord) {
-    held = cpu_hold_take(hold.get(), out.kind, out.version, out.pos, out.sym);
-    lastWord = wordJson(out.kind, out.kind ? held.load() : out.version, out.fps, out.pos, out.ring);
+    held = cpu_hold_take(hold.get(), out.kind, out.version, out.count, out.id, out.sym);
+    lastWord = wordJson(out.kind, out.version, out.fps, out.count, out.id, held.load(), out.ring);
   }
   rollWindow(now());
 }

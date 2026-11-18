@@ -366,7 +366,7 @@ static int ws_init(lizard_t *f) {
   w->bits = malloc(nc); w->data = malloc((size_t)max_k(f) + 8);
   w->slot = malloc(nc); w->llr2 = malloc(nc); w->white = malloc((size_t)f->subch * LIZARD_SUB * 2);
   w->llrf = malloc((size_t)f->subch * LIZARD_SUB * 2); w->sub_est = malloc((size_t)f->subch * sizeof(double)); w->sub_rms = malloc((size_t)f->subch * sizeof(float));
-  w->blk_its = calloc((size_t)f->blocks, 1); w->blk_est = calloc((size_t)f->blocks, sizeof(float)); w->blk_pilot = calloc((size_t)f->blocks, sizeof(float));
+  w->blk_its = calloc((size_t)f->blocks_max, 1); w->blk_est = calloc((size_t)f->blocks_max, sizeof(float)); w->blk_pilot = calloc((size_t)f->blocks_max, sizeof(float));
   w->rot = malloc((size_t)2 * ALIGN_TURNS * sizeof(float));
   if (w->rot) for (int i = 0; i < ALIGN_TURNS; i++) { const double th = 2.0 * 3.14159265358979323846 * i / ALIGN_TURNS; w->rot[2 * i] = (float)cos(th); w->rot[2 * i + 1] = (float)sin(th); }
   const int side_mod = f->frame.w < f->frame.h ? f->frame.w : f->frame.h;
@@ -440,15 +440,17 @@ static int ws_init(lizard_t *f) {
 
 
 // The word restates this lizard_t rather than being handed to us, so it cannot come to disagree with what is
-// painted. The display rate is the exception, being a property of the sequence and not of this frame:
-// lizard_fmt_fps sets it and it survives a repaint. Everything else follows from the format, and the fountain's
-// header is payload. A configuration the word cannot express (a sub-channel count that is not a multiple of 16,
-// LIZARD_STEP, which only lizard_init_tiers makes) blanks the band instead: a receiver that finds nothing there knows it
-// was told nothing, where one that finds a lie does not.
+// painted: the version and the layout's counts are the codec's (lizard_layout). The display rate is the exception,
+// being a property of the sequence and not of this frame: lizard_fmt_fps sets it and it survives a repaint. The
+// fountain's header is payload. A configuration the word cannot express (a sub-channel count that is not a multiple of
+// 16, LIZARD_STEP, or 3/4 blocks other than the rest of the frame holds, which only lizard_init_tiers makes) blanks the
+// band instead: a receiver that finds nothing there knows it was told nothing, where one that finds a lie does not.
 static void fmt_paint(lizard_t *f) {
   f->fmt.version = f->subch / LIZARD_STEP;
+  int m = -1;
   const int fb = ob_fmt_bytes(f->frame.w < f->frame.h ? f->frame.w : f->frame.h, f->frame.reserve);
-  if (f->subch % LIZARD_STEP || !fb || ob_fmt_encode(&f->fmt, f->fmt_cw, fb)) memset(f->fmt_cw, 0, sizeof f->fmt_cw);
+  const int stated = f->subch % LIZARD_STEP == 0 && ob_fmt_layout(f->fmt.version, f->fmt.count, &m) && m == f->tier[OB_TIER_34].blocks;
+  if ((f->fmt.kind == OB_FMT_STATIC && !stated) || !fb || ob_fmt_encode(&f->fmt, f->fmt_cw, fb)) memset(f->fmt_cw, 0, sizeof f->fmt_cw);
   ob_layout_set_fmt(&f->frame, f->fmt_cw);
 }
 
@@ -488,21 +490,47 @@ void lizard_align(const lizard_t *f, float d[2]) { const struct lizard_ws *w = f
 // the word moves the word's cells and nothing else (layout.c ob_layout_set_fmt), so registration is untouched,
 // and it takes effect on the next encode, which paints the border from the layout as it then stands.
 int lizard_fmt_fps(lizard_t *f, int fps) {
-  if (fps < 0 || fps > 255) return -1;
+  if (ob_fmt_rate_code(fps) < 0) return -1;
   f->fmt.fps = fps;
   fmt_paint(f);
   return 0;
 }
 int lizard_fmt_word(lizard_t *f, int kind, const uint8_t b[4]) {
-  if (kind == OB_FMT_STATIC) { f->fmt.ext[0] = b[0]; f->fmt.ext[1] = b[1]; }
-  else if (kind == OB_FMT_ANIM && b[0] <= OB_FMT_POS_MAX) { f->fmt.pos = b[0]; memcpy(f->fmt.sym, b + 1, 3); }
-  else return -1;
+  if (kind == OB_FMT_ANIM && b[0] <= OB_FMT_ID_MAX) { f->fmt.id = b[0]; memcpy(f->fmt.sym, b + 1, 3); }
+  else if (kind != OB_FMT_STATIC) return -1;
   f->fmt.kind = kind;
   fmt_paint(f);
   return 0;
 }
 
-static int init(lizard_t *f, int n, int subch, const lizard_tier_t *tier, int tiers, int span) {
+// ai: The frame's layout (lizard_layout, lizard_init_tiers): blocks[t] blocks of tier t (OB_TIER_RATE's order, inner
+// ai: first), packed from the frame's first slot, each its rate's slots, the rest padded; the word repainted. -1 where
+// ai: they take more slots than the frame has or more blocks than its buffers hold (blocks_max).
+static int set_layout(lizard_t *f, const int blocks[OB_TIERS]) {
+  long long used = 0;
+  int total = 0;
+  for (int t = 0; t < OB_TIERS; t++) { if (blocks[t] < 0) return -1; used += (long long)blocks[t] * f->tier[t].slots; total += blocks[t]; }
+  if (used > (long long)f->subch * LIZARD_SUB * 2 || total > f->blocks_max) return -1;
+  f->blocks = total;
+  f->used = 0;
+  for (int t = 0, b = 0, at = 0; t < OB_TIERS; t++) {
+    f->tier[t].blocks = blocks[t];
+    for (int q = 0; q < blocks[t]; q++, b++, at += f->tier[t].slots) { f->block_tier[b] = t; f->block_slot[b] = at; f->used = at + f->tier[t].slots; }
+  }
+  f->fmt.count[0] = blocks[OB_TIER_78]; f->fmt.count[1] = blocks[OB_TIER_23]; f->fmt.count[2] = blocks[OB_TIER_12];
+  fmt_paint(f);
+  return 0;
+}
+
+int lizard_layout(lizard_t *f, const int count[3]) {
+  int m;
+  if (f->subch % LIZARD_STEP || !ob_fmt_layout(f->subch / LIZARD_STEP, count, &m)) return -1;
+  if (f->tier[OB_TIER_34].blocks == m && f->fmt.count[0] == count[0] && f->fmt.count[1] == count[1] && f->fmt.count[2] == count[2] && f->blocks) return 0;
+  const int b[OB_TIERS] = { count[0], m, count[1], count[2] };
+  return set_layout(f, b);
+}
+
+static int init(lizard_t *f, int n, int subch, const int blocks[OB_TIERS], int span) {
   memset(f, 0, sizeof *f);
   // ai: n is a picture size of the ladder (LIZARD_PICTURES): 2^k, 3 x 2^k, 9 x 2^7 (1152) or 5 x 2^8 (1280), the
   // ai: transform's sizes (fft.h), each with n / 2 whole 64-column strips (turn_pack writes rows v and n - v for v below
@@ -511,8 +539,8 @@ static int init(lizard_t *f, int n, int subch, const lizard_tier_t *tier, int ti
   for (int i = 0; i < LIZARD_NPICTURES; i++) picture |= n == LIZARD_PICTURES[i];
   if (!picture || subch < 1) return -1;
   // Past the ladder's top the version is past what the word may state (fmt.h OB_FMT_VERSION_MAX), so fmt_paint would
-  // blank the band and the symbol could not describe itself. Refused. Below the ladder's foot, 64 sub-channels, the
-  // format has no profile (lizard_tiers_for) and lizard_init refuses it; an experiment's tiers there paint the band blank.
+  // blank the band and the symbol could not describe itself. Refused. Below the ladder's foot, 64 sub-channels, an
+  // experiment's tiers (lizard_init_tiers) paint the band blank.
   if (subch > LIZARD_STEP * OB_FMT_VERSION_MAX) return -1;
   // span: frame modules across the image, which names the ring (lizard_phy.h LIZARD_RING: span = 2 B), 0 the sender's
   // ai: default ring (LIZARD_RING_DEFAULT, the same for every picture); a ring's span puts this picture in that ring at
@@ -569,23 +597,25 @@ static int init(lizard_t *f, int n, int subch, const lizard_tier_t *tier, int ti
   int side = span + 2 * f->margin;
   f->px = side * f->pxm;
   if (ob_layout_init(&f->frame, side)) { lizard_free(f); return -1; }
-  fmt_paint(f);
+  f->fmt.kind = OB_FMT_STATIC;
+  f->fmt.fps = 60;
   // One payload for every block, LIZARD_BLOCK bytes and its CRC-32C: 3840 bits, every code's k at 3/4, 2/3 and 1/2
-  // exactly; the 7/8 code's k of 3968 carries zeros past it, which its decoder is told.
-  f->tiers = tiers;
-  for (int t = 0; t < tiers; t++) {
-    f->tier[t] = tier[t];
-    f->tier[t].slots = lizard_block_slots(tier[t].rate);
-    if (ldpc_init(&f->code[t], tier[t].rate) || f->code[t].k < 8 * (LIZARD_BLOCK + 4)) { lizard_free(f); return -1; }
-    f->blocks += tier[t].blocks;
+  // exactly; the 7/8 code's k of 3968 carries zeros past it, which its decoder is told. The four codes are every
+  // frame's; a frame's layout says how many blocks each carries (lizard_layout).
+  f->tiers = OB_TIERS;
+  for (int t = 0; t < OB_TIERS; t++) {
+    f->tier[t] = (lizard_tier_t){ OB_TIER_RATE[t], 0, lizard_block_slots(OB_TIER_RATE[t]) };
+    if (ldpc_init(&f->code[t], OB_TIER_RATE[t]) || f->code[t].k < 8 * (LIZARD_BLOCK + 4)) { lizard_free(f); return -1; }
   }
   f->block_bytes = LIZARD_BLOCK;
-  f->block_tier = malloc((size_t)f->blocks * 2 * sizeof(int));
+  // ai: the most blocks a layout of this frame holds: a word's or the experiment's own
+  int given = 0;
+  for (int t = 0; t < OB_TIERS; t++) given += blocks[t];
+  f->blocks_max = lizard_blocks_max_for(subch) > given ? lizard_blocks_max_for(subch) : given;
+  f->block_tier = malloc((size_t)f->blocks_max * 2 * sizeof(int));
   if (!f->block_tier) { lizard_free(f); return -1; }
-  // ai: the blocks one after another from the frame's first slot, inner first, each its rate's slots; the rest padded
-  f->block_slot = f->block_tier + f->blocks;
-  for (int t = 0, b = 0, at = 0; t < tiers; t++) for (int q = 0; q < tier[t].blocks; q++, b++, at += f->tier[t].slots) { f->block_tier[b] = t; f->block_slot[b] = at; f->used = at + f->tier[t].slots; }
-  if (f->used > subch * LIZARD_SUB * 2) { lizard_free(f); return -1; }
+  f->block_slot = f->block_tier + f->blocks_max;
+  if (set_layout(f, blocks)) { lizard_free(f); return -1; }
   if (ws_init(f)) { lizard_free(f); return -1; }
   // ai: the bit map (lizard_phy.h LIZARD_BITMAP): each tier's slot to codeword bit permutation
   for (int t = 0; t < f->tiers; t++) {
@@ -600,10 +630,7 @@ static int init(lizard_t *f, int n, int subch, const lizard_tier_t *tier, int ti
 const int LIZARD_RING[LIZARD_RINGS] = { 64, 128, 256 };
 
 // ai: lizard_phy.h: a block's slots, its code's sent bits and its pilots (16 at 7/8, 32 at 3/4, none at 2/3 and 1/2)
-int lizard_block_slots(int rate) {
-  const int nt = ldpc_sent_bits(rate);
-  return nt ? nt + (rate == 6 ? 16 : rate == 4 ? 32 : 0) : 0;
-}
+int lizard_block_slots(int rate) { return ob_block_slots(rate); }
 
 // ai: the profile's search: the blocks of every tier but the second (which fills, its remainder padded), in tier
 // ai: order, each count's squared distance from its target thousandths of the frame's slots summed, the least kept,
@@ -639,6 +666,12 @@ int lizard_tiers_for(int subch, lizard_tier_t tier[LIZARD_TIERS]) {
   for (int q = 0; q < LIZARD_TIERS; q++) if (keep[q]) tier[t++] = (lizard_tier_t){ RATE[q], keep[q], slots[q] };
   return t;
 }
+int lizard_blocks_max_for(int subch) {
+  const long long all = (long long)subch * LIZARD_SUB * 2, s7 = lizard_block_slots(OB_TIER_RATE[OB_TIER_78]), s3 = lizard_block_slots(OB_TIER_RATE[OB_TIER_34]);
+  int most = 0;
+  for (int a = 0; a <= OB_FMT_COUNT_MAX && a * s7 + s3 <= all; a++) { const int k = a + (int)((all - a * s7) / s3); if (k > most) most = k; }
+  return most;
+}
 int lizard_blocks_for(int subch) {
   lizard_tier_t tier[LIZARD_TIERS];
   const int n = lizard_tiers_for(subch, tier);
@@ -651,23 +684,29 @@ int lizard_init(lizard_t *f, int n, int subch, int span) {
   lizard_tier_t tier[LIZARD_TIERS];
   const int tiers = lizard_tiers_for(subch, tier);
   if (!tiers) { memset(f, 0, sizeof *f); return -1; }
-  // ai: a block is the transfer's 476 B (xfer.h XFER_BLOCK) at every rate: with its CRC-32C the k of the 3/4, 2/3 and
-  // ai: 1/2 codes, and the 7/8 code carries zeros past it, known to the decoder
-  return init(f, n, subch, tier, tiers, span);
+  // ai: the default senders' layout (lizard_tiers_for), which a frame's word may replace (lizard_layout)
+  int b[OB_TIERS] = { 0 };
+  for (int i = 0; i < tiers; i++) for (int t = 0; t < OB_TIERS; t++) if (OB_TIER_RATE[t] == tier[i].rate) b[t] = tier[i].blocks;
+  return init(f, n, subch, b, span);
 }
 
 int lizard_init_tiers(lizard_t *f, int n, const lizard_tier_t *tier, int tiers, int span) {
   long long used = 0;
+  int b[OB_TIERS] = { 0 }, last = -1;
   if (tiers < 1 || tiers > LIZARD_TIERS) { memset(f, 0, sizeof *f); return -1; }
-  for (int t = 0; t < tiers; t++) {
-    const int sl = lizard_block_slots(tier[t].rate);
-    if (tier[t].blocks < 1 || !sl) { memset(f, 0, sizeof *f); return -1; }
-    used += (long long)tier[t].blocks * sl;
+  for (int i = 0; i < tiers; i++) {
+    int t = 0;
+    while (t < OB_TIERS && OB_TIER_RATE[t] != tier[i].rate) t++;
+    // ai: the four codes, each once, in their order (inner first)
+    if (t == OB_TIERS || t <= last || tier[i].blocks < 1) { memset(f, 0, sizeof *f); return -1; }
+    last = t;
+    b[t] = tier[i].blocks;
+    used += (long long)tier[i].blocks * lizard_block_slots(tier[i].rate);
   }
   // ai: the fewest sub-channels that hold the blocks (the last one's remainder padded)
   const long long per = LIZARD_SUB * 2, subch = (used + per - 1) / per;
   if (subch > LIZARD_STEP * OB_FMT_VERSION_MAX) { memset(f, 0, sizeof *f); return -1; }
-  return init(f, n, (int)subch, tier, tiers, span);
+  return init(f, n, (int)subch, b, span);
 }
 
 void lizard_block_stats(const lizard_t *f, const int8_t **its, const float **est) { *its = f->ws ? f->ws->blk_its : 0; *est = f->ws ? f->ws->blk_est : 0; }
@@ -1677,6 +1716,10 @@ static int acquire_hold(const lizard_t *f, const image_t *pim, ob_reg_t *reg_in,
   w->fmt_rx_ok = 0;
   w->fmt_read = w->fmt_cells && ob_thin_read_fmt(&f->frame, &im, &reg, w->fmt_q, w->fmt_cells);
   if (w->fmt_read) w->fmt_rx_ok = ob_fmt_decode(w->fmt_q, w->fmt_cells, w->fmt_bytes, &w->fmt_rx) == 0;
+  // ai: the frame is finished at the layout its own static word states, where the word names this codec's version
+  // ai: (2026-11-18: the word is read before the frame, the inside decoded by it). The layout is the frame's state, as
+  // ai: the workspace is: a codec belongs to one thread at a time (lizard_phy.h), so it is set through the const here.
+  if (w->fmt_rx_ok && w->fmt_rx.kind == OB_FMT_STATIC && w->fmt_rx.version * LIZARD_STEP == f->subch) lizard_layout((lizard_t *)f, w->fmt_rx.count);
   w->hold_im = im; w->hold_reg = reg; w->hold_valid = 1;
   return 1;
 }

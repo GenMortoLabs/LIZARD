@@ -430,7 +430,7 @@ int main(int argc, char** argv) {
       if (runOut && !runOut->frame(luma.data(), W, W, W, runWhy)) { printf("LIZ_RUN_OUT: %s\n", runWhy.c_str()); runOut.reset(); }
       cpu_frame_t fr{};
       const int got = cpu_dec_frame(d, luma.data(), W, W, held, blocks.data(), ok.data(), &fr);
-      if (fr.word) { words++; const int v = cpu_hold_take(hold, fr.kind, fr.version, fr.pos, fr.sym); if (v) held = v; }
+      if (fr.word) { words++; const int v = cpu_hold_take(hold, fr.kind, fr.version, fr.count, fr.id, fr.sym); if (v) held = v; }
       verified += got; total += fr.total;
       if (live) {
         // ai: changed live: every block read (the static word held from the first frame); a word static until the ask at
@@ -445,7 +445,7 @@ int main(int argc, char** argv) {
           }
           lastKind = fr.kind;
           const bool animOk = seq >= carOn && (carOff < 0 || staticFrom < 0);
-          if (fr.kind == 1 && (!animOk || fr.pos != pos)) { faults++; if (faults < 5) printf("frame %d: animated word position %d, the frame's %d, asked at %d\n", k, fr.pos, pos, carOn); }
+          if (fr.kind == 1 && (!animOk || fr.id != pos)) { faults++; if (faults < 5) printf("frame %d: animated word id %d, the frame's %d, asked at %d\n", k, fr.id, pos, carOn); }
           if (fr.kind == 0 && animFrom >= 0 && (carOff < 0 || seq < carOff)) { faults++; if (faults < 5) printf("frame %d: a static word after the animated began, none asked\n", k); }
         }
         if (got != wantBlocks) { faults++; if (faults < 5) printf("frame %d: %d of %d blocks\n", k, got, fr.total); }
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
         // ai: the header stands (held at the format's version), none before
         const int seq = k / codes, pos = Sender::carouselPosition(carKey, static_cast<uint64_t>(codes) * static_cast<uint64_t>(seq / car) + static_cast<uint64_t>(k % codes));
         if (fr.word) symbols++;
-        if (fr.word && (fr.kind != 1 || fr.pos != pos)) { faults++; if (faults < 5) printf("frame %d: word kind %d position %d, the frame's %d\n", k, fr.kind, fr.pos, pos); }
+        if (fr.word && (fr.kind != 1 || fr.id != pos)) { faults++; if (faults < 5) printf("frame %d: word kind %d id %d, the frame's %d\n", k, fr.kind, fr.id, pos); }
         if (stood < 0 && got > 0) stood = seq;
         if (got > 0 && got != wantBlocks) { faults++; if (faults < 5) printf("frame %d: %d of %d blocks\n", k, got, fr.total); }
         if (stood >= 0 && got == 0) { faults++; if (faults < 5) printf("frame %d: no blocks after the header stood\n", k); }

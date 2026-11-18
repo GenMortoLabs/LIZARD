@@ -545,11 +545,13 @@ void Sender::paint(int) {
     error_ = "a painter's codec failed";
     return;
   }
-  lizard_fmt_fps(&f, fm.fps);
-  // ai: the animated header (setCarousel): the format's own, version, fps and extension bytes 0 and 0 (k 3)
-  uint8_t hdr[OB_CAR_SYM * OB_CAR_N];
-  const uint8_t content[4] = {static_cast<uint8_t>(fm.subch / LIZARD_STEP), static_cast<uint8_t>(fm.fps), 0, 0};
-  const int hk = ob_car_header(content, 4, hdr);
+  // ai: the static word's rate the table's nearest the sender's (src/fmt.h OB_FMT_RATE); the animated header (setCarousel)
+  // ai: the format's own configuration, its rate exact (src/fmt.h ob_car_content: a rate record where the table has none)
+  lizard_fmt_fps(&f, ob_fmt_rate_near(fm.fps));
+  uint8_t hdr[OB_CAR_SYM * OB_CAR_N], content[OB_CAR_CONTENT_MAX];
+  ob_fmt_t cfg = f.fmt;
+  cfg.fps = fm.fps;
+  const int clen = ob_car_content(&cfg, content), hk = clen < 0 ? -1 : ob_car_header(content, clen, hdr);
   std::vector<float> drive(static_cast<size_t>(f.px) * f.px);
   const int W = side_, codes = fm.codes, gap = gap_;
   const size_t per = static_cast<size_t>(blocks_) * blockBytes_;
@@ -570,12 +572,12 @@ void Sender::paint(int) {
     const double t0 = nowMs();
     lizard_parity(&f, static_cast<int>(j.seq & 3));
     if (j.car <= 0 && f.fmt.kind != OB_FMT_STATIC) {
-      const uint8_t b[4] = {0, 0, 0, 0};   // ai: the carousel turned off: the static word again, extension bytes 0 and 0
+      const uint8_t b[4] = {0, 0, 0, 0};   // ai: the carousel turned off: the static word again
       lizard_fmt_word(&f, OB_FMT_STATIC, b);
     }
     for (int k = 0; k < codes; k++) {
       if (j.car > 0 && hk > 0) {
-        // ai: code k's symbol (setCarousel): the position the producer drew for it
+        // ai: code k's symbol (setCarousel): the id the producer drew for it
         const int p = j.pos[k];
         uint8_t b[4] = {static_cast<uint8_t>(p), 0, 0, 0};
         ob_car_symbol(hdr, hk, p, b + 1);

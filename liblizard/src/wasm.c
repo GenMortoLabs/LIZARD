@@ -54,9 +54,10 @@ static lizard_any_t ANY = { .which = -1 };
 // ai: nmax: the largest picture this receiver decodes (1536, the ladder's top, in every receiver since 2026-09-29). Returns the
 // ai: block bytes (476), or -1.
 int lizard_any_setup(int nmax) { return lizard_any_init(&ANY, nmax); }
-// ai: blocks and ok hold lizard_any_max_blocks() blocks. held: the version (sub-channels / 16) of the last word the
-// ai: caller read, 0 for none. Returns the blocks decoded; lizard_any_which says which ring registered
-// ai: (-1 none), lizard_any_n the picture finished (0 none), lizard_any_held whether the held configuration stood in.
+// ai: blocks and ok hold lizard_any_max_blocks() blocks. held: the configuration the caller holds for animated frames
+// ai: (fmt.h ob_fmt_held, lizard_car_held: its carousel's header), 0 for none. Returns the blocks decoded;
+// ai: lizard_any_which says which ring registered (-1 none), lizard_any_n the picture finished (0 none), lizard_any_held
+// ai: whether the frame was finished at the held configuration.
 int lizard_any_rx(const uint8_t *img, int iw, int ih, float gamma, uint8_t *blocks, uint8_t *ok, int held) {
   return lizard_any_frame(&ANY, img, iw, ih, gamma, blocks, ok, held, &R);
 }
@@ -77,29 +78,40 @@ int lizard_any_pilot_get(float *out) { return lizard_any_pilot(&ANY, out, out + 
 // Focus refuses any other).
 int lizard_bitmap_get(void) { return fready ? F.bitmap : -1; }
 
-// What the last decode read out of the band, an ob_fmt_t (fmt.h: version, fps, kind as ints, ext's 2 bytes, pos, sym's
-// 3 bytes), or 0 for nothing read.
+// What the last decode read out of the band, an ob_fmt_t (fmt.h: kind, version, fps, count[3], id as ints, then sym's 3
+// bytes), or 0 for nothing read.
 const ob_fmt_t *lizard_fmt_rx_ptr(void) { return fready ? lizard_fmt_rx(&F) : 0; }
 // The display rate the painted band states (lizard_phy.h). A sender may call this between frames.
 int lizard_fmt_fps_set(int fps) { return fready ? lizard_fmt_fps(&F, fps) : -1; }
-// ai: The word the next encode paints (lizard_phy.h lizard_fmt_word): kind 0 static with extension bytes b0, b1; kind 1
-// ai: animated, position b0 and the symbol's bytes b1 to b3.
+// ai: The word the next encode paints (lizard_phy.h lizard_fmt_word): kind 0 static (the codec's version and layout);
+// ai: kind 1 animated, id b0 and the symbol's bytes b1 to b3.
 int lizard_fmt_word_set(int kind, int b0, int b1, int b2, int b3) {
   const uint8_t b[4] = { (uint8_t)b0, (uint8_t)b1, (uint8_t)b2, (uint8_t)b3 };
   return fready ? lizard_fmt_word(&F, kind, b) : -1;
 }
+// ai: The frame's layout the next encode paints (lizard_phy.h lizard_layout): 7/8, 2/3 and 1/2 blocks, the 3/4 filling;
+// ai: 0, or -1 where it is no frame. lizard_blocks() then says the frame's blocks; lizard_blocks_max() the most any layout
+// ai: of this codec holds (what a told receiver's buffers hold, a frame's word choosing its own).
+int lizard_layout_set(int a, int t, int c) { const int k[3] = { a, t, c }; return fready ? lizard_layout(&F, k) : -1; }
+int lizard_blocks_max(void) { return F.blocks_max; }
 // ai: One carousel's assembly (fmt.h ob_car_rx_t), the module's: reset for a new sender; add an animated word's symbol,
-// ai: k back once its header stands (0 before); the header's bytes (3k).
+// ai: k back once its header stands (0 before); the header's bytes (3k); the configuration it states as one int (fmt.h
+// ai: ob_fmt_held: lizard_any_rx's held), 0 where none stands.
 static ob_car_rx_t CAR;
 void lizard_car_reset(void) { ob_car_reset(&CAR); }
-int lizard_car_add(int pos, int s0, int s1, int s2) { const uint8_t s[3] = { (uint8_t)s0, (uint8_t)s1, (uint8_t)s2 }; return ob_car_add(&CAR, pos, s); }
+int lizard_car_add(int id, int s0, int s1, int s2) { const uint8_t s[3] = { (uint8_t)s0, (uint8_t)s1, (uint8_t)s2 }; return ob_car_add(&CAR, id, s); }
 const uint8_t *lizard_car_hdr(void) { return CAR.hdr; }
-// ai: A header's symbol for a sender painting a carousel: content (len bytes) at `content`, symbol pos into out[0..2];
-// ai: k, or -1.
-int lizard_car_symbol(const uint8_t *content, int len, int pos, uint8_t *out) {
-  uint8_t hdr[OB_CAR_SYM * OB_CAR_N];
-  const int k = ob_car_header(content, len, hdr);
-  return k < 0 || ob_car_symbol(hdr, k, pos, out) ? -1 : k;
+int lizard_car_held(void) { ob_fmt_t g; return CAR.k && ob_car_config(CAR.hdr, CAR.k, &g) ? ob_fmt_held(&g) : 0; }
+// ai: A header's symbol for a sender painting a carousel: the codec's configuration as content (fmt.h ob_car_content:
+// ai: fps the rate it states, any 1 to 65,535, a rate record where the table has none), symbol id into out[0..2]; k,
+// ai: or -1.
+int lizard_car_symbol(int fps, int id, uint8_t *out) {
+  uint8_t content[OB_CAR_CONTENT_MAX], hdr[OB_CAR_SYM * OB_CAR_N];
+  if (!fready) return -1;
+  ob_fmt_t g = F.fmt;
+  g.fps = fps;
+  const int len = ob_car_content(&g, content), k = len < 0 ? -1 : ob_car_header(content, len, hdr);
+  return k < 0 || ob_car_symbol(hdr, k, id, out) ? -1 : k;
 }
 // ai: The pilots (lizard_phy.h lizard_parity, lizard_pilot): the count mod 4 the next encode paints, and what the last told
 // ai: decode read, out[0], out[1] r of the even and of the odd blocks, out[2], out[3] their standard errors; the

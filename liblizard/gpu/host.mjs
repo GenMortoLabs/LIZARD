@@ -7,7 +7,9 @@
 // ai: its own), the kept frames (run's keep, LIZ_DUMP, LIZ_DUMP_S), the int8 twins (the WebGPU tree is f32, which has
 // ai: none), the LDPC forms' cross-check and the trial (a WebGPU device validates every module before it runs).
 
-export const TREE_VERSION = 12;   // ai: front.cpp TREE_VERSION
+import { layoutOf as layoutOfCounts, RATES } from "../sim/lizard_pick.mjs";
+
+export const TREE_VERSION = 13;   // ai: front.cpp TREE_VERSION
 export const WEBGPU_VARIANT = "f32";   // ai: gen.mjs WEBGPU_VARIANT: the variant gen translates to WGSL
 
 // ai: front.cpp STAGES, the profile's stage groups, a timestamp pair each.
@@ -655,7 +657,7 @@ export class FrontHalf {
     const C = this.C, d = this.dev, nb = slots.length;
     if (!nb) throw new Error("a batch of no slots");
     if (nb > this.B) throw new Error(`${nb} frames in a batch of ${this.B}`);
-    if (held < -1 || (held > 0 && held < C.VERSION_MIN) || held > C.VERSION_MAX) throw new Error(`held ${held}: -1 (carried), 0, or a version ${C.VERSION_MIN} to ${C.VERSION_MAX}`);
+    if (held < -1 || (held > 0 && !layoutOfCounts(16 * (held >>> 21), [(held >>> 14) & 127, (held >>> 7) & 127, held & 127]).length)) throw new Error(`held ${held}: -1 (carried), 0, or a configuration (src/fmt.h ob_fmt_held)`);
     const ln = this.freeLane();
     if (!ln) throw new Error(`${this.lanes.length} batches in flight already`);
     const f = { t0: this.now(), lane: ln, nb, stages: [] };
@@ -663,7 +665,7 @@ export class FrontHalf {
     for (const s of slots) if (s) { W = Math.max(W, s.w); H = Math.max(H, s.h); }
     this.ensure(ln, W, H);
     const Bl = ln.B;
-    // ai: HELD's uniform: a version posted (held >= 0) under a new post number, taken once in place of the carried one
+    // ai: HELD's uniform: a configuration posted (held >= 0) under a new post number, taken once in place of the carried one
     if (held >= 0) this.heldPost++;
     d.write(ln.heldUni, 0, new Uint32Array([Math.max(held, 0), this.heldPost, nb, this.holdWords ? 1 : 0]));
     {
@@ -844,7 +846,6 @@ export class FrontHalf {
     }
     const pics = this.S.tree.pictures;
     const slotOf = (v) => pics.findIndex((p) => v >= p.lo && v <= p.hi);
-    const rb = bk.rule.blocks;
     for (let i = 0; i < nb; i++) {
       const fo = out.frames[i];
       fo.counts = Array.from({ length: C.COUNTERS }, (_, k) => u32(f.cntOff + 4 * (C.COUNTERS * i + k)));
@@ -853,21 +854,26 @@ export class FrontHalf {
       if (!f.present[i]) { fo.empty = true; continue; }
       const r = (k) => f32(f.resOff + 4 * (C.RESULT * i + k));
       fo.ring = r(0) === 1 ? r(2) : -1;
-      fo.version = Math.trunc(r(29));
+      // ai: the configuration decoded at, word 29 as a float's bits (src/fmt.h ob_fmt_held; 0 none)
+      fo.config = u32(f.resOff + 4 * (C.RESULT * i + 29));
+      fo.version = fo.config >>> 21;
       fo.size = fo.version > 0 ? slotOf(fo.version) : -1;
       fo.n = fo.size >= 0 ? pics[fo.size].n : 0;
       fo.held = r(30) === 1;
       fo.finder = { found: r(0), ring: r(2), corners: Array.from({ length: 8 }, (_, k) => r(17 + k)) };
       fo.hasWord = r(5) > 0;
-      // ai: F8's word (glsl/word.mjs; front.cpp's reading): r(5) a static word's version, or 256 + an animated word's
-      // ai: position; r(6) the three bytes after it, low first (the rate and the extension bytes, or the symbol)
+      // ai: F8's word (glsl/word.mjs; front.cpp's reading): r(5) a static word's version, or 256 + an animated word's id;
+      // ai: r(6) its bits as a float's: a static word's 32 bits after its magic, or the symbol's three bytes, low first
       if (fo.hasWord) {
-        const a = Math.trunc(r(5)), b = Math.trunc(r(6)), by = [b & 255, (b >>> 8) & 255, (b >>> 16) & 255];
-        fo.word = a >= 256 ? { kind: 1, version: 0, fps: 0, pos: a - 256, sym: by } : { kind: 0, version: a, fps: by[0], ext: [by[1], by[2]] };
+        const a = Math.trunc(r(5)), b = u32(f.resOff + 4 * (C.RESULT * i + 6)), by = [b & 255, (b >>> 8) & 255, (b >>> 16) & 255];
+        fo.word = a >= 256 ? { kind: 1, version: 0, fps: 0, id: a - 256, sym: by }
+          : { kind: 0, version: 4 + (b >>> 26), fps: RATES[(b >>> 21) & 31], count: [(b >>> 14) & 127, (b >>> 7) & 127, b & 127] };
       }
       fo.anchors = Math.trunc(r(31));
       fo.pilotBlocks = 0;
-      const nblk = fo.version > 0 && fo.version < rb.length ? rb[fo.version] : fo.version;
+      // ai: the blocks of its configuration's layout
+      const lay = fo.config ? layoutOfCounts(16 * fo.version, [(fo.config >>> 14) & 127, (fo.config >>> 7) & 127, fo.config & 127]) : [];
+      const nblk = lay.reduce((n, [, b]) => n + b, 0);
       if (fo.version > 0 && fo.backCounts[6] > 0) {
         fo.pilotR = fo.pilotSd = fo.pilotR2 = fo.pilotSd2 = NaN;
         for (let g = 0; g < 2; g++) {

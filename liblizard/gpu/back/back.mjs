@@ -15,8 +15,6 @@ import { build as buildLdpc } from "./ldpc.mjs";
 import { derived } from "./dims.mjs";
 import { pass1WorkgroupBytes, SLOTS } from "../plan/back_transform.mjs";
 import { RuleStage } from "./tiers.mjs";
-import { ruleTables } from "./codes.mjs";
-import { NC } from "../plan/back_tiers.mjs";
 
 // BCOUNTS: u32 [B][8] a batch, what each column holds and who writes it.
 export const COUNT = { columns: 0, rows: 1, stored: 2, tried: 3, verified: 4, records: 5, subch: 6, iterations: 7 };
@@ -53,11 +51,8 @@ export class BackHalf {
     Object.assign(bh, { device, B, precision, sizes: bsizes, tables, dims, log });
     // ai: The stages built at once (2026-09-29, the GPU worker's start: STATUS "The ramp at the start"): none reads
     // ai: another's build, and none compiles under an error scope (../pipeline.mjs).
-    // ai: each version's blocks a code, a byte a code in CODES' order, the gate's codes table (the LDPC's dispatches)
-    const rt = await ruleTables(), codes = new Uint32Array(rt.profiles.length);
-    rt.profiles.forEach((p, v) => { for (const t of p ?? []) { if (t.count > 255 || t.c >= NC) throw new Error(`version ${v}: ${t.count} blocks of code ${t.c}: the gate's codes table holds a byte a code`); codes[v] |= t.count << (8 * t.c); } });
     [bh.transform, bh.soft, bh.ldpc] = await Promise.all([
-      Transform.build(device, { B, tables, precision, blkStride: dims.blkStride, picture, codes }),
+      Transform.build(device, { B, tables, precision, blkStride: dims.blkStride, picture }),
       buildSoft(device, { B, sizes: bsizes, tables }),
       buildLdpc(device, { B, sizes: bsizes }),
     ]);

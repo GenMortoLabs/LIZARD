@@ -10,7 +10,7 @@ import dev.lizard.ui.*
 // ai: default (the kept ones neither read nor written: Prefs.forget), the ones named applied; sending starts once the
 // ai: code area has a size, and after secs (8 unless named) of presenting the last presenter and sender stats are
 // ai: printed to stdout as one JSON line {"present": {...}, "sender": {...}} and the app exits 0. Any failure prints
-// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 4 to 64 (Pick.VERSION_MIN to VERSION_MAX); fps 1 to
+// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 4 to 67 (Pick.VERSION_MIN to VERSION_MAX); fps 1 to
 // ai: 60; size 25 to 100 (%); spacing 4 to 68 and margin 2 to 34 (modules); ring auto, 64, 128 or 256; full 0 or 1 (the
 // ai: window manager's full screen); vsync 0 or 1 (1 unless named); file=<path>[:<path>...] (files or folders in place
 // ai: of the test stream, as a pick or a drop gives them: one file as itself, else one tar, 2026-10-16; the paths split

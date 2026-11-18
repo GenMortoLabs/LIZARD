@@ -337,7 +337,7 @@ void XferTx::makeAll() {
     spillThread_ = std::thread([this] { spiller(); });
 #endif
   }
-  const uint32_t W = std::min<uint32_t>(chunks_, physicalCores());
+  [[maybe_unused]] const uint32_t W = std::min<uint32_t>(chunks_, physicalCores());   // ai: (the wasm has no pool)
   std::vector<std::thread> pool;
 #ifndef __EMSCRIPTEN__
   for (uint32_t w = 1; w < W; w++) try { pool.emplace_back([this] { work(); }); } catch (const std::system_error&) { break; }

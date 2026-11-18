@@ -17,8 +17,8 @@
 // ai:   the learned stop's sums are `precise`: no contraction into fused multiply-adds, so the kernel keeps the float32
 // ai:     order of stop/rule.mjs scoreF32 and the trainer's (the WGSL leaves contraction to the driver);
 // ai:   a check's slot loops are unrolled ([[unroll]], GL_EXT_control_flow_attributes), as the drivers unroll naga's.
-import { VERSION, F16, STORAGE16, INT16, ATOMICS, UNROLL, uniformLoad, wgAdd, wgLoad, wgStore, wgXor } from "./common.mjs";
-import { TIER_BLOCKS, CHUNKS, KNOWN, NC, TTW, tierUniformWords } from "../plan/back_tiers.mjs";
+import { VERSION, F16, STORAGE16, INT16, ATOMICS, UNROLL, CFG, uniformLoad, wgAdd, wgLoad, wgStore, wgXor } from "./common.mjs";
+import { TIER_BLOCKS, CHUNKS, KNOWN, NC, tierUniformWords } from "../plan/back_tiers.mjs";
 import { SLOTS } from "../plan/common.mjs";
 import { CRC_CHUNKS } from "../wgsl/back_ldpc.mjs";
 
@@ -29,20 +29,28 @@ const PARAMS = (binding) => `layout(set = 0, binding = ${binding}, std140) unifo
 const NAN = "uintBitsToFloat(0x7fc00000u | (P.n & 0u))";
 
 // ai: TAB's constants and readers (the WGSL's tables()); TAB is the buffer named TAB. codes: [{ n, k, slots, tail, bar }]:
-// ai: n the sent bits, slots a block's (its sent bits, then its tail of pilots), tail the pilots' coefficients.
+// ai: n the sent bits, slots a block's (its sent bits, then its tail of pilots), tail the pilots' coefficients. A frame's
+// ai: layout from its configuration g (the gate's list: src/fmt.h ob_fmt_held, ../glsl/common.mjs CFG; a row of TAB a
+// ai: version until 2026-11-18): blocksOf its blocks, ttOf a code's (first block, first slot, blocks, 0), blockAt a
+// ai: block's (code, index in it), each from the four counts by fixed comparisons (no array indexed at run time).
 function tables(L, codes) {
   const pick = (f) => codes.slice(0, -1).reduceRight((e, x, c) => `(c == ${c}u ? ${f(x)} : ${e})`, f(codes[codes.length - 1]));
   const barBits = (x) => { const f = new Float32Array([x]); return new Uint32Array(f.buffer)[0]; };
   return /* glsl */ `
-const uint TT_AT = ${L.TT}u;
 const uint WHITE_AT = ${L.WHITE}u;
 uint nOf(uint c) { return ${pick((x) => `${x.n}u`)}; }
 uint slotsOf(uint c) { return ${pick((x) => `${x.slots}u`)}; }
 uint tailOf(uint c) { return ${pick((x) => `${x.tail}u`)}; }
 float barOf(uint c) { return uintBitsToFloat(${pick((x) => `${barBits(x.bar)}u`)}); }
 const uint NCODES = ${NC}u;
-uint blocksOf(uint v) { return TAB[TT_AT + ${TTW}u * v]; }
-uvec4 ttOf(uint v, uint c) { uint o = TT_AT + ${TTW}u * v + 4u + 4u * c; return uvec4(TAB[o], TAB[o + 1u], TAB[o + 2u], TAB[o + 3u]); }
+${CFG}
+uint blocksOf(uint g) { uvec4 k = cfgCounts(g); return k.x + k.y + k.z + k.w; }
+uvec4 ttOf(uint g, uint c) {
+  uvec4 k = cfgCounts(g);
+  uint fb = (c > 0u ? k.x : 0u) + (c > 1u ? k.y : 0u) + (c > 2u ? k.z : 0u);
+  uint fs = (c > 0u ? k.x * ${codes[0].slots}u : 0u) + (c > 1u ? k.y * ${codes[1].slots}u : 0u) + (c > 2u ? k.z * ${codes[2].slots}u : 0u);
+  return uvec4(fb, fs, c == 0u ? k.x : (c == 1u ? k.y : (c == 2u ? k.z : k.w)), 0u);
+}
 uint whiteWord(uint slot) {
   uint w = WHITE_AT + (slot >> 5u);
   uint s = slot & 31u;
@@ -74,7 +82,8 @@ uvec2 tailIn(uint v, uint j) {
 }
 `;
 }
-const versionOf = (lists, B, f) => `${lists}[${SLOTS}u * (${B} + 1u) + 2u * ${B} + ${f}]`;
+// ai: a listed frame's configuration (the gate's: ../plan/back_transform.mjs LISTS, src/fmt.h ob_fmt_held)
+const cfgAt = (lists, B, f) => `${lists}[${SLOTS}u * (${B} + 1u) + 2u * ${B} + ${f}]`;
 
 const TAIL_MAX = 16;
 export const talignSource = ({ f16 = false, layout, codes }) => {
@@ -149,7 +158,7 @@ void main() {
   uint count = LISTS[P.s * (P.B + 1u)];
   if (wg.z >= count) { return; }
   uint f = LISTS[P.s * (P.B + 1u) + 1u + wg.z];
-  uint v = ${versionOf("LISTS", "P.B", "f")};
+  uint v = ${cfgAt("LISTS", "P.B", "f")};
   uint blocks = min(blocksOf(v), ${TIER_BLOCKS}u);
   float kk = ${TWO_PI} / float(P.n);
   uint cnt = 0u;
@@ -260,8 +269,8 @@ void main() {
   uint count = LISTS[P.s * (P.B + 1u)];
   if (wg.z >= count) { return; }
   uint f = LISTS[P.s * (P.B + 1u) + 1u + wg.z];
-  uint v = ${versionOf("LISTS", "P.B", "f")};
-  if (b >= ${CHUNKS}u * v) { return; }
+  uint v = ${cfgAt("LISTS", "P.B", "f")};
+  if (b >= ${CHUNKS}u * (v >> 21u)) { return; }
   uint g = t >> 5u;
   uint l = t & 31u;
   uint j = 8u * b + g;
@@ -317,7 +326,7 @@ void main() {
   uint count = LISTS[P.s * (P.B + 1u)];
   if (wg.z >= count) { return; }
   uint f = LISTS[P.s * (P.B + 1u) + 1u + wg.z];
-  uint v = ${versionOf("LISTS", "P.B", "f")};
+  uint v = ${cfgAt("LISTS", "P.B", "f")};
   if (t >= min(blocksOf(v), ${TIER_BLOCKS}u)) { return; }
   uvec2 bc = blockAt(v, t);
   if (bc.x >= NCODES) { return; }
@@ -585,7 +594,7 @@ void main() {
   uint blocksMax = T.dims.z;
   // ai: a workgroup a (block of this code, listed frame): the frame from the gate's list of every listed frame (listsAll)
   uint f = LISTS[${SLOTS}u * (B + 1u) + 5u * B + wg.y];
-  uint v = ${versionOf("LISTS", "B", "f")};
+  uint v = ${cfgAt("LISTS", "B", "f")};
   uvec4 tt = ttOf(v, CODE);
   uint x = wg.x;
   if (x >= tt.z) { return; }

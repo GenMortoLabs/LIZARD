@@ -128,10 +128,12 @@ struct FrameOut {
   uint64_t tag = 0;   // ai: the caller's, as enqueued
   int ring = -1, version = 0, n = 0, size = -1;
   bool held = false;
+  int config = 0;   // ai: the configuration decoded at (src/fmt.h ob_fmt_held: version << 21 | the counts), 0 none
   struct { float found = 0, ring = -1; std::array<float, 8> corners{}; } finder;
   bool hasWord = false;
-  // ai: the frame's own word (src/fmt.h): kind 0 static (version, fps, ext) or 1 animated (a carousel symbol: pos, sym)
-  struct { int kind = 0, version = 0, fps = 0, pos = 0; uint8_t ext[2] = {0, 0}, sym[3] = {0, 0, 0}; } word;
+  // ai: the frame's own word (src/fmt.h): kind 0 static (version, fps, count: its 7/8, 2/3 and 1/2 blocks) or 1 animated
+  // ai: (a carousel symbol: id, sym)
+  struct { int kind = 0, version = 0, fps = 0, id = 0, count[3] = {0, 0, 0}; uint8_t sym[3] = {0, 0, 0}; } word;
   int anchors = 0;   // ai: result word 31: the anchors ANCH_FIT found on the frame (0: the frame not found)
   std::vector<uint32_t> counts;       // ai: COUNTERS a frame
   std::vector<uint32_t> backCounts;   // ai: the back half's COUNTS a frame
@@ -266,8 +268,8 @@ class FrontHalf {
   BufP developLut;
 
   int B = 0;        // ai: the lanes' size
-  // ai: HELD's (run): the last version posted's number (a new one each run given held >= 0, taken once on the device in
-  // ai: place of the carried version); holdWords false keeps no version (LIZ_HOLD=0, the finder's judges)
+  // ai: HELD's (run): the last configuration posted's number (a new one each run given held >= 0, taken once on the device
+  // ai: in place of the carried one); holdWords false keeps none (LIZ_HOLD=0, the finder's judges)
   uint32_t heldPost = 0;
   bool holdWords = true;
   std::vector<std::unique_ptr<Lane>> lanes;
@@ -307,9 +309,10 @@ class FrontHalf {
   std::mutex ringMu;
   void release(Slot* s);
   Lane* freeLane();
-  // ai: A batch of staged slots on a free lane: recorded and submitted. held: -1 the held version carried on the device
-  // ai: (gpu/glsl/word.mjs HELD: the last static word read before each frame in capture order, launch to launch);
-  // ai: 0 or a version posted, the batch starting from it (a carousel's header, a reset, a batch on its own).
+  // ai: A batch of staged slots on a free lane: recorded and submitted. held: -1 the held configuration carried on the
+  // ai: device (gpu/glsl/word.mjs HELD: the last static word read before each frame in capture order, launch to launch),
+  // ai: which frames with animated words decode at; 0 or a configuration posted (src/fmt.h ob_fmt_held), the batch
+  // ai: starting from it (a carousel's header, a reset, a batch on its own).
   // ai: profile: a pass and a timestamp pair a stage group (decoder.mjs batch's profile: STAGES), so the batch's
   // ai: out.stageMs says which stage costs what; its gpuMs is their sum. keep: the batch's first `keep` frames read
   // ai: back as the ring holds them (FrameOut::luma), for a replay.

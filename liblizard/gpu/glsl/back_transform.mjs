@@ -9,7 +9,7 @@
 // ai: Bindings as the WGSL's: 0 frames, 1 sel, 2 LISTS, 3 ARGS, 4 the gate's uniform (at[s] a slot's (workgroups of
 // ai: pass 1, rows of pass 2, top version, 0), then the rows table four versions' words a vec4), 5 BCOUNTS, 6 V, 7
 // ai: ITS, 8 REC. Built a batch size, as the WGSL is: B, the lists' heads and the zeroed lengths are literals.
-import { VERSION, SAMPLERLESS, F16, STORAGE16, DIMS, CONVERT, LUMH, lumhHead, MAP } from "./common.mjs";
+import { VERSION, SAMPLERLESS, F16, STORAGE16, DIMS, CONVERT, LUMH, lumhHead, MAP, CFG } from "./common.mjs";
 import { COONS } from "./sample.mjs";
 import { SLOTS } from "../plan/common.mjs";
 import { ARGS_WORDS, CPW, LATTICE_MAX, ANCH_SIDE, ANCH_REC, ANCH_SURF, ANCH_GAIN, ANCH_ERASE, listsHead, listsRows, listsRing, argsLdpc } from "../plan/back_transform.mjs";
@@ -26,7 +26,7 @@ layout(set = 0, binding = 0, std430) readonly buffer Frames { Frame frames[]; };
 layout(set = 0, binding = 1, std430) readonly buffer Sel { uvec4 sel[]; };
 layout(set = 0, binding = 2, std430) buffer Lists { uint lists[]; };
 layout(set = 0, binding = 3, std430) buffer Args { uint args[]; };
-layout(set = 0, binding = 4, std140) uniform Gate { uvec4 at[${SLOTS}]; uvec4 rows[${Math.ceil((counts * SLOTS) / 4)}]; uvec4 codes[${Math.ceil(counts / 4)}]; } G;
+layout(set = 0, binding = 4, std140) uniform Gate { uvec4 at[${SLOTS}]; uvec4 rows[${Math.ceil((counts * SLOTS) / 4)}]; } G;
 layout(set = 0, binding = 5, std430) buffer Counts { uint counts[]; };
 layout(set = 0, binding = 6, std430) buffer Verdicts { uint V[]; };
 layout(set = 0, binding = 7, std430) buffer Iterations { uint ITS[]; };
@@ -36,6 +36,7 @@ const uint LS = ${B + 1}u;
 const uint SLOTS = ${SLOTS}u;
 const uint HEAD = ${listsHead(B)}u;
 const uint LDPC = ${argsLdpc(0)}u;
+${CFG}
 void main() {
   uint t = gl_LocalInvocationIndex;
   for (uint i = t; i < ${8 * B}u; i += 64u) { counts[i] = 0u; }
@@ -45,7 +46,7 @@ void main() {
   // ai: pass 2's workgroups a frame gather here as the frames are listed: the most rows any frame of the size needs.
   // ai: and tsoft's, the chunks of the most version any frame of the size takes.
   for (uint s = 0u; s < SLOTS; s++) { lists[s * LS] = 0u; args[s * ${ARGS_WORDS}u + 6u] = 0u; args[s * ${ARGS_WORDS}u + 9u] = 0u; }
-  // ai: and each code's, the most blocks of it a listed frame's version takes, the frames listed counted in m.
+  // ai: and each code's, the most blocks of it a listed frame's configuration takes, the frames listed counted in m.
   for (uint c = 0u; c < ${NC}u; c++) { args[LDPC + 3u * c] = 0u; }
   uint m = 0u;
   for (uint f = 0u; f < B; f++) {
@@ -54,24 +55,29 @@ void main() {
     lists[HEAD + 2u * B + f] = 0u;
     lists[HEAD + 3u * B + f] = 0u;
     lists[HEAD + 4u * B + f] = 0u;
+    // ai: F8's configuration (sel.y = 1 + it, src/fmt.h ob_fmt_held: version << 21 | the counts), the frame's layout
     if (frames[f].valid == 0u || sel[f].y < 2u) { continue; }
+    uint g = sel[f].y - 1u;
     uint s = sel[f].z;
-    if (s >= SLOTS || G.at[s].x == 0u) { continue; }
+    if (s >= SLOTS || G.at[s].x == 0u || !cfgOk(g)) { continue; }
     uint c = lists[s * LS];
     lists[s * LS + 1u + c] = f;
     lists[s * LS] = c + 1u;
-    uint k = min(sel[f].y - 1u, G.at[s].z);
+    uint k = min(g >> 21u, G.at[s].z);
     uint i = k * SLOTS + s;
     uint r = G.rows[i >> 2u][i & 3u];
-    lists[HEAD + 2u * B + f] = k;
+    lists[HEAD + 2u * B + f] = g;
     lists[HEAD + 3u * B + f] = r;
     lists[HEAD + 4u * B + f] = sel[f].x;
     args[s * ${ARGS_WORDS}u + 6u] = max(args[s * ${ARGS_WORDS}u + 6u], r);
     args[s * ${ARGS_WORDS}u + 9u] = max(args[s * ${ARGS_WORDS}u + 9u], ${chunks}u * k);
     lists[HEAD + 5u * B + m] = f;
     m = m + 1u;
-    uint cc = G.codes[k >> 2u][k & 3u];
-    for (uint c = 0u; c < ${NC}u; c++) { args[LDPC + 3u * c] = max(args[LDPC + 3u * c], (cc >> (8u * c)) & 255u); }
+    uvec4 cc = cfgCounts(g);
+    args[LDPC] = max(args[LDPC], cc.x);
+    args[LDPC + 3u] = max(args[LDPC + 3u], cc.y);
+    args[LDPC + 6u] = max(args[LDPC + 6u], cc.z);
+    args[LDPC + 9u] = max(args[LDPC + 9u], cc.w);
   }
   for (uint c = 0u; c < ${NC}u; c++) { args[LDPC + 3u * c + 1u] = m; args[LDPC + 3u * c + 2u] = 1u; }
   for (uint s = 0u; s < SLOTS; s++) {

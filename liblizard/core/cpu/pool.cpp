@@ -140,7 +140,7 @@ void CpuPool::run(Worker* w) {
     out.ms = nowMs() - t0;
     out.found = fr.found != 0; out.ring = fr.ring; out.n = fr.n; out.held = fr.held != 0;
     out.hasWord = fr.word != 0; out.version = fr.version; out.fps = fr.fps;
-    out.kind = fr.kind; out.pos = fr.pos; memcpy(out.ext, fr.ext, 2); memcpy(out.sym, fr.sym, 3);
+    out.kind = fr.kind; out.id = fr.id; memcpy(out.count, fr.count, sizeof out.count); memcpy(out.sym, fr.sym, 3);
     memcpy(out.quad, fr.quad, sizeof out.quad);
     out.pilotBlocks = fr.pilot_blocks; out.pilotR = fr.pilot_r[0]; out.pilotSd = fr.pilot_sd[0]; out.pilotR2 = fr.pilot_r[1]; out.pilotSd2 = fr.pilot_sd[1];
     if (fr.n) for (int b = 0; b < fr.total; b++) if (ok[b]) out.blocks.insert(out.blocks.end(), blocks.begin() + (size_t)b * bb, blocks.begin() + (size_t)(b + 1) * bb);

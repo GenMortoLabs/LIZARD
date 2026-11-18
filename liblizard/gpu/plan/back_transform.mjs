@@ -17,7 +17,8 @@ export const ARGS_WORDS = 12;
 export const argsLdpc = (c) => SLOTS * ARGS_WORDS + 3 * c;
 // ai: ARGS whole, u32 words: ARGS_WORDS a picture slot, then 3 a code.
 export const argsWords = SLOTS * ARGS_WORDS + 3 * NC;
-// ai: LISTS: a size's count and frames (SLOTS (1 + B)), then from listsHead each frame's (w, h), version, rows and
+// ai: LISTS: a size's count and frames (SLOTS (1 + B)), then from listsHead each frame's (w, h), configuration (src/fmt.h
+// ai: ob_fmt_held: version << 21 | its counts; the version alone before 2026-11-18), rows and
 // ai: ring, then from listsAll every listed frame of every size in the batch's order (the LDPC's workgroups' frames:
 // ai: a workgroup a (block of a code, listed frame)).
 export const listsHead = (B) => SLOTS * (1 + B);
@@ -29,11 +30,10 @@ export const listsAll = (B) => listsHead(B) + 5 * B;
 export const ARGS_SLOT = { pass1: 0, reduce: 3, pass2: 6, soft: 9 };
 // ai: The gate's uniform in u32 words: at[s] = (n / CPW, V, the size's top version, 0) a slot, then the rows table
 // ai: flat, entry v SLOTS + s the rows version v takes at slot s (transform.mjs fills it), padded to whole vec4u.
-// ai: counts: versions 0 to the largest built size's top. Then the codes table, a word a version: each code's blocks in
-// ai: the version's rate profile, a byte a code in CODES' order (../back/codes.mjs ruleTables).
+// ai: counts: versions 0 to the largest built size's top. (A codes table followed, each version's blocks a code, until
+// ai: 2026-11-18: a frame's blocks are its word's, ../glsl/common.mjs CFG.)
 export const gateRowsAt = (c, s) => 4 * SLOTS + c * SLOTS + s;
-export const gateCodesAt = (counts, v) => 4 * SLOTS + 4 * Math.ceil((counts * SLOTS) / 4) + v;
-export const gateWords = (counts) => gateCodesAt(counts, 0) + 4 * Math.ceil(counts / 4);
+export const gateWords = (counts) => 4 * SLOTS + 4 * Math.ceil((counts * SLOTS) / 4);
 
 export const LATTICE_MAX = 36;   // node coordinates a side PIC holds (register.mjs NODES_MAX / 4 is 34)
 

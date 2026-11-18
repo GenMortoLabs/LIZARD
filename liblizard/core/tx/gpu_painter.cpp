@@ -99,7 +99,7 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
   const int n = lizard_n_for(subch);
   if (lizard_init(&f_, n, subch, span)) return "the codec refused LIZARD-" + std::to_string(subch);
   fReady_ = true;
-  lizard_fmt_fps(&f_, fps);
+  lizard_fmt_fps(&f_, ob_fmt_rate_near(fps));   // ai: the table's rate nearest (src/fmt.h); the header states it exactly
   fps_ = fps;
   gWords_.reset();
   wordsWhy_ = "no GPU paint configured";
@@ -293,17 +293,20 @@ std::string GpuPainter::words() {
     int cells = 0, nwb = 0;
     const std::string we = wordSpans(f_, t_, spans, cells, nwb);
     if (!we.empty()) return we;
-    // ai: every symbol's word: the header the format's own (version, fps, extension bytes 0 and 0), symbol p's animated
-    // ai: word (src/fmt.h ob_fmt_encode) as its cells' bits
+    // ai: every symbol's word: the header the format's own configuration (src/fmt.h ob_car_content: the static word's
+    // ai: five bytes, a rate record where the sender's rate is off the table), symbol p's animated word (src/fmt.h
+    // ai: ob_fmt_encode) as its cells' bits
     const ob_layout_t& L = f_.frame;
     const int bytes = ob_fmt_bytes(L.w < L.h ? L.w : L.h, L.reserve);
-    uint8_t hdr[OB_CAR_SYM * OB_CAR_N], cw[OB_FMT_BYTES_MAX];
-    const uint8_t content[4] = {static_cast<uint8_t>(f_.subch / LIZARD_STEP), static_cast<uint8_t>(fps_), 0, 0};
-    const int k = ob_car_header(content, 4, hdr);
+    uint8_t hdr[OB_CAR_SYM * OB_CAR_N], cw[OB_FMT_BYTES_MAX], content[OB_CAR_CONTENT_MAX];
+    ob_fmt_t cfg = f_.fmt;
+    cfg.fps = fps_;
+    const int clen = ob_car_content(&cfg, content), k = clen < 0 ? -1 : ob_car_header(content, clen, hdr);
+    if (k < 0) return "the animated header's content";
     std::vector<uint32_t> wall(static_cast<size_t>(OB_CAR_N) * nwb, 0);
     for (int p = 0; p < OB_CAR_N; p++) {
       ob_fmt_t w{};
-      w.kind = OB_FMT_ANIM; w.pos = p;
+      w.kind = OB_FMT_ANIM; w.id = p;
       ob_car_symbol(hdr, k, p, w.sym);
       if (ob_fmt_encode(&w, cw, bytes)) return "the animated word did not encode";
       for (int side = 0; side < 4; side++) for (int c = 0; c < cells; c++)

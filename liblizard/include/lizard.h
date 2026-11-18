@@ -145,7 +145,7 @@ typedef struct {
   int word;           /* ai: the frame's own word read */
   int blocks;         /* ai: the size of the format it was decoded at, its version (0 none) */
   int fps;            /* ai: the display rate its word states */
-  int held_used;      /* ai: decoded at the held word, its own not read */
+  int held_used;      /* ai: decoded at the held configuration, its own word animated */
   int total;          /* ai: the blocks the symbol carries */
   int verified;       /* ai: the blocks verified */
   float quad[8];      /* ai: its corners in the image, x y x y ..., top left, top right, bottom right, bottom left */
@@ -154,16 +154,17 @@ typedef struct {
                          ai: NaN where no block's pilots were read (pilot_blocks 0); every format has blocks of both
                          ai: parities, so a frame read reads both */
   float pilot_sd[2];  /* ai: their standard errors (NaN with its reading) */
-  int animated;       /* ai: the word read is animated, a carousel symbol (no version of its own: the frame was decoded
-                         ai: at the held word; blocks 0) */
+  int animated;       /* ai: the word read is animated, a carousel symbol (no configuration of its own: the frame was
+                         ai: decoded at the held one; blocks 0) */
 } liz_decoded;
 
 /* ai: One captured frame (or one region of it: px at the region's first pixel, w x h, rows stride bytes apart): its
  * ai: verified blocks packed into verified (liz_decoder_max_blocks x LIZ_BLOCK bytes), their count returned. held: the
- * ai: caller's, the size (blocks) the last word read names (0 none), shared by every decoder reading one stream; a frame
- * ai: whose own word does not read, or is animated, is decoded at it, and with none held is not decoded; it is updated
- * ai: whenever a frame's own static word reads, and when the animated words this decoder has read assemble a header
- * ai: (its version). Every frame is otherwise decoded on its own. out may be NULL. */
+ * ai: caller's, the configuration the last word read states (a static word's version and layout, or the header the
+ * ai: animated words this decoder has read assemble: one int, version << 21 | the 7/8, 2/3 and 1/2 blocks 7 bits each;
+ * ai: 0 none), shared by every decoder reading one stream, updated whenever one is read. A frame is decoded at its own
+ * ai: static word; one whose word is animated at the held configuration (none held: not decoded); one whose word does
+ * ai: not read, not at all (the word before the frame). Every frame is otherwise decoded on its own. out may be NULL. */
 LIZ_API int liz_decode(liz_decoder *d, const uint8_t *px, int w, int h, int stride, liz_pixfmt fmt, int *held,
                        uint8_t *verified, liz_decoded *out);
 

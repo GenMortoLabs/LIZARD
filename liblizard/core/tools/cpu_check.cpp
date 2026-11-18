@@ -112,7 +112,7 @@ static int replay(const std::string& run, int want, int threads, std::string mod
         cpu_dec_set_axis(axes[i][0], axes[i][1]);
         r.got = cpu_dec_frame(d, px[i].data(), dims[i].first, dims[i].second, ordered ? held : 0, blocks.data(), ok.data(), &r.fr);
         r.ms = nowMs() - a;
-        if (r.fr.word) { const int v = cpu_hold_take(hold, r.fr.kind, r.fr.version, r.fr.pos, r.fr.sym); if (v) held = v; }
+        if (r.fr.word) { const int v = cpu_hold_take(hold, r.fr.kind, r.fr.version, r.fr.count, r.fr.id, r.fr.sym); if (v) held = v; }
         r.digest = digestOf(d, r.fr, r.got, blocks.data(), ok.data(), bb);
         if (hashing) r.deep = cpu_hash_take();
         res[i] = r;
@@ -137,13 +137,14 @@ static int replay(const std::string& run, int want, int threads, std::string mod
   }
   // ai: LIZ_PERFRAME=1: a line a frame, in frame order after the run, in lizard_gpu_check's form for the fields the C has
   // ai: ("frame <index> found <0|1> ring <r> version <v> held <0|1> blocks <n> word <v>", word 0 where none read or the
-  // ai: word animated; then "anim <0|1> pos <p> sym <hex>", an animated word's carousel symbol), so one run of many cells
+  // ai: word animated; then "anim <0|1> id <i> sym <hex>", an animated word's carousel symbol, and "count <a> <t> <c>", a static
+  // ai: word's 7/8, 2/3 and 1/2 blocks), so one run of many cells
   // ai: splits by frame (scripts/gpu/native/peaks.mjs readFrames)
   if (envOr("LIZ_PERFRAME", "") == "1")
     for (int i = 0; i < frames; i++) {
       const auto& r = res[(size_t)i];
-      printf("frame %d found %d ring %d version %d held %d blocks %d word %d anim %d pos %d sym %02x%02x%02x\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.fr.held != 0, r.got, r.fr.word ? r.fr.version : 0,
-             r.fr.word && r.fr.kind ? 1 : 0, r.fr.pos, r.fr.sym[0], r.fr.sym[1], r.fr.sym[2]);
+      printf("frame %d found %d ring %d version %d held %d blocks %d word %d anim %d id %d sym %02x%02x%02x count %d %d %d\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.fr.held != 0, r.got, r.fr.word ? r.fr.version : 0,
+             r.fr.word && r.fr.kind ? 1 : 0, r.fr.id, r.fr.sym[0], r.fr.sym[1], r.fr.sym[2], r.fr.count[0], r.fr.count[1], r.fr.count[2]);
     }
   std::sort(ms.begin(), ms.end());
   std::sort(passMs.begin(), passMs.end());

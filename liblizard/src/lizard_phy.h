@@ -15,17 +15,18 @@
 #include "ob.h"
 #include "fmt.h"
 
-// The code rate follows the frequency (the format's rate profile): a frame's slots (two a coefficient, in order of
-// rising frequency, subch x 640 of them) carry LDPC blocks at four rates from the lowest frequencies outwards, 7/8 on
-// about the inner LIZARD_TIER_IN tenths of a percent of them, then 3/4, then 2/3 on about LIZARD_TIER_23 and 1/2 on about
-// the outer LIZARD_TIER_OUT, because a capture's signal-to-noise ratio falls with the frequency: the low frequencies
-// carry more than 3/4 needs and the high ones less. Every block is the same LIZARD_BLOCK bytes whatever its rate (the
+// The code rate follows the frequency: a frame's slots (two a coefficient, in order of rising frequency, subch x 640 of
+// them) carry LDPC blocks at four rates from the lowest frequencies outwards, 7/8, then 3/4, then 2/3, then 1/2, because a
+// capture's signal-to-noise ratio falls with the frequency: the low frequencies carry more than 3/4 needs and the high
+// ones less. Every block is the same LIZARD_BLOCK bytes whatever its rate (the
 // transfer's 476: xfer.h XFER_BLOCK), so a profile moves a frame's capacity by its block count. A block takes its
 // code's sent bits and then its pilots (lizard_block_slots: 4496 slots at 7/8, 5152 at 3/4, 5760 at 2/3, 7680 at 1/2),
 // the blocks packed one after another from the frame's first slot whatever the sub-channels; the slots past the last
-// block are padded (the whitening alone). The profile is a function of the sub-channel count alone (lizard_tiers_for),
-// which the format word names, so a receiver told the version knows it; lizard_init builds it. LIZARD_RATE is the 3/4
-// tier's rate, the one that fills.
+// block are padded (the whitening alone). A frame's layout is its word's: the 7/8, 2/3 and 1/2 blocks counted there, the
+// 3/4 filling the rest (fmt.h ob_fmt_layout; lizard_layout), chosen by the sender, read by every receiver (2026-11-18;
+// the profile was a function of the version alone before, which every receiver derived). The default senders' choice
+// (lizard_tiers_for) puts the 7/8 on about the inner LIZARD_TIER_IN thousandths, the 2/3 on LIZARD_TIER_23 and the 1/2 on
+// the outer LIZARD_TIER_OUT, by least squares. LIZARD_RATE is the 3/4 tier's rate, the one that fills.
 enum { LIZARD_RATE = 4, LIZARD_TIER_IN = 390, LIZARD_TIER_23 = 150, LIZARD_TIER_OUT = 200, LIZARD_BLOCK = 476 };
 
 // ai: THE RINGS (64, 128 and 256 band cells a side since 2026-10-25; the 32 ring as well from 2026-09-27, the 96 in the
@@ -71,8 +72,8 @@ extern const int LIZARD_RING[LIZARD_RINGS];
 enum { LIZARD_BITMAP = 3 };
 // LIZARD_SUB: the coefficients a sub-channel (640 slots), the unit a format counts and the soft values' moments are
 // taken over (a block's slots run across sub-channels as they fall). LIZARD_STEP: the sub-channels a version steps by: a
-// format is a multiple of 16 sub-channels from 64 to 1024 and its word's version is subch / LIZARD_STEP, 4 to 64
-// (fmt.h OB_FMT_VERSION_MIN, OB_FMT_VERSION_MAX).
+// format is a multiple of 16 sub-channels from 64 to 1072 and its word's version is subch / LIZARD_STEP, 4 to 67
+// (fmt.h OB_FMT_VERSION_MIN, OB_FMT_VERSION_MAX; OB_FMT_SLOTS a version's slots).
 enum { LIZARD_SUB = 320, LIZARD_STEP = 16, LIZARD_STRIP = 64, LIZARD_TIERS = 4 };
 
 // A run of blocks sent at one code rate. Low frequencies survive blur and distance and high ones do
@@ -87,6 +88,7 @@ int lizard_block_slots(int rate);
 // Named, so internal.h can forward-declare it for the two accessors that hand back what lizard_acquire is holding.
 typedef struct lizard_s {
   int n, subch, blocks, block_bytes;
+  int blocks_max;         // the most blocks a layout of this frame holds (lizard_layout), its buffers' size
   float scale;            // picture samples a frame module, n / span (span = 2 LIZARD_RING[ring])
   int pxm, px;            // the painter's whole pixels a module, and the drive's side in them
   int margin;             // border modules between the symbol's edge and the picture: the mark and its guard, 15
@@ -97,8 +99,8 @@ typedef struct lizard_s {
   int bw, vblocks;
   int *pos;               // subch * 320 indices into that array ((v / bw) * n * bw + u * bw + v % bw, u wrapped), low frequency first
   ob_layout_t frame;      // the border round the picture: ring, corner marks, band (layout.h)
-  int tiers;                                  // the frame's blocks from the lowest frequencies outwards
-  lizard_tier_t tier[LIZARD_TIERS];
+  int tiers;                                  // the four codes, fmt.h OB_TIER_RATE's order (inner first)
+  lizard_tier_t tier[LIZARD_TIERS];           // each code's blocks in the frame's layout (0 where it carries none)
   ldpc_t code[LIZARD_TIERS];
   int *block_tier, *block_slot;               // per block: its tier, and its first slot among the frame's (two a coefficient, pos order)
   int used;                                   // the slots the blocks take; the frame's other subch x 640 - used are padded
@@ -111,15 +113,19 @@ typedef struct lizard_s {
 
 // The word the last decode read out of the symbol, or 0 where it read none.
 const ob_fmt_t *lizard_fmt_rx(const lizard_t *f);
-// What the band says about the display rate: 1 to 255 whole frames a second the sender MEANS to paint at, 0 for
-// a sender that states none (the default, so nothing that does not care is changed). -1 where fps is out of
-// range. Repaints the word, which is safe at any time.
+// What the band says about the display rate: whole frames a second the sender MEANS to paint at, one of the table's
+// (fmt.h OB_FMT_RATE: 60, the default, and 31 others to 1); -1 where the table has none (a sender at another rate paints
+// animated words, whose header states it). Repaints the word, which is safe at any time.
 int lizard_fmt_fps(lizard_t *f, int fps);
-// The word the next encode paints (fmt.h): kind OB_FMT_STATIC with extension bytes b[0] and b[1] (0 and 0, the default:
-// the format as it stands), or OB_FMT_ANIM, a carousel symbol: position b[0] (to OB_FMT_POS_MAX) and its bytes b[1] to
-// b[3]. The version stays the codec's and the rate lizard_fmt_fps's. 0, or -1 where the kind or the position is not
-// one. Repaints the word, which is safe at any time.
+// The word the next encode paints (fmt.h): kind OB_FMT_STATIC (the codec's version and layout, the rate
+// lizard_fmt_fps's; b unread), or OB_FMT_ANIM, a carousel symbol: id b[0] (to OB_FMT_ID_MAX) and its bytes b[1] to
+// b[3]. 0, or -1 where the kind or the id is not one. Repaints the word, which is safe at any time.
 int lizard_fmt_word(lizard_t *f, int kind, const uint8_t b[4]);
+// The frame's layout (fmt.h ob_fmt_layout): count[0] 7/8 blocks, count[1] 2/3, count[2] 1/2, the 3/4 blocks filling the
+// rest; the next encode paints it and its word states it, and a decode finishes a frame at its own static word's (the
+// word read before the frame). lizard_init sets the default senders' (lizard_tiers_for). 0, or -1 where it is no frame of
+// this codec's version. Cheap: no table, no search.
+int lizard_layout(lizard_t *f, const int count[3]);
 // ai: The pilots (SPEC 7.3; 2026-09-30): the slots of a block past its codeword (its last 16 on a 7/8 block, its last 32
 // ai: on a 3/4 block; a 2/3 or 1/2 block has none) carry the whitening XOR a bit of c, the sender's count of
 // ai: painted pictures mod 4: bit 0 on an even block, so its tail flips sign picture to picture, and bit 1 on an odd
@@ -150,15 +156,16 @@ void lizard_align(const lizard_t *f, float d[2]);
 // The clipping ratio c (SPEC 6.7), a format constant: the picture is clipped at c times its rms (L = c sigma, the rms
 // known from the coefficients sent, every one at the same magnitude) and that range mapped onto black to white.
 #define LIZARD_CLIP 2.0f
-// The format at subch sub-channels (a multiple of 16 from 64 to 1024): the rate profile lizard_tiers_for gives, in a
-// picture of n (LIZARD_PICTURES, lizard_n_for(subch) for the format's own), in the ring whose span (2 LIZARD_RING[r]) span
-// names, 0 the default. 0, or -1 for a configuration that is no format's.
+// The format at subch sub-channels (a multiple of 16 from 64 to 1072), with the default senders' layout
+// (lizard_tiers_for; lizard_layout another), in a picture of n (LIZARD_PICTURES, lizard_n_for(subch) for the format's own),
+// in the ring whose span (2 LIZARD_RING[r]) span names, 0 the default. 0, or -1 for a configuration that is no format's.
 int lizard_init(lizard_t *f, int n, int subch, int span);
-// The same with up to LIZARD_TIERS runs of blocks at any rates in place of the profile (an experiment's: the format's
-// profile is lizard_tiers_for's): each run's rate and blocks (its slots are the rate's, lizard_block_slots), in a frame of
-// the fewest sub-channels that hold them.
+// The same with blocks at the four codes given (an experiment's: each run's rate one of the four, in their order, each
+// once, with its blocks; the 3/4's as given, not filling), in a frame of the fewest sub-channels that hold them. Its
+// band is blank unless the word could state it (lizard_layout's own).
 int lizard_init_tiers(lizard_t *f, int n, const lizard_tier_t *tier, int tiers, int span);
-// The format's rate profile for subch sub-channels (a multiple of LIZARD_STEP, 64 to 1024), over its S = subch x 640
+// The default senders' layout (2026-11-18: no receiver derives it; a frame's word states its counts) for subch
+// sub-channels (a multiple of LIZARD_STEP, 64 to 1072), over its S = subch x 640
 // slots: a 7/8 blocks, m 3/4 blocks, t 2/3 blocks and c 1/2 blocks, inner first, of s7, s3, s2 and s1 slots
 // (lizard_block_slots), with a s7 + t s2 + c s1 + s3 <= S, m = floor((S - a s7 - t s2 - c s1) / s3) >= 1 (the 3/4 tier
 // fills, the remainder padded), and the (a, t, c) whose a s7, t s2 and c s1 are nearest LIZARD_TIER_IN, LIZARD_TIER_23 and
@@ -169,6 +176,9 @@ int lizard_init_tiers(lizard_t *f, int n, const lizard_tier_t *tier, int tiers, 
 int lizard_tiers_for(int subch, lizard_tier_t tier[LIZARD_TIERS]);
 // The blocks a frame of subch sub-channels carries under that profile (0 for no format).
 int lizard_blocks_for(int subch);
+// The most blocks any layout a word may state gives a frame of subch sub-channels (OB_FMT_COUNT_MAX 7/8 blocks, the
+// smallest, and 3/4 blocks filling the rest): what a receiver's buffers hold.
+int lizard_blocks_max_for(int subch);
 // ai: Where the camera's optical axis falls in the image the calling thread decodes next, image px (2026-10-17): where
 // ai: the lens model's centre is first taken (acquire.c lensm_axis) and where the final fit's search for it starts
 // ai: (lens_centre, 2026-11-10: the centre is fitted in every frame, so a wrong or missing axis costs little). NaN, the

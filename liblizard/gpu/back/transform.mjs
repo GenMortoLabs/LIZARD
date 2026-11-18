@@ -10,7 +10,7 @@
 // ai: frame's (ring, picture) pair (`picture`: the front half's rings, where each ring puts a picture and its
 // ai: lattice). It reads the front half's anchors records too (binding 10: SPEC 6.13, the mesh the anchors give and
 // ai: their erase).
-import { CPW, ARGS_WORDS, ARGS_SLOT, LATTICE_MAX, argsLdpc, gateRowsAt, gateCodesAt, gateWords } from "../plan/back_transform.mjs";
+import { CPW, ARGS_WORDS, ARGS_SLOT, LATTICE_MAX, argsLdpc, gateRowsAt, gateWords } from "../plan/back_transform.mjs";
 import { RING_COUNT } from "../plan/finder.mjs";
 import { CHUNKS } from "../plan/back_tiers.mjs";
 import { gridOf } from "../tables.mjs";
@@ -32,10 +32,9 @@ export class Transform {
   // ai: The gate also zeroes the chain's counters, verdicts, iteration counts and record count (blkStride entries a
   // ai: frame for V and ITS).
   // ai: picture: the rings, [{ span, margin, lattice }] a ring (gpu/tables.mjs formatTables rings: span, margin and
-  // ai: nodeX), PIC a size holding each ring's grid for that size (gridOf) and lattice. codes: a word a version, each
-  // ai: code's blocks in its rate profile a byte (codes.mjs ruleTables; the gate's codes table, the LDPC's dispatches).
-  static async build(device, { B, tables, precision = "f32", blkStride, picture, codes }) {
-    if (!codes) throw new Error("the gate sizes the LDPC's dispatches: codes, each version's blocks a code, is required");
+  // ai: nodeX), PIC a size holding each ring's grid for that size (gridOf) and lattice. The LDPC's dispatches are sized
+  // ai: by each listed frame's own counts (its word's configuration, ../glsl/common.mjs CFG).
+  static async build(device, { B, tables, precision = "f32", blkStride, picture }) {
     if (precision === "f16" && !device.features.has("shader-f16")) throw new Error("precision f16 without shader-f16");
     if (!picture) throw new Error("the transform samples the frame itself: picture, the front half's rings, is required");
     if (!(blkStride > 0)) throw new Error(`blkStride ${blkStride}: the blocks a frame the gate zeroes`);
@@ -103,7 +102,6 @@ export class Transform {
       gate.set([tb.n / CPW, tb.V, tb.blocks / CHUNKS, 0], 4 * s);
       for (let v = 0; v < counts; v++) gate[gateRowsAt(v, s)] = rowsOfVersion(tb, v);
     }
-    for (let v = 0; v < counts; v++) gate[gateCodesAt(counts, v)] = codes[v] ?? 0;
     t.gateUni = up(gate, U.UNIFORM);
     // Per frame strides, the largest built size's (a batch may mix sizes).
     // ai: Y holds V rows a frame where pass 1 writes V - 1, and the column means ride in PART's w (no Y0 buffer).

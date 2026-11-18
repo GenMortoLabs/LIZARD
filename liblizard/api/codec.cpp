@@ -141,7 +141,7 @@ LIZ_API int liz_decode(liz_decoder* d, const uint8_t* px, int w, int h, int stri
     }
     cpu_frame_t fr{};
     cpu_dec_frame(d->d, img, w, h, *held, d->blocks.data(), d->ok.data(), &fr);
-    if (fr.word) { const int v = cpu_hold_take(d->hold, fr.kind, fr.version, fr.pos, fr.sym); if (v) *held = v; }
+    if (fr.word) { const int v = cpu_hold_take(d->hold, fr.kind, fr.version, fr.count, fr.id, fr.sym); if (v) *held = v; }
     int k = 0;
     const int total = std::min(fr.total, d->top);
     for (int b = 0; b < total; b++)

@@ -133,7 +133,7 @@ static void test_stream(liz_decoder *d) {
         frames++; blocks += got; missed += g.frame_blocks - got; judged_bad += v.bad;
         CHECK(got == g.frame_blocks, "ring %d, %d codes, frame %d: %d of %d blocks", ring, codes, i, got, g.frame_blocks);
         CHECK(v.test && !v.bad && v.judged == got, "ring %d, %d codes, frame %d: judged the test stream's", ring, codes, i);
-        CHECK(held == 13, "ring %d: the held word %d", ring, held);
+        CHECK(held >> 21 == 13, "ring %d: the held configuration %d (version %d)", ring, held, held >> 21);
         if (i == 3 && got) {   /* ai: one payload byte wrong: that block is bad */
           verified[LIZ_ID_BYTES + 100] ^= 1;
           liz_rx_frame(rx, verified, got, &v);

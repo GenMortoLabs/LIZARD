@@ -1,19 +1,20 @@
 // F8, the format word, in GLSL: the band read through the final map, each word cell against its track pairs' grey;
 // the word, static or animated, by Gauss-Jordan over GF(256) from its most reliable bytes (../wordcode.mjs); the
-// side-aware gate, held to the C's false-word rate; sel written (a static word's version, else HELD's, below) with
-// the result: r[5] the version, or 256 + the position of an animated word, r[6] the bytes after it
-// (fps + 256 ext0 + 65536 ext1, or the symbol's three bytes alike), 0 and 0 where no word is taken. One workgroup of
-// 256 a frame.
+// side-aware gate, held to the C's false-word rate; sel written (a static word's configuration, else HELD's for an
+// animated word, below; none for a frame whose word is not read) with the result: r[5] the version, or 256 + the id of
+// an animated word, r[6] the word's bits as a float's (uintBitsToFloat): a static word's 32 bits after its magic
+// (version, rate code, counts; src/fmt.h), or the symbol's three bytes, low first; 0 and 0 where no word is taken. One
+// workgroup of 256 a frame.
 // ai: The Word, Lattice and Held uniforms are std140, every member an array of uvec4 or vec4; the uniform's layout and
 // ai: tables come from ../plan/word.mjs. No private array is indexed at run
 // ai: time (the S26's Adreno returned zeros from one): the code's rows, GF(256)'s tables and the generator's columns are
 // ai: read from the uniform, the lattice too.
-import { VERSION, SAMPLERLESS, DIMS, CONVERT, MAP, uniformLoad } from "./common.mjs";
+import { VERSION, SAMPLERLESS, DIMS, CONVERT, MAP, CFG, uniformLoad } from "./common.mjs";
 import { COONS } from "./sample.mjs";
 import { SLOTS } from "../plan/common.mjs";
 import { LATTICE_MAX } from "../plan/back_transform.mjs";
 import { RING_COUNT } from "../plan/finder.mjs";
-import { VERSION_MIN, VERSION_MAX, TAU, SIDE_KEEP, MAGIC, MAGIC_ANIM, POS_MAX } from "../wordcode.mjs";
+import { VERSION_MIN, TAU, SIDE_KEEP, MAGIC, MAGIC_ANIM, ID_MAX } from "../wordcode.mjs";
 import { CON_MIN, WMAX, ROWS, MIDS_MAX, VECS, UNKNOWN, SWAP, PER, SETS, TOP, BYTES_MAX, GATE, LAYOUT } from "../plan/word.mjs";
 
 const TOPS = Math.ceil(SLOTS / 4);
@@ -33,7 +34,8 @@ const SLOT_OF = `uint slotOf(uint v) {
 // ai: one of the next SWAP; the last UNKNOWN flip one's least reliable bit. A lane a set solves its UNKNOWN x UNKNOWN
 // ai: system by Gauss-Jordan in its own rows of workgroup memory (the magic's column moved to the right side; the
 // ai: Adreno's pivoted eliminations on private arrays returned zeros, workgroup memory is not private); a static solve
-// ai: whose version is outside VERSION_MIN to VERSION_MAX, an animated one past POS_MAX, refused. A lane a (set, u32 of
+// ai: whose counts make no frame of its version (common.mjs CFG cfgOk, src/fmt.h ob_fmt_layout), an animated one past
+// ai: ID_MAX, refused. A lane a (set, u32 of
 // ai: the word) builds that word of the candidate from the code's rows and scores it against qs; a lane a set sums them;
 // ai: lane 0 keeps the best, the first set on a tie (the static magic's first).
 const SEARCH = /* glsl */ `
@@ -103,7 +105,7 @@ const SEARCH = /* glsl */ `
     }
     uint x0 = mat[m0 + 4u];
     uint data = x0 | (mat[m0 + 9u] << 8u) | (mat[m0 + 14u] << 16u) | (mat[m0 + 19u] << 24u);
-    bool inRange = kind == 0u ? (x0 >= ${VERSION_MIN}u && x0 <= ${VERSION_MAX}u) : x0 <= ${POS_MAX}u;
+    bool inRange = kind == 0u ? cfgOk(cfgOfWord(data)) : x0 <= ${ID_MAX}u;
     sv[li] = uvec4(data, kind, ok && inRange ? 1u : 0u, 0u);
   }
   barrier();
@@ -198,6 +200,11 @@ uint gbyte(uint i) { return (W.gf[i >> 4u][(i >> 2u) & 3u] >> (8u * (i & 3u))) &
 uint gexp(uint e) { return gbyte(e % 255u); }
 uint glog(uint x) { return gbyte(256u + x); }
 uint gmul(uint a, uint b) { return (a == 0u || b == 0u) ? 0u : gexp(glog(a) + glog(b)); }
+${CFG}
+// ai: a static word's 32 bits after its magic (bytes 1 to 4, the first the most significant; data holds them low
+// ai: first) and its configuration (src/fmt.h ob_fmt_held: the version, from its six bits, << 21 | the counts)
+uint bitsOfWord(uint data) { return (data << 24u) | ((data & 0xff00u) << 8u) | ((data >> 8u) & 0xff00u) | (data >> 24u); }
+uint cfgOfWord(uint data) { uint x = bitsOfWord(data); return ((${VERSION_MIN}u + (x >> 26u)) << 21u) | (x & 0x1fffffu); }
 // ai: a row of a set's system: position p's columns of the four unknown bytes, its value less the magic's part
 void setRow(uint at, uint r, uint p, uint v, uint magic) {
   uint i = 2u * (${BYTES_MAX}u * r + p);
@@ -304,27 +311,30 @@ void main() {
     bool ok = con >= ${CON_MIN} && wn.z != 0u && through;
     uint b1 = wn.x & 255u;
     bool own = ok && wn.y == 0u;
-    result[f].r[5] = ok ? float(wn.y == 0u ? b1 : 256u + b1) : 0.0;
-    result[f].r[6] = ok ? float(wn.x >> 8u) : 0.0;
+    uint g = own ? cfgOfWord(wn.x) : 0u;
+    result[f].r[5] = ok ? float(own ? (g >> 21u) : 256u + b1) : 0.0;
+    result[f].r[6] = ok ? uintBitsToFloat(own ? bitsOfWord(wn.x) : (wn.x >> 8u)) : 0.0;
     result[f].r[7] = uintBitsToFloat(wn.w);
-    // ai: its own static word's version, sel.w 2; else HELD's (sel.w 1, waiting for it)
-    result[f].r[29] = own ? float(b1) : 0.0;
+    // ai: its own static word's configuration (sel.y 1 + it), sel.w 2; an animated word's frame HELD's (sel.w 1, waiting
+    // ai: for it); a frame whose word is not read none (sel.w 0: the word before the frame, 2026-11-18). Record word 29
+    // ai: the configuration decoded at as a float's bits (0 none), 30 whether it was held.
+    result[f].r[29] = uintBitsToFloat(g);
     result[f].r[30] = 0.0;
-    sel[f] = own ? uvec4(rg, 1u + b1, slotOf(b1), 2u) : uvec4(rg, 0u, 0u, 1u);
+    sel[f] = own ? uvec4(rg, 1u + g, slotOf(g >> 21u), 2u) : uvec4(rg, 0u, 0u, ok ? 1u : 0u);
   }
 }
 `;
 
-// ai: F8's held version (2026-11-16), after WORD in its pass: one invocation walks the launch's frames in capture order;
-// ai: a frame with its own static word (sel.w 2) makes its version the held one, a frame waiting (sel.w 1: found, no
-// ai: static word of its own) decodes at the held one (sel.y 1 + it, sel.z its picture; none where 0), record words
-// ai: 29 and 30 its version and whether it was held. The held version goes on from launch to launch in CARRY, one
-// ai: word pair for every lane of the decoder (x the version, y the host's last post taken), so a frame's held version
-// ai: is the last static word read before it, whatever the launch's size or how many are in flight (before, each
-// ai: launch took the host's version at its submit: a word read earlier in the same launch, or in one still in flight,
-// ai: was not seen). The host posts a version of its own (Held: version, post; a carousel's header, or 0 at a reset or
-// ai: for a launch alone) by a new post number, taken once in CARRY's place; hold 0 keeps no version (a lab's arm).
-// ai: Bindings: 0 sel, 1 the results, 2 CARRY, 3 the Word uniform, 4 Held (version, post, frames, hold).
+// ai: F8's held configuration (2026-11-16; the version alone until 2026-11-18), after WORD in its pass: one invocation
+// ai: walks the launch's frames in capture order; a frame with its own static word (sel.w 2) makes its configuration
+// ai: (src/fmt.h ob_fmt_held) the held one, a frame with an animated word (sel.w 1) decodes at the held one (sel.y 1 + it,
+// ai: sel.z its picture; none where 0), record words 29 and 30 the configuration as a float's bits and whether it was
+// ai: held. The held configuration goes on from launch to launch in CARRY, one word pair for every lane of the decoder
+// ai: (x the configuration, y the host's last post taken), so a frame's held one is the last static word read before
+// ai: it, whatever the launch's size or how many are in flight. The host posts one of its own (Held: config, post; a
+// ai: carousel's header, or 0 at a reset or for a launch alone) by a new post number, taken once in CARRY's place;
+// ai: hold 0 keeps none (a lab's arm).
+// ai: Bindings: 0 sel, 1 the results, 2 CARRY, 3 the Word uniform, 4 Held (config, post, frames, hold).
 export const HELD = VERSION + /* glsl */ `
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 struct Result { float r[32]; };
@@ -332,21 +342,21 @@ layout(set = 0, binding = 0, std430) buffer Sel { uvec4 sel[]; };
 layout(set = 0, binding = 1, std430) buffer Results { Result result[]; };
 layout(set = 0, binding = 2, std430) buffer Carry { uvec4 carry[]; };
 layout(set = 0, binding = 3, std140) uniform Word { ${WORD_UNI} } W;
-layout(set = 0, binding = 4, std140) uniform Held { uint version; uint post; uint frames; uint hold; } HB;
+layout(set = 0, binding = 4, std140) uniform Held { uint config; uint post; uint frames; uint hold; } HB;
 ${SLOT_OF}
 void main() {
   uvec4 c = carry[0];
-  uint cur = HB.post != c.y ? HB.version : c.x;
+  uint cur = HB.post != c.y ? HB.config : c.x;
   for (uint f = 0u; f < HB.frames; f++) {
     uvec4 s = sel[f];
     if (s.w == 2u) {
       if (HB.hold != 0u) { cur = s.y - 1u; }
       sel[f].w = 0u;
     } else if (s.w == 1u) {
-      uint v = HB.hold != 0u ? cur : 0u;
-      result[f].r[29] = float(v);
-      result[f].r[30] = v > 0u ? 1.0 : 0.0;
-      sel[f] = v > 0u ? uvec4(s.x, 1u + v, slotOf(v), 0u) : uvec4(s.x, 0u, 0u, 0u);
+      uint g = HB.hold != 0u ? cur : 0u;
+      result[f].r[29] = uintBitsToFloat(g);
+      result[f].r[30] = g > 0u ? 1.0 : 0.0;
+      sel[f] = g > 0u ? uvec4(s.x, 1u + g, slotOf(g >> 21u), 0u) : uvec4(s.x, 0u, 0u, 0u);
     }
   }
   carry[0] = uvec4(cur, HB.post, 0u, 0u);

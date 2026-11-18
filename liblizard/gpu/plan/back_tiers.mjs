@@ -15,15 +15,19 @@ import { STEP } from "../../sim/lizard_pick.mjs";
 // ai: estimate read as before). UV's second half (from P.ucOff) is each coefficient's (u, v), u in the high 16 bits
 // ai: (signed), v in the low.
 
-export const TIER_BLOCKS = 128;   // ai: blocks a frame at most (talign's and tblocks' lanes; the profile's top is 116)
-// ai: TT holds rows 0 to VERSIONS, the versions a word names (../wordcode.mjs VERSION_MAX); row 0 is zero (no format).
+// ai: blocks a frame at most (talign's and tblocks' lanes): the most a word may state, 149 at version 67 (127 7/8 blocks
+// ai: and 22 3/4 ones; sim/lizard_pick.mjs blocksMaxFor), rounded up to whole 32-lane sets; 128 before 2026-11-18
+export const TIER_BLOCKS = 160;
+// ai: the versions a word names (../wordcode.mjs VERSION_MAX)
 export const VERSIONS = VERSION_MAX;
 // ai: the 8-sub-channel chunks a version takes (16 sub-channels, sim/lizard_pick.mjs STEP): the soft stage's workgroups
 // ai: are a chunk each, and the gate's rows table (gpu/back/transform.mjs rowsOfVersion) counts chunks.
 export const CHUNKS = STEP / 8;
 export const KNOWN = 3840;        // ai: (476 + 4) x 8: the bits a block's payload and CRC fill, the k of the 3/4, 2/3 and 1/2 codes; past them
                                   // ai: the 7/8 code's data bits are zeros
-export const WHITE_SLOTS = 1024 * 640;
+// ai: the whitening a slot over the ladder's largest frame (16 VERSION_MAX sub-channels of 640 slots: 1072 since
+// ai: 2026-11-18, 1024 before)
+export const WHITE_SLOTS = STEP * VERSION_MAX * 640;
 // ai: The LDPC kernel's forms (2026-10-08, the decoder's speed; research STATUS "The LDPC's speed"), all counting the
 // ai: violated checks after each iteration from a bitmap of the posteriors' signs, 32 checks of a row at a time
 // ai: (violatedChunks), and keeping each check's record in its lane's own array (lane i is check i of every row, so no
@@ -41,24 +45,23 @@ export const WHITE_SLOTS = 1024 * 640;
 // ai: went 2026-10-22; the check's own values in 16-bit registers ("reg+i16+r16") was slower on both devices
 // ai: (2026-10-31).
 export const LDPC_FORMS = ["reg", "reg+i32", "reg+i16"];
-// ai: the codes TT names, in order: src/lizard_phy.c lizard_tiers_for's four rates (ldpc.h index, slots a block: the code's
+// ai: the codes, in order: src/lizard_phy.c lizard_tiers_for's four rates (ldpc.h index, slots a block: the code's
 // ai: sent bits and its pilots, src/lizard_phy.c lizard_block_slots). Every block's slots are a multiple of 16, so every
 // ai: block's first slot is too (the blocks are packed from the frame's first slot, the remainder padded).
 export const CODES = [{ rate: 6, slots: 4496, name: "7/8" }, { rate: 4, slots: 5152, name: "3/4" }, { rate: 3, slots: 5760, name: "2/3" }, { rate: 2, slots: 7680, name: "1/2" }];
-// ai: TT's words a version: (blocks, used slots, 0, 0), then (first block, first slot, blocks, 0) a code in CODES' order.
 // ai: 2/3 among the codes since 2026-10-07, in the format's profile since 2026-10-08 (four rates, 7/8, 3/4, 2/3, 1/2).
+// ai: A frame's blocks of each are its word's (../glsl/common.mjs CFG; TAB's TT table, a row a version, until 2026-11-18).
 export const NC = CODES.length;
-export const TTW = 4 + 4 * NC;
 
 // ai: TAB's sections' word offsets, from the codes' n and the nets' words (all codes' together).
 export function tabLayout(codes, netWords) {
-  let o = TTW * (VERSIONS + 1);
+  let o = 0;
   const inv = codes.map((c) => { const at = o; o += Math.ceil(c.n / 2); return at; });
   const WHITE = o;
   o += WHITE_SLOTS / 32 + 1;   // ai: one word past the last slot: whiteWord reads the word after a slot's
   const NET = o;
   o += netWords;
-  return { TT: 0, inv, WHITE, NET, words: o };
+  return { inv, WHITE, NET, words: o };
 }
 
 // ai: A code's module constants: its shape (n, k, z, block rows mb, the most slots a row, staircase included), the
