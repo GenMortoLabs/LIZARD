@@ -5,12 +5,6 @@
 #include <string.h>
 
 const int OB_TIER_RATE[OB_TIERS] = { 6, 4, 3, 2 };
-// ai: the 32 whole rates to 60 a sender's display or a halved camera gives most (2026-11-18): 1 to 10 (low senders,
-// ai: a 15 or 20 a second camera halved), 60 Hz's divisors (12, 15, 20, 30, 60), 50 Hz's (25, 50), film's and 48 Hz's
-// ai: (24, 48), 120 to 360 Hz monitors' (16, 18, 36, 40, 45), 165 Hz's (33, 55), 480 Hz's (32), 540 Hz's (27, 54),
-// ai: 56 and 280 Hz's (14, 28), and 35, rising
-const uint8_t OB_FMT_RATE[OB_FMT_RATES] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20,
-                                            24, 25, 27, 28, 30, 32, 33, 35, 36, 40, 45, 48, 50, 54, 55, 60 };
 
 int ob_block_slots(int rate) {
   const int nt = ldpc_sent_bits(rate);
@@ -20,7 +14,7 @@ int ob_block_slots(int rate) {
 int ob_fmt_layout(int version, const int count[3], int *m34) {
   if (m34) *m34 = 0;
   if (version < OB_FMT_VERSION_MIN || version > OB_FMT_VERSION_MAX) return 0;
-  for (int i = 0; i < 3; i++) if (count[i] < 0 || count[i] > OB_FMT_COUNT_MAX) return 0;
+  for (int i = 0; i < 3; i++) if (count[i] < 0 || count[i] > (i ? OB_FMT_COUNT_MAX : OB_FMT_COUNT78_MAX)) return 0;
   const long long all = (long long)version * OB_FMT_SLOTS;
   const long long used = (long long)count[0] * ob_block_slots(OB_TIER_RATE[OB_TIER_78]) + (long long)count[1] * ob_block_slots(OB_TIER_RATE[OB_TIER_23]) +
                          (long long)count[2] * ob_block_slots(OB_TIER_RATE[OB_TIER_12]);
@@ -32,25 +26,17 @@ int ob_fmt_layout(int version, const int count[3], int *m34) {
   return 1;
 }
 
-int ob_fmt_rate_code(int fps) {
-  for (int c = 0; c < OB_FMT_RATES; c++) if (OB_FMT_RATE[c] == fps) return c;
-  return -1;
-}
-
-int ob_fmt_rate_near(int fps) {
-  int best = 0;
-  for (int c = 1; c < OB_FMT_RATES; c++) {
-    const int d = OB_FMT_RATE[c] - fps, db = OB_FMT_RATE[best] - fps;
-    if ((d < 0 ? -d : d) < (db < 0 ? -db : db)) best = c;
-  }
-  return OB_FMT_RATE[best];
+// ai: the static word's CRC-4 (fmt.h): x^4 + x + 1 over its 28 content bits, most significant first, from 0
+static uint32_t crc4(uint32_t content) {
+  uint32_t r = content << 4;
+  for (int i = 31; i >= 4; i--) if (r >> i & 1) r ^= 0x13u << (i - 4);
+  return r & 15;
 }
 
 int ob_fmt_pack(const ob_fmt_t *f, uint8_t data[OB_FMT_DATA]) {
-  const int rc = ob_fmt_rate_code(f->fps);
-  if (rc < 0 || !ob_fmt_layout(f->version, f->count, 0)) return -1;
-  const uint32_t x = (uint32_t)(f->version - OB_FMT_VERSION_MIN) << 26 | (uint32_t)rc << 21 | (uint32_t)f->count[0] << 14 |
-                     (uint32_t)f->count[1] << 7 | (uint32_t)f->count[2];
+  if (!ob_fmt_layout(f->version, f->count, 0)) return -1;
+  const uint32_t c = (uint32_t)(f->version - OB_FMT_VERSION_MIN) << 22 | (uint32_t)f->count[0] << 14 | (uint32_t)f->count[1] << 7 |
+                     (uint32_t)f->count[2], x = c << 4 | crc4(c);
   data[0] = OB_FMT_MAGIC;
   for (int i = 0; i < 4; i++) data[1 + i] = (uint8_t)(x >> (24 - 8 * i));
   return 0;
@@ -82,16 +68,15 @@ int ob_fmt_bit(const uint8_t *cw, int bytes, int edge, int cell) {
 
 int ob_fmt_held(const ob_fmt_t *f) {
   if (!f || f->kind != OB_FMT_STATIC || !ob_fmt_layout(f->version, f->count, 0)) return 0;
-  return f->version << 21 | f->count[0] << 14 | f->count[1] << 7 | f->count[2];
+  return f->version << 22 | f->count[0] << 14 | f->count[1] << 7 | f->count[2];
 }
 
 int ob_fmt_unheld(int held, ob_fmt_t *f) {
   memset(f, 0, sizeof *f);
   if (held <= 0) return 0;
   f->kind = OB_FMT_STATIC;
-  f->version = held >> 21;
-  f->count[0] = held >> 14 & 127; f->count[1] = held >> 7 & 127; f->count[2] = held & 127;
-  f->fps = 60;
+  f->version = held >> 22;
+  f->count[0] = held >> 14 & 255; f->count[1] = held >> 7 & 127; f->count[2] = held & 127;
   if (ob_fmt_layout(f->version, f->count, 0)) return 1;
   memset(f, 0, sizeof *f);
   return 0;
@@ -112,17 +97,16 @@ int ob_fmt_encode(const ob_fmt_t *f, uint8_t *cw, int bytes) {
 
 // RS can miscorrect past its distance, and a wrong word is worse than none: it would send the receiver to another
 // picture size and cost every block of every frame until it changed again. A magic, and the static word's counts making
-// a frame of its version (ob_fmt_layout) or the animated word's id range, are the check. The version and the rate have
-// no values to refuse, and an animated word's three bytes answer to the header's CRC, so they are taken as they come.
+// a frame of its version (ob_fmt_layout) and its CRC-4, or the animated word's id range, are the check. An
+// animated word's three bytes answer to the header's CRC, so they are taken as they come.
 static int accept(const uint8_t *cw, ob_fmt_t *f) {
   memset(f, 0, sizeof *f);
   if (cw[0] == OB_FMT_MAGIC) {
     const uint32_t x = (uint32_t)cw[1] << 24 | (uint32_t)cw[2] << 16 | (uint32_t)cw[3] << 8 | cw[4];
     f->kind = OB_FMT_STATIC;
     f->version = OB_FMT_VERSION_MIN + (int)(x >> 26);
-    f->fps = OB_FMT_RATE[(x >> 21) & 31];
-    f->count[0] = (int)(x >> 14) & 127; f->count[1] = (int)(x >> 7) & 127; f->count[2] = (int)x & 127;
-    if (ob_fmt_layout(f->version, f->count, 0)) return 1;
+    f->count[0] = (int)(x >> 18) & 255; f->count[1] = (int)(x >> 11) & 127; f->count[2] = (int)(x >> 4) & 127;
+    if ((x & 15) == crc4(x >> 4) && ob_fmt_layout(f->version, f->count, 0)) return 1;
     memset(f, 0, sizeof *f);
     return 0;
   }
@@ -156,7 +140,7 @@ int ob_fmt_decode(const float *q, int cells, int bytes, ob_fmt_t *f) {
   // ai: Then the soft values: the least confident bytes go in as erasures, 2 more a step. rs_decode_er refuses any
   // ai: result past 2e + f <= nroots (rs.c solve), which the garbage figures below assume. The last step leaves three
   // ai: roots over its erasures (nroots - 3; every nroots here is odd: 11, 27, 59 in the three rings). Garbage (soft
-  // ai: values uniform in -0.5 to 0.5) passes a magic and its check (a static word's counts making a frame, an animated
+  // ai: values uniform in -0.5 to 0.5) passes a magic and its check (a static word's CRC-4 and counts making a frame, an animated
   // ai: word's id to 254) at the rate test/fmt_test.c works out exactly. A faded side reads near 0 confidence and the steps
   // ai: erase its bytes: two faded sides read in every ring, three in the 128 and 256. Two glared sides are erased the
   // ai: same way (SPEC.md 5.3).
@@ -192,29 +176,20 @@ int ob_car_header(const uint8_t *content, int len, uint8_t *hdr) {
 int ob_car_content(const ob_fmt_t *f, uint8_t *out) {
   ob_fmt_t g = *f;
   g.kind = OB_FMT_STATIC;
-  const int exact = ob_fmt_rate_code(f->fps) < 0;
-  if (exact) {
-    if (f->fps < 1 || f->fps > 65535) return -1;
-    g.fps = ob_fmt_rate_near(f->fps);
-  }
-  if (ob_fmt_pack(&g, out)) return -1;
-  if (!exact) return OB_FMT_DATA;
-  out[5] = OB_CAR_REC_RATE; out[6] = 2; out[7] = (uint8_t)(f->fps >> 8); out[8] = (uint8_t)f->fps;
-  return OB_FMT_DATA + 4;
+  if (f->fps < 0 || f->fps > 65535 || ob_fmt_pack(&g, out)) return -1;
+  out[5] = (uint8_t)(f->fps >> 8); out[6] = (uint8_t)f->fps;
+  return OB_CAR_CONTENT_MAX;
 }
 
 int ob_car_config(const uint8_t *hdr, int k, ob_fmt_t *f) {
   memset(f, 0, sizeof *f);
   const int len = OB_CAR_SYM * k - OB_CAR_CRC;
   ob_fmt_t g;
-  if (k < OB_CAR_K_MIN || k > OB_CAR_N || len < OB_FMT_DATA || !accept(hdr, &g) || g.kind != OB_FMT_STATIC) return 0;
-  for (int at = OB_FMT_DATA; at < len && hdr[at];) {
+  if (k < OB_CAR_K_MIN || k > OB_CAR_N || len < OB_CAR_CONTENT_MAX || !accept(hdr, &g) || g.kind != OB_FMT_STATIC) return 0;
+  g.fps = hdr[5] << 8 | hdr[6];
+  // ai: the records: none is defined yet, so each is only walked over (a receiver skips what it does not know)
+  for (int at = OB_CAR_CONTENT_MAX; at < len && hdr[at];) {
     if (at + 2 > len || at + 2 + hdr[at + 1] > len) return 0;
-    if (hdr[at] == OB_CAR_REC_RATE && hdr[at + 1] == 2) {
-      const int fps = hdr[at + 2] << 8 | hdr[at + 3];
-      if (!fps) return 0;
-      g.fps = fps;
-    }
     at += 2 + hdr[at + 1];
   }
   *f = g;

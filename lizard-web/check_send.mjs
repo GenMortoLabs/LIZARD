@@ -9,7 +9,7 @@
 // ai: each half as a native receiver would), and LIZARD-480 again, its density changed while it runs (below). The
 // ai: canvas is read at its own pixels, so a format larger than the window reads the same. Each time the page's canvas is
 // ai: read back as luma, padded with white as the page's surround is, and decoded by the C told nothing (sim/phy.mjs
-// ai: makeBlind): the word must name the version painted and the page's 24 fps, the blocks must verify, the state line
+// ai: makeBlind): the word must name the version painted (it states no rate), the blocks must verify, the state line
 // ai: must say what is sent, and for the file one of the frames read must carry its header block, whose name, length and
 // ai: BLAKE3 root (sim/xfer.mjs XferReceiver's parse) are the file's, or its packed stream's where the page packed it
 // ai: (sim/pack.mjs, the default client's compression, held to here). Then the server's log: no request under /api (the
@@ -28,17 +28,17 @@
 // ai: send.mjs repick, which is the worker's respec and, under the GPU encoder, a new configuration made and
 // ai: checked against the C while the frames already asked for present from the old one's slots, the old one released
 // ai: after its last. The canvas is grabbed from the change on: every grab until the new version shows must read the old
-// ai: version or the new at 24 fps with 0 bad (the frames in flight: AHEAD, 3, on wasm, up to two batches of 16 under
+// ai: version or the new with 0 bad (the frames in flight: AHEAD, 3, on wasm, up to two batches of 16 under
 // ai: the GPU encoder; a GPU canvas with nothing presented for 120 animation frames, while the new configuration is made,
-// ai: is counted, not judged), and the first frame at the new version (LIZARD-272, n = 768, in the 128 ring) must read it at 24 fps, its blocks verified, 0 bad, off the arm's
+// ai: is counted, not judged), and the first frame at the new version (LIZARD-272, n = 768, in the 128 ring) must read it, its blocks verified, 0 bad, off the arm's
 // ai: canvas with the state line still sending, and its ids all above every id read before (send.mjs nextId: a re-pick
 // ai: changes the blocks a frame, and ids counted from seq would come back as repeats). The page's report after it (#tx
 // ai: and #nums, written together once a second, so a grab can hold the one from before the change) must name it in #nums
 // ai: within 3 s, #tx's encoder line still the arm's: in the GPU arm WebGPU, so the check at the new picture passed and
 // ai: nothing stopped. Then the display fps box is set to 30 as a script sets it (no change event, so the page keeps
-// ai: nothing): the tick restates it, to the worker's word and under the GPU encoder through GpuEncoder.setFps, which
-// ai: repaints the border's word. Grabbed from the change on, every frame must read the new version at 24 until the first
-// ai: that says 30, which is judged as the re-pick's was, and the report after it must say "of 30 asked", the same encoder.
+// ai: nothing): the tick paces by it, and the page's report must say "of 30 asked" within 3 s, the same encoder, a frame
+// ai: grabbed after it reading the version with 0 bad (the word states no rate since 2026-11-18; the box's rate was
+// ai: restated into the border's word before).
 // ai: Each wait is bounded (60 s for the re-pick, SwiftShader's compile and check at the new picture inside it; 30 s for
 // ai: the rate), and how long each change took to reach the canvas is printed. The C's blind decoder missed a few clean
 // ai: frames (2026-09-29, the C's own paint of the test stream, whole pixels in white: 8 of 2,000 at LIZARD-208 and 3 of
@@ -182,7 +182,7 @@ function encoderOf(g) {
   const line = g.tx.split("\n").find((l) => l.startsWith("encoder: ")) ?? "no encoder line";
   return { line, ok: GPU ? g.which === "cg" && line.startsWith("encoder: WebGPU") : g.which === "c" && /^encoder: wasm in the worker \(WebGPU off: .+\)$/.test(line) };
 }
-const decoded = (g, r) => `canvas ${g.w} x ${g.h}, picture n = ${r.n}, word ${r.fmt ? `version ${r.fmt.version} at ${r.fmt.fps} fps` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad`;
+const decoded = (g, r) => `canvas ${g.w} x ${g.h}, picture n = ${r.n}, word ${r.fmt ? `version ${r.fmt.version}` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad`;
 const pageLine = (g) => `  page: ${g.state} | ${JSON.stringify(g.dt)} | ${g.tx.split("\n").slice(0, 3).join(" | ")} | ${g.tx.split("\n").find((l) => l.startsWith("painted ")) ?? "no painted line"} | ${encoderOf(g).line} (#${g.which})`;
 
 const faults = [];
@@ -231,7 +231,7 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
     const h = out.r.got.find((b) => b.id === ID_HEADER);
     if (h) { const rx = new XferReceiver({ M, Decoder, store: new MemoryStore() }); await rx.add(ID_HEADER, h.bytes); header = rx.progress().header; break; }
   }
-  const { g, r } = out, v = versionOf(subch), wordOk = r.fmt?.version === v && r.fmt?.fps === FPS, blocksOk = r.seen > 0 && r.bad === 0;
+  const { g, r } = out, v = versionOf(subch), wordOk = r.fmt?.version === v, blocksOk = r.seen > 0 && r.bad === 0;
   // ai: a file's header is the file's, or its packed stream's where packing pays (sim/pack.mjs): random bytes do not shrink
   // ai: its figures kept whole by no-break spaces (send.mjs sizeText, 2026-10-23), read as spaces here
   // ai: the block (2026-11-07; "Sending <name>, <sizes>" before): the file's name, its Size, a bundle's Files; the test
@@ -241,7 +241,7 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   const want = bun ? { name: bun.made.name, type: "application/x-tar", bytes: bun.bytes } : c.big ? { name: "check-big.bin", bytes: bigBytes } : c.prose ? { name: "check-prose.txt", type: "text/plain", bytes: proseBytes } : { name: "check-send.bin", bytes: fileBytes };
   const pk = c.file ? pack(want.bytes, want.name, want.type ?? "", Z) : null, sent = pk?.packed ? { name: pk.name, type: pk.type, bytes: pk.bytes } : want;
   const root = hex(blake3(M, sent.bytes)), headerOk = !c.file || (header && header.name === sent.name && header.length === sent.bytes.length && header.root === root && (!sent.type || header.type === sent.type));
-  console.log(`${name}: canvas ${g.w} x ${g.h}, picture n = ${r.n} (want ${N_FOR(subch)}), word ${r.fmt ? `version ${r.fmt.version} at ${r.fmt.fps} fps` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad${c.file ? `; ${frames} frames read, ${blocks} blocks, header ${header ? `${header.name}, ${header.length} B, root ${header.root.slice(0, 16)}...` : "not read"}` : ""}`);
+  console.log(`${name}: canvas ${g.w} x ${g.h}, picture n = ${r.n} (want ${N_FOR(subch)}), word ${r.fmt ? `version ${r.fmt.version}` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad${c.file ? `; ${frames} frames read, ${blocks} blocks, header ${header ? `${header.name}, ${header.length} B, root ${header.root.slice(0, 16)}...` : "not read"}` : ""}`);
   const enc = encoderOf(g);
   console.log(pageLine(g));
   if (!enc.ok) faults.push(`${name}: the encoder is not the one asked for: ${enc.line}, read off #${g.which}`);
@@ -262,8 +262,8 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   // ai: the left's (the page gives the second symbol the frame's next blocksPerFrame ids).
   if (codes > 1) {
     const right = out.halves[1], ids = (x) => new Set(x.got.map((b) => b.id)), left = ids(r), shared = [...ids(right)].filter((id) => left.has(id));
-    console.log(`  right half: word ${right.fmt ? `version ${right.fmt.version} at ${right.fmt.fps} fps` : "not read"}, ${right.seen} blocks verified, ${right.bad} bad, ${shared.length} ids shared with the left`);
-    if (!(right.fmt?.version === v && right.fmt?.fps === FPS)) faults.push(`${name}: the right half's word is not version ${v} at ${FPS} fps`);
+    console.log(`  right half: word ${right.fmt ? `version ${right.fmt.version}` : "not read"}, ${right.seen} blocks verified, ${right.bad} bad, ${shared.length} ids shared with the left`);
+    if (right.fmt?.version !== v) faults.push(`${name}: the right half's word is not version ${v}`);
     if (!(right.seen > 0 && right.bad === 0)) faults.push(`${name}: the right half read ${right.seen} blocks, ${right.bad} bad`);
     if (shared.length) faults.push(`${name}: the halves share ${shared.length} ids`);
     // ai: two squares a gap apart (send.mjs gapOf: spacing - 4 modules, 12 at the default spacing of 16; the page's #tx
@@ -317,11 +317,11 @@ async function grabUntil(want, ok, subs, ms) {
     if (x) {
       out = x; bad += x.r.bad;
       if (want(x.r)) break;
-      let word = x.r.fmt ? `${x.r.fmt.version}@${x.r.fmt.fps}` : "no word";
+      let word = x.r.fmt ? `${x.r.fmt.version}` : "no word";
       if (!x.r.fmt) {
         const t = await readTold(x, subs);
         if (t) bad += t.r.bad;
-        if (t && t.r.bad === 0 && ok(t.r)) { missed++; word = `missed blind, told ${t.r.fmt.version}@${t.r.fmt.fps}`; for (const b of t.r.got) ids.push(b.id); }
+        if (t && t.r.bad === 0 && ok(t.r)) { missed++; word = `missed blind, told ${t.r.fmt.version}`; for (const b of t.r.got) ids.push(b.id); }
         else strays++;
       } else if (!ok(x.r)) strays++;
       words.push(word);
@@ -348,11 +348,11 @@ async function midStream(subch0, r0) {
   let name = `a new density while it runs: LIZARD-${subch0} to LIZARD-${subch}, test stream`;
   // ai: The change's first frame on the canvas: its word, blocks, picture and ids, the canvas it was read off and the state
   // ai: line at that moment.
-  const judge = (o, what, fps) => {
-    if (!o.found) { faults.push(`${what}: no grab read version ${v} at ${fps} fps in ${o.secs.toFixed(0)} s (read on the way: ${o.before}; ${o.idle} idle)`); return false; }
+  const judge = (o, what) => {
+    if (!o.found) { faults.push(`${what}: no grab read version ${v} in ${o.secs.toFixed(0)} s (read on the way: ${o.before}; ${o.idle} idle)`); return false; }
     const { g, r } = o, ids = r.got.map((b) => b.id), lo = Math.min(...ids), prior = Math.max(maxId, ...o.ids);
     console.log(`${what}: ${o.grabs} grab${o.grabs === 1 ? "" : "s"} in ${o.secs.toFixed(1)} s until the word read it (on the way: ${o.before}${o.missed ? `; ${o.missed} missed by the blind decoder, read told` : ""}${o.idle ? `; ${o.idle} with nothing presented` : ""}); ${decoded(g, r)} (want n = ${N_FOR(subch)}), ids ${lo} to ${Math.max(...ids)}, the highest read before ${prior}`);
-    if (!(r.fmt?.version === v && r.fmt?.fps === fps)) faults.push(`${what}: the word is not version ${v} at ${fps} fps`);
+    if (r.fmt?.version !== v) faults.push(`${what}: the word is not version ${v}`);
     if (!(r.seen > 0 && r.bad === 0)) faults.push(`${what}: ${r.seen} blocks, ${r.bad} bad`);
     if (o.bad) faults.push(`${what}: ${o.bad} bad blocks over the grabs until it`);
     if (o.strays) faults.push(`${what}: ${o.strays} grabs on the way that neither the blind decoder nor a told one reads as the old frames or the new (${o.before})`);
@@ -379,16 +379,17 @@ async function midStream(subch0, r0) {
   // ai: The re-pick: grabbed from the resize on (the old version until the worker, and under the GPU encoder the new
   // ai: configuration, has the new code, and the frames asked for before it have painted); the first frame at the new
   // ai: version is judged, then #tx must name it.
-  let o = await grabUntil((r) => r.fmt?.version === v, (r) => (r.fmt?.version === v0 || r.fmt?.version === v) && r.fmt?.fps === FPS, [subch0, subch], 60000);
-  if (!judge(o, name, FPS)) return;
+  const o = await grabUntil((r) => r.fmt?.version === v, (r) => r.fmt?.version === v0 || r.fmt?.version === v, [subch0, subch], 60000);
+  if (!judge(o, name)) return;
   // ai: the version is #tx's first line's since 2026-10-02 (the lab line #lab's from 2026-10-01); the block's Speed the rate
   await reported(name, (p) => p.lab.split(/[ ,]/)[0] === NAME(subch), `${NAME(subch)} in #tx`);
-  // ai: The display rate, set as a script sets it (no change event, so the page keeps nothing); the page's tick states it
-  // ai: from the box. Grabbed from the change on; the first frame whose word says 30 is judged, then #tx must say 30 asked.
+  // ai: The display rate, set as a script sets it (no change event, so the page keeps nothing); the page's tick paces by
+  // ai: the box: #tx must say 30 asked, and a frame grabbed after it still reads the version with 0 bad.
   name = `${NAME(subch)} with the display fps box moved from ${FPS} to 30`;
   await evaluate(s, `document.getElementById("fps").value = 30`);
-  o = await grabUntil((r) => r.fmt?.fps === 30, (r) => r.fmt?.version === v && (r.fmt?.fps === FPS || r.fmt?.fps === 30), [subch], 30000);
-  if (judge(o, name, 30)) await reported(name, (p) => / of 30 asked/.test(p.tx), `"of 30 asked" in #tx`);
+  await reported(name, (p) => / of 30 asked/.test(p.tx), `"of 30 asked" in #tx`);
+  const after = await grabUntil((r) => r.fmt?.version === v && r.seen > 0, (r) => r.fmt?.version === v, [subch], 30000);
+  if (!after.found || after.r.bad || after.bad) faults.push(`${name}: no clean frame of version ${v} read after the change (${after.before})`);
 }
 s.close();
 cleanup();

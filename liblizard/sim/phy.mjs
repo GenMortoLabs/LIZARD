@@ -109,13 +109,14 @@ export function blockJudge(payload = PAYLOAD, stream = "blake3") {
 // ai: order they were captured. Nothing else carries. An animated word (a carousel symbol, src/fmt.h) names no version:
 // ai: its symbol goes to the carousel's assembly (sim/ob.mjs carousel, reset with the receiver), and once a header
 // ai: stands the configuration it states (its first five bytes, a static word's) is held as a static word's is; a frame
-// ai: whose word does not read is not decoded (2026-11-18: the word before the frame). Blocks are judged from the light
+// ai: whose word does not read is not decoded (2026-11-18: the word before the frame). fmt.fps: the display rate the
+// ai: last assembled header states, 0 where none has (a static word states none). Blocks are judged from the light
 // ai: (blockJudge); spec.stream names a replay's generator, BLAKE3 when left out.
 async function makeBlind(spec) {
   await initOb();
   const nmax = spec.nmax ?? BLIND_NMAX, fa = new LizardAny(nmax);
   const judge = blockJudge(fa.blockBytes - ID_BYTES, spec.stream ?? "blake3");
-  let held = 0, builds = 0;
+  let held = 0, fps = 0, builds = 0;
   return {
     label: `lizard blind to ${nmax}`, family: "lizard", variants: ["blind"], usefulBytes: fa.blockBytes - ID_BYTES, nmax,
     decode(img, iw, ih, truth, rgba = false, axis = null) {
@@ -123,26 +124,25 @@ async function makeBlind(spec) {
       if (r.fmt && r.fmt.kind === 0) held = r.fmt.held;
       else if (r.fmt) {
         const k = carousel.add(r.fmt.id, r.fmt.sym);
-        if (k) held = carousel.held() || held;
+        if (k && carousel.held()) { held = carousel.held(); fps = carousel.fps(); }
       }
       // ai: built: this frame built a picture's codec (its first sight of that ring and picture; src/wasm.c pic_for).
       const built = r.builds > builds;
       builds = r.builds;
-      return [{ ...judge.frame(r.ok, r.blocks), found: r.found, n: r.pictureN, ring: r.ring, held: r.held, fmt: r.fmt, quad: r.quad, built, ber: NaN, mi: NaN, ms: { detect: r.msDetect, total } }];
+      return [{ ...judge.frame(r.ok, r.blocks), found: r.found, n: r.pictureN, ring: r.ring, held: r.held, fmt: r.fmt && { ...r.fmt, fps }, quad: r.quad, built, ber: NaN, mi: NaN, ms: { detect: r.msDetect, total } }];
     },
-    reset() { held = 0; carousel.reset(); },
+    reset() { held = fps = 0; carousel.reset(); },
     prof, free() { fa.free(); },
   };
 }
 // variants: [{ name, gamma }]. Each block starts with its 4-byte fountain id.
 async function makeLizard(spec) {
   await initOb();
-  const { n = 512, subch = 32, mode = 1, span = 0, tiers = null, bitmap, fps = 0, variants = [{ name: "ldpc" }] } = spec;
+  const { n = 512, subch = 32, mode = 1, span = 0, tiers = null, bitmap, variants = [{ name: "ldpc" }] } = spec;
   const fc = new Lizard(n, subch, mode, { span, tiers, bitmap }), B = fc.blockBytes, T = fc.blocks, seen = variants.map(() => new Set()), buf = new Uint8Array(T * B), want = new Uint8Array(B - ID_BYTES);
   const quiet = marginSamples(spec, fc);
   // The page's pixels come from the codec's own paint, which has only its margin: an experiment's override has no way there.
   const noRGBA = spec.quiet !== undefined && spec.quiet !== fc.quiet ? `spec.quiet ${spec.quiet} is the simulator's override; the codec paints ${fc.quiet}` : null;
-  if (fps) fc.setFps(fps);   // the display rate goes in the band (src/fmt.h); 0 states none, which is the default
   let source = sourceFor(spec.stream), ink = 0x000000, paper = 0xffffff;
   return {
     label: `lizard ${n} ${tiers ? tiers.map(([r, b]) => `${b}x${RATE[r]}`).join("+") : `${subch}sub`}${span ? " span" + span : ""}`, family: "lizard", variants: variants.map((v) => v.name), usefulBytes: B - ID_BYTES, blocksPerFrame: T, modules: fc.side, bitmap: fc.bitmap,
@@ -202,8 +202,6 @@ async function makeLizard(spec) {
     reset() { seen.forEach((s) => s.clear()); },
     seenCount: () => seen.reduce((t, x) => t + x.size, 0),
     setSource(fn) { source = fn; },
-    // The rate the band states (src/fmt.h). A sender may call it whenever its own target moves.
-    setFps(v) { fc.setFps(v); },
     prof, free() { fc.free(); },
   };
 }

@@ -84,7 +84,8 @@ typedef enum {
  * ai: names; a symbol of it carries liz_blocks_for(blocks) blocks, the code's rate following the frequency (7/8 on its
  * ai: lowest frequencies, then 3/4 and 2/3, 1/2 on its highest: 48 at LIZARD-432); ring: 0 to LIZ_RINGS - 1 (the 64,
  * ai: 128 and 256 rings) or LIZ_RING_DEFAULT;
- * ai: fps: 1 to 255, the display rate the symbol's word states; codes: 1, or 2 symbols side by side (one format, one
+ * ai: fps: 1 to 255, the display rate the sender paints at (its animated header states it; a static word states none);
+ * ai: codes: 1, or 2 symbols side by side (one format, one
  * ai: word, the frame's blocks split between them, the first code the first ones). */
 typedef struct {
   int blocks, ring, fps, codes;
@@ -144,7 +145,8 @@ typedef struct {
   int n;              /* ai: the picture it was finished at; 0 not finished */
   int word;           /* ai: the frame's own word read */
   int blocks;         /* ai: the size of the format it was decoded at, its version (0 none) */
-  int fps;            /* ai: the display rate its word states */
+  int fps;            /* ai: the display rate the last header the decoder assembled states (0 none: a static word
+                         ai: states none) */
   int held_used;      /* ai: decoded at the held configuration, its own word animated */
   int total;          /* ai: the blocks the symbol carries */
   int verified;       /* ai: the blocks verified */
@@ -161,7 +163,8 @@ typedef struct {
 /* ai: One captured frame (or one region of it: px at the region's first pixel, w x h, rows stride bytes apart): its
  * ai: verified blocks packed into verified (liz_decoder_max_blocks x LIZ_BLOCK bytes), their count returned. held: the
  * ai: caller's, the configuration the last word read states (a static word's version and layout, or the header the
- * ai: animated words this decoder has read assemble: one int, version << 21 | the 7/8, 2/3 and 1/2 blocks 7 bits each;
+ * ai: animated words this decoder has read assemble: one int, version << 22 | the 7/8 blocks (8 bits), the 2/3 and the 1/2
+ * ai: (7 bits each);
  * ai: 0 none), shared by every decoder reading one stream, updated whenever one is read. A frame is decoded at its own
  * ai: static word; one whose word is animated at the held configuration (none held: not decoded); one whose word does
  * ai: not read, not at all (the word before the frame). Every frame is otherwise decoded on its own. out may be NULL. */

@@ -169,7 +169,6 @@ TrialFrames paintTrial(const json& pictures, double noise) {
     lizard_t f{};
     if (lizard_init(&f, n, fr.subch, 2 * fr.ring)) { throw wg::Error("trial: no codec for LIZARD-" + std::to_string(fr.subch)); }
     if (f.block_bytes != XFER_BLOCK) { lizard_free(&f); throw wg::Error("trial: blocks of " + std::to_string(f.block_bytes) + " bytes"); }
-    lizard_fmt_fps(&f, 60);
     lizard_parity(&f, (int)(i & 3));
     fr.blocks.resize(f.blocks);
     std::vector<uint8_t> blocks((size_t)f.blocks * XFER_BLOCK);

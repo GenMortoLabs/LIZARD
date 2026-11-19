@@ -128,12 +128,12 @@ struct FrameOut {
   uint64_t tag = 0;   // ai: the caller's, as enqueued
   int ring = -1, version = 0, n = 0, size = -1;
   bool held = false;
-  int config = 0;   // ai: the configuration decoded at (src/fmt.h ob_fmt_held: version << 21 | the counts), 0 none
+  int config = 0;   // ai: the configuration decoded at (src/fmt.h ob_fmt_held: version << 22 | the counts), 0 none
   struct { float found = 0, ring = -1; std::array<float, 8> corners{}; } finder;
   bool hasWord = false;
-  // ai: the frame's own word (src/fmt.h): kind 0 static (version, fps, count: its 7/8, 2/3 and 1/2 blocks) or 1 animated
+  // ai: the frame's own word (src/fmt.h): kind 0 static (version, count: its 7/8, 2/3 and 1/2 blocks) or 1 animated
   // ai: (a carousel symbol: id, sym)
-  struct { int kind = 0, version = 0, fps = 0, id = 0, count[3] = {0, 0, 0}; uint8_t sym[3] = {0, 0, 0}; } word;
+  struct { int kind = 0, version = 0, id = 0, count[3] = {0, 0, 0}; uint8_t sym[3] = {0, 0, 0}; } word;
   int anchors = 0;   // ai: result word 31: the anchors ANCH_FIT found on the frame (0: the frame not found)
   std::vector<uint32_t> counts;       // ai: COUNTERS a frame
   std::vector<uint32_t> backCounts;   // ai: the back half's COUNTS a frame

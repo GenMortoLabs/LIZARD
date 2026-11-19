@@ -139,7 +139,7 @@ void CpuPool::run(Worker* w) {
     cpu_dec_frame(dec, w->luma.data(), (int)w->w, (int)w->h, w->held, blocks.data(), ok.data(), &fr);
     out.ms = nowMs() - t0;
     out.found = fr.found != 0; out.ring = fr.ring; out.n = fr.n; out.held = fr.held != 0;
-    out.hasWord = fr.word != 0; out.version = fr.version; out.fps = fr.fps;
+    out.hasWord = fr.word != 0; out.version = fr.version;
     out.kind = fr.kind; out.id = fr.id; memcpy(out.count, fr.count, sizeof out.count); memcpy(out.sym, fr.sym, 3);
     memcpy(out.quad, fr.quad, sizeof out.quad);
     out.pilotBlocks = fr.pilot_blocks; out.pilotR = fr.pilot_r[0]; out.pilotSd = fr.pilot_sd[0]; out.pilotR2 = fr.pilot_r[1]; out.pilotSd2 = fr.pilot_sd[1];

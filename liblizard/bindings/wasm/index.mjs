@@ -151,7 +151,7 @@ function decodedFrom(p, count, blocks) {
 
 export class Decoder {
   // ai: nmax: the largest picture decoded (0: every format). held: the held configuration (the last word read's version
-  // ai: and layout as one int, lizard.h liz_decode: version << 21 | the 7/8, 2/3 and 1/2 blocks), the one thing carried
+  // ai: and layout as one int, lizard.h liz_decode: version << 22 | the 7/8, 2/3 and 1/2 blocks), the one thing carried
   // ai: from frame to frame, for animated frames; decoders reading one stream may share it through decode's held option.
   constructor(nmax = 0) {
     mod();

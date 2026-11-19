@@ -202,9 +202,12 @@ uint glog(uint x) { return gbyte(256u + x); }
 uint gmul(uint a, uint b) { return (a == 0u || b == 0u) ? 0u : gexp(glog(a) + glog(b)); }
 ${CFG}
 // ai: a static word's 32 bits after its magic (bytes 1 to 4, the first the most significant; data holds them low
-// ai: first) and its configuration (src/fmt.h ob_fmt_held: the version, from its six bits, << 21 | the counts)
+// ai: first: the version less 4 (6 bits), the 7/8 count (8), the 2/3 and 1/2 counts (7 each), their CRC-4) and its
+// ai: configuration (src/fmt.h ob_fmt_held: version << 22 | the counts), 0 where its CRC-4 is wrong (src/fmt.c crc4:
+// ai: x^4 + x + 1 over the 28 content bits, most significant first, from 0)
 uint bitsOfWord(uint data) { return (data << 24u) | ((data & 0xff00u) << 8u) | ((data >> 8u) & 0xff00u) | (data >> 24u); }
-uint cfgOfWord(uint data) { uint x = bitsOfWord(data); return ((${VERSION_MIN}u + (x >> 26u)) << 21u) | (x & 0x1fffffu); }
+uint crc4(uint c) { uint r = c << 4u; for (uint i = 31u; i >= 4u; i--) { if (((r >> i) & 1u) != 0u) { r ^= 0x13u << (i - 4u); } } return r & 15u; }
+uint cfgOfWord(uint data) { uint x = bitsOfWord(data); return (x & 15u) != crc4(x >> 4u) ? 0u : ((${VERSION_MIN}u + (x >> 26u)) << 22u) | ((x >> 4u) & 0x3fffffu); }
 // ai: a row of a set's system: position p's columns of the four unknown bytes, its value less the magic's part
 void setRow(uint at, uint r, uint p, uint v, uint magic) {
   uint i = 2u * (${BYTES_MAX}u * r + p);
@@ -312,7 +315,7 @@ void main() {
     uint b1 = wn.x & 255u;
     bool own = ok && wn.y == 0u;
     uint g = own ? cfgOfWord(wn.x) : 0u;
-    result[f].r[5] = ok ? float(own ? (g >> 21u) : 256u + b1) : 0.0;
+    result[f].r[5] = ok ? float(own ? (g >> 22u) : 256u + b1) : 0.0;
     result[f].r[6] = ok ? uintBitsToFloat(own ? bitsOfWord(wn.x) : (wn.x >> 8u)) : 0.0;
     result[f].r[7] = uintBitsToFloat(wn.w);
     // ai: its own static word's configuration (sel.y 1 + it), sel.w 2; an animated word's frame HELD's (sel.w 1, waiting
@@ -320,7 +323,7 @@ void main() {
     // ai: the configuration decoded at as a float's bits (0 none), 30 whether it was held.
     result[f].r[29] = uintBitsToFloat(g);
     result[f].r[30] = 0.0;
-    sel[f] = own ? uvec4(rg, 1u + g, slotOf(g >> 21u), 2u) : uvec4(rg, 0u, 0u, ok ? 1u : 0u);
+    sel[f] = own ? uvec4(rg, 1u + g, slotOf(g >> 22u), 2u) : uvec4(rg, 0u, 0u, ok ? 1u : 0u);
   }
 }
 `;
@@ -356,7 +359,7 @@ void main() {
       uint g = HB.hold != 0u ? cur : 0u;
       result[f].r[29] = uintBitsToFloat(g);
       result[f].r[30] = g > 0u ? 1.0 : 0.0;
-      sel[f] = g > 0u ? uvec4(s.x, 1u + g, slotOf(g >> 21u), 0u) : uvec4(s.x, 0u, 0u, 0u);
+      sel[f] = g > 0u ? uvec4(s.x, 1u + g, slotOf(g >> 22u), 0u) : uvec4(s.x, 0u, 0u, 0u);
     }
   }
   carry[0] = uvec4(cur, HB.post, 0u, 0u);

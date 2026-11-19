@@ -39,7 +39,7 @@ struct CpuFrameOut {
   int ring = -1, n = 0;           // ai: the ring, and the picture the frame was finished at (0: not finished)
   bool held = false;              // ai: the held word stood in for the frame's own
   bool hasWord = false;
-  int version = 0, fps = 0;       // ai: the frame's own word (codec.h cpu_frame_t: kind 0 static, 1 animated)
+  int version = 0;                // ai: the frame's own word (codec.h cpu_frame_t: kind 0 static, 1 animated)
   int kind = 0, id = 0, count[3] = {0, 0, 0};   // ai: a static word's 7/8, 2/3 and 1/2 blocks, or an animated one's id
   uint8_t sym[3] = {0, 0, 0};
   float quad[8] = {};             // ai: the symbol's corners in the crop, TL TR BR BL

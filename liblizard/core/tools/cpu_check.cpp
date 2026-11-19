@@ -53,7 +53,7 @@ static void fnv(uint64_t& h, const void* p, size_t n) {
 // ai: What a frame's decode produced, less its timings.
 static uint64_t digestOf(const cpu_dec_t* d, const cpu_frame_t& fr, int got, const uint8_t* blocks, const uint8_t* ok, int bb) {
   uint64_t h = 1469598103934665603ull;
-  const int head[8] = {fr.found, fr.ring, fr.n, fr.held, fr.word, fr.version, fr.fps, got};
+  const int head[8] = {fr.found, fr.ring, fr.n, fr.held, fr.word, fr.version, fr.kind, got};
   fnv(h, head, sizeof head);
   if (fr.found) fnv(h, fr.quad, sizeof fr.quad);
   if (fr.n) {

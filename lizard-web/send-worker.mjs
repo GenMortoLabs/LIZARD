@@ -32,7 +32,7 @@ import { isControlId, ID_BYTES, idPut } from "../liblizard/sim/xfer.mjs";
 import { makeXfer } from "./xfer-pool.mjs";
 import { Refresh, batchIds } from "./refresh.mjs";
 
-let phy = null, xs = null, fps = 0, codes = 1, chain = Promise.resolve();
+let phy = null, xs = null, codes = 1, chain = Promise.resolve();
 // ai: the code's colours the paint takes (the page's Colours, 2026-11-16: "colours", and start's), 0xRRGGBB, kept for each
 // ai: codec made (a start, a respec)
 let colours = [0x000000, 0xffffff];
@@ -115,7 +115,7 @@ async function handle(m) {
     // ai: Developer Tools' Seed (2026-11-14): the schedule drawn from it before the first frame (a transfer made at the pick
     // ai: drew a random one); none given, the random one stands
     if (xs && m.seed != null) xs.reseed(m.seed);
-    fps = m.fps; phy.setFps?.(fps); codes = m.codes ?? 1; gapModules = m.gap;
+    codes = m.codes ?? 1; gapModules = m.gap;
     if (m.every) refresh.setEvery(m.every);
     refresh.setFormat(m.spec.subch, phy.blocksPerFrame);
     postMessage({ type: "ready", gen: m.gen, label: phy.label, usefulBytes: phy.usefulBytes, blocksPerFrame: phy.blocksPerFrame, xfer: xs?.info() });
@@ -124,12 +124,10 @@ async function handle(m) {
     // would break the fountain's stream, exactly as the page used to refuse it.
     const next = await makePhy(m.spec);
     if (next.usefulBytes !== phy.usefulBytes) { next.free(); postMessage({ type: "respec", gen: m.gen, ok: false }); return; }
-    phy.free(); phy = next; phy.setFps?.(fps); phy.setColours(...colours); codes = m.codes ?? codes; gapModules = m.gap;
+    phy.free(); phy = next; phy.setColours(...colours); codes = m.codes ?? codes; gapModules = m.gap;
     if (xs) phy.setSource(source());
     refresh.setFormat(m.spec.subch, phy.blocksPerFrame);
     postMessage({ type: "respec", gen: m.gen, ok: true, label: phy.label, blocksPerFrame: phy.blocksPerFrame });
-  } else if (m.type === "fps") {
-    fps = m.fps; phy?.setFps?.(fps);
   } else if (m.type === "colours") {
     colours = [m.ink, m.paper]; phy?.setColours(...colours);
   } else if (m.type === "refresh") {

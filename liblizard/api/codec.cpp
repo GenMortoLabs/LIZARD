@@ -54,7 +54,6 @@ LIZ_API liz_encoder* liz_encoder_new(const liz_format* format) {
     if (lizard_init(&e->f, e->g.n, LIZARD_STEP * format->blocks, e->g.span))
       throw Error(LIZ_E_FORMAT, "the codec refused LIZARD-" + std::to_string(LIZARD_STEP * format->blocks));
     e->made = true;
-    if (lizard_fmt_fps(&e->f, format->fps)) throw Error(LIZ_E_FORMAT, "the codec refused " + std::to_string(format->fps) + " a second");
     // ai: the arithmetic of format.cpp held to the codec's own
     if (e->f.pxm != e->g.pxm || e->f.px + 2 * LIZARD_QUIET * e->f.pxm != e->g.side || e->f.block_bytes != LIZ_BLOCK || e->f.blocks != lizard_blocks_for(LIZARD_STEP * format->blocks))
       throw Error(LIZ_E_INTERNAL, "the geometry differs from the codec's");
@@ -148,7 +147,7 @@ LIZ_API int liz_decode(liz_decoder* d, const uint8_t* px, int w, int h, int stri
       if (d->ok[b]) std::memcpy(verified + size_t(k++) * LIZ_BLOCK, d->blocks.data() + size_t(b) * d->bb, LIZ_BLOCK);
     if (out) {
       liz_decoded o{};
-      o.found = fr.found; o.ring = fr.ring; o.n = fr.n; o.word = fr.word; o.blocks = fr.version; o.fps = fr.fps;
+      o.found = fr.found; o.ring = fr.ring; o.n = fr.n; o.word = fr.word; o.blocks = fr.version; o.fps = cpu_hold_fps(d->hold);
       o.held_used = fr.held; o.total = fr.total; o.verified = k;
       std::memcpy(o.quad, fr.quad, sizeof o.quad);
       o.pilot_blocks = fr.pilot_blocks;

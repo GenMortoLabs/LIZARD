@@ -80,7 +80,7 @@ test("the test stream in every ring, one code and two", () => {
         const blocks = got.decoded.reduce((n, d) => n + d.count, 0);
         assert.equal(blocks, g.frameBlocks, `ring ${ring}, ${codes} codes, frame ${i}: every block`);
         assert.ok(got.verdict.test && got.verdict.bad === 0, "judged the test stream's");
-        assert.equal(r.decoder.held >> 21, 13, "the held configuration's version");
+        assert.equal(r.decoder.held >> 22, 13, "the held configuration's version");
       }
       s.free(); r.free();
     }

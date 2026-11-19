@@ -55,7 +55,7 @@ void main() {
     lists[HEAD + 2u * B + f] = 0u;
     lists[HEAD + 3u * B + f] = 0u;
     lists[HEAD + 4u * B + f] = 0u;
-    // ai: F8's configuration (sel.y = 1 + it, src/fmt.h ob_fmt_held: version << 21 | the counts), the frame's layout
+    // ai: F8's configuration (sel.y = 1 + it, src/fmt.h ob_fmt_held: version << 22 | the counts), the frame's layout
     if (frames[f].valid == 0u || sel[f].y < 2u) { continue; }
     uint g = sel[f].y - 1u;
     uint s = sel[f].z;
@@ -63,7 +63,7 @@ void main() {
     uint c = lists[s * LS];
     lists[s * LS + 1u + c] = f;
     lists[s * LS] = c + 1u;
-    uint k = min(g >> 21u, G.at[s].z);
+    uint k = min(g >> 22u, G.at[s].z);
     uint i = k * SLOTS + s;
     uint r = G.rows[i >> 2u][i & 3u];
     lists[HEAD + 2u * B + f] = g;

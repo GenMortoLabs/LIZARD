@@ -94,13 +94,14 @@ export function streamMatches(id, bytes) {
 // ai: add an animated word's symbol, k back once the header stands; header(k) its 3k bytes), and a sender's symbol of a
 // ai: header made from content.
 // ai: held(): the configuration the assembled header states as one int (src/fmt.h ob_fmt_held: LizardAny's held), 0 where
-// ai: none stands. symbol(fps, id): the Lizard codec's configuration as a header (src/fmt.h ob_car_content: fps any 1 to
-// ai: 65,535, a rate record where the table has none), its symbol id.
+// ai: none stands; fps() the display rate it states, 0 where none. symbol(fps, id): the Lizard codec's configuration as a
+// ai: header (src/fmt.h ob_car_content: fps 0 to 65,535 in its two bytes), its symbol id.
 export const carousel = {
   reset() { M._lizard_car_reset(); },
   add(id, sym) { return M._lizard_car_add(id, sym[0], sym[1], sym[2]); },
   header(k) { const p = M._lizard_car_hdr(); return M.HEAPU8.slice(p, p + 3 * k); },
   held() { return M._lizard_car_held(); },
+  fps() { return M._lizard_car_fps(); },
   symbol(fps, id) {
     const p = M._malloc(4);
     const k = M._lizard_car_symbol(fps, id, p), sym = Array.from(M.HEAPU8.subarray(p, p + 3));
@@ -234,20 +235,16 @@ export class Lizard {
     return M.HEAPF32.slice(this.pDrive >> 2, (this.pDrive >> 2) + this.side * this.side);
   }
   // The word the last decode read out of the symbol's band, or null where it read none. This is all a receiver
-  // that was told nothing goes on: the version, everything derived from it (sim/lizard_pick.mjs), and the rate
-  // the sender means to paint at (fps 0 where it stated none).
-  // ai: The C's ob_fmt_t (src/fmt.h): a static word's version, fps and extension bytes (kind 0), or an animated word's
-  // ai: carousel position and symbol (kind 1, version 0).
+  // that was told nothing goes on: the version and the layout's counts (sim/lizard_pick.mjs layoutOf).
+  // ai: The C's ob_fmt_t (src/fmt.h): a static word's version and counts (kind 0; fps 0, a static word stating no rate),
+  // ai: or an animated word's carousel id and symbol (kind 1, version 0).
   static fmtOf(p) {
     if (!p) return null;
     const i = p >> 2, kind = M.HEAP32[i], version = M.HEAP32[i + 1], count = [M.HEAP32[i + 3], M.HEAP32[i + 4], M.HEAP32[i + 5]];
     // ai: held: the configuration as one int (src/fmt.h ob_fmt_held), what LizardAny takes for animated frames
     return { kind, version, fps: M.HEAP32[i + 2], count, id: M.HEAP32[i + 6], sym: [M.HEAPU8[p + 28], M.HEAPU8[p + 29], M.HEAPU8[p + 30]],
-      held: kind === 0 ? (version << 21 | count[0] << 14 | count[1] << 7 | count[2]) : 0 };
+      held: kind === 0 ? (version << 22 | count[0] << 14 | count[1] << 7 | count[2]) : 0 };
   }
-  // The display rate the painted band states, whole frames a second, one of the table's (src/fmt.h OB_FMT_RATE). A sender
-  // may change it between frames: only the word's cells move, so registration is untouched and no frame is invalidated.
-  setFps(v) { if (M._lizard_fmt_fps_set(v)) throw new Error(`fps ${v}: not a rate the word's table holds`); }
   // ai: The word the next encode paints (src/lizard_phy.h lizard_fmt_word): setWord(0) the static word (the codec's
   // ai: version and layout); setWord(1, [id, s0, s1, s2]) a carousel symbol.
   setWord(kind, b = []) { if (M._lizard_fmt_word_set(kind, b[0] ?? 0, b[1] ?? 0, b[2] ?? 0, b[3] ?? 0)) throw new Error(`word kind ${kind} [${b}] refused`); }

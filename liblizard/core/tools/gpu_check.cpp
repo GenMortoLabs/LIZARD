@@ -58,7 +58,8 @@
 // ai: budget; 2048 by default, the web's on the S26). The anchors each frame read (SPEC 6.13): selftest prints them a
 // ai: frame and replay's totals line ends with them; LIZ_PERFRAME=1 (replay): a
 // ai: line a frame as it comes back, "frame <index> found <0|1> ring <r> version <v> held <0|1> blocks <n> anchors <k>
-// ai: word <v> fps <f> bad <n> r <r> sd <sd> r2 <r2> sd2 <sd2> pblocks <n>" (word: the version F8 read, 0 none; bad:
+// ai: word <v> bad <n> r <r> sd <sd> r2 <r2> sd2 <sd2> pblocks <n> anim <0|1> id <i> sym <hex> count <a> <t> <c>" (word:
+// ai: the version F8 read, 0 none; count a static word's three counts, 2026-11-19, as lizard_cpu_check's line; bad:
 // ai: verified blocks of a test-stream frame that are not the stream's, the receiver's judge, XferJudge; their sum the
 // ai: "judge:" line; r to pblocks the pilots, FrameOut's, nan where none), then "finder <index> score <s> orient <o>
 // ai: corners <x0 y0 .. x3 y3> depths <d0 .. d3>", the finder's result words 1, 3 and 17 to 28 off the lane.
@@ -746,7 +747,7 @@ static int selftest(Ctx& c, std::string v) {
     }
     const json& Wd = R["word"];
     const bool wordRef = !Wd["word"].is_null();
-    if (wordRef != fo.hasWord || (wordRef && (Wd["word"]["version"].get<int>() != fo.word.version || Wd["word"]["fps"].get<int>() != fo.word.fps))) why += " word";
+    if (wordRef != fo.hasWord || (wordRef && Wd["word"]["version"].get<int>() != fo.word.version)) why += " word";
     if (Wd["version"].get<int>() != fo.version || Wd["n"].get<int>() != fo.n || Wd["held"].get<bool>() != fo.held) why += " version";
     const int rb = R["back"]["blocks"];
     std::set<int> ids;
@@ -890,10 +891,10 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
       const FrameVerdict jv = judge.frame(packed.data(), fo.records.size(), [](const uint8_t*) {});
       bad += jv.bad; testFrames += jv.test;
       if (perFrame) {
-        printf("frame %llu found %d ring %d version %d held %d blocks %zu anchors %d word %d fps %d bad %d r %g sd %g r2 %g sd2 %g pblocks %d anim %d id %d sym %02x%02x%02x\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version, fo.held ? 1 : 0,
-               fo.records.size(), fo.anchors, fo.hasWord ? fo.word.version : 0, fo.hasWord ? fo.word.fps : 0, jv.bad,
+        printf("frame %llu found %d ring %d version %d held %d blocks %zu anchors %d word %d bad %d r %g sd %g r2 %g sd2 %g pblocks %d anim %d id %d sym %02x%02x%02x count %d %d %d\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version, fo.held ? 1 : 0,
+               fo.records.size(), fo.anchors, fo.hasWord ? fo.word.version : 0, jv.bad,
                fo.pilotBlocks ? fo.pilotR : NAN, fo.pilotBlocks ? fo.pilotSd : NAN, fo.pilotBlocks ? fo.pilotR2 : NAN, fo.pilotBlocks ? fo.pilotSd2 : NAN, fo.pilotBlocks,
-               fo.hasWord && fo.word.kind ? 1 : 0, fo.word.id, fo.word.sym[0], fo.word.sym[1], fo.word.sym[2]);
+               fo.hasWord && fo.word.kind ? 1 : 0, fo.word.id, fo.word.sym[0], fo.word.sym[1], fo.word.sym[2], fo.word.count[0], fo.word.count[1], fo.word.count[2]);
         // ai: the back half's counts (BCOUNTS, glsl/back_tiers.mjs): codewords the LDPC ran (blocks not declined), their
         // ai: iterations, verified by the CRC (2026-11-08)
         if (fo.backCounts.size() > 7) printf("back %llu ldpc %u its %u verified %u\n", (unsigned long long)fo.tag, fo.backCounts[3], fo.backCounts[7], fo.backCounts[4]);

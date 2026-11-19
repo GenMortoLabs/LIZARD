@@ -270,7 +270,7 @@ void main() {
   if (wg.z >= count) { return; }
   uint f = LISTS[P.s * (P.B + 1u) + 1u + wg.z];
   uint v = ${cfgAt("LISTS", "P.B", "f")};
-  if (b >= ${CHUNKS}u * (v >> 21u)) { return; }
+  if (b >= ${CHUNKS}u * (v >> 22u)) { return; }
   uint g = t >> 5u;
   uint l = t & 31u;
   uint j = 8u * b + g;

@@ -7,9 +7,9 @@
 // ai: its own), the kept frames (run's keep, LIZ_DUMP, LIZ_DUMP_S), the int8 twins (the WebGPU tree is f32, which has
 // ai: none), the LDPC forms' cross-check and the trial (a WebGPU device validates every module before it runs).
 
-import { layoutOf as layoutOfCounts, RATES } from "../sim/lizard_pick.mjs";
+import { layoutOf as layoutOfCounts } from "../sim/lizard_pick.mjs";
 
-export const TREE_VERSION = 13;   // ai: front.cpp TREE_VERSION
+export const TREE_VERSION = 14;   // ai: front.cpp TREE_VERSION
 export const WEBGPU_VARIANT = "f32";   // ai: gen.mjs WEBGPU_VARIANT: the variant gen translates to WGSL
 
 // ai: front.cpp STAGES, the profile's stage groups, a timestamp pair each.
@@ -657,7 +657,7 @@ export class FrontHalf {
     const C = this.C, d = this.dev, nb = slots.length;
     if (!nb) throw new Error("a batch of no slots");
     if (nb > this.B) throw new Error(`${nb} frames in a batch of ${this.B}`);
-    if (held < -1 || (held > 0 && !layoutOfCounts(16 * (held >>> 21), [(held >>> 14) & 127, (held >>> 7) & 127, held & 127]).length)) throw new Error(`held ${held}: -1 (carried), 0, or a configuration (src/fmt.h ob_fmt_held)`);
+    if (held < -1 || (held > 0 && !layoutOfCounts(16 * (held >>> 22), [(held >>> 14) & 255, (held >>> 7) & 127, held & 127]).length)) throw new Error(`held ${held}: -1 (carried), 0, or a configuration (src/fmt.h ob_fmt_held)`);
     const ln = this.freeLane();
     if (!ln) throw new Error(`${this.lanes.length} batches in flight already`);
     const f = { t0: this.now(), lane: ln, nb, stages: [] };
@@ -856,7 +856,7 @@ export class FrontHalf {
       fo.ring = r(0) === 1 ? r(2) : -1;
       // ai: the configuration decoded at, word 29 as a float's bits (src/fmt.h ob_fmt_held; 0 none)
       fo.config = u32(f.resOff + 4 * (C.RESULT * i + 29));
-      fo.version = fo.config >>> 21;
+      fo.version = fo.config >>> 22;
       fo.size = fo.version > 0 ? slotOf(fo.version) : -1;
       fo.n = fo.size >= 0 ? pics[fo.size].n : 0;
       fo.held = r(30) === 1;
@@ -866,8 +866,8 @@ export class FrontHalf {
       // ai: r(6) its bits as a float's: a static word's 32 bits after its magic, or the symbol's three bytes, low first
       if (fo.hasWord) {
         const a = Math.trunc(r(5)), b = u32(f.resOff + 4 * (C.RESULT * i + 6)), by = [b & 255, (b >>> 8) & 255, (b >>> 16) & 255];
-        fo.word = a >= 256 ? { kind: 1, version: 0, fps: 0, id: a - 256, sym: by }
-          : { kind: 0, version: 4 + (b >>> 26), fps: RATES[(b >>> 21) & 31], count: [(b >>> 14) & 127, (b >>> 7) & 127, b & 127] };
+        fo.word = a >= 256 ? { kind: 1, version: 0, id: a - 256, sym: by }
+          : { kind: 0, version: 4 + (b >>> 26), count: [(b >>> 18) & 255, (b >>> 11) & 127, (b >>> 4) & 127] };
       }
       fo.anchors = Math.trunc(r(31));
       fo.pilotBlocks = 0;

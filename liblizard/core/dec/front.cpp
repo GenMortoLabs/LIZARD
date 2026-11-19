@@ -55,7 +55,9 @@ static constexpr double MiB = 1 << 20;
 // ai: 13 since 2026-11-18: a frame's configuration in F8's sel and record word 29 (src/fmt.h ob_fmt_held: version and
 // ai: the word's counts), HELD carrying it, the gate's lists and the rule stage's layout from it (TAB's TT table and the
 // ai: gate's codes table gone, the rule's blocks a version gone); word 6 the static word's 32 bits.
-static constexpr int TREE_VERSION = 13;
+// ai: 14 since 2026-11-18: the static word without a rate (its 7/8 count 8 bits, a CRC-4 F8 checks; the
+// ai: configuration version << 22).
+static constexpr int TREE_VERSION = 14;
 
 Consts Consts::of(const json& c) {
   Consts k;
@@ -1092,7 +1094,7 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
     uint32_t cfg;
     std::memcpy(&cfg, &r[29], 4);
     fo.config = (int)cfg;
-    fo.version = (int)(cfg >> 21);
+    fo.version = (int)(cfg >> 22);
     fo.size = fo.version > 0 ? slotOf(fo.version) : -1;
     fo.n = fo.size >= 0 ? pics[fo.size]["n"].get<int>() : 0;
     fo.held = r[30] == 1;
@@ -1109,8 +1111,8 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
       fo.word.kind = a >= 256 ? 1 : 0;
       if (fo.word.kind) { fo.word.id = a - 256; for (int j = 0; j < 3; j++) fo.word.sym[j] = (uint8_t)(b >> (8 * j)); }
       else {
-        fo.word.version = OB_FMT_VERSION_MIN + (int)(b >> 26); fo.word.fps = OB_FMT_RATE[(b >> 21) & 31];
-        fo.word.count[0] = (int)(b >> 14) & 127; fo.word.count[1] = (int)(b >> 7) & 127; fo.word.count[2] = (int)b & 127;
+        fo.word.version = OB_FMT_VERSION_MIN + (int)(b >> 26);
+        fo.word.count[0] = (int)(b >> 18) & 255; fo.word.count[1] = (int)(b >> 11) & 127; fo.word.count[2] = (int)(b >> 4) & 127;
       }
     }
     fo.anchors = (int)r[31];   // ai: ANCH_FIT's count (PICK zeroes the record: 0 on a frame not found)

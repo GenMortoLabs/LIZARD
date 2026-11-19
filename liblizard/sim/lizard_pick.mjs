@@ -111,14 +111,13 @@ export function tiersFor(subch) {
   return [...(ba ? [[6, ba, BLOCK_SLOTS[6]]] : []), [4, m, BLOCK_SLOTS[4]], ...(bt ? [[3, bt, BLOCK_SLOTS[3]]] : []), ...(bc ? [[2, bc, BLOCK_SLOTS[2]]] : [])];
 }
 export const blocksFor = (subch) => tiersFor(subch).reduce((n, [, b]) => n + b, 0);
-// ai: A frame's layout from its word's counts (src/fmt.c ob_fmt_layout, 2026-11-18): [7/8, 2/3, 1/2] blocks, each 0 to
-// ai: COUNT_MAX, the 3/4 filling the rest; all four tiers as [rate, blocks, slots] (0 blocks kept), or [] where it is no
-// ai: frame: no room for one 3/4 block, or fewer than two blocks carrying pilots (7/8 and 3/4). countsFor: the default
-// ai: senders' counts (tiersFor). RATES: the word's rate table (src/fmt.c OB_FMT_RATE), a code its index.
-export const COUNT_MAX = 127;
-export const RATES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20, 24, 25, 27, 28, 30, 32, 33, 35, 36, 40, 45, 48, 50, 54, 55, 60];
+// ai: A frame's layout from its word's counts (src/fmt.c ob_fmt_layout, 2026-11-18): [7/8, 2/3, 1/2] blocks, the 7/8 0 to
+// ai: COUNT78_MAX and the others 0 to COUNT_MAX, the 3/4 filling the rest; all four tiers as [rate, blocks, slots] (0
+// ai: blocks kept), or [] where it is no frame: no room for one 3/4 block, or fewer than two blocks carrying pilots (7/8
+// ai: and 3/4). countsFor: the default senders' counts (tiersFor).
+export const COUNT78_MAX = 255, COUNT_MAX = 127;
 export function layoutOf(subch, [a, t, c]) {
-  if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1) || ![a, t, c].every((x) => Number.isInteger(x) && x >= 0 && x <= COUNT_MAX)) return [];
+  if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1) || ![a, t, c].every((x, i) => Number.isInteger(x) && x >= 0 && x <= (i ? COUNT_MAX : COUNT78_MAX))) return [];
   const all = 640 * subch, used = a * BLOCK_SLOTS[6] + t * BLOCK_SLOTS[3] + c * BLOCK_SLOTS[2];
   if (used + BLOCK_SLOTS[4] > all) return [];
   const m = Math.floor((all - used) / BLOCK_SLOTS[4]);
@@ -130,7 +129,7 @@ export const countsFor = (subch) => { const t = tiersFor(subch), of = (r) => t.f
 export function blocksMaxFor(subch) {
   const all = 640 * subch;
   let most = 0;
-  for (let a = 0; a <= COUNT_MAX && a * BLOCK_SLOTS[6] + BLOCK_SLOTS[4] <= all; a++) most = Math.max(most, a + Math.floor((all - a * BLOCK_SLOTS[6]) / BLOCK_SLOTS[4]));
+  for (let a = 0; a <= COUNT78_MAX && a * BLOCK_SLOTS[6] + BLOCK_SLOTS[4] <= all; a++) most = Math.max(most, a + Math.floor((all - a * BLOCK_SLOTS[6]) / BLOCK_SLOTS[4]));
   return most;
 }
 // The border in modules a side, which src/lizard_phy.c sets as the corner mark's own size plus the guard interval,

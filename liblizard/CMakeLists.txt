@@ -82,7 +82,7 @@ if(EMSCRIPTEN)
       _liz_rx_progress _liz_rx_chunks _liz_rx_meta _liz_rx_data _liz_rx_clear
       _lizard_setup _lizard_setup_tiers _lizard_any_setup _lizard_any_rx _lizard_any_held _lizard_any_max_blocks _lizard_any_which
       _lizard_any_n _lizard_any_blocks _lizard_any_fmt _lizard_any_builds _lizard_bitmap_get _lizard_subch
-      _lizard_blocks _lizard_blocks_max _lizard_layout_set _lizard_side _lizard_cell _lizard_quiet _lizard_fmt_rx_ptr _lizard_fmt_fps_set _lizard_fmt_word_set _lizard_car_reset _lizard_car_add _lizard_car_hdr _lizard_car_held _lizard_car_symbol _lizard_parity_set
+      _lizard_blocks _lizard_blocks_max _lizard_layout_set _lizard_side _lizard_cell _lizard_quiet _lizard_fmt_rx_ptr _lizard_fmt_word_set _lizard_car_reset _lizard_car_add _lizard_car_hdr _lizard_car_held _lizard_car_fps _lizard_car_symbol _lizard_parity_set
       _lizard_pilot_get _lizard_any_pilot_get _lizard_align_get _lizard_tx _lizard_tx_rgba _lizard_rs_geom _lizard_rx _lizard_dbg
       _lizard_dbg_sym _lizard_dbg_coef _lizard_blk_its _lizard_blk_est _ob_heap_top
       _ob_last _ob_prof _ob_prof_reset _ob_luma_strip _ob_test_binarize _ob_test_sample _ob_test_marks

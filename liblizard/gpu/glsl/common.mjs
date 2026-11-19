@@ -11,23 +11,23 @@ import { CODES } from "../plan/back_tiers.mjs";
 import { VERSION_MIN, VERSION_MAX } from "../wordcode.mjs";
 
 export const VERSION = "#version 460\n";
-// ai: A frame's configuration (2026-11-18; src/fmt.h ob_fmt_held): version << 21 | its 7/8, 2/3 and 1/2 blocks, 7 bits
-// ai: each, as its word states them. cfgCounts: the four codes' blocks in CODES' order (7/8, 3/4, 2/3, 1/2), the 3/4
+// ai: A frame's configuration (2026-11-18; src/fmt.h ob_fmt_held): version << 22 | its 7/8 blocks << 14 (8 bits), its 2/3
+// ai: << 7 and 1/2 blocks (7 bits each), as its word states them. cfgCounts: the four codes' blocks in CODES' order (7/8, 3/4, 2/3, 1/2), the 3/4
 // ai: filling the rest of the version's 10,240 slots a version (src/fmt.h ob_fmt_layout; 0 where none fits); cfgOk: a
 // ai: frame (a version of the ladder, room for one 3/4 block, two blocks carrying pilots). Every term an integer; no
 // ai: array indexed at run time.
 export const CFG = /* glsl */ `
 uvec4 cfgCounts(uint g) {
-  uint a = (g >> 14u) & 127u;
+  uint a = (g >> 14u) & 255u;
   uint t = (g >> 7u) & 127u;
   uint c = g & 127u;
   uint used = a * ${CODES[0].slots}u + t * ${CODES[2].slots}u + c * ${CODES[3].slots}u;
-  uint all = (g >> 21u) * 10240u;
+  uint all = (g >> 22u) * 10240u;
   uint m = all >= used + ${CODES[1].slots}u ? (all - used) / ${CODES[1].slots}u : 0u;
   return uvec4(a, m, t, c);
 }
 bool cfgOk(uint g) {
-  uint v = g >> 21u;
+  uint v = g >> 22u;
   uvec4 k = cfgCounts(g);
   return v >= ${VERSION_MIN}u && v <= ${VERSION_MAX}u && k.y >= 1u && k.x + k.y >= 2u;
 }

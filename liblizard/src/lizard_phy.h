@@ -113,12 +113,8 @@ typedef struct lizard_s {
 
 // The word the last decode read out of the symbol, or 0 where it read none.
 const ob_fmt_t *lizard_fmt_rx(const lizard_t *f);
-// What the band says about the display rate: whole frames a second the sender MEANS to paint at, one of the table's
-// (fmt.h OB_FMT_RATE: 60, the default, and 31 others to 1); -1 where the table has none (a sender at another rate paints
-// animated words, whose header states it). Repaints the word, which is safe at any time.
-int lizard_fmt_fps(lizard_t *f, int fps);
-// The word the next encode paints (fmt.h): kind OB_FMT_STATIC (the codec's version and layout, the rate
-// lizard_fmt_fps's; b unread), or OB_FMT_ANIM, a carousel symbol: id b[0] (to OB_FMT_ID_MAX) and its bytes b[1] to
+// The word the next encode paints (fmt.h): kind OB_FMT_STATIC (the codec's version and layout; b unread), or
+// OB_FMT_ANIM, a carousel symbol: id b[0] (to OB_FMT_ID_MAX) and its bytes b[1] to
 // b[3]. 0, or -1 where the kind or the id is not one. Repaints the word, which is safe at any time.
 int lizard_fmt_word(lizard_t *f, int kind, const uint8_t b[4]);
 // The frame's layout (fmt.h ob_fmt_layout): count[0] 7/8 blocks, count[1] 2/3, count[2] 1/2, the 3/4 blocks filling the
@@ -176,8 +172,8 @@ int lizard_init_tiers(lizard_t *f, int n, const lizard_tier_t *tier, int tiers, 
 int lizard_tiers_for(int subch, lizard_tier_t tier[LIZARD_TIERS]);
 // The blocks a frame of subch sub-channels carries under that profile (0 for no format).
 int lizard_blocks_for(int subch);
-// The most blocks any layout a word may state gives a frame of subch sub-channels (OB_FMT_COUNT_MAX 7/8 blocks, the
-// smallest, and 3/4 blocks filling the rest): what a receiver's buffers hold.
+// The most blocks any layout a word may state gives a frame of subch sub-channels (7/8 blocks, the smallest, to
+// OB_FMT_COUNT78_MAX, and 3/4 blocks filling the rest; 152 at version 67): what a receiver's buffers hold.
 int lizard_blocks_max_for(int subch);
 // ai: Where the camera's optical axis falls in the image the calling thread decodes next, image px (2026-10-17): where
 // ai: the lens model's centre is first taken (acquire.c lensm_axis) and where the final fit's search for it starts

@@ -99,7 +99,6 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
   const int n = lizard_n_for(subch);
   if (lizard_init(&f_, n, subch, span)) return "the codec refused LIZARD-" + std::to_string(subch);
   fReady_ = true;
-  lizard_fmt_fps(&f_, ob_fmt_rate_near(fps));   // ai: the table's rate nearest (src/fmt.h); the header states it exactly
   fps_ = fps;
   gWords_.reset();
   wordsWhy_ = "no GPU paint configured";
@@ -294,8 +293,7 @@ std::string GpuPainter::words() {
     const std::string we = wordSpans(f_, t_, spans, cells, nwb);
     if (!we.empty()) return we;
     // ai: every symbol's word: the header the format's own configuration (src/fmt.h ob_car_content: the static word's
-    // ai: five bytes, a rate record where the sender's rate is off the table), symbol p's animated word (src/fmt.h
-    // ai: ob_fmt_encode) as its cells' bits
+    // ai: five bytes and the sender's rate), symbol p's animated word (src/fmt.h ob_fmt_encode) as its cells' bits
     const ob_layout_t& L = f_.frame;
     const int bytes = ob_fmt_bytes(L.w < L.h ? L.w : L.h, L.reserve);
     uint8_t hdr[OB_CAR_SYM * OB_CAR_N], cw[OB_FMT_BYTES_MAX], content[OB_CAR_CONTENT_MAX];

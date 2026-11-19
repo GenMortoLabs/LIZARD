@@ -534,7 +534,6 @@ int main(int argc, char** argv) {
       const std::string name = e["name"];
       lizard_t f{};
       if (ring < 0 || ring >= LIZARD_RINGS || lizard_init(&f, n, subch, 2 * LIZARD_RING[ring])) { printf("FAIL %s: the codec refused it\n", name.c_str()); bad++; continue; }
-      lizard_fmt_fps(&f, 60);
       SendTables t;
       const std::string te = sendTables(f, k, 4, t, e.value("codes", 1));
       if (!te.empty()) { printf("FAIL %s: %s\n", name.c_str(), te.c_str()); bad++; lizard_free(&f); continue; }
@@ -637,8 +636,8 @@ int main(int argc, char** argv) {
       stream_fill(xfer_id_get(blk), want.data(), XFER_PAYLOAD);
       if (!memcmp(want.data(), blk + XFER_ID_BYTES, XFER_PAYLOAD)) stream++;
     }
-    printf("decode: found %d, ring %d, n %d, word %d (version %d = LIZARD-%d, %d a second), %d blocks verified, %d of them the test stream's, pilots %d blocks r %.2f %.2f\n",
-           fr.found, fr.ring, fr.n, fr.word, fr.version, LIZARD_STEP * fr.version, fr.fps, got, stream, fr.pilot_blocks, fr.pilot_r[0], fr.pilot_r[1]);
+    printf("decode: found %d, ring %d, n %d, word %d (version %d = LIZARD-%d), %d blocks verified, %d of them the test stream's, pilots %d blocks r %.2f %.2f\n",
+           fr.found, fr.ring, fr.n, fr.word, fr.version, LIZARD_STEP * fr.version, got, stream, fr.pilot_blocks, fr.pilot_r[0], fr.pilot_r[1]);
     cpu_dec_free(d);
     return got > 0 ? 0 : 1;
   }

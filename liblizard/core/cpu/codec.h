@@ -11,13 +11,12 @@ typedef struct cpu_dec cpu_dec_t;
 
 // ai: What a frame's decode found. ring: the ring that registered (an index into src/lizard_phy.h LIZARD_RING), -1 none. n: the picture it was finished
 // ai: at, 0 not finished. held: the frame (its word animated) was finished at the caller's held configuration. word: the
-// ai: frame's own word read, kind 0 static (version = sub-channels / 16, fps the display rate it states, count its 7/8,
-// ai: 2/3 and 1/2 blocks) or 1 animated (a carousel symbol, src/fmt.h: id, sym its bytes; version 0). total: the blocks
+// ai: frame's own word read, kind 0 static (version = sub-channels / 16, count its 7/8, 2/3 and 1/2 blocks) or 1 animated (a carousel symbol, src/fmt.h: id, sym its bytes; version 0). total: the blocks
 // ai: of the layout it was finished at (ok[] and blocks[] hold that many; cpu_dec_top the most). quad: the symbol's corners in the image, TL
 // ai: TR BR BL. pilot_*: what the block tails read (liblizard/src/any.h lizard_any_pilot: r of the even blocks and of
 // ai: the odd, their standard errors, the blocks read, 0 none).
 typedef struct {
-  int found, ring, n, held, word, version, fps, total;
+  int found, ring, n, held, word, version, total;
   float quad[8];
   int pilot_blocks;
   float pilot_r[2], pilot_sd[2];
@@ -28,14 +27,15 @@ typedef struct {
 // ai: The held configuration, the one state a receiver carries from frame to frame (src/any.h), for its animated frames:
 // ai: a static word's configuration (src/fmt.h ob_fmt_held: version and counts as one int), or that of the header the
 // ai: animated words' carousel assembled (src/fmt.h ob_car_rx_t, ob_car_config). take: a frame's word (kind 0 static,
-// ai: 1 animated; none, the hold as it was) and returns the configuration held after it, 0 none. One a receiver; reset
-// ai: for a new stream.
+// ai: 1 animated; none, the hold as it was) and returns the configuration held after it, 0 none. fps: the display rate
+// ai: the last assembled header states (0 none: a static word states none). One a receiver; reset for a new stream.
 typedef struct cpu_hold cpu_hold_t;
 cpu_hold_t *cpu_hold_new(void);
 void cpu_hold_free(cpu_hold_t *h);
 void cpu_hold_reset(cpu_hold_t *h);
 int cpu_hold_take(cpu_hold_t *h, int kind, int version, const int count[3], int id, const uint8_t sym[3]);
 int cpu_hold_held(const cpu_hold_t *h);
+int cpu_hold_fps(const cpu_hold_t *h);
 
 // ai: nmax: the largest picture decoded (1536 for every format; smaller saves memory). NULL where the codec refuses.
 cpu_dec_t *cpu_dec_new(int nmax);

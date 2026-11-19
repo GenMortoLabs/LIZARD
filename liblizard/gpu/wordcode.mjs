@@ -1,7 +1,7 @@
 // The format word as a linear code, for the GPU reader (glsl/word.mjs). The word is its magic and four bytes, static
-// ai: [0x4C, then 32 bits: the version less 4 (6), the rate's code (5), the 7/8, 2/3 and 1/2 blocks (7 each), the first
-// ai: the most significant] (since 2026-11-18; [0x4C, version, fps, ext0, ext1] from 2026-11-15, [0x4C, version, fps]
-// ai: before) or animated [0xB3, id, three bytes of a carousel symbol], and bytes - 5 Reed-Solomon parity bytes, one code a ring over every word cell:
+// ai: [0x4C, then 32 bits: the version less 4 (6), the 7/8 blocks (8), the 2/3 and 1/2 blocks (7 each), their CRC-4
+// ai: (src/fmt.c crc4), the first the most significant] (since 2026-11-18; that day a rate code in place of the 8th count
+// ai: bit and the CRC, then four zero bits in place of the CRC; [0x4C, version, fps, ext0, ext1] from 2026-11-15, [0x4C, version, fps] before) or animated [0xB3, id, three bytes of a carousel symbol], and bytes - 5 Reed-Solomon parity bytes, one code a ring over every word cell:
 // ai: RS(16,5), (32,5), (64,5) at W = 32, 64, 128 word cells a side, the 64, 128 and 256 rings (src/fmt.c, src/rs.c:
 // ai: GF(256), polynomial 0x11D, roots alpha^0 upward, data first).
 // Reed-Solomon is linear over GF(2), so every valid word is its magic's BASE xor the rows of its four bytes' set bits:
@@ -12,7 +12,7 @@
 //
 // Bit order is the reader's: q index side * W + cell, cell 0..W - 1 along the side; byte k lives on side k % 4 at
 // cells 8 (k / 4) .. + 7, most significant bit first (src/fmt.c ob_fmt_bit). Cells past the codeword are light.
-import { N_FOR, subchOf, layoutOf, RATES } from "../sim/lizard_pick.mjs";
+import { N_FOR, subchOf, layoutOf } from "../sim/lizard_pick.mjs";
 
 const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
 { let x = 1; for (let i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 256) x ^= 0x11d; } for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255]; }
@@ -26,12 +26,17 @@ export const MAGIC = 0x4c, MAGIC_ANIM = 0xb3, DATA = 5, ID_MAX = 254;
 // ai: STEP), 64 to 1072 sub-channels (since 2026-11-18; 4 to 64 from 2026-10-29), its six bits' every value.
 export const VERSION_MIN = 4;
 export const VERSION_MAX = 67;
-// ai: A static word's data bytes (src/fmt.c ob_fmt_pack: the rate one of the table's, count [7/8, 2/3, 1/2] a frame of
-// ai: the version, sim/lizard_pick.mjs layoutOf) and an animated one's
-export function staticWord(version, fps, count) {
-  const rc = RATES.indexOf(fps);
-  if (rc < 0 || !layoutOf(subchOf(version), count).length) throw new Error(`no static word: version ${version}, ${fps} a second, counts ${count}`);
-  const x = ((version - VERSION_MIN) * 2 ** 26 + rc * 2 ** 21 + count[0] * 2 ** 14 + count[1] * 2 ** 7 + count[2]) >>> 0;
+// ai: A static word's data bytes (src/fmt.c ob_fmt_pack: count [7/8, 2/3, 1/2] a frame of the version,
+// ai: sim/lizard_pick.mjs layoutOf) and an animated one's
+// ai: src/fmt.c crc4: x^4 + x + 1 over a static word's 28 content bits, most significant first, from 0
+export function crc4(c) {
+  let r = (c << 4) >>> 0;
+  for (let i = 31; i >= 4; i--) if ((r >>> i) & 1) r = (r ^ (0x13 << (i - 4))) >>> 0;
+  return r & 15;
+}
+export function staticWord(version, count) {
+  if (!layoutOf(subchOf(version), count).length) throw new Error(`no static word: version ${version}, counts ${count}`);
+  const c = (version - VERSION_MIN) * 2 ** 22 + count[0] * 2 ** 14 + count[1] * 2 ** 7 + count[2], x = (c * 16 + crc4(c)) >>> 0;
   return [MAGIC, x >>> 24, (x >>> 16) & 255, (x >>> 8) & 255, x & 255];
 }
 export const animWord = (id, sym) => [MAGIC_ANIM, id, sym[0], sym[1], sym[2]];
@@ -93,21 +98,21 @@ export const TAU = 0.1, SIDE_KEEP = 0.75, GATE_CHOICES = 3;
 // ai: The C's false-word rate on garbage (soft values uniform in -0.5 to 0.5) in a ring of W word cells a side, exact
 // ai: as test/fmt_test.c p_pass has it: RS(bytes, 5) passing errors only, then each erasure step (2, 4, ... nroots - 3
 // ai: least confident bytes, src/fmt.c ob_fmt_decode), a false codeword's data bytes uniform, so 1/256 for each magic
-// ai: and the static words' share of the 32 bits after it (STATIC_WORDS / 2^32: every version and rate code, the
-// ai: counts that make a frame, about 3.55%), or the ids' of the id byte.
-// ai: STATIC_WORDS: per version, the (a, t, c) whose slots leave one 3/4 block and two blocks with pilots, times the 32
-// ai: rates (src/fmt.c ob_fmt_layout), counted by a and t with c's room in closed form
+// ai: and the static words' share of the 32 bits after it (STATIC_WORDS / 2^32: every version's counts that make a frame,
+// ai: each with its one CRC-4), or the ids' of the id byte.
+// ai: STATIC_WORDS: per version, the (a, t, c) whose slots leave one 3/4 block and two blocks with pilots (src/fmt.c
+// ai: ob_fmt_layout), counted by a and t with c's room in closed form
 function staticWords() {
   const s7 = 4496, s3 = 5152, s2 = 5760, s1 = 7680;
   let n = 0;
   for (let v = VERSION_MIN; v <= VERSION_MAX; v++) {
     const all = v * 10240;
-    for (let a = 0; a < 128; a++) for (let t = 0; t < 128; t++) {
+    for (let a = 0; a < 256; a++) for (let t = 0; t < 128; t++) {
       const room = all - Math.max(1, 2 - a) * s3 - a * s7 - t * s2;   // ai: the 3/4 blocks the pilots and the fill need
       if (room >= 0) n += Math.min(127, Math.floor(room / s1)) + 1;
     }
   }
-  return n * RATES.length;
+  return n;
 }
 export const STATIC_WORDS = staticWords();
 export const WORDS = STATIC_WORDS + (ID_MAX + 1) * 2 ** 24;

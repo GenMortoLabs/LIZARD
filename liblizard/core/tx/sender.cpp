@@ -545,9 +545,8 @@ void Sender::paint(int) {
     error_ = "a painter's codec failed";
     return;
   }
-  // ai: the static word's rate the table's nearest the sender's (src/fmt.h OB_FMT_RATE); the animated header (setCarousel)
-  // ai: the format's own configuration, its rate exact (src/fmt.h ob_car_content: a rate record where the table has none)
-  lizard_fmt_fps(&f, ob_fmt_rate_near(fm.fps));
+  // ai: the animated header (setCarousel): the format's own configuration and the sender's rate (src/fmt.h
+  // ai: ob_car_content); a static word states no rate
   uint8_t hdr[OB_CAR_SYM * OB_CAR_N], content[OB_CAR_CONTENT_MAX];
   ob_fmt_t cfg = f.fmt;
   cfg.fps = fm.fps;

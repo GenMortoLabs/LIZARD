@@ -194,9 +194,9 @@ async function gpuEncoder() {
   })().finally(() => { gencMaking = null; });
   return gencMaking;
 }
-async function gpuConfigure(s, codes, fps, gap) {
+async function gpuConfigure(s, codes, gap) {
   const e = await gpuEncoder();
-  const cfg = await e.configure({ spec: s, codes, fps, gap }), key = `${s.n}/${s.span}/${codes}/${codes > 1 ? gap : 0}`;
+  const cfg = await e.configure({ spec: s, codes, gap }), key = `${s.n}/${s.span}/${codes}/${codes > 1 ? gap : 0}`;
   cfg.pending = 0; cfg.half = 0;
   if (!checked.has(key)) {
     const blocks = new Uint8Array(codes * cfg.V * cfg.B);
@@ -258,20 +258,6 @@ $("subch").addEventListener("change", showBlocks);
 // ai: phase held, read 93 to 95% of it; auto and 24 a second before), in send.html
 // ai: itself since 2026-10-02 (#subch 480, #fps 60: set here, after the page was drawn, they flashed auto first). A
 // ai: setting the user changed is kept over these (persist, below), and a URL preset over that.
-
-// ai: The display rate goes in the BAND (src/fmt.h). The word is the only channel a receiver has, and the rate is the
-// ai: one thing about an animated symbol that no single frame shows.
-// It is what the box asks for, not what the loop achieved: a sender falling behind then reads as
-// what it is, the band saying 60 where the receiver counts 15 distinct frames a second. Re-stating it is free,
-// since only the word's cells are repainted (src/lizard_phy.c lizard_fmt_fps), so the box can move mid-transfer.
-let bandFps = 0;
-function stateFps(force = false) {
-  const v = Math.max(0, Math.min(255, Math.round(+$("fps").value) || 0));
-  if (!force && v === bandFps) return;
-  sw?.postMessage({ type: "fps", fps: v, gen });
-  if (gcfg && v !== bandFps) genc.setFps(v).catch(gpuGiveUp);
-  bandFps = v;
-}
 
 // A LIZARD file goes as a chunked transfer (sim/xfer.mjs): chunks of 2^chunk bytes (?chunk=10..24, 16 MiB unless
 // ai: asked), a fountain each, the header and manifest in the light, and only there: the receiver reads it blind
@@ -531,14 +517,12 @@ async function start() {
   // The worker holds the codec and, for a file, the fountain: the page keeps neither.
   swInit();
   ahead.clear(); inflight = 0; reqSeq = 0; spare = []; respecPending = false; behind = 0;
-  const fps = Math.max(0, Math.min(255, Math.round(+$("fps").value) || 0));
-  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, fps, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf(), colours: [inkOf(), paperOf()] });
-  bandFps = fps;
+  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf(), colours: [inkOf(), paperOf()] });
   // ai: The GPU encoder for this run, where the menu asks for it and it builds (WebGPU by name: its failure is the start's).
   // ai: Its configuration is this run's only if the run is still this one when it comes back.
   if (wantGpu()) {
     let c = null;
-    try { c = await gpuConfigure(s, codes, fps, gap); } catch (e) {
+    try { c = await gpuConfigure(s, codes, gap); } catch (e) {
       if (my !== gen) return;
       if ($("enc").value === "gpu") throw e;
       console.warn("sender: the GPU encoder:", e);
@@ -597,7 +581,6 @@ async function start() {
     }
     const period = 1000 / Math.max(1, +$("fps").value);
     if (!due(now, next, period)) { pump(); return; }
-    stateFps();
     // Not encoded yet: paint it on the next animation frame rather than skip it, and count that.
     const fr = ahead.get(seq);
     if (!fr) { behind++; pump(); return; }
@@ -644,7 +627,7 @@ async function start() {
 }
 // ai: Halts the stream and clears the canvas; the caller shows the state that follows.
 function stop() {
-  offeredKBs = 0; drawFps = 0; cancelAnimationFrame(timer); cfg = shown = null; bandFps = 0; running = live = paused = hiddenPause = false;
+  offeredKBs = 0; drawFps = 0; cancelAnimationFrame(timer); cfg = shown = null; running = live = paused = hiddenPause = false;
   showEnc();
   cancelPrep();
   // The worker's frames from this run are dropped by generation; a reply still awaited is refused, not left hanging.
@@ -695,7 +678,7 @@ async function repickOnce() {
     r = await swCall({ type: "respec", spec: s, codes, gap });
     if (my !== gen) return;
     if (r.ok && gcfg) {
-      try { next = await gpuConfigure(s, codes, bandFps, gap); } catch (e) { if (my === gen) gpuGiveUp(e); return; }
+      try { next = await gpuConfigure(s, codes, gap); } catch (e) { if (my === gen) gpuGiveUp(e); return; }
       if (my !== gen) { genc?.release(next); return; }
     }
   } finally { if (my === gen) respecPending = false; }
@@ -703,7 +686,6 @@ async function repickOnce() {
   if (next) { const old = gcfg; gcfg = next; gpuRelease(old); }
   shown = s;
   showBlocks();
-  stateFps(true);
   Object.assign(cfg, { label: r.label, blocksPerFrame: r.blocksPerFrame, codes, gap });
 }
 // One debounced entry point for every way the room can change, so they cannot race.

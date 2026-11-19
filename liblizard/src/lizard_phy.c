@@ -440,9 +440,8 @@ static int ws_init(lizard_t *f) {
 
 
 // The word restates this lizard_t rather than being handed to us, so it cannot come to disagree with what is
-// painted: the version and the layout's counts are the codec's (lizard_layout). The display rate is the exception,
-// being a property of the sequence and not of this frame: lizard_fmt_fps sets it and it survives a repaint. The
-// fountain's header is payload. A configuration the word cannot express (a sub-channel count that is not a multiple of
+// painted: the version and the layout's counts are the codec's (lizard_layout). The display rate is no frame's and
+// is the animated header's (fmt.h). The fountain's header is payload. A configuration the word cannot express (a sub-channel count that is not a multiple of
 // 16, LIZARD_STEP, or 3/4 blocks other than the rest of the frame holds, which only lizard_init_tiers makes) blanks the
 // band instead: a receiver that finds nothing there knows it was told nothing, where one that finds a lie does not.
 static void fmt_paint(lizard_t *f) {
@@ -485,16 +484,6 @@ int lizard_pilot(const lizard_t *f, int blocks, float r[2], float sd[2]) {
   return all;
 }
 void lizard_align(const lizard_t *f, float d[2]) { const struct lizard_ws *w = f->ws; d[0] = w ? w->align[0] : 0; d[1] = w ? w->align[1] : 0; }
-// The display rate the word states, in whole frames a second (fmt.h): the only field a caller supplies, since it
-// is the only one that is not a property of this lizard_t. Safe at any time, including mid-transfer: repainting
-// the word moves the word's cells and nothing else (layout.c ob_layout_set_fmt), so registration is untouched,
-// and it takes effect on the next encode, which paints the border from the layout as it then stands.
-int lizard_fmt_fps(lizard_t *f, int fps) {
-  if (ob_fmt_rate_code(fps) < 0) return -1;
-  f->fmt.fps = fps;
-  fmt_paint(f);
-  return 0;
-}
 int lizard_fmt_word(lizard_t *f, int kind, const uint8_t b[4]) {
   if (kind == OB_FMT_ANIM && b[0] <= OB_FMT_ID_MAX) { f->fmt.id = b[0]; memcpy(f->fmt.sym, b + 1, 3); }
   else if (kind != OB_FMT_STATIC) return -1;
@@ -598,7 +587,6 @@ static int init(lizard_t *f, int n, int subch, const int blocks[OB_TIERS], int s
   f->px = side * f->pxm;
   if (ob_layout_init(&f->frame, side)) { lizard_free(f); return -1; }
   f->fmt.kind = OB_FMT_STATIC;
-  f->fmt.fps = 60;
   // One payload for every block, LIZARD_BLOCK bytes and its CRC-32C: 3840 bits, every code's k at 3/4, 2/3 and 1/2
   // exactly; the 7/8 code's k of 3968 carries zeros past it, which its decoder is told. The four codes are every
   // frame's; a frame's layout says how many blocks each carries (lizard_layout).
@@ -669,7 +657,7 @@ int lizard_tiers_for(int subch, lizard_tier_t tier[LIZARD_TIERS]) {
 int lizard_blocks_max_for(int subch) {
   const long long all = (long long)subch * LIZARD_SUB * 2, s7 = lizard_block_slots(OB_TIER_RATE[OB_TIER_78]), s3 = lizard_block_slots(OB_TIER_RATE[OB_TIER_34]);
   int most = 0;
-  for (int a = 0; a <= OB_FMT_COUNT_MAX && a * s7 + s3 <= all; a++) { const int k = a + (int)((all - a * s7) / s3); if (k > most) most = k; }
+  for (int a = 0; a <= OB_FMT_COUNT78_MAX && a * s7 + s3 <= all; a++) { const int k = a + (int)((all - a * s7) / s3); if (k > most) most = k; }
   return most;
 }
 int lizard_blocks_for(int subch) {

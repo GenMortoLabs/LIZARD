@@ -18,20 +18,20 @@
 // ai:     and 1536 in the 128, 512, 1024 and 1536 in the 256, 15 of the 24 pairs) rsh alone, reading the picture (rsh's
 // ai:     copy form);
 // ai:   present: a render pass onto the canvas, whole canvas pixels a frame pixel, a frame of a batch.
-// ai: The border (ring, marks, band, word, quiet margin) is the C's paint, taken once a configuration and again at each
-// ai: fps change from this module's own Lizard on the importing thread's wasm, so it is the C's to the byte. The square
+// ai: The border (ring, marks, band, word, quiet margin) is the C's paint, taken once a configuration from this
+// ai: module's own Lizard on the importing thread's wasm, so it is the C's to the byte. The square
 // ai: is not: the transform's rounding differs, within one grey level of the C's (scripts/gpu/encoder_check.mjs); `check`
 // ai: holds a device to that on frames of its choosing (a driver that returns garbage fails it), not a conformance
 // ai: rule: a sender's symbol need only decode (2026-09-29).
 // ai:
 // ai:   const enc = await GpuEncoder.create();                 // throws Unavailable: no WebGPU, no adapter
-// ai:   const cfg = await enc.configure({ spec, codes, fps, gap }); // spec { n, subch, span }; gap: modules between codes; again at a re-pick
+// ai:   const cfg = await enc.configure({ spec, codes, gap });   // spec { n, subch, span }; gap: modules between codes; again at a re-pick
 // ai:   const ctx = enc.attach(canvas);                        // a canvas with no 2D context
 // ai:   enc.encode(half, f0, blocks, count, cfg, parity, test); // frames f0 .. f0 + count - 1 of a half, count <= cfg.sub,
 // ai:                                                          // each codes x blocks x 476 B (test: the ids alone read)
 // ai:   enc.present(half * cfg.batch + f, ctx, whole, cfg);    // frame f of that half, at its due time
 // ai:   enc.release(cfg);                                      // a configuration no frame still needs
-// ai:   await enc.setFps(fps); await enc.check(blocks, count, cfg); cfg.frameMs; enc.takeGpuMs(); enc.destroy();
+// ai:   await enc.check(blocks, count, cfg); cfg.frameMs; enc.takeGpuMs(); enc.destroy();
 // ai: A configuration holds two batches' frames (half 0 and 1, `batch` frames each: one presenting while the next is
 // ai: made; a frame is encoded again only after its present was submitted) and the scratch of `sub` frames. An encode
 // ai: is one submission, and WebGPU runs a queue in order, so a present waits behind every encode submitted before it:
@@ -39,9 +39,8 @@
 // ai: which is why the encodes are small and the page paces them (cfg.frameMs, the measured GPU ms a frame of that
 // ai: configuration: timestamps, or a submission's time to done where there are none). A configuration is its own
 // ai: buffers, so frames encoded before a re-pick present from theirs while the next one's are made; cfg left out is
-// ai: the latest. The wasm holds one codec at a time, the latest configuration's Lizard (cfg.lizard): configure, check
-// ai: and setFps run one at a time on a chain shared by every encoder, and only the latest configuration's border is ever painted again (an fps
-// ai: change leaves an older one's last frames at the old rate). batch 16 and sub 4 unless asked, sub then batch halved
+// ai: the latest. The wasm holds one codec at a time, the latest configuration's Lizard (cfg.lizard): configure and
+// ai: check run one at a time on a chain shared by every encoder. batch 16 and sub 4 unless asked, sub then batch halved
 // ai: while the device cannot hold a configuration's buffers (cfg.batch, cfg.sub say what it got).
 import { irowsSource, ipicSource } from "./wgsl/inverse.mjs";
 import { paintSource, tposeSource, rsvSource, rshSource, presentSource, TPOSE_TILE, RSV_THREADS, RSH_THREADS, GA_BYTES } from "./wgsl/send.mjs";
@@ -103,7 +102,7 @@ export const STAGES = ["paint", "irows", "ipic", "tpose", "rsv", "rsh"];
 export class Unavailable extends Error {}
 
 // ai: The wasm holds one codec for the whole module, whichever encoder set it up: the steps that use it (configure,
-// ai: check, setFps) run one at a time on this chain across every GpuEncoder, and lizard is the Lizard that holds it
+// ai: check) run one at a time on this chain across every GpuEncoder, and lizard is the Lizard that holds it
 // ai: (null while it changes hands). A configuration paints its border only while its Lizard is this one.
 const codec = { chain: Promise.resolve(), lizard: null };
 
@@ -182,9 +181,9 @@ export class GpuEncoder {
   }
 
   // ai: A configuration: the format's tables, the border and the resampler from the C, every buffer a batch needs.
-  // ai: spec as the page's (n, subch, span); codes symbols a frame, side by side; fps the rate the word states.
+  // ai: spec as the page's (n, subch, span); codes symbols a frame, side by side.
   configure(opts) { return this.serial(() => this.configureNow(opts)); }
-  async configureNow({ spec, codes = 1, fps = 0, gap = GAP_MODULES }) {
+  async configureNow({ spec, codes = 1, gap = GAP_MODULES }) {
     const { n, subch, span = 0 } = spec;
     const alive = () => { if (this.dead) throw new Unavailable("the encoder was destroyed"); };
     await initOb();
@@ -205,7 +204,6 @@ export class GpuEncoder {
     let c = null;
     try {
       alive();
-      if (fps) fc.setFps(fps);
       const g = fc.resampleGeom(), ag = fc.anchorGeom(), V = fc.blocks, B = fc.blockBytes, W = fc.side + 2 * fc.quiet * fc.cell;
       const want = profile.reduce((a, t) => a + t.count, 0);
       if (g.n !== n || tb.blocks !== subch / 8 || V !== want || B !== PAYLOAD) throw new Error(`the tables (${tb.blocks} chunks at ${n}, a profile of ${want} blocks) and the codec (${V} of ${B} B at ${g.n}) disagree`);
@@ -328,21 +326,12 @@ export class GpuEncoder {
   }
 
   // ai: The C's paint of configuration c's symbol, its grey bytes (every pixel outside the square is read from them): at
-  // ai: configure and at every fps change, when only the word's cells move. Only while c's Lizard is the wasm's codec.
+  // ai: configure. Only while c's Lizard is the wasm's codec.
   paintBorder(c) {
     if (!c.lizard || c.lizard !== codec.lizard) throw new Error(`${c.label}: its codec is no longer the wasm's`);
     const { rgba } = c.lizard.encodeRGBA(new Uint8Array(c.V * c.B)), grey = new Uint8Array(4 * Math.ceil((c.W * c.W) / 4));
     for (let i = 0; i < c.W * c.W; i++) grey[i] = rgba[4 * i];
     this.device.queue.writeBuffer(c.BORDER, 0, grey);
-  }
-  // ai: The rate the latest configuration's word states, its border painted again (after any configure in flight).
-  setFps(fps) {
-    return this.serial(() => {
-      const c = this.cfg;
-      if (!c || c.lizard !== codec.lizard) return;
-      c.lizard.setFps(fps);
-      this.paintBorder(c);
-    });
   }
 
   // ai: count frames (1 to c.sub) into frames f0 .. f0 + count - 1 of half h (0 or 1), one submission: each frame codes x
