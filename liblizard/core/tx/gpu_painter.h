@@ -65,14 +65,12 @@ class GpuPainter {
   // ai: count is at most depth() - seq mod depth()). out null: the frames stay on the device (the ring's readers take
   // ai: them there); else each is read back into out[f] as width() x side() grey.
   // ai: test: the blocks are the test stream's (SPEC 9.3), and only their ids (each block's first five bytes) are read and
-  // ai: sent, 8 bytes a block packed: PAINT makes each payload from its id on the device (BLAKE3, wgsl/send.mjs; 2026-11-15)
-  // ai: pos: the animated header's carousel position of each frame's codes (count x codes, a frame's codes in turn;
-  // ai: OB_CAR_N keeps that code's static word; wordsWhy below), null every frame's static word
+  // ai: sent, 12 bytes a block packed (the bare id and the 48-bit TOI): PAINT makes each payload from its id on the device (BLAKE3, wgsl/send.mjs; 2026-11-15)
   // ai: fill (2026-11-16, the sender's RaptorQ on the GPU, gpu_encoder.h): records what writes BLOCKS (blocksBuffer) into
   // ai: the encode's own pass before PAINT, in place of the host's blocks (blocks then unread, may be null).
-  double encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false, const uint8_t* pos = nullptr,
+  double encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false,
                 const std::function<void(wg::Encoder&)>& fill = {});
-  // ai: the encode's blocks on the device (480 B a block: its id's five bytes, its 471-byte payload), remade at each
+  // ai: the encode's blocks on the device (480 B a block: its id's twelve bytes, its 460-byte payload), remade at each
   // ai: configure
   std::shared_ptr<wg::Buffer> blocksBuffer() const { return BLOCKS_; }
 
@@ -84,7 +82,10 @@ class GpuPainter {
   // ai: their queue writes (blocks, uniforms) land each at its own submission's head.
   static constexpr int FLIGHTS_MAX = 3, FLIGHTS = FLIGHTS_MAX;
   struct Pending { std::shared_ptr<wg::Ticket> ticket; int flight = 0, count = 0; std::vector<uint8_t>* out = nullptr; double t0 = 0; };
-  Pending submit(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false, const uint8_t* pos = nullptr,
+  // ai: The sender's clock the border's word states (src/lizard_phy.h lizard_clock: fps 0 to 240, delay 1 to 30, its
+  // ai: places' largest): the border painted again and uploaded where it moved, the next encode's.
+  void setClock(int fps, int delay);
+  Pending submit(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq = 0, bool test = false,
                  const std::function<void(wg::Encoder&)>& fill = {});
   bool done(const Pending& p);
   double finish(Pending& p);
@@ -98,18 +99,9 @@ class GpuPainter {
   struct Check { bool ok = false; long borderDiff = 0, squareDiff = 0, anchorPx = 0, anchorDark = 0, anchorDiff = 0; int squareMax = 0; };
   Check check(const uint8_t* blocks, int count);
 
-  // ai: The animated header (2026-11-15, sender.h setCarousel; SPEC 5.5): every symbol's word of the format's own header
-  // ai: (version, fps, extension bytes 0 and 0: k 3) made at each configure, so any encode's frames may take their own:
-  // ai: encode's pos, each code's symbol painted over its word cells by WORDS (gpu/wgsl/send.mjs) after rsh. No
-  // ai: configure between a change and the frames that show it.
-  // ai: wordsWhy: "" where it can, else why not (no WORDS kernel in the tree, no word in the format, the cells not where
-  // ai: the border has them); the sender then paints an animated header on the CPU.
-  const std::string& wordsWhy() const { return wordsWhy_; }
-
  private:
   GpuPainter() = default;
   std::string pipes(int n);
-  std::string words();
   std::unique_ptr<wg::Device> dev_;
   std::string name_, assets_;
   std::function<void(const std::string&)> log_;
@@ -126,13 +118,6 @@ class GpuPainter {
   // ai: a configuration's buffers and groups
   std::shared_ptr<wg::Buffer> BLOCKS_, UV_, S_, PU_, TW_, ROWS_, SU_, Y_, PQT_, PIC_, TAPS_, BORDER_, GU_, FRAME_, READ_;
   std::shared_ptr<wg::BindGroup> gPaint_, gIrows_, gIpic_, gTpose_, gRsv_, gRsh_;
-  // ai: the animated header's (carousel): WORDS, the frame words it paints, every symbol's word bits, its uniform
-  std::shared_ptr<wg::BindGroupLayout> bglWords_;
-  std::shared_ptr<wg::Pipeline> words_;
-  std::shared_ptr<wg::Buffer> SPANS_, WALL_, WU_, POS_;
-  std::shared_ptr<wg::BindGroup> gWords_;
-  int carSpans_ = 0, carNwb_ = 0;
-  std::string wordsWhy_ = "no GPU paint configured";
   // ai: each flight's timestamp queries and their readback (submit's, round robin)
   std::shared_ptr<wg::QuerySet> qs_[FLIGHTS_MAX];
   std::shared_ptr<wg::Buffer> time_[FLIGHTS_MAX];

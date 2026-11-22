@@ -13,7 +13,7 @@ import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import dev.lizard.Session
 import dev.lizard.readout.Readout
-import dev.lizard.tar.TAR_TYPE
+import dev.lizard.tar.isTar
 import dev.lizard.tar.tarEach
 import org.json.JSONArray
 import org.json.JSONException
@@ -31,14 +31,15 @@ import dev.lizard.ui.*
 // ai: its take let go (Session.placed). A file the default client packed is kept by the session as it came
 // ai: (keepPacked, 2026-11-15) and read back here through the native Unpacker as it is placed, one pass from the take's
 // ai: file into Downloads, the bytes counted for Receive's Saving row (onSaving). A tar (several files or a folder sent
-// ai: as one, Tar.kt) is unpacked into a folder there whole as it is read (one folder alone at its top is the bundle's,
+// ai: as one, Tar.kt; told by its name, isTar: the description carries no media type) is unpacked into a folder
+// ai: there whole as it is read (one folder alone at its top is the bundle's,
 // ai: else the tar's name less .tar; a free name, the folder's files hidden as pending until the last is in); one that
 // ai: does not read whole (a packed frame damaged, a tar damaged or cut short) is placed as the file it came as. What
 // ai: Downloads does not take stays in the data folder, listed and opened from there (the FileProvider's "session"
 // ai: path), and is placed again at the next pass (retry): a file is never only in a store that lets it go. A take is
 // ai: placed when its file is in Downloads, made durable, and listed: its row written before its take is let go (a
 // ai: copy whose row cannot be written is taken back out of Downloads), so a placing cut short leaves the take, which
-// ai: the next pass lets go once its root is listed. The list is <data>/received.json (entries name, type, size, root,
+// ai: the next pass lets go once its root is listed. The list is <data>/received.json (entries name, size, root,
 // ai: at, uri for a file, folder and items {path, uri, size} for a bundle, local for one Downloads did not take), newest
 // ai: first, written durably whole; an entry whose file MediaStore says is gone (the user deleted it there) is dropped
 // ai: from it, but not one MediaStore did not answer for, and a list that does not read is never written over (one that
@@ -50,14 +51,14 @@ import dev.lizard.ui.*
 class Received(private val ctx: Context, private val data: File) {
     // ai: a bundle's file: its path in the folder, its MediaStore URI (or a local file's), its size
     data class Item(val path: String, val uri: String, val size: Long)
-    data class Entry(val name: String, val type: String, val size: Long, val root: String, val at: Long, val uri: String, val folder: String,
+    data class Entry(val name: String, val size: Long, val root: String, val at: Long, val uri: String, val folder: String,
                      val items: List<Item>, val local: String) {
         val bundle get() = folder.isNotEmpty() || items.isNotEmpty()
         val files get() = items.size
         // ai: the key a row is kept by: the root, else the file's place
         val id get() = root.ifEmpty { uri.ifEmpty { local } }
-        // ai: the header's media type, else the name's extension's, else bytes
-        val mime: String get() = type.takeIf { it.isNotEmpty() && it != TAR_TYPE }.orEmpty().ifEmpty { mimeOf(name) }
+        // ai: the name's extension's media type, else bytes (the description carries none)
+        val mime: String get() = mimeOf(name)
     }
 
     private val mu = Any()
@@ -108,7 +109,7 @@ class Received(private val ctx: Context, private val data: File) {
             val its = o.optJSONArray("items")
             val items = if (its == null) emptyList() else (0 until its.length()).mapNotNull { k ->
                 its.optJSONObject(k)?.let { Item(it.optString("path"), it.optString("uri"), it.optLong("size")) } }
-            Entry(o.optString("name"), o.optString("type"), o.optLong("size"), o.optString("root"), o.optLong("at"), o.optString("uri"),
+            Entry(o.optString("name"), o.optLong("size"), o.optString("root"), o.optLong("at"), o.optString("uri"),
                 o.optString("folder"), items, o.optString("local"))
         }
     }
@@ -116,7 +117,7 @@ class Received(private val ctx: Context, private val data: File) {
     // ai: written whole beside it, made durable, and renamed over it, so a crash or a power loss leaves the list as it was
     private fun write(es: List<Entry>) {
         val a = JSONArray()
-        for (e in es) a.put(JSONObject().put("name", e.name).put("type", e.type).put("size", e.size).put("root", e.root).put("at", e.at)
+        for (e in es) a.put(JSONObject().put("name", e.name).put("size", e.size).put("root", e.root).put("at", e.at)
             .put("uri", e.uri).put("folder", e.folder).put("local", e.local)
             .put("items", JSONArray().apply { for (it in e.items) put(JSONObject().put("path", it.path).put("uri", it.uri).put("size", it.size)) }))
         data.mkdirs()
@@ -144,14 +145,13 @@ class Received(private val ctx: Context, private val data: File) {
     // ai: of all, the folder under Downloads); null once it is over. Called on the placing's thread, at most every 100 ms.
     @Volatile var onSaving: ((String, Readout.Saving?) -> Unit)? = null
 
-    // ai: a take as the session lists it (Session.kept): packed, the name and type of the file a packed take holds
-    private class Take(val id: String, val name: String, val type: String, val root: String, val file: File, val packed: Pair<String, String>?)
+    // ai: a take as the session lists it (Session.kept): packed, its file the default client's zstd stream of the file
+    private class Take(val id: String, val name: String, val root: String, val file: File, val packed: Boolean)
     private fun takes(): List<Take> = runCatching {
         val a = JSONArray(Session.kept(data.path))
         (0 until a.length()).mapNotNull { i ->
             val o = a.optJSONObject(i) ?: return@mapNotNull null
-            val p = o.optJSONObject("packed")?.let { it.optString("name") to it.optString("type") }?.takeIf { it.first.isNotEmpty() }
-            Take(o.optString("id"), o.optString("name"), o.optString("type"), o.optString("root"), File(o.optString("path")), p)
+            Take(o.optString("id"), o.optString("name"), o.optString("root"), File(o.optString("path")), o.optBoolean("packed"))
                 .takeIf { it.id.isNotEmpty() && it.name.isNotEmpty() }
         }
     }.getOrDefault(emptyList())
@@ -175,29 +175,28 @@ class Received(private val ctx: Context, private val data: File) {
     // ai: listed, then the take let go (its file with it). Where Downloads does not take it the file stays in the take's
     // ai: folder, listed from there as it came.
     private fun file(k: Take): Filed {
-        val name = k.packed?.first ?: k.name
+        val name = k.name
         if (k.root.isNotEmpty() && list().any { it.root == k.root && it.local != k.file.path }) {
             placed(k.id)
             return Filed(k.root, name, "")
         }
         val now = System.currentTimeMillis()
-        // ai: a packed file as it came: its type without the original's parameter (application/zstd), which MediaStore
-        // ai: and the apps that open it know
-        val came = if (k.packed != null) k.type.substringBefore(';').trim() else k.type
+        // ai: a packed file that does not unpack placed as it came, the zstd stream it is, under its <name>.zst
+        val came = k.name
         return try {
             val t0 = android.os.SystemClock.elapsedRealtime()
             val took = k.file.length()
             val e = (try { place(k, now) } finally { onSaving?.invoke(k.root, null) })
-                ?: placeFile(k.file, k.name, came).let { (uri, size) -> Entry(k.name, came, size, k.root, now, uri, "", emptyList(), "") }
+                ?: placeFile(k.file, came).let { (uri, size) -> Entry(came, size, k.root, now, uri, "", emptyList(), "") }
             listed(e)
             placed(k.id)
-            Log.i(TAG, "received: ${e.name} placed in Downloads in ${android.os.SystemClock.elapsedRealtime() - t0} ms (${e.size} B${if (e.items.isNotEmpty()) ", ${e.items.size} files" else ""}${if (k.packed != null) ", unpacked from $took B" else ""})")
+            Log.i(TAG, "received: ${e.name} placed in Downloads in ${android.os.SystemClock.elapsedRealtime() - t0} ms (${e.size} B${if (e.items.isNotEmpty()) ", ${e.items.size} files" else ""}${if (k.packed) ", unpacked from $took B" else ""})")
             Filed(k.root, name, "")
         } catch (e: Exception) {
             val why = e.message ?: e.javaClass.simpleName
             Log.w(TAG, "received: $name not placed in Downloads: $why; kept in ${k.file.path}")
             if (k.file.isFile) synchronized(mu) {
-                if (read().none { it.local == k.file.path }) add(Entry(k.name, came, k.file.length(), k.root, now, "", "", emptyList(), k.file.path))
+                if (read().none { it.local == k.file.path }) add(Entry(came, k.file.length(), k.root, now, "", "", emptyList(), k.file.path))
             }
             Filed(k.root, name, why)
         }
@@ -209,9 +208,9 @@ class Received(private val ctx: Context, private val data: File) {
     // ai: the file does not read whole (a packed frame damaged, a tar damaged or cut short: nothing of it left in
     // ai: Downloads; the caller places the file as it came); a throw where Downloads does not take it.
     private fun place(k: Take, at: Long): Entry? {
-        val name = k.packed?.first ?: k.name
-        val type = k.packed?.second ?: k.type
-        val raw: InputStream = try { if (k.packed != null) Unpacked(k.file.path) else k.file.inputStream() }
+        // ai: a packed file (kept's packed: its name <name>.zst) placed unpacked under its name less the .zst
+        val name = if (k.packed) k.name.removeSuffix(".zst") else k.name
+        val raw: InputStream = try { if (k.packed) Unpacked(k.file.path) else k.file.inputStream() }
             catch (e: IOException) { Log.w(TAG, "received: ${k.name}: ${e.message}; placed as it came"); return null }
         return raw.use {
             val total = (raw as? Unpacked)?.size ?: k.file.length()
@@ -224,8 +223,8 @@ class Received(private val ctx: Context, private val data: File) {
             }.buffered(1 shl 16)
             say?.invoke(k.root, Readout.Saving(0, total, ""))
             try {
-                if (type == TAR_TYPE) untar(src, name, k.root, at) { folder = it; say?.invoke(k.root, Readout.Saving(0, total, it)) }
-                else placeStream(src, name, type).let { (uri, size) -> Entry(name, type, size, k.root, at, uri, "", emptyList(), "") }
+                if (isTar(name)) untar(src, name, k.root, at) { folder = it; say?.invoke(k.root, Readout.Saving(0, total, it)) }
+                else placeStream(src, name).let { (uri, size) -> Entry(name, size, k.root, at, uri, "", emptyList(), "") }
             } catch (e: Broken) {
                 Log.w(TAG, "received: ${k.name}: ${e.message}; placed as it came")
                 null
@@ -270,12 +269,11 @@ class Received(private val ctx: Context, private val data: File) {
         if (f == null || !f.exists()) { d.deleteRecursively(); return Filed("", d.name, "") }
         val name = m?.optString("name").orEmpty().ifEmpty { f.name }
         val root = m?.optString("root").orEmpty()
-        val type = m?.optString("type").orEmpty()
         val at = m?.optLong("at")?.takeIf { it > 0 } ?: f.lastModified()
         if (root.isNotEmpty() && list().any { it.root == root && it.local.isEmpty() }) { d.deleteRecursively(); return Filed(root, name, "") }
         return try {
-            val e = if (f.isDirectory) placeFolder(f, f.name, root, at, type)
-                else placeFile(f, name, type).let { (uri, size) -> Entry(name, type, size, root, at, uri, "", emptyList(), "") }
+            val e = if (f.isDirectory) placeFolder(f, f.name, root, at)
+                else placeFile(f, name).let { (uri, size) -> Entry(name, size, root, at, uri, "", emptyList(), "") }
             listed(e)
             d.deleteRecursively()
             Filed(root, name, "")
@@ -285,7 +283,7 @@ class Received(private val ctx: Context, private val data: File) {
             synchronized(mu) {
                 if (read().none { it.local == f.path }) {
                     val items = if (f.isDirectory) f.walkTopDown().filter { it.isFile }.map { Item(it.relativeTo(f).invariantSeparatorsPath, it.path, it.length()) }.toList() else emptyList()
-                    add(Entry(name, type, if (f.isDirectory) items.sumOf { it.size } else f.length(), root, at, "", if (f.isDirectory) f.name else "", items, f.path))
+                    add(Entry(name, if (f.isDirectory) items.sumOf { it.size } else f.length(), root, at, "", if (f.isDirectory) f.name else "", items, f.path))
                 }
             }
             Filed(root, name, why)
@@ -295,15 +293,15 @@ class Received(private val ctx: Context, private val data: File) {
     // ai: One file into Downloads through MediaStore: inserted pending (hidden from other apps), its bytes copied and made
     // ai: durable, then shown; MediaStore gives a name taken a free one ("name (1).ext"). Its URI and size; a throw where
     // ai: Downloads does not take it (nothing of it left there). The source is the caller's to let go once it is listed.
-    private fun placeFile(src: File, name: String, type: String, sub: String = "", pending: MutableList<Uri>? = null): Pair<String, Long> =
-        src.inputStream().use { placeStream(it, name, type, sub, pending) }
+    private fun placeFile(src: File, name: String, sub: String = "", pending: MutableList<Uri>? = null): Pair<String, Long> =
+        src.inputStream().use { placeStream(it, name, sub, pending) }
 
     // ai: placeFile's work from a stream (2026-11-14: a tar's entry straight into Downloads, unpack): the URI and the
     // ai: bytes written
-    private fun placeStream(src: java.io.InputStream, name: String, type: String, sub: String = "", pending: MutableList<Uri>? = null): Pair<String, Long> {
+    private fun placeStream(src: java.io.InputStream, name: String, sub: String = "", pending: MutableList<Uri>? = null): Pair<String, Long> {
         val v = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, safeName(name))
-            put(MediaStore.MediaColumns.MIME_TYPE, type.ifEmpty { mimeOf(name) })
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeOf(name))
             put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/" + sub)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -325,7 +323,7 @@ class Received(private val ctx: Context, private val data: File) {
     // ai: bundle there whole, or none of it: what was inserted is deleted at a failure). The folder's name is free where
     // ai: no file of this app's is under it and (Android 11 and up, where the folder is seen) no folder of that name is
     // ai: there. The entry; the source folder is left to the caller.
-    private fun placeFolder(dir: File, name: String, root: String, at: Long, type: String): Entry {
+    private fun placeFolder(dir: File, name: String, root: String, at: Long): Entry {
         val folder = freeFolder(safeName(name))
         val files = dir.walkTopDown().filter { it.isFile }.sortedBy { it.relativeTo(dir).invariantSeparatorsPath }.toList()
         val pending = ArrayList<Uri>()
@@ -334,7 +332,7 @@ class Received(private val ctx: Context, private val data: File) {
             for (f in files) {
                 val rel = f.relativeTo(dir).invariantSeparatorsPath
                 val sub = (folder + "/" + rel.substringBeforeLast('/', "")).trimEnd('/') + "/"
-                val (uri, size) = placeFile(f, f.name, "", sub, pending)
+                val (uri, size) = placeFile(f, f.name, sub, pending)
                 items += Item(rel, uri, size)
             }
             for (u in pending) resolver.update(u, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
@@ -342,7 +340,7 @@ class Received(private val ctx: Context, private val data: File) {
             for (u in pending) runCatching { resolver.delete(u, null, null) }
             throw e
         }
-        return Entry(folder, type.ifEmpty { TAR_TYPE }, items.sumOf { it.size }, root, at, "", Environment.DIRECTORY_DOWNLOADS + "/" + folder, items, "")
+        return Entry(folder, items.sumOf { it.size }, root, at, "", Environment.DIRECTORY_DOWNLOADS + "/" + folder, items, "")
     }
 
     private fun freeFolder(name: String): String {
@@ -402,7 +400,7 @@ class Received(private val ctx: Context, private val data: File) {
                 }
                 if (!dir) {
                     val rel = (if (one != null) parts.drop(1) else parts).joinToString("/")
-                    val (uri, size) = refused { placeStream(Read(data), parts.last(), "", sub(folder!!, rel), pending) }
+                    val (uri, size) = refused { placeStream(Read(data), parts.last(), sub(folder!!, rel), pending) }
                     items += Item(rel, uri, size)
                 }
             }
@@ -419,7 +417,7 @@ class Received(private val ctx: Context, private val data: File) {
             }
         }
         items.sortBy { it.path }
-        return Entry(folder!!, TAR_TYPE, items.sumOf { it.size }, root, at, "", Environment.DIRECTORY_DOWNLOADS + "/" + folder, items, "")
+        return Entry(folder!!, items.sumOf { it.size }, root, at, "", Environment.DIRECTORY_DOWNLOADS + "/" + folder, items, "")
     }
 
     // ai: A folder under Downloads that MediaStore left behind (it deletes and moves files, never folders): the folders

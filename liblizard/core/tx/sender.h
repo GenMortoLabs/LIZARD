@@ -4,8 +4,8 @@
 // ai: encode and paint them ahead (lizard_encode, lizard_paint_grey: grey with the margin, the pilots' count the
 // ai: frame's number mod 4) into the GPU painter's frame ring (2026-10-07), or the GPU paints them (painter, below);
 // ai: the app takes them in order (take, takeSlot) and puts them on the screen at the display's pace.
-// ai: A file's chunks (2026-11-16): solved by the transfer's CPU workers at the first configure; where the GPU paints and
-// ai: holds the file, each chunk's symbols go up as it is made and the GPU makes every frame's blocks from their ids
+// ai: A file's source blocks (2026-11-16): solved by the transfer's CPU workers at the first configure; where the GPU paints and
+// ai: holds the file, each source block's symbols go up as it is made and the GPU makes every frame's blocks from their ids
 // ai: (gpu_stream.h; read back where the CPU paints later), else the CPU's encoders; the stats' rq and rqWhy say which.
 // ai: A stream file played (2026-11-18, play): a .lizard of frames painted ahead (stream_export.h) shown in turn and
 // ai: looped at its fps, nothing painted: its frames unpacked on the CPU into the same ring by the upload path, so every
@@ -60,9 +60,10 @@ struct TxFormat {
 // ai: version's, the ring 0 to 2, fps, codes; the gap between two codes in pixels and in modules), its pictures and their
 // ai: size (a picture's w x h, two entries a picture at 2:1), its blocks a picture, and the file it carries.
 struct StreamPlay {
-  std::string path, meta, name, type, root;
+  std::string path, meta, name, root;
+  int compression = 0;
   int blocks = 0, ring = 0, fps = 0, codes = 1, gap = 0, gapModules = 0, side = 0, pictures = 0, frameBlocks = 0;
-  uint64_t length = 0, lap = 0;
+  uint64_t length = 0, cycle = 0;
   bool test = false;
 };
 
@@ -74,8 +75,8 @@ class Sender {
   const StreamPlay* playing() const { return play_.get(); }
   // ai: A file (data alive as long as this: the app maps it) or, with data null, the test stream.
   // ai: spillDir: where the transfer's spill goes (xfer_tx.h: no encoder kept, symbols in segments on disk); "" none.
-  // ai: stopped: the transfer's (xfer_tx.h), its hash stopped where it says so
-  Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir = "",
+  // ai: stopped: the transfer's (xfer_tx.h), its hash stopped where it says so; compression the bytes' (XFER_COMP_*)
+  Sender(const uint8_t* data, size_t length, const std::string& name, uint8_t compression = 0, const std::string& spillDir = "",
          const std::function<bool()>& stopped = {});
   ~Sender();
   Sender(const Sender&) = delete;
@@ -129,9 +130,9 @@ class Sender {
   // ai: repeats the picture before's block otherwise. The pilots stay the picture's count (painted with the picture, not
   // ai: kept with the block), so a receiver and its phase lock read every picture as ever: no format change, a repeated
   // ai: block one a receiver has. Only new places take ids. From the next frame made (frames already made ahead keep
-  // ai: theirs). A client ties the two pilot rates (7/8 and 3/4) to one delay.
-  static constexpr int REFRESH_MAX = 65535;
-  // ai: per code rate (0 7/8, 1 3/4, 2 2/3, 3 1/2; the format's tiers from the inside out): every block of the rate takes
+  // ai: theirs).
+  static constexpr int REFRESH_MAX = 30;   // ai: the largest delay the border's word states (src/fmt.h OB_FMT_DELAY_MAX)
+  // ai: per code rate (0 6/7, 1 3/4, 2 2/3, 3 1/2; the format's tiers from the inside out): every block of the rate takes
   // ai: its rate's; kept across configures
   void setRefresh(const int rate[4]);
   // ai: per block place of this format's symbol (every code alike); a configure to a format of another block count ends
@@ -139,26 +140,8 @@ class Sender {
   bool setRefreshBlocks(const std::vector<int>& place);
   // ai: whether picture k shows a new block at a place that takes one every `every` pictures
   static bool due(int every, uint64_t k) { return every <= 1 || k % static_cast<uint64_t>(every) == 0; }
-  // ai: The animated header (2026-11-15, the apps' Header in Send's Refresh fold; src/fmt.h, SPEC 5.5): frames each
-  // ai: carousel symbol is shown, 1 to CAROUSEL_MAX, 0 the static word (the default). The header is the format's own
-  // ai: (version, fps, extension bytes 0 and 0: k 3). Code c of frame seq shows slot codes x (seq / frames) + c (two codes
-  // ai: each its own, so a picture gives a receiver two), and slot t position carouselPosition(key, t): every pass of
-  // ai: 255 slots shows each position once, each pass in an order of its own drawn from the sender's key (random a
-  // ai: sender, seed's where one is given), so a capture that misses periodically (a camera reading every third frame:
-  // ai: 255 = 3 x 5 x 17, which in a fixed order would see 85 positions forever) meets other positions each pass. On the
-  // ai: GPU each encode's frames take theirs from every
-  // ai: symbol's word made at each configure (gpu_painter.h wordsWhy: WORDS over the word cells after rsh); where that
-  // ai: cannot be, a configure with it on paints on the CPU (gpuWhy says why). Live, as setRefresh: the next frame made
-  // ai: takes it (those already made ahead keep theirs), no configure between; kept across configures.
-  void setCarousel(int frames);
-  static constexpr int CAROUSEL_MAX = 30;
-  // ai: the carousel's slot t's position under key: pass t / 255 a Fisher-Yates order of the 255 positions from
-  // ai: xorshift32 seeded by the key and the pass (the transfer's schedule's mix32), its (t mod 255)-th
-  static int carouselPosition(uint32_t key, uint64_t slot);
-  uint32_t carouselKey();
   // ai: A file's schedule drawn from seed in place of its random one (xfer_tx.h reseed): before its first frame only;
-  // ai: false after, or for the test stream. The carousel's key drawn from it too, at any time, a file or the test
-  // ai: stream, so a send repeats.
+  // ai: false after, or for the test stream.
   bool seed(uint32_t seed);
   // ai: The code's colours (2026-11-16, Send's Colours): its ink and its paper, 0xRRGGBB, a frame's grey painted along
   // ai: the line between them where it is shown, each channel apart, ink + (paper - ink) v / 255 rounded (take here,
@@ -170,8 +153,8 @@ class Sender {
 
   // ai: Export (2026-11-18: the apps' Export, liz_sender_export, lizard_stream export): this sender's frames into a
   // ai: stream file (stream_export.h) at path (through path.part, renamed at the end): from the first frame made once
-  // ai: the file's lap is known (every chunk made; frames made before carry the header alone, and those made ahead
-  // ai: meanwhile drop out), `frames` of them (0: laps x the lap over a picture's blocks), the count made odd so a
+  // ai: the file's cycle is known (every source block made; frames made before carry the header alone, and those made ahead
+  // ai: meanwhile drop out), `frames` of them (0: cycles x the cycle over a picture's blocks), the count made odd so a
   // ai: camera taking every other frame meets every frame across two loops; every frame packed by `packing` on `packers`
   // ai: threads (0: the machine's cores) and written in order. display: the screen shows them meanwhile, each frame a
   // ai: host takes (take, takeSlot) going to the file too, at the screen's pace; else no screen: the sender drains its
@@ -184,7 +167,7 @@ class Sender {
   // ai: literals alone, about a tenth larger than zstd at level 1) where it can; else packing's level on the CPU
   struct ExportJob {
     std::string path;
-    double laps = 2.5;
+    double cycles = 2.5;
     int frames = 0;
     lizfile::Packing packing;
     bool display = true;
@@ -194,7 +177,7 @@ class Sender {
   };
   std::string exportStart(const ExportJob& job);
   // ai: the export now or the last one: on (running), done (the file whole at path), frames written of all (0 until the
-  // ai: lap is known), the file's bytes so far; error where it stopped short
+  // ai: cycle is known), the file's bytes so far; error where it stopped short
   struct ExportState { bool on = false, done = false; int written = 0, frames = 0; uint64_t bytes = 0; std::string path, error; };
   ExportState exportState();
   // ai: an export ended where it is (its .part removed); the sender goes on
@@ -206,8 +189,8 @@ class Sender {
 
  private:
   std::atomic<uint32_t> ink_{0}, paper_{0xffffffu};
-  // ai: car: setCarousel's when it was made; pos: each code's carousel position where car > 0
-  struct Job { uint64_t seq; std::vector<uint8_t> blocks; int data; int car; uint8_t pos[2]; };
+  // ai: delay: the largest of the frame's places' Refresh delays, which its border's word states with the fps (src/fmt.h)
+  struct Job { uint64_t seq; std::vector<uint8_t> blocks; int data; int delay = 1; };
   void stopAll();
   void produce();
   void paint(int k);
@@ -238,17 +221,15 @@ class Sender {
   uint64_t playBase_ = 0;          // ai: the count at the configure whose frames show the stream's picture 0
 
   std::unique_ptr<XferTx> xfer_;
-  uint32_t nextId_;                 // ai: the test stream's next id (a random first one)
+  uint32_t nextId_;                 // ai: the test stream's next bare id (a random first one)
+  uint64_t testToi_ = 1;            // ai: and its TOI (48 bits), random and nonzero at each start, as any send's
   TxFormat fmt_;
   int n_ = 0, side_ = 0, width_ = 0, gap_ = 0, blocks_ = 0, blockBytes_ = 0, gen_ = 0;
   std::string label_, error_, tiers_;   // ai: tiers_: the format's rate profile as text (the stats' tiers)
   int byRate_[4] = {1, 1, 1, 1};    // ai: setRefresh's, under mu_
   std::vector<int> byPlace_;        // ai: setRefreshBlocks's (empty: each place its rate's), under mu_
   std::vector<int> scheduleLocked() const;   // ai: each block place's delay now (mu_ held)
-  int carousel_ = 0;                // ai: setCarousel's, under mu_
-  uint32_t carKey_ = 0;             // ai: the carousel's order's key (carouselPosition), under mu_
-  bool gpuWords_ = false;           // ai: the GPU paints and can paint an animated header (gpu_painter.h wordsWhy)
-  std::vector<uint8_t> rateOf_;     // ai: a symbol's block b's code rate (0 7/8 ... 3 1/2), from the format's tiers
+  std::vector<uint8_t> rateOf_;     // ai: a symbol's block b's code rate (0 6/7 ... 3 1/2), from the format's tiers
   std::mutex mu_;
   std::mutex xferMu_;               // ai: the transfer's state: the producer fills a frame under it, stats reads under it
   std::condition_variable cv_;
@@ -261,7 +242,7 @@ class Sender {
   std::map<uint64_t, int> ready_;   // ai: painted into the ring, not taken: seq -> slot
   std::map<uint64_t, std::vector<uint8_t>> hostOf_;    // ai: a painted frame's host copy (TxFormat.hostFrames), until taken
   std::map<uint64_t, std::vector<uint8_t>> toUpload_;  // ai: the CPU's painted frames, packed as the ring's rows, for the uploader
-  std::map<uint64_t, int> dataOf_;  // ai: a frame's data blocks (its header and manifest not counted), for the lap
+  std::map<uint64_t, int> dataOf_;  // ai: a frame's data blocks (its session header not counted), for the cycle
   std::vector<std::vector<uint8_t>> spare_;
   std::thread producer_, uploader_;
   std::vector<std::thread> painters_;
@@ -275,7 +256,7 @@ class Sender {
   std::atomic<double> paintMsWin_{0};
   double winStart_ = 0, lastFps_ = 0, lastKBs_ = 0, lastPaintMs_ = 0, lastPaintBatch_ = 0;
   // ai: who makes a file's blocks (decided at the first configure that gets that far): the GPU from the CPU's solved
-  // ai: chunks (stream_), or the CPU's encoders; why not the GPU. The destructor lets the transfer's workers go before
+  // ai: source blocks (stream_), or the CPU's encoders; why not the GPU. The destructor lets the transfer's workers go before
   // ai: the stream (a worker waits in its put)
   enum { RQ_NONE, RQ_CPU, RQ_GPU };
   std::atomic<int> holder_{RQ_NONE};

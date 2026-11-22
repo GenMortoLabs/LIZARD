@@ -1,109 +1,138 @@
 // The transfer's blocks and its BLAKE3 tree (xfer.h has the layouts).
 #include "xfer.h"
 #include "blake3.h"
-#include "blake3_impl.h"   // the official compression function, which the chunk-aligned subtree hash is built on
+#include "blake3_impl.h"   // the official compression function, which the source-block-aligned subtree hash is built on
+#include <stdlib.h>
 #include <string.h>
 
 static void put_le(uint8_t *p, uint64_t v, int n) { for (int i = 0; i < n; i++) p[i] = (uint8_t)(v >> 8 * i); }
-static uint64_t get_le(const uint8_t *p, int n) { uint64_t v = 0; for (int i = n - 1; i >= 0; i--) v = v << 8 | p[i]; return v; }
-static int zero(const uint8_t *p, size_t n) { for (size_t i = 0; i < n; i++) if (p[i]) return 0; return 1; }
 
-uint32_t xfer_chunk_count(uint64_t length, int chunk_log2) {
-  if (chunk_log2 < XFER_LOG2_MIN || chunk_log2 > XFER_LOG2_MAX) return 0;
-  const uint64_t n = (length >> chunk_log2) + ((length & ((1ull << chunk_log2) - 1)) != 0);
-  return n > XFER_MAX_CHUNKS ? 0 : (uint32_t)n;
+uint32_t xfer_source_blocks(uint64_t length, int sb_log2) {
+  if (sb_log2 < XFER_LOG2_MIN || sb_log2 > XFER_LOG2_MAX) return 0;
+  const uint64_t n = (length >> sb_log2) + ((length & ((1ull << sb_log2) - 1)) != 0);
+  return n > XFER_MAX_SOURCE_BLOCKS ? 0 : (uint32_t)n;
 }
 
-int xfer_chunk_log2_for(uint64_t length) {
-  for (int k = XFER_LOG2_DEFAULT; k <= XFER_LOG2_MAX; k++) if (!length || xfer_chunk_count(length, k)) return k;
+int xfer_sb_log2_for(uint64_t length) {
+  for (int k = XFER_LOG2_DEFAULT; k <= XFER_LOG2_MAX; k++) if (!length || xfer_source_blocks(length, k)) return k;
   return -1;
 }
 
-size_t xfer_chunk_len(const xfer_header_t *h, uint32_t index) {
-  if (index >= h->chunks) return 0;
-  const uint64_t size = 1ull << h->chunk_log2, at = (uint64_t)index << h->chunk_log2;
+size_t xfer_sb_len(const xfer_header_t *h, uint32_t index) {
+  if (index >= h->source_blocks) return 0;
+  const uint64_t size = 1ull << h->sb_log2, at = (uint64_t)index << h->sb_log2;
   return (size_t)(h->length - at < size ? h->length - at : size);
 }
 
-uint32_t xfer_blocks(size_t len) { return (uint32_t)((len + XFER_PAYLOAD - 1) / XFER_PAYLOAD); }
+uint32_t xfer_symbols(size_t len) { return (uint32_t)((len + XFER_PAYLOAD - 1) / XFER_PAYLOAD); }
 
-int xfer_manifest_blocks(uint32_t chunks) {
-  return chunks < 2 || chunks > XFER_MAX_CHUNKS ? 0 : (int)((chunks + XFER_PER_BLOCK - 1) / XFER_PER_BLOCK);
-}
-
-int xfer_header_init(xfer_header_t *h, uint64_t length, int chunk_log2) {
+int xfer_header_init(xfer_header_t *h, uint64_t length, int sb_log2) {
   memset(h, 0, sizeof *h);
-  const uint32_t chunks = xfer_chunk_count(length, chunk_log2);
-  if (chunk_log2 < XFER_LOG2_MIN || chunk_log2 > XFER_LOG2_MAX || (length && !chunks)) return -1;
-  h->hash = XFER_HASH_BLAKE3; h->chunk_log2 = (uint8_t)chunk_log2;
-  h->length = length; h->chunks = chunks;
+  const uint32_t source_blocks = xfer_source_blocks(length, sb_log2);
+  if (sb_log2 < XFER_LOG2_MIN || sb_log2 > XFER_LOG2_MAX || (length && !source_blocks)) return -1;
+  h->hash = XFER_HASH_BLAKE3; h->sb_log2 = (uint8_t)sb_log2;
+  h->length = length; h->source_blocks = source_blocks;
   return 0;
 }
 
-// What write and parse both hold a header to.
+// What every description is held to: the form and the length.
 static int consistent(const xfer_header_t *h) {
   if (h->hash != XFER_HASH_BLAKE3) return XFER_ERR_HASH;
-  if (h->chunk_log2 < XFER_LOG2_MIN || h->chunk_log2 > XFER_LOG2_MAX) return XFER_ERR;
-  if (h->chunks != xfer_chunk_count(h->length, h->chunk_log2) || (h->length && !h->chunks)) return XFER_ERR;
-  if (h->type_len > XFER_TYPE_MAX || !zero(h->name + h->name_len, XFER_NAME_MAX - h->name_len) || !zero(h->type + h->type_len, XFER_TYPE_MAX - h->type_len)) return XFER_ERR;
+  if (h->sb_log2 < XFER_LOG2_MIN || h->sb_log2 > XFER_LOG2_MAX) return XFER_ERR;
+  if (h->source_blocks != xfer_source_blocks(h->length, h->sb_log2) || (h->length && !h->source_blocks)) return XFER_ERR;
   return 0;
 }
 
-int xfer_header_write(const xfer_header_t *h, uint8_t *payload) {
-  if (consistent(h)) return XFER_ERR;
+// ---- CBOR (RFC 8949), the description's profile (xfer.h) ----
+// ai: CB_* the major types used; a head is the major type in the top three bits and the argument in the rest: below 24
+// ai: itself, 24 to 27 one, two, four or eight bytes after (big-endian); 28 to 31 (reserved, indefinite) outside the
+// ai: profile, as tags (6) and the simple values but false and true (7: 20, 21)
+enum { CB_UINT = 0, CB_NINT = 1, CB_BYTES = 2, CB_TEXT = 3, CB_ARRAY = 4, CB_MAP = 5, CB_SIMPLE = 7, CB_DEPTH = 8 };
+
+// ai: the head at p (n bytes): its major type into *mt, its argument into *arg; its byte count, or -1
+static int cb_head(const uint8_t *p, size_t n, int *mt, uint64_t *arg) {
+  if (!n) return -1;
+  const int m = p[0] >> 5, ai = p[0] & 31;
+  int k = 1;
+  uint64_t v = (uint64_t)ai;
+  if (ai >= 24) {
+    if (ai > 27) return -1;
+    const int w = 1 << (ai - 24);
+    if (n < (size_t)(1 + w)) return -1;
+    v = 0;
+    for (int i = 0; i < w; i++) v = v << 8 | p[1 + i];
+    k = 1 + w;
+  }
+  if (m == 6 || (m == CB_SIMPLE && v != 20 && v != 21)) return -1;
+  *mt = m; *arg = v;
+  return k;
+}
+
+// ai: the item at p (n bytes) skipped, nested to CB_DEPTH: its byte count, or -1
+static long cb_skip(const uint8_t *p, size_t n, int depth) {
+  int mt;
+  uint64_t a;
+  const int k = cb_head(p, n, &mt, &a);
+  if (k < 0 || depth > CB_DEPTH) return -1;
+  size_t at = (size_t)k;
+  if (mt == CB_BYTES || mt == CB_TEXT) return a > n - at ? -1 : (long)(at + a);
+  if (mt == CB_ARRAY || mt == CB_MAP) {
+    if (a > n) return -1;   // ai: every item a byte at least
+    const uint64_t items = mt == CB_MAP ? 2 * a : a;
+    for (uint64_t i = 0; i < items; i++) {
+      const long s = cb_skip(p + at, n - at, depth + 1);
+      if (s < 0) return -1;
+      at += (size_t)s;
+    }
+  }
+  return (long)at;
+}
+
+// ai: a key at p: an unsigned or negative integer into *key; its byte count, or -1
+static int cb_key(const uint8_t *p, size_t n, int64_t *key) {
+  int mt;
+  uint64_t a;
+  const int k = cb_head(p, n, &mt, &a);
+  if (k < 0 || (mt != CB_UINT && mt != CB_NINT) || a >> 31) return -1;
+  *key = mt == CB_UINT ? (int64_t)a : -1 - (int64_t)a;
+  return k;
+}
+
+// ai: the head of major type mt and argument v in its shortest form into out: its byte count
+static size_t cb_put(uint8_t *out, int mt, uint64_t v) {
+  const uint8_t t = (uint8_t)(mt << 5);
+  if (v < 24) { out[0] = (uint8_t)(t | v); return 1; }
+  const int w = v <= 0xff ? 1 : v <= 0xffff ? 2 : v <= 0xffffffffu ? 4 : 8;
+  out[0] = (uint8_t)(t | (24 + (w == 1 ? 0 : w == 2 ? 1 : w == 4 ? 2 : 3)));
+  for (int i = 0; i < w; i++) out[1 + i] = (uint8_t)(v >> 8 * (w - 1 - i));
+  return (size_t)(1 + w);
+}
+// ai: a head's bytes in its shortest form
+// ai: an integer key's head into out
+static size_t cb_put_key(uint8_t *out, int key) { return key >= 0 ? cb_put(out, CB_UINT, (uint64_t)key) : cb_put(out, CB_NINT, (uint64_t)(-1 - key)); }
+
+int xfer_session_write(uint8_t *payload, const uint8_t *desc, size_t len) {
+  if (len > XFER_DESC_MAX) return XFER_ERR;
   memset(payload, 0, XFER_PAYLOAD);
-  payload[XFER_H_HASH] = h->hash; payload[XFER_H_LOG2] = h->chunk_log2;
-  payload[XFER_H_NAME_LEN] = h->name_len; payload[XFER_H_TYPE_LEN] = h->type_len;
-  put_le(payload + XFER_H_LENGTH, h->length, 8);
-  put_le(payload + XFER_H_CHUNKS, h->chunks, 4);
-  memcpy(payload + XFER_H_ROOT, h->root, XFER_CV);
-  memcpy(payload + XFER_H_NAME, h->name, h->name_len);
-  memcpy(payload + XFER_H_TYPE, h->type, h->type_len);
+  if (len) memcpy(payload, desc, len);
   return 0;
 }
 
 int xfer_same_file(const xfer_header_t *a, const xfer_header_t *b) {
-  return a->hash == b->hash && a->chunk_log2 == b->chunk_log2 && a->length == b->length &&
-         a->chunks == b->chunks && !memcmp(a->root, b->root, XFER_CV);
+  return a->hash == b->hash && a->sb_log2 == b->sb_log2 && a->length == b->length &&
+         a->source_blocks == b->source_blocks && !memcmp(a->root, b->root, XFER_CV);
 }
 
-int xfer_header_parse(const uint8_t *payload, xfer_header_t *h) {
-  memset(h, 0, sizeof *h);
-  h->hash = payload[XFER_H_HASH]; h->chunk_log2 = payload[XFER_H_LOG2];
-  h->name_len = payload[XFER_H_NAME_LEN]; h->type_len = payload[XFER_H_TYPE_LEN];
-  if (h->type_len > XFER_TYPE_MAX) return XFER_ERR;
-  // ai: the reserved bytes past the type (461 to 470) are zero, as every byte past a length
-  if (!zero(payload + XFER_H_END, XFER_PAYLOAD - XFER_H_END)) return XFER_ERR;
-  h->length = get_le(payload + XFER_H_LENGTH, 8);
-  h->chunks = (uint32_t)get_le(payload + XFER_H_CHUNKS, 4);
-  memcpy(h->root, payload + XFER_H_ROOT, XFER_CV);
-  memcpy(h->name, payload + XFER_H_NAME, XFER_NAME_MAX);
-  memcpy(h->type, payload + XFER_H_TYPE, XFER_TYPE_MAX);
-  return consistent(h);
-}
-
-// The entries of manifest block m: chunks 14 m .. 14 m + n - 1.
-static uint32_t entries(uint32_t chunks, uint32_t m) {
-  const uint32_t first = m * XFER_PER_BLOCK;
-  return chunks - first < XFER_PER_BLOCK ? chunks - first : XFER_PER_BLOCK;
-}
-
-int xfer_manifest_write(const uint8_t *cvs, uint32_t chunks, const uint8_t root[XFER_CV], uint32_t m, uint8_t *payload) {
-  if (m >= (uint32_t)xfer_manifest_blocks(chunks)) return -1;
-  const uint32_t first = m * XFER_PER_BLOCK, n = entries(chunks, m);
-  memset(payload, 0, XFER_PAYLOAD);
-  memcpy(payload + XFER_M_TAG, root, XFER_M_TAG_BYTES);
-  memcpy(payload + XFER_M_ENTRIES, cvs + (size_t)first * XFER_CV, (size_t)n * XFER_ENTRY);
-  return 0;
-}
-
-int xfer_manifest_parse(const uint8_t *payload, const xfer_header_t *h, uint32_t m, uint8_t *cvs) {
-  const uint32_t chunks = h->chunks;
-  if (m >= (uint32_t)xfer_manifest_blocks(chunks) || memcmp(payload + XFER_M_TAG, h->root, XFER_M_TAG_BYTES)) return -1;
-  const uint32_t first = m * XFER_PER_BLOCK, n = entries(chunks, m);
-  const size_t used = XFER_M_ENTRIES + (size_t)n * XFER_ENTRY;
-  if (!zero(payload + used, XFER_PAYLOAD - used)) return -1;
-  memcpy(cvs + (size_t)first * XFER_CV, payload + XFER_M_ENTRIES, (size_t)n * XFER_ENTRY);
+int xfer_session_parse(const uint8_t *payload, xfer_session_t *s) {
+  memset(s, 0, sizeof *s);
+  // ai: the description, one CBOR map from byte 0; the bytes past it are a sender's to write as 0 and a receiver's to
+  // ai: ignore (2026-11-20, IP's rule: a later field there is read by receivers already in the field)
+  int mt;
+  uint64_t a;
+  if (cb_head(payload, XFER_PAYLOAD, &mt, &a) < 0 || mt != CB_MAP) return XFER_ERR;
+  const long n = cb_skip(payload, XFER_PAYLOAD, 0);
+  if (n < 0) return XFER_ERR;
+  s->at = 0; s->len = (size_t)n;
   return 0;
 }
 
@@ -134,8 +163,8 @@ static void chunk(const uint8_t *in, size_t len, uint64_t counter, int root, uin
   cv_bytes(out, cv);
 }
 
-// More than one chunk: the official code's own wide hash (blake3_compress_subtree_wide, as its hasher calls it), its
-// vector kernels' lanes at once (4 chunks on SSE4.1, NEON and wasm SIMD, 8 on AVX2; blake3_dispatch.c picks), which
+// More than one source block: the official code's own wide hash (blake3_compress_subtree_wide, as its hasher calls it), its
+// vector kernels' lanes at once (4 source blocks on SSE4.1, NEON and wasm SIMD, 8 on AVX2; blake3_dispatch.c picks), which
 // leaves at least two chaining values; they pair level by level, an odd last one carried up (its hasher's
 // compress_subtree_to_parent_node), to the two under the top node.
 static void subtree(const uint8_t *in, size_t len, uint64_t counter, int root, uint8_t out[XFER_CV]) {
@@ -194,27 +223,132 @@ static void merge(const uint8_t *cvs, uint32_t n, int root, uint8_t out[XFER_CV]
   parent(block, root, out);
 }
 
-int xfer_root(const uint8_t *cvs, uint32_t chunks, uint8_t root[XFER_CV]) {
-  if (chunks < 2 || chunks > XFER_MAX_CHUNKS) return -1;
-  merge(cvs, chunks, 1, root);
+int xfer_root(const uint8_t *cvs, uint32_t source_blocks, uint8_t root[XFER_CV]) {
+  if (source_blocks < 2 || source_blocks > XFER_MAX_SOURCE_BLOCKS) return -1;
+  merge(cvs, source_blocks, 1, root);
   return 0;
 }
 
-int xfer_manifest_check(const uint8_t *cvs, uint32_t chunks, const uint8_t root[XFER_CV]) {
+int xfer_root_check(const uint8_t *cvs, uint32_t source_blocks, const uint8_t root[XFER_CV]) {
   uint8_t got[XFER_CV];
-  return xfer_root(cvs, chunks, got) || memcmp(got, root, XFER_CV) ? -1 : 0;
+  return xfer_root(cvs, source_blocks, got) || memcmp(got, root, XFER_CV) ? -1 : 0;
 }
 
-int xfer_chunk_cv(const uint8_t *data, size_t len, uint32_t index, int chunk_log2, uint8_t cv[XFER_CV]) {
-  if (chunk_log2 < XFER_LOG2_MIN || chunk_log2 > XFER_LOG2_MAX || !len || len > (size_t)1 << chunk_log2 || index >= XFER_MAX_CHUNKS) return -1;
-  subtree(data, len, (uint64_t)index << (chunk_log2 - 10), 0, cv);
+int xfer_sb_cv(const uint8_t *data, size_t len, uint32_t index, int sb_log2, uint8_t cv[XFER_CV]) {
+  if (sb_log2 < XFER_LOG2_MIN || sb_log2 > XFER_LOG2_MAX || !len || len > (size_t)1 << sb_log2 || index >= XFER_MAX_SOURCE_BLOCKS) return -1;
+  subtree(data, len, (uint64_t)index << (sb_log2 - 10), 0, cv);
   return 0;
 }
 
-int xfer_chunk_check(const xfer_header_t *h, uint32_t index, const uint8_t *data, size_t len, const uint8_t *cvs) {
+int xfer_sb_check(const xfer_header_t *h, uint32_t index, const uint8_t *data, size_t len, uint8_t *cv) {
   uint8_t got[XFER_CV];
-  if (index >= h->chunks || len != xfer_chunk_len(h, index)) return -1;
-  if (h->chunks == 1) { xfer_b3_hash(data, len, got); return memcmp(got, h->root, XFER_CV) ? -1 : 0; }
-  if (!cvs || xfer_chunk_cv(data, len, index, h->chunk_log2, got)) return -1;
-  return memcmp(got, cvs + (size_t)index * XFER_CV, XFER_CV) ? -1 : 0;
+  if (index >= h->source_blocks || len != xfer_sb_len(h, index)) return -1;
+  if (h->source_blocks == 1) { xfer_b3_hash(data, len, got); return memcmp(got, h->root, XFER_CV) ? -1 : 0; }
+  return cv && !xfer_sb_cv(data, len, index, h->sb_log2, cv) ? 0 : -1;
+}
+
+// ---- The object's TOI (xfer.h) ----
+xfer_toi_t xfer_toi_of(const uint8_t root[32], uint64_t length, int sb_log2) {
+  uint8_t in[32 + 5 + 1], out[XFER_TOI_BYTES];
+  memcpy(in, root, 32);
+  for (int i = 0; i < 5; i++) in[32 + i] = (uint8_t)(length >> 8 * i);
+  in[37] = (uint8_t)sb_log2;
+  blake3_hasher hs;
+  blake3_hasher_init_derive_key(&hs, "LIZARD TOI");
+  blake3_hasher_update(&hs, in, sizeof in);
+  blake3_hasher_finalize(&hs, out, sizeof out);
+  xfer_toi_t t = 0;
+  for (int i = XFER_TOI_BYTES - 1; i >= 0; i--) t = t << 8 | out[i];
+  return t ? t : 1;
+}
+
+// ---- The description (xfer.h; SPEC 7.11): the file's own map ----
+int xfer_desc_write(const xfer_header_t *h, uint8_t *out) {
+  if (consistent(h) || h->compression > XFER_COMP_ZSTD || h->critical) return XFER_ERR;
+  // ai: the deterministic form: shortest heads, the keys in ascending order of their bytes (3 to 6, then -1); the TOI
+  // ai: not written, a receiver deriving it from k, the length and the root (xfer_toi_of)
+  const int pairs = 3 + (h->name_len != 0) + (h->compression != 0);   // ai: k, length, root always
+  size_t n = cb_put(out, CB_MAP, (uint64_t)pairs);
+  n += cb_put_key(out + n, XFER_K_LOG2); n += cb_put(out + n, CB_UINT, h->sb_log2);
+  n += cb_put_key(out + n, XFER_K_LENGTH); n += cb_put(out + n, CB_UINT, h->length);
+  n += cb_put_key(out + n, XFER_K_ROOT); n += cb_put(out + n, CB_BYTES, XFER_CV); memcpy(out + n, h->root, XFER_CV); n += XFER_CV;
+  if (h->name_len) { n += cb_put_key(out + n, XFER_K_NAME); n += cb_put(out + n, CB_TEXT, h->name_len); memcpy(out + n, h->name, h->name_len); n += h->name_len; }
+  // ai: -1 (0x20) sorts after the unsigned keys' bytes
+  if (h->compression) { n += cb_put_key(out + n, XFER_K_COMPRESSION); n += cb_put(out + n, CB_UINT, h->compression); }
+  return (int)n;
+}
+
+// ai: the keys of one map seen (a key twice refuses it): keys from -32 to 31 a bit each, others in a short list
+typedef struct { uint64_t bits; int64_t far[8]; int nfar; } keys_t;
+static int key_seen(keys_t *k, int64_t key) {
+  if (key >= -32 && key < 32) {
+    const uint64_t b = 1ull << (key + 32);
+    if (k->bits & b) return 1;
+    k->bits |= b;
+    return 0;
+  }
+  for (int i = 0; i < k->nfar; i++) if (k->far[i] == key) return 1;
+  if (k->nfar == 8) return 1;   // ai: more than eight keys outside -32 .. 31: refused as a duplicate would be
+  k->far[k->nfar++] = key;
+  return 0;
+}
+
+int xfer_desc_read(const uint8_t *desc, size_t len, xfer_toi_t self_toi, xfer_header_t *h, xfer_toi_t *toi) {
+  memset(h, 0, sizeof *h);
+  h->hash = XFER_HASH_BLAKE3;   // ai: the one hash; another would come as a key to be understood
+  int mt, c = 0;
+  uint64_t pairs;
+  int k = cb_head(desc, len, &mt, &pairs);
+  if (k < 0 || mt != CB_MAP || pairs > len) return XFER_ERR;
+  size_t at = (size_t)k;
+  uint32_t have = 0;
+  keys_t seen = { 0 };
+  for (uint64_t i = 0; i < pairs; i++) {
+    int64_t key;
+    if ((k = cb_key(desc + at, len - at, &key)) < 0 || key_seen(&seen, key)) return XFER_ERR;
+    at += (size_t)k;
+    uint64_t v;
+    const int vh = cb_head(desc + at, len - at, &mt, &v);
+    if (vh < 0) return XFER_ERR;
+    const uint8_t *val = desc + at + vh;
+    const size_t left = len - at - (size_t)vh;
+    switch (key) {
+      case XFER_K_LOG2: if (mt != CB_UINT || v > 63) return XFER_ERR; h->sb_log2 = (uint8_t)v; have |= 2; break;
+      case XFER_K_LENGTH: if (mt != CB_UINT || v >> 40) return XFER_ERR; h->length = v; have |= 4; break;
+      case XFER_K_ROOT: if (mt != CB_BYTES || v != XFER_CV || left < XFER_CV) return XFER_ERR; memcpy(h->root, val, XFER_CV); have |= 8; break;
+      case XFER_K_NAME: if (mt != CB_TEXT || v > XFER_NAME_MAX || left < v) return XFER_ERR; h->name_len = (uint8_t)v; memcpy(h->name, val, (size_t)v); break;
+      case XFER_K_COMPRESSION:
+        if (mt != CB_UINT) return XFER_ERR;
+        // ai: elective: a value this build does not know kept as it is (the file then filed as it came, its name the
+        // ai: compressor's), 255 past a byte
+        h->compression = v > 255 ? 255 : (uint8_t)v;
+        break;
+      default: if (key >= 0) c = 1;   // ai: unknown: a negative key skipped; an unsigned one (critical) keeps the file from being presented
+    }
+    const long s2 = cb_skip(desc + at, len - at, 0);
+    if (s2 < 0) return XFER_ERR;
+    at += (size_t)s2;
+  }
+  if (at != len || have != 14) return XFER_ERR;
+  h->source_blocks = xfer_source_blocks(h->length, h->sb_log2);
+  if (consistent(h)) return XFER_ERR;
+  // ai: a file's TOI is its content's (xfer_toi_of), derived, never stated; the session header's own TOI is another's
+  const xfer_toi_t t = xfer_toi_of(h->root, h->length, h->sb_log2);
+  if (self_toi && t == (self_toi & XFER_TOI_MASK)) return XFER_ERR;
+  h->critical = (uint8_t)c;
+  if (toi) *toi = t;
+  return 0;
+}
+
+size_t xfer_name_cut(const uint8_t *name, size_t len, uint8_t out[XFER_NAME_MAX]) {
+  if (len <= XFER_NAME_MAX) { if (len) memcpy(out, name, len); return len; }
+  size_t ext = 0;   // ai: the extensions' bytes with their dot, 0 for none: the last two where they fit, else the last
+  for (size_t i = len, dots = 0; i-- > 1 && len - i <= XFER_EXT_MAX;)
+    if (name[i] == '.') { ext = len - i; if (++dots == 2) break; }
+  // ai: the stem cut at a character's start (the stem is longer than the cut, as the name is longer than XFER_NAME_MAX)
+  size_t stem = XFER_NAME_MAX - ext;
+  while (stem > 0 && (name[stem] & 0xc0) == 0x80) stem--;
+  memcpy(out, name, stem);
+  if (ext) memcpy(out + stem, name + len - ext, ext);
+  return stem + ext;
 }

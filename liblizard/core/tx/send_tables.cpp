@@ -27,7 +27,7 @@ std::string SendConsts::load(const std::string& manifest, const std::vector<uint
   if (tabBytes.size() != 4 * words) return "the sender's TAB is " + std::to_string(tabBytes.size()) + " B, not " + std::to_string(4 * words);
   tab.resize(words);
   std::memcpy(tab.data(), tabBytes.data(), 4 * words);
-  if (pw.size() != 120) return "the sender's pw words are not 120";
+  if (pw.size() != 240) return "the sender's pw words are not 240 (the CRC-64's split powers): regenerate liblizard/out";
   if (slots < 1 + static_cast<int>(codeRate.size())) return "the paint's uniform holds " + std::to_string(slots) + " sizes, too few for the codes' tiers";
   // ai: rsh's G with the anchors' 8 words (SPEC 6.13, gpu/wgsl/send.mjs GA_BYTES); a tree from before them names none
   if (!j.contains("gWords")) return "the sender's manifest predates the anchors in the format (no gWords): regenerate liblizard/out";
@@ -45,6 +45,17 @@ void uvOf(int p, int n, int bw, int& u, int& v) {
 }
 uint32_t bitsOf(float x) { uint32_t b; std::memcpy(&b, &x, 4); return b; }
 }  // namespace
+
+// ai: the border: the C's paint of the symbol with every block zero (only the square depends on them, and not the
+// ai: anchors' squares in it: lizard_encode paints them over the picture, the same whatever the blocks)
+void sendBorder(const lizard_t& f, int W, std::vector<uint8_t>& border) {
+  std::vector<uint8_t> zero(static_cast<size_t>(f.blocks) * f.block_bytes, 0), rgba(static_cast<size_t>(W) * W * 4);
+  std::vector<float> drive(static_cast<size_t>(f.px) * f.px);
+  lizard_encode(&f, zero.data(), drive.data());
+  lizard_paint_rgba(&f, drive.data(), rgba.data());
+  border.assign(4 * ((static_cast<size_t>(W) * W + 3) / 4), 0);
+  for (size_t i = 0; i < static_cast<size_t>(W) * W; i++) border[i] = rgba[4 * i];
+}
 
 std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendTables& t, int codes, int gap) {
   t = SendTables{};
@@ -132,14 +143,7 @@ std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendT
   t.pu[k.paramsSizes] = static_cast<uint32_t>(f.blocks); t.pu[k.paramsSizes + 2] = static_cast<uint32_t>(used); t.pu[k.paramsSizes + 3] = static_cast<uint32_t>(t.npos);
   t.pu[k.paramsDims] = static_cast<uint32_t>(f.blocks); t.pu[k.paramsDims + 1] = static_cast<uint32_t>(t.npos); t.pu[k.paramsDims + 2] = static_cast<uint32_t>(frames * codes);
   std::copy(k.pw.begin(), k.pw.end(), t.pu.begin() + k.paramsPw);
-  // ai: the border: the C's paint of the symbol with every block zero (only the square depends on them, and not the
-  // ai: anchors' squares in it: lizard_encode paints them over the picture, the same whatever the blocks)
-  std::vector<uint8_t> zero(static_cast<size_t>(f.blocks) * f.block_bytes, 0), rgba(static_cast<size_t>(t.W) * t.W * 4);
-  std::vector<float> drive(static_cast<size_t>(f.px) * f.px);
-  lizard_encode(&f, zero.data(), drive.data());
-  lizard_paint_rgba(&f, drive.data(), rgba.data());
-  t.border.assign(4 * ((static_cast<size_t>(t.W) * t.W + 3) / 4), 0);
-  for (size_t i = 0; i < static_cast<size_t>(t.W) * t.W; i++) t.border[i] = rgba[4 * i];
+  sendBorder(f, t.W, t.border);
   // ai: the anchors' runs in a symbol's pixels (src/lizard_phy.c lizard_encode: square i from module m0(i) of the drive, a
   // ai: modules a side, the drive LIZARD_QUIET modules into the symbol), d and e of rsh's G (gpu/wgsl/send.mjs GA)
   int geo8[8];
@@ -147,60 +151,6 @@ std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendT
   t.anch.assign(8, 0);
   for (int i = 0; i < 7; i++) t.anch[i] = static_cast<uint32_t>((geo8[1 + i] + LIZARD_QUIET) * f.pxm);
   t.anch[7] = static_cast<uint32_t>(geo8[0] * f.pxm);
-  return "";
-}
-
-std::string wordSpans(const lizard_t& f, const SendTables& t, std::vector<uint32_t>& spans, int& cells, int& nwb) {
-  const ob_layout_t& L = f.frame;
-  const int sideMod = L.w < L.h ? L.w : L.h, bytes = ob_fmt_bytes(sideMod, L.reserve);
-  cells = ob_fmt_side_cells(sideMod, L.reserve);
-  if (!cells || !bytes) return "the format has no word";
-  nwb = (4 * cells + 31) / 32;
-  const int C = f.pxm, m = LIZARD_QUIET * f.pxm, W = t.W;
-  // ai: a symbol's pixels (W x W, margin included) to its word's bit, -1 elsewhere: src/layout.c ob_layout_set_fmt's cells,
-  // ai: a module C pixels from the margin m in (src/lizard_phy.c lizard_encode's frame, lizard_paint_grey's margin)
-  std::vector<int16_t> bit(static_cast<size_t>(W) * W, -1);
-  for (int side = 0; side < 4; side++) for (int i = 0; i < cells; i++) for (int j = 0; j < OB_CELL; j++) for (int e = 0; e < OB_RING_DEEP; e++) {
-    const int tt = L.reserve + OB_WORD_AT(i) + j, d = OB_THIN_FMT + e;
-    const int x = side == 0 || side == 2 ? tt : side == 3 ? d : L.w - 1 - d;
-    const int y = side == 0 ? d : side == 2 ? L.h - 1 - d : tt;
-    for (int py = 0; py < C; py++) for (int px = 0; px < C; px++) {
-      const int X = m + x * C + px, Y = m + y * C + py;
-      if (X < 0 || Y < 0 || X >= W || Y >= W) return "a word cell past the symbol";
-      bit[static_cast<size_t>(Y) * W + X] = static_cast<int16_t>(side * cells + i);
-    }
-  }
-  // ai: held to the border's own word (the painted word's bit 1 dark, 0 light)
-  for (size_t p = 0; p < bit.size(); p++) {
-    if (bit[p] < 0) continue;
-    const int b = bit[p], v = ob_fmt_bit(f.fmt_cw, bytes, b / cells, b % cells);
-    if (t.border[p] != (v ? 0 : 255)) return "the word's cells are not where the border paints them";
-  }
-  // ai: the frame's words: symbol c at x c (W + gap); a frame word's code in its index's bit 31 (a word cell is the
-  // ai: quiet margin in from its symbol's edge, so the four pixels of a frame word that touch cells are one code's)
-  spans.clear();
-  for (int y = 0; y < W; y++) for (int wx = 0; wx < t.RW; wx++) {
-    uint32_t idx[4] = {0xffff, 0xffff, 0xffff, 0xffff};
-    int code = -1;
-    for (int k = 0; k < 4; k++) {
-      int x = 4 * wx + k;
-      if (x >= t.FW) continue;
-      const int c = x / (W + t.gap);
-      x -= c * (W + t.gap);
-      if (c >= t.codes || x >= W) continue;
-      const int b = bit[static_cast<size_t>(y) * W + x];
-      if (b < 0) continue;
-      if (code >= 0 && code != c) return "a frame word touches two codes' word cells";
-      idx[k] = static_cast<uint32_t>(b);
-      code = c;
-    }
-    if (code < 0) continue;
-    const uint32_t at = static_cast<uint32_t>(y * t.RW + wx);
-    if (at >> 31) return "a frame too large for the word spans";
-    spans.push_back(at | static_cast<uint32_t>(code) << 31);
-    spans.push_back(idx[0] | idx[1] << 16);
-    spans.push_back(idx[2] | idx[3] << 16);
-  }
   return "";
 }
 

@@ -5,7 +5,7 @@
 // ai:     about a millisecond, never behind a batch;
 // ai:   the decoder: plans on the first frame's shape, launches as soon as a frame is staged and a lane is free, with
 // ai:     every frame then staged (since 2026-10-08: nothing held back to fill a batch), two in flight, finishes them,
-// ai:     keeps the held word, and hands each frame's verified blocks to the transfer.
+// ai:     notes the last word read (for the stats), and hands each frame's verified blocks to the transfer.
 #include "receiver.h"
 #include "develop.h"
 #include "crops.h"
@@ -32,20 +32,14 @@
 #include <vector>
 
 namespace {
-struct HoldFree { void operator()(cpu_hold_t* h) const { cpu_hold_free(h); } };
-using HoldPtr = std::unique_ptr<cpu_hold_t, HoldFree>;
-// ai: the last word for the page: a static word's version and rate, or an animated word's position and the version its
-// ai: carousel's header names (null until one stands)
-// ai: a frame's word for the stats: a static word's version and counts, or an animated one's id with the held
-// ai: configuration's version and counts (src/fmt.h ob_fmt_held: version << 22 | the counts); fps the display rate the
-// ai: last assembled header states (cpu_hold_fps), 0 where none has (a static word states none)
-nlohmann::json wordJson(int kind, int version, int fps, const int count[3], int id, int held, int ring) {
-  const int v = kind ? held >> 22 : version;
-  const nlohmann::json c = kind ? nlohmann::json::array({held >> 14 & 255, held >> 7 & 127, held & 127}) : nlohmann::json::array({count[0], count[1], count[2]});
-  nlohmann::json w = {{"version", v > 0 ? nlohmann::json(v) : nlohmann::json()}, {"fps", fps}, {"ring", ring}, {"count", v > 0 ? c : nlohmann::json()}};
-  if (kind) { w["animated"] = true; w["id"] = id; }
-  return w;
+// ai: a frame's word for the stats: its version and counts (and the ring it was read in), the sender's clock (fps, 0 a
+// ai: still; delay, its places' largest)
+nlohmann::json wordJson(int version, const int count[3], int ring, int fps, int delay) {
+  return {{"version", version}, {"ring", ring}, {"count", nlohmann::json::array({count[0], count[1], count[2]})}, {"fps", fps}, {"delay", delay}};
 }
+// ai: the last word read's configuration for the series' head (src/fmt.h: version << 22 | the 6/7, 2/3 and 1/2 counts),
+// ai: a statistic: no frame is decoded by it
+int cfgOf(int version, const int count[3]) { return version << 22 | count[0] << 14 | count[1] << 7 | count[2]; }
 }  // namespace
 
 namespace lizard {
@@ -103,14 +97,14 @@ struct Stamps {
   // ai: whether the frame tagged `tag` came in stream s (one no longer kept, 512 pushes on, is taken for an earlier
   // ai: stream's: no frame waits in either decoder that long)
   bool in(uint64_t tag, uint64_t s) const { auto it = ns.find(tag); return it != ns.end() && it->second.stream == s; }
-  std::array<double, 8> row(uint64_t tag, size_t blocks, int fresh, bool found, int pilotBlocks, float pilotR, float pilotSd, float pilotR2, float pilotSd2) const {
+  std::array<double, 8> row(uint64_t tag, size_t blocks, int fresh, bool found, int pilotSubch, float pilotR, float pilotSd, float pilotR2, float pilotSd2) const {
     auto it = ns.find(tag);
-    return {it == ns.end() ? 0 : it->second.ns / 1e6, (double)blocks, (double)fresh, found ? 1.0 : 0.0, pilotBlocks ? (double)pilotR : NAN, pilotBlocks ? (double)pilotSd : NAN,
-            pilotBlocks ? (double)pilotR2 : NAN, pilotBlocks ? (double)pilotSd2 : NAN};
+    return {it == ns.end() ? 0 : it->second.ns / 1e6, (double)blocks, (double)fresh, found ? 1.0 : 0.0, pilotSubch ? (double)pilotR : NAN, pilotSubch ? (double)pilotSd : NAN,
+            pilotSubch ? (double)pilotR2 : NAN, pilotSubch ? (double)pilotSd2 : NAN};
   }
   void add(const std::array<double, 8>& r) { series.push_back(r); while (series.size() > SERIES) series.pop_front(); }
-  void frame(uint64_t tag, size_t blocks, int fresh, bool found, int pilotBlocks, float pilotR, float pilotSd, float pilotR2, float pilotSd2) {
-    add(row(tag, blocks, fresh, found, pilotBlocks, pilotR, pilotSd, pilotR2, pilotSd2));
+  void frame(uint64_t tag, size_t blocks, int fresh, bool found, int pilotSubch, float pilotR, float pilotSd, float pilotR2, float pilotSd2) {
+    add(row(tag, blocks, fresh, found, pilotSubch, pilotR, pilotSd, pilotR2, pilotSd2));
   }
   // ai: Receiver::series: the version, then the rows captured after sinceMs, oldest first (the series is in the order
   // ai: the results came, which on the CPU's pool is not always the captures')
@@ -135,11 +129,12 @@ class GpuReceiver : public Receiver {
   bool start(std::string& why, bool software);
   void push(const CameraFrame& f) override;
   std::string stats() override;
-  std::vector<double> series(double sinceMs) override { std::lock_guard<std::mutex> l(mu); return stamps.since(held, sinceMs); }
+  std::vector<double> series(double sinceMs) override { std::lock_guard<std::mutex> l(mu); return stamps.since(lastCfg, sinceMs); }
   void batchCap(int n) override { cap = n; cv.notify_all(); }
   std::string file() override;
   void clear() override;
   void forget(const std::string& root) override;
+  void release() override { xfer->releaseDone(); }
   // ai: the camera's buffer is read in place only through the zero-copy ingest; a device without it (camera.h) takes
   // ai: the frame's luma plane, uploaded (enqueueLuma)
   bool wantsLuma() const override { return !zeroCopy; }
@@ -207,7 +202,7 @@ class GpuReceiver : public Receiver {
   bool build(std::string& why);
   std::atomic<bool> stop{false};
   std::thread decoderThread, releaserThread;
-  std::mutex mu;                          // ai: guards staging, the shape, the stats window, the held word
+  std::mutex mu;                          // ai: guards staging, the shape, the stats window, the last word
   std::condition_variable cv;
   std::deque<Slot*> staging;
   // ai: Save replays: beside each staged frame, the replay that held it (Replay::hold) as it was staged, or none; the
@@ -226,12 +221,7 @@ class GpuReceiver : public Receiver {
   // ai: push holds it shared around an enqueue and its staging; the decoder thread holds it exclusive while a plan
   // ai: clears the lanes and rebuilds the ring, so no enqueue is under way on a ring that goes
   std::shared_mutex planMu;
-  int held = 0;
-  HoldPtr hold{cpu_hold_new()};           // ai: the held version's source: static words, or a carousel's header (codec.h)
-  // ai: the version the next batch posts to the device's held version (front.h run): 0 at the start and at a clear, a
-  // ai: carousel's header's where one names it; -1 once posted, the device carrying its static words on (gpu/glsl/word.mjs
-  // ai: HELD), so a frame decodes at the last word read before it whatever the batches and how many are in flight
-  int post = 0;
+  int lastCfg = 0;                        // ai: the last word read's configuration (cfgOf), 0 none: the series' head
   int batchSize = 1;                      // ai: the batcher's size as the decoder thread last read it (push is another thread)
   std::atomic<int> cap{0};                // ai: Receiver::batchCap, set by the caller's thread and read by the decoder's; 0 for none
   // ai: camera buffers waiting for their ingest to finish before release: (timeline value, tag)
@@ -559,7 +549,6 @@ void GpuReceiver::decoderLoop() {
       }
       std::vector<Slot*> batch;
       std::vector<std::shared_ptr<Replay>> batchReplay;
-      int heldNow = -1;
       std::shared_ptr<Replay> recNow;
       {
         std::unique_lock<std::mutex> l(mu);
@@ -585,8 +574,6 @@ void GpuReceiver::decoderLoop() {
           stagingReplay.erase(stagingReplay.begin(), stagingReplay.begin() + n);
           stagingAt.erase(stagingAt.begin(), stagingAt.begin() + n);
           if (staging.empty()) flushNow = false;
-          heldNow = post;
-          post = -1;
         }
         recNow = rec;
         idle = batch.empty() && flight.empty() && staging.empty();
@@ -600,7 +587,7 @@ void GpuReceiver::decoderLoop() {
         if (k.replay) while (k.n < (int)batchReplay.size() && batchReplay[k.n] == k.replay) k.n++;
         for (size_t i = k.n; i < batchReplay.size(); i++) if (batchReplay[i]) batchReplay[i]->release(1);
         try {
-          flight.push_back(fh->run(batch, heldNow, false, k.n));
+          flight.push_back(fh->run(batch, false, k.n));
         } catch (...) {
           for (auto* s : batch) fh->release(s);
           if (k.replay) k.replay->release(k.n);
@@ -626,8 +613,8 @@ void GpuReceiver::decoderLoop() {
   for (auto& k : flightKept) if (k.replay) k.replay->release(k.n);
 }
 
-// ai: a batch's frames: the held word from each frame's own word in capture order (a frame whose word does not read
-// ai: leaves it as is), the verified blocks to the transfer frame by frame (its judge and dedupe), the window's counts.
+// ai: a batch's frames: the last word read noted, the verified blocks to the transfer frame by frame (its judge and
+// ai: dedupe), the window's counts.
 void GpuReceiver::deliver(BatchOut& out, const Kept& k) {
   int index = 0;
   for (auto& fo : out.frames) {
@@ -674,14 +661,12 @@ void GpuReceiver::deliver(BatchOut& out, const Kept& k) {
       if (v.test) { win.useful += v.fresh; win.test++; }
       win.words += fo.hasWord;
     }
-    stamps.frame(fo.tag, fo.records.size(), v.fresh, fo.finder.found == 1, fo.pilotBlocks, fo.pilotR, fo.pilotSd, fo.pilotR2, fo.pilotSd2);
+    stamps.frame(fo.tag, fo.records.size(), v.fresh, fo.finder.found == 1, fo.pilotSubch, fo.pilotR, fo.pilotSd, fo.pilotR2, fo.pilotSd2);
     totalBlocks += (long)fo.records.size();
     totalFrames++;
     if (fo.hasWord) {
-      const int before = held;
-      held = cpu_hold_take(hold.get(), fo.word.kind, fo.word.version, fo.word.count, fo.word.id, fo.word.sym);
-      if (fo.word.kind && held && held != before) post = held;   // ai: the carousel's header, which the device cannot read
-      lastWord = wordJson(fo.word.kind, fo.word.version, cpu_hold_fps(hold.get()), fo.word.count, fo.word.id, held, fo.ring);
+      lastCfg = cfgOf(fo.word.version, fo.word.count);
+      lastWord = wordJson(fo.word.version, fo.word.count, fo.ring, fo.word.fps, fo.word.delay);
     }
   }
   std::lock_guard<std::mutex> l(mu);
@@ -748,7 +733,7 @@ std::string GpuReceiver::stats() {
     {"totals", {{"frames", totalFrames}, {"blocks", totalBlocks}}}, {"series", stamps.series},
     // ai: a file only once a header named one: the page reads a file's presence as a transfer under way; type, the
     // ai: header's media type, is what the app opens and shares the file as (2026-10-01)
-    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"chunks", p.chunks}, {"chunksVerified", p.verified}, {"chunksSolving", p.solving}, {"inHand", p.inHand}, {"root", p.root}, {"type", p.type},
+    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"sourceBlocks", p.sourceBlocks}, {"sourceBlocksVerified", p.verified}, {"sourceBlocksSolving", p.solving}, {"inHand", p.inHand}, {"root", p.root}, {"compression", p.compression},
                                  {"refusal", p.refusal}, {"limit", p.limit}, {"free", p.free}, {"failed", p.failed}, {"error", p.failed ? p.error : std::string()}} : json()},
     {"test", last.test > 0},
   };
@@ -756,12 +741,12 @@ std::string GpuReceiver::stats() {
 }
 
 std::string GpuReceiver::file() { auto p = xfer->progress(); return p.done ? p.path : ""; }
-void GpuReceiver::clear() { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; post = 0; cpu_hold_reset(hold.get()); }
+void GpuReceiver::clear() { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; lastCfg = 0; }
 void GpuReceiver::forget(const std::string& root) { xfer->forget(root); }
 
 // ai: The C on the CPU (cpu/pool.h: the web's worker pool natively): a frame's crop is copied to an idle worker or the
-// ai: frame is lost, never queued; each worker decodes blind on its own decoder; the held word is the last word any
-// ai: frame read; a frame's verified blocks go into the transfer one frame at a time. The camera's buffer is handed
+// ai: frame is lost, never queued; each worker decodes blind on its own decoder, each frame on its own; a frame's
+// ai: verified blocks go into the transfer one frame at a time. The camera's buffer is handed
 // ai: back inside push, once the crop is copied.
 constexpr int CPU_NMAX = 1536;   // ai: every picture of the ladder (sim/phy.mjs BLIND_NMAX)
 
@@ -776,11 +761,12 @@ class CpuReceiver : public Receiver {
   void push(const CameraFrame& f) override;
   void waitForRoom(bool on) override { waits = on; }
   std::string stats() override;
-  std::vector<double> series(double sinceMs) override { std::lock_guard<std::mutex> l(mu); return stamps.since(held.load(), sinceMs); }
+  std::vector<double> series(double sinceMs) override { std::lock_guard<std::mutex> l(mu); return stamps.since(lastCfg, sinceMs); }
   void batchCap(int) override {}   // ai: a frame at a time already
   std::string file() override { auto p = xfer->progress(); return p.done ? p.path : ""; }
-  void clear() override { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; held = 0; cpu_hold_reset(hold.get()); }
+  void clear() override { xfer->clear(); std::lock_guard<std::mutex> l(mu); lastWord = nullptr; lastCfg = 0; }
   void forget(const std::string& root) override { xfer->forget(root); }
+  void release() override { xfer->releaseDone(); }
   bool wantsLuma() const override { return true; }
   void record(std::shared_ptr<Replay> r) override { std::lock_guard<std::mutex> l(mu); rec = std::move(r); }
   void cameraClosed() override { std::lock_guard<std::mutex> l(mu); endWindow(); }
@@ -827,8 +813,7 @@ class CpuReceiver : public Receiver {
     }
     if (flight.empty()) { for (auto& r : ready) stamps.add(r.second); ready.clear(); }
   }
-  std::atomic<int> held{0};
-  HoldPtr hold{cpu_hold_new()};           // ai: the held version's source (codec.h), under mu
+  int lastCfg = 0;                        // ai: the last word read's configuration (cfgOf), under mu: the series' head
   // ai: the stats window (a second), and totals; repeat: frames that decoded blocks, none of them new; skips: frames
   // ai: lost to busy workers
   Stamps stamps;
@@ -882,7 +867,7 @@ void CpuReceiver::push(const CameraFrame& in) {
       { std::lock_guard<std::mutex> l(mu); flight.push_back(f.tag); }
       float a[2];
       axisOf(f, c, k, a);
-      bool took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.w, c.h, f.tag, held.load(), t, a[0], a[1]);
+      bool took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.w, c.h, f.tag, t, a[0], a[1]);
       if (!took && waits) {
         // ai: a file's frame (waitForRoom) waits for a worker, offered again each millisecond (a worker booting, or busy);
         // ai: the wait counts once as the pressure a lost frame is, so the pool grows to meet a file as a camera's would
@@ -891,7 +876,7 @@ void CpuReceiver::push(const CameraFrame& in) {
         pool->lost(share);
         while (!took && !closing) {
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.w, c.h, f.tag, held.load(), t, a[0], a[1]);
+          took = pool->offer(f.luma, f.stride, c.x[k], c.y[k], c.w, c.h, f.tag, t, a[0], a[1]);
         }
       }
       if (took) {
@@ -935,13 +920,13 @@ void CpuReceiver::done(CpuFrameOut&& out) {
     if (!v.fresh && v.seen) win.repeat++;
     win.words += out.hasWord;
   }
-  ready.emplace(out.tag, stamps.row(out.tag, blocks.size(), v.fresh, out.found, out.pilotBlocks, out.pilotR, out.pilotSd, out.pilotR2, out.pilotSd2));
+  ready.emplace(out.tag, stamps.row(out.tag, blocks.size(), v.fresh, out.found, out.pilotSubch, out.pilotR, out.pilotSd, out.pilotR2, out.pilotSd2));
   flushRows();
   totalBlocks += (long)blocks.size();
   totalFrames++;
   if (out.hasWord) {
-    held = cpu_hold_take(hold.get(), out.kind, out.version, out.count, out.id, out.sym);
-    lastWord = wordJson(out.kind, out.version, cpu_hold_fps(hold.get()), out.count, out.id, held.load(), out.ring);
+    lastCfg = cfgOf(out.version, out.count);
+    lastWord = wordJson(out.version, out.count, out.ring, out.fps, out.delay);
   }
   rollWindow(now());
 }
@@ -975,7 +960,7 @@ std::string CpuReceiver::stats() {
     {"cpuMs", lastMsFrames ? last.ms / lastMsFrames : 0}, {"gpuMs", 0}, {"B", 0},
     {"bandVersion", lastWord.is_null() ? json() : lastWord["version"]}, {"word", lastWord},
     {"totals", {{"frames", totalFrames}, {"blocks", totalBlocks}}}, {"series", stamps.series},
-    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"chunks", p.chunks}, {"chunksVerified", p.verified}, {"chunksSolving", p.solving}, {"inHand", p.inHand}, {"root", p.root}, {"type", p.type},
+    {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"sourceBlocks", p.sourceBlocks}, {"sourceBlocksVerified", p.verified}, {"sourceBlocksSolving", p.solving}, {"inHand", p.inHand}, {"root", p.root}, {"compression", p.compression},
                                  {"refusal", p.refusal}, {"limit", p.limit}, {"free", p.free}, {"failed", p.failed}, {"error", p.failed ? p.error : std::string()}} : json()},
     {"test", last.test > 0},
   };

@@ -2,7 +2,8 @@
 // stage (B), the LDPC (C) and the composition (back.mjs) cannot disagree on where frame f's slots sit. Before this
 // each stage recomputed them from its own view of the size list (DESIGN.md section 9).
 //
-import { blocksMaxFor } from "../../sim/lizard_pick.mjs";
+import { blocksMaxFor, SUB_SLOTS } from "../../sim/lizard_pick.mjs";
+import { PILOT_READ } from "../plan/back_tiers.mjs";
 
 // ai: sizes[s] = { n, subch, blocks, ... } at the size's index (sel[f].z, the picture slot), null where the size is not
 // ai: built. A size with no blocks is not served.
@@ -16,7 +17,8 @@ export function derived(sizes, { B } = {}) {
   return {
     B, served, subchMax, blocksMax,
     sStride: Math.max(...served.map((s) => sizes[s].subch * 320)),   // S entries a frame (the largest disc)
-    lStride: subchMax * 160,                                          // L words a frame: int8 slot order, 640 a sub-channel
+    lStride: subchMax * SUB_SLOTS / 4,                                // L words a frame: int8 data-slot order, 636 a sub-channel
+    pilotRead: PILOT_READ,                                            // PILOT's floats a frame before the shifts (r, sd, r2, sd2)
     blkStride: blocksMax,                                             // BLK, V and ITS entries a frame
     recCap: (B ?? 1) * blocksMax,                                     // records the result buffer holds a batch: every block
   };

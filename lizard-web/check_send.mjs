@@ -50,7 +50,7 @@
 // ai: cases judge one grab each blind, a missed one read told and grabbed again (below).
 // ai: Bundles (2026-10-16, tar.mjs): two files through the file input (one transfer, "check-send.bin and 1 more.tar")
 // ai: and a folder of two, one in a subfolder, through the folder input (check-folder.tar), each case's header the
-// ai: name, application/x-tar, length and root of the tar tar.mjs makes in node of the same files and times.
+// ai: name, length and root of the tar tar.mjs makes in node of the same files and times.
 // ai: Spacing and Margin (2026-10-23, send.html's sliders; a gap slider from 2026-10-03): LIZARD-480 with one code at a
 // ai: margin of 20; two codes again at spacings 4 and 44 (&spacing=), each canvas's
 // ai: gap between the painted squares spacing - 4 modules within half a module and both halves read blind; then the
@@ -69,7 +69,7 @@ import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init as initWh, Decoder, Encoder } from "../liblizard/sim/fountain.mjs";
 import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
 import { pack } from "../liblizard/sim/pack.mjs";
-import { XferSender, XferReceiver, MemoryStore, ID_HEADER, PAYLOAD, blake3, hex, isControlId, idChunk } from "../liblizard/sim/xfer.mjs";
+import { XferSender, XferReceiver, MemoryStore, ID_HEADER, PAYLOAD, blake3, hex, isControlId, idSbn } from "../liblizard/sim/xfer.mjs";
 import { N_FOR, NAME, SPAN, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, subchOf, versionOf } from "../liblizard/sim/lizard_pick.mjs";
 import { tabs, open, evaluate, navigate } from "./phone.mjs";
 import { bundle } from "./tar.mjs";
@@ -99,7 +99,7 @@ const scratch = mkdtempSync(join(tmpdir(), "lizard-send-")), filePath = join(scr
 const fileBytes = new Uint8Array(FILE_BYTES);
 for (let i = 0, v = 7; i < fileBytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; fileBytes[i] = v >>> 16; }
 writeFileSync(filePath, fileBytes);
-// ai: a file of four chunks (the last 12,345 B), so the page's pool of workers makes its transfer (xfer-pool.mjs, 2026-11-06):
+// ai: a file of four source blocks (the last 12,345 B), so the page's pool of workers makes its transfer (xfer-pool.mjs, 2026-11-06):
 // ai: every data block read is held to the serial sender's block of that id (sim/xfer.mjs XferSender)
 const bigPath = join(scratch, "check-big.bin"), bigBytes = new Uint8Array(3 * 2 ** 24 + 12345);
 for (let i = 0, v = 11; i < bigBytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bigBytes[i] = v >>> 16; }
@@ -218,7 +218,7 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   // ai: told at the version painted: read so with 0 bad it is counted as missed and another grab taken, at most four
   // ai: (2026-09-29: one blind grab a case failed a good run about 2% of the time). Read by neither, it is
   // ai: judged as it is and fails.
-  let out = null, header = null, frames = 0, blocks = 0, missed = 0;
+  let out = null, header = null, fileTag = 0, headerComp = 0, frames = 0, blocks = 0, missed = 0;
   const read = [];
   for (let k = 0; k < (c.file ? GRABS : 1) + missed; k++) {
     out = await readOnce(codes); frames++;
@@ -229,19 +229,21 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
     }
     blocks += out.r.seen; read.push(...out.r.got);
     const h = out.r.got.find((b) => b.id === ID_HEADER);
-    if (h) { const rx = new XferReceiver({ M, Decoder, store: new MemoryStore() }); await rx.add(ID_HEADER, h.bytes); header = rx.progress().header; break; }
+    // ai: the session header (under its extension's TOI) lists the file under a TOI of its own: fileTag
+    if (h) { const rx = new XferReceiver({ M, Decoder, store: new MemoryStore() }); await rx.add(ID_HEADER, h.toi, h.bytes); header = rx.progress().header; fileTag = rx.files()[0]?.hdr.toi ?? 0; headerComp = rx.files()[0]?.hdr.compression ?? 0; break; }
   }
-  const { g, r } = out, v = versionOf(subch), wordOk = r.fmt?.version === v, blocksOk = r.seen > 0 && r.bad === 0;
+  // ai: the word states the version and, since 2026-11-22, the sender's clock: the page's FPS and its largest Refresh delay (1 here)
+  const { g, r } = out, v = versionOf(subch), wordOk = r.fmt?.version === v && r.fmt?.fps === +FPS && r.fmt?.delay === 1, blocksOk = r.seen > 0 && r.bad === 0;
   // ai: a file's header is the file's, or its packed stream's where packing pays (sim/pack.mjs): random bytes do not shrink
   // ai: its figures kept whole by no-break spaces (send.mjs sizeText, 2026-10-23), read as spaces here
   // ai: the block (2026-11-07; "Sending <name>, <sizes>" before): the file's name, its Size, a bundle's Files; the test
   // ai: stream its name and Speed; no spinner once it paints, no error line
   const rows = g.dt?.rows ?? {}, wantName = bun ? bun.made.name : c.big ? "check-big.bin" : c.prose ? "check-prose.txt" : c.file ? "check-send.bin" : "Test stream";
   const stateOk = g.state === "" && g.dt?.name === wantName && !g.dt.spin && (c.file ? !!rows.Size && (!bun || rows.Files === String(bun.made.files)) && (bun || c.big || c.prose || /^50\sKB$/.test(rows.Size)) : Object.keys(rows).join() === "Speed");
-  const want = bun ? { name: bun.made.name, type: "application/x-tar", bytes: bun.bytes } : c.big ? { name: "check-big.bin", bytes: bigBytes } : c.prose ? { name: "check-prose.txt", type: "text/plain", bytes: proseBytes } : { name: "check-send.bin", bytes: fileBytes };
-  const pk = c.file ? pack(want.bytes, want.name, want.type ?? "", Z) : null, sent = pk?.packed ? { name: pk.name, type: pk.type, bytes: pk.bytes } : want;
-  const root = hex(blake3(M, sent.bytes)), headerOk = !c.file || (header && header.name === sent.name && header.length === sent.bytes.length && header.root === root && (!sent.type || header.type === sent.type));
-  console.log(`${name}: canvas ${g.w} x ${g.h}, picture n = ${r.n} (want ${N_FOR(subch)}), word ${r.fmt ? `version ${r.fmt.version}` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad${c.file ? `; ${frames} frames read, ${blocks} blocks, header ${header ? `${header.name}, ${header.length} B, root ${header.root.slice(0, 16)}...` : "not read"}` : ""}`);
+  const want = bun ? { name: bun.made.name, bytes: bun.bytes } : c.big ? { name: "check-big.bin", bytes: bigBytes } : c.prose ? { name: "check-prose.txt", bytes: proseBytes } : { name: "check-send.bin", bytes: fileBytes };
+  const pk = c.file ? pack(want.bytes, want.name, Z) : null, sent = pk?.packed ? { name: pk.name, bytes: pk.bytes, compression: pk.compression } : { ...want, compression: 0 };
+  const root = hex(blake3(M, sent.bytes)), headerOk = !c.file || (header && header.name === sent.name && header.length === sent.bytes.length && header.root === root && headerComp === sent.compression);
+  console.log(`${name}: canvas ${g.w} x ${g.h}, picture n = ${r.n} (want ${N_FOR(subch)}), word ${r.fmt ? `version ${r.fmt.version}, clock ${r.fmt.fps} / ${r.fmt.delay}` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad${c.file ? `; ${frames} frames read, ${blocks} blocks, header ${header ? `${header.name}, ${header.length} B, root ${header.root.slice(0, 16)}...` : "not read"}` : ""}`);
   const enc = encoderOf(g);
   console.log(pageLine(g));
   if (!enc.ok) faults.push(`${name}: the encoder is not the one asked for: ${enc.line}, read off #${g.which}`);
@@ -250,14 +252,15 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   if (r.n !== N_FOR(subch)) faults.push(`${name}: registered at n = ${r.n}`);
   if (!stateOk) faults.push(`${name}: the block says ${JSON.stringify(g.dt)}${g.state ? `, the state line "${g.state}"` : ""}`);
   if (c.big) {
-    const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder }), x = new Uint8Array(PAYLOAD), data = read.filter((b) => !isControlId(b.id));
-    const chunks = new Set(data.map((b) => idChunk(b.id))), differ = data.filter((b) => { ref.block(b.id, x); return b.bytes.some((v, i) => v !== x[i]); }).length;
+    // ai: the file's data blocks alone (under the TOI its description lists it by)
+    const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder }), x = new Uint8Array(PAYLOAD), data = read.filter((b) => !isControlId(b.id) && b.toi === fileTag);
+    const sourceBlocks = new Set(data.map((b) => idSbn(b.id))), differ = data.filter((b) => { ref.block(b.id, x); return b.bytes.some((v, i) => v !== x[i]); }).length;
     ref.free();
-    console.log(`  the pool's blocks: ${data.length} data blocks of ${chunks.size} chunks held to the serial sender's, ${differ} differ`);
-    if (!data.length || chunks.size < 2 || differ) faults.push(`${name}: ${data.length} data blocks of ${chunks.size} chunks read, ${differ} not the serial sender's`);
+    console.log(`  the pool's blocks: ${data.length} data blocks of ${sourceBlocks.size} chunks held to the serial sender's, ${differ} differ`);
+    if (!data.length || sourceBlocks.size < 2 || differ) faults.push(`${name}: ${data.length} data blocks of ${sourceBlocks.size} chunks read, ${differ} not the serial sender's`);
   }
   if (c.prose && !pk?.packed) faults.push(`${name}: the prose did not pack (sim/pack.mjs)`);
-  if (!headerOk) faults.push(`${name}: the header read is not the file's (want ${sent.name}, ${sent.bytes.length} B, root ${root.slice(0, 16)}...${sent.type ? `, ${sent.type}` : ""})`);
+  if (!headerOk) faults.push(`${name}: the header read is not the file's (want ${sent.name}, ${sent.bytes.length} B, root ${root.slice(0, 16)}..., compression ${sent.compression})`);
   // ai: Two codes: the right half read on its own as well, its word the same, its blocks verified and none of its ids
   // ai: the left's (the page gives the second symbol the frame's next blocksPerFrame ids).
   if (codes > 1) {

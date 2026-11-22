@@ -16,17 +16,18 @@ import java.io.File
 object Native {
     // ai: the process's priority raised as far as a user's may (native/priority.cpp): what was done, "" nothing
     @JvmStatic external fun raisePriority(): String
-    // ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
-    // ai: form goes where packing pays (liblizard/core/tx/pack.h; removed at txDestroy); make: the epoch it was begun
+    // ai: path: the file to send ("" for the test stream); name as its description carries it; dir: where its packed
+    // ai: form goes where packing pays (liblizard/core/tx/pack.h, the description then saying compression 1; removed at
+    // ai: txDestroy); make: the epoch it was begun
     // ai: under (txCancelMakes), -1 one nothing cancels; 0, why in txError() (cancelled too)
-    @JvmStatic external fun txCreate(path: String, name: String, type: String, dir: String, make: Long): Long
+    @JvmStatic external fun txCreate(path: String, name: String, dir: String, make: Long): Long
     @JvmStatic external fun txError(): String
     // ai: stream files (2026-11-18): a sender playing one (0: txError), its meta.json, what a .lizard holds
     // ai: ({"kind","meta"}, "" with txError), and Export (tx_jni.cpp txExport, txExportState, txExportStop)
     @JvmStatic external fun txPlay(path: String): Long
     @JvmStatic external fun txStream(h: Long): String
     @JvmStatic external fun lizardInfo(path: String): String
-    @JvmStatic external fun txExport(h: Long, path: String, laps: Double, display: Boolean, level: Int, name: String, type: String,
+    @JvmStatic external fun txExport(h: Long, path: String, cycles: Double, display: Boolean, level: Int, name: String,
                                      blocks: Int, ring: Int, fps: Int, codes: Int, frameBlocks: Int): String
     @JvmStatic external fun txExportState(h: Long): String
     @JvmStatic external fun txExportStop(h: Long)
@@ -39,10 +40,8 @@ object Native {
     @JvmStatic external fun txPrepare(h: Long, assets: String): String
     // ai: painter: 0 the CPU, 1 the GPU, 2 auto; gap: modules between two codes; "" or the refusal
     @JvmStatic external fun txConfigure(h: Long, subch: Int, span: Int, fps: Int, codes: Int, gap: Int, threads: Int, painter: Int, assets: String): String
-    // ai: Rate refresh: a new block of the rates 7/8, 3/4, 2/3, 1/2 every a, b, c, d frames (1 to 10), from the next frame
+    // ai: Rate refresh: a new block of the rates 6/7, 3/4, 2/3, 1/2 every a, b, c, d frames (1 to 10), from the next frame
     @JvmStatic external fun txRefresh(h: Long, a: Int, b: Int, c: Int, d: Int)
-    // ai: the animated header (Refresh's Header): frames each carousel symbol is shown, 0 the static word; the next configure takes it
-    @JvmStatic external fun txCarousel(h: Long, frames: Int)
     @JvmStatic external fun txSeed(h: Long, seed: Int): Boolean
     // ai: the code's colours (sender.h setColours): its ink and its paper, 0xRRGGBB; the next frame shown takes them
     @JvmStatic external fun txColours(h: Long, ink: Int, paper: Int)

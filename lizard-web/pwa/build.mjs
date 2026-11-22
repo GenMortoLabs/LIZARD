@@ -7,7 +7,7 @@
 // ai:      zstd inside) among them, or no app;
 // ai:   2. copy: the pages to the root, their references re-pointed, and every other file under assets/ at its path under
 // ai:      the project's root (assets/lizard-web/recv.mjs, assets/liblizard/sim/phy.mjs,
-// ai:      assets/liblizard/gpu/back/stop/stop_78.safetensors), so the modules' relative references hold as they are;
+// ai:      assets/liblizard/gpu/back/stop/stop_67.safetensors), so the modules' relative references hold as they are;
 // ai:      into each page's head the manifest, the theme colour and the build;
 // ai:   3. strip comments (strip.mjs; not the emscripten glue), then parse every module again (node --check);
 // ai:   4. content-address assets/ (hash.mjs): name.<hash>.ext, every reference rewritten, in dependency order;
@@ -27,9 +27,8 @@ import { hashTree, verifyTree, findTokens, walk } from "./hash.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url)), WEB = resolve(HERE, ".."), ROOT = resolve(WEB, "..");
 const OUT = resolve(WEB, process.argv[2] ?? "app");
 const PAGES = ["lizard-web/index.html", "lizard-web/send.html", "lizard-web/recv.html"];
-// ai: what ships: the pages' own kinds of file, the codec's wasm, the sender's LDPC stop nets and the receiver's GPU
-// ai: decoder's tree (liblizard/gpu/webgpu.zst)
-const SHIP = new Set([".html", ".css", ".mjs", ".js", ".svg", ".wasm", ".safetensors", ".json", ".woff2", ".zst"]);
+// ai: what ships: the pages' own kinds of file, the codec's wasm and the sender's LDPC stop nets
+const SHIP = new Set([".html", ".css", ".mjs", ".js", ".svg", ".wasm", ".safetensors", ".json", ".woff2"]);
 const SCAN = new Set([".html", ".css", ".mjs", ".js", ".svg"]);
 // ai: emscripten's output (-O3): no comments, and its own string literals are the bare names it loads (lizard.wasm,
 // ai: lizard-media.wasm)

@@ -55,7 +55,7 @@ void main() {
     lists[HEAD + 2u * B + f] = 0u;
     lists[HEAD + 3u * B + f] = 0u;
     lists[HEAD + 4u * B + f] = 0u;
-    // ai: F8's configuration (sel.y = 1 + it, src/fmt.h ob_fmt_held: version << 22 | the counts), the frame's layout
+    // ai: F8's configuration (sel.y = 1 + it, version << 22 | the 6/7, 2/3 and 1/2 counts of its static word, src/fmt.h), the frame's layout
     if (frames[f].valid == 0u || sel[f].y < 2u) { continue; }
     uint g = sel[f].y - 1u;
     uint s = sel[f].z;

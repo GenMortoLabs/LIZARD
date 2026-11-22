@@ -67,10 +67,10 @@ fun rxOf(j: JsonObject?): Readout.Rx {
     if (j == null) return Readout.Rx()
     val f = j.obj("file")
     return Readout.Rx(state = j.str("state"), error = j.str("error"), goodputKBs = j.num("goodputKBs"), foundShare = j.num("foundShare"),
-        bandVersion = j.num("bandVersion").toInt(), fps = j.obj("word")?.num("fps")?.toInt() ?: 0,
+        bandVersion = j.num("bandVersion").toInt(),
         hasFile = f != null, name = f?.str("name").orEmpty().ifEmpty { "a file" }, size = f?.num("size")?.toLong() ?: 0,
         received = f?.num("received")?.toLong() ?: 0, verified = f?.flag("verified") ?: false, secs = f?.num("secs") ?: 0.0,
-        chunks = f?.num("chunks")?.toInt() ?: 0, chunksVerified = f?.num("chunksVerified")?.toInt() ?: 0, inHand = f?.flag("inHand") ?: false)
+        sourceBlocks = f?.num("sourceBlocks")?.toInt() ?: 0, sourceBlocksVerified = f?.num("sourceBlocksVerified")?.toInt() ?: 0, inHand = f?.flag("inHand") ?: false)
 }
 
 // ai: Save replays' runs (the stats' "replays", session.h): a run's .lizard of the newest frames the decoder takes
@@ -103,22 +103,3 @@ fun partialsOf(listing: String): List<Partial> = runCatching {
     }
 }.getOrDefault(emptyList())
 
-// ai: One hint, the first that holds, while the camera reads a word (2026-10-25, both apps' since 2026-10-31). A phone
-// ai: as the camera (cam/phone.cpp) or an upload, none: their timing is not this camera's. A camera the phase lock does not hold reads a sender at most half its rate without its captures spanning two
-// ai: pictures (the web's rule), so its rate (the one it agreed to at start, else `modeFps`) under twice the word's
-// ai: names the most the sender should paint, as a hint: "Sender at 24 fps", "recommended 15" (2026-11-11; "Sender too
-// ai: fast", "max N fps" as a warning from 2026-11-07, the sentence "Set the sender to at most N fps for this camera."
-// ai: before). Advice only: decoding never depends on it. null where none holds.
-fun hintOf(j: JsonObject?, on: Boolean, phone: Boolean = false, upload: Boolean = false, locked: Boolean = false, modeFps: Double = 0.0): Warn? {
-    if (!on || j == null || upload || phone) return null
-    val cam = j.obj("camera")
-    val wf = j.obj("word")?.num("fps") ?: 0.0
-    if (j.num("bandVersion") <= 0 || wf <= 0 || cam == null) return null
-    val camFps = cam.num("agreedFps").takeIf { it > 0 } ?: modeFps
-    if (!locked && camFps > 0 && camFps < 2 * wf) {
-        val n = floor(camFps / 2).toInt()
-        val at = if (wf == floor(wf)) wf.toInt().toString() else "%.1f".format(wf)
-        if (n >= 1) return Warn("Sender at $at fps", "recommended $n", hint = true)
-    }
-    return null
-}

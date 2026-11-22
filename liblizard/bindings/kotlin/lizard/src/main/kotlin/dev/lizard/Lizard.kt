@@ -22,14 +22,14 @@ data class Geometry(val n: Int, val span: Int, val pxm: Int, val side: Int, val 
 
 data class Rect(val x: Int, val y: Int, val w: Int, val h: Int)
 
-// ai: where a block of a symbol lies (lizard.h liz_block_place): its code rate (0 7/8, 1 3/4, 2 2/3, 3 1/2; the 7/8 and
+// ai: where a block of a symbol lies (lizard.h liz_block_place): its code rate (0 6/7, 1 3/4, 2 2/3, 3 1/2; the 6/7 and
 // ai: 3/4 blocks carry the pilots), its first slot and slots (640 a sub-channel), the sub-channels it spans
 data class BlockPlace(val rate: Int, val firstSlot: Int, val slots: Int, val firstSubch: Int, val lastSubch: Int)
 
 object Lizard {
-  const val BLOCK = 476
-  const val ID_BYTES = 5
-  const val PAYLOAD = 471
+  const val BLOCK = 472
+  const val ID_BYTES = 12
+  const val PAYLOAD = 460
   const val MIN_BLOCKS = 4
   const val MAX_BLOCKS = 64
   const val RINGS = 3
@@ -54,7 +54,7 @@ object Lizard {
   }
   // ai: block b of a symbol of a format's size (Format.blocks)
   fun blockPlace(blocks: Int, b: Int): BlockPlace = IntArray(5).also { Native.blockPlace(blocks, b, it) }.let { BlockPlace(it[0], it[1], it[2], it[3], it[4]) }
-  const val REFRESH_MAX = 65535
+  const val REFRESH_MAX = 30
   // ai: the test stream's payload for an id
   fun streamFill(id: Long): ByteArray = ByteArray(PAYLOAD).also { Native.streamFill(id, it) }
 }
@@ -69,7 +69,7 @@ abstract class Handle internal constructor(protected var h: Long, private val re
 class Encoder(format: Format) : Handle(Native.encoderNew(format.blocks, format.ring, format.fps, format.codes), Native::encoderFree) {
   val format = format
   val geometry: Geometry = Lizard.geometry(format)
-  // ai: one frame: blocks, frameBlocks x 476 bytes; picture, the frame's count (mod 4 the pilots); out, width x height
+  // ai: one frame: blocks, frameBlocks x 472 bytes; picture, the frame's count (mod 4 the pilots); out, width x height
   // ai: pixels of fmt (made if not given)
   fun paint(blocks: ByteArray, picture: Int, out: ByteArray? = null, fmt: PixelFormat = PixelFormat.GREY): ByteArray {
     val o = out ?: ByteArray(geometry.width * geometry.height * fmt.bytes)
@@ -83,57 +83,43 @@ class Encoder(format: Format) : Handle(Native.encoderNew(format.blocks, format.r
   }
 }
 
-// ai: the held word (the size, Format.blocks, the last word read names, 0 none), shared by decoders reading one stream
-class HeldWord(@JvmField var value: Int = 0)
-
 class Decoded(
   val count: Int, val blocks: ByteArray, val found: Boolean, val ring: Int, val n: Int, val word: Boolean,
-  val blocksPerSymbol: Int, val fps: Int, val heldUsed: Boolean, val total: Int, val quad: FloatArray,
-  val pilotBlocks: Int, val pilotR: FloatArray, val pilotSd: FloatArray,
-  // ai: the word read is animated, a carousel symbol (lizard.h liz_decoded animated)
-  val animated: Boolean = false,
+  val blocksPerSymbol: Int, val total: Int, val quad: FloatArray,
+  val pilotSubch: Int, val pilotR: FloatArray, val pilotSd: FloatArray,
 )
 
+// ai: Each frame decoded on its own (lizard.h liz_decode): nothing carries from one frame to the next.
 class Decoder(nmax: Int = 0) : Handle(Native.decoderNew(nmax), Native::decoderFree) {
   val maxBlocks: Int = Native.decoderMaxBlocks(live())
-  // ai: this decoder's own held word, used when a decode names none
-  val held = HeldWord()
   private val out = ByteArray(maxBlocks * Lizard.BLOCK)
-  private val ints = IntArray(11)
+  private val ints = IntArray(8)
   private val floats = FloatArray(12)
-  private val heldBox = IntArray(1)
 
-  fun decode(px: ByteArray, w: Int, h: Int, fmt: PixelFormat = PixelFormat.GREY, stride: Int = w * fmt.bytes, offset: Int = 0, held: HeldWord = this.held): Decoded {
-    heldBox[0] = held.value
-    val n = Native.decode(live(), px, offset, w, h, stride, fmt.code, heldBox, out, ints, floats)
-    held.value = heldBox[0]
-    return result(n)
-  }
+  fun decode(px: ByteArray, w: Int, h: Int, fmt: PixelFormat = PixelFormat.GREY, stride: Int = w * fmt.bytes, offset: Int = 0): Decoded =
+    result(Native.decode(live(), px, offset, w, h, stride, fmt.code, out, ints, floats))
   // ai: from a direct buffer (a camera plane), offset bytes in
-  fun decode(px: ByteBuffer, w: Int, h: Int, fmt: PixelFormat, stride: Int, offset: Int = 0, held: HeldWord = this.held): Decoded {
+  fun decode(px: ByteBuffer, w: Int, h: Int, fmt: PixelFormat, stride: Int, offset: Int = 0): Decoded {
     require(px.isDirect) { "a direct buffer" }
-    heldBox[0] = held.value
-    val n = Native.decodeBuffer(live(), px, offset, w, h, stride, fmt.code, heldBox, out, ints, floats)
-    held.value = heldBox[0]
-    return result(n)
+    return result(Native.decodeBuffer(live(), px, offset, w, h, stride, fmt.code, out, ints, floats))
   }
   private fun result(n: Int) = Decoded(
-    n, out.copyOf(n * Lizard.BLOCK), ints[0] != 0, ints[1], ints[2], ints[3] != 0, ints[4], ints[5], ints[6] != 0, ints[7],
-    floats.copyOfRange(0, 8), ints[9], floats.copyOfRange(8, 10), floats.copyOfRange(10, 12), ints[10] != 0,
+    n, out.copyOf(n * Lizard.BLOCK), ints[0] != 0, ints[1], ints[2], ints[3] != 0, ints[4], ints[5],
+    floats.copyOfRange(0, 8), ints[7], floats.copyOfRange(8, 10), floats.copyOfRange(10, 12),
   )
 }
 
-data class TxInfo(val test: Boolean, val length: Long, val chunks: Int, val lap: Int, val root: String)
+data class TxInfo(val test: Boolean, val length: Long, val sourceBlocks: Int, val cycle: Int, val root: String)
 
 class Tx private constructor(h: Long) : Handle(h, Native::txFree) {
   companion object {
-    // ai: a file's bytes (copied in), its name and media type as its header carries them
-    fun file(bytes: ByteArray, name: String = "", type: String = "") = Tx(Native.txNew(bytes, name, type))
-    fun path(path: String, name: String? = null, type: String? = null) = Tx(Native.txNewPath(path, name, type))
+    // ai: a file's bytes (copied in) and its name as its description carries it
+    fun file(bytes: ByteArray, name: String = "") = Tx(Native.txNew(bytes, name))
+    fun path(path: String, name: String? = null) = Tx(Native.txNewPath(path, name))
     // ai: the test stream from firstId (0: a random one)
     fun test(firstId: Int = 0) = Tx(Native.txNewTest(firstId))
   }
-  // ai: the next frame's n blocks (n x 476 bytes)
+  // ai: the next frame's n blocks (n x 472 bytes)
   fun next(n: Int, out: ByteArray = ByteArray(n * Lizard.BLOCK)): ByteArray { Native.txNext(live(), n, out); return out }
   val info: TxInfo get() {
     val l = LongArray(4)
@@ -144,7 +130,7 @@ class Tx private constructor(h: Long) : Handle(h, Native::txFree) {
 }
 
 data class Verdict(val seen: Int, val bad: Int, val judged: Int, val fresh: Int, val test: Boolean)
-data class Progress(val header: Boolean, val done: Boolean, val chunks: Int, val verified: Int, val rejected: Int,
+data class Progress(val header: Boolean, val done: Boolean, val sourceBlocks: Int, val verified: Int, val rejected: Int,
                     val length: Long, val bytesIn: Long, val fraction: Double, val solveMs: Double)
 
 // ai: dir null: in memory, at most maxBytes (0: no cap); else files under dir/lizard-xfer (that folder emptied first)
@@ -159,13 +145,12 @@ class Rx(dir: String? = null, maxBytes: Long = 0) : Handle(Native.rxNew(dir, max
     Native.rxProgress(live(), i, l, d)
     return Progress(i[0] != 0, i[1] != 0, i[2], i[3], i[4], l[0], l[1], d[0], d[1])
   }
-  // ai: each chunk: 0 to 99 the share in (a floor until the manifest is in), 255 verified
-  val chunks: ByteArray get() = Native.rxChunks(live())
+  // ai: each source block: 0 to 99 the share of its source symbols in, 255 verified
+  val sourceBlocks: ByteArray get() = Native.rxSourceBlocks(live())
   val name: String get() = Native.rxMeta(live(), 0)
-  val type: String get() = Native.rxMeta(live(), 1)
-  val root: String get() = Native.rxMeta(live(), 2)
-  val path: String get() = Native.rxMeta(live(), 3)
-  val error: String get() = Native.rxMeta(live(), 4)
+  val root: String get() = Native.rxMeta(live(), 1)
+  val path: String get() = Native.rxMeta(live(), 2)
+  val error: String get() = Native.rxMeta(live(), 3)
   // ai: the finished file's bytes in a memory store, null before it is done
   fun data(): ByteArray? = Native.rxData(live())
   fun clear() = Native.rxClear(live())
@@ -200,9 +185,9 @@ class FrameReceiver(val layout: Int = 1, nmax: Int = 0, dir: String? = null, max
     for (d in decoded) { d.blocks.copyInto(all, o); o += d.blocks.size }
     return Pushed(decoded, rx.frame(all), rx.progress)
   }
-  class File(val name: String, val type: String, val root: String, val bytes: ByteArray)
+  class File(val name: String, val root: String, val bytes: ByteArray)
   // ai: the file once whole (a memory store), else null
-  val file: File? get() = rx.data()?.let { File(rx.name, rx.type, rx.root, it) }
+  val file: File? get() = rx.data()?.let { File(rx.name, rx.root, it) }
   fun clear() = rx.clear()
   override fun close() { decoder.close(); rx.close() }
 }

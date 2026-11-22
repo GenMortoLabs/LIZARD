@@ -1,4 +1,4 @@
-// The format's LDPC base matrices (src/ldpc_base.h: 7/8, 3/4, 2/3 and 1/2, the rate profile's codes) as ldpc_init
+// The format's LDPC base matrices (src/ldpc_base.h: 6/7, 3/4, 2/3 and 1/2, the rate profile's codes) as ldpc_init
 // builds them: each code's H hashed (FNV-1a over its row pointers and column indices) and held to the hash recorded
 // when the table was adopted, and its block-row view held to the table entry by entry. Prints each table as the
 // header holds it.

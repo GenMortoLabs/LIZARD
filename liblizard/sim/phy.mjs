@@ -12,8 +12,8 @@
 // A variant is a decoder setting applied to the same capture, which is how ablations stay
 // paired. `fresh` counts fountain blocks not seen before, `seen` every valid block in the
 // capture. usefulBytes is what one block hands the fountain: headers and ids are not payload.
-import { init as initOb, Lizard, LizardAny, prof, streamBlock, streamMatches, carousel } from "./ob.mjs";
-import { isControlId, PAYLOAD, ID_BYTES, idGet, idPut } from "./xfer.mjs";
+import { init as initOb, Lizard, LizardAny, prof, streamBlock, streamMatches } from "./ob.mjs";
+import { isControlId, PAYLOAD, ID_BYTES, idGet, toiGet, idPut } from "./xfer.mjs";
 import { PICTURE_SIZES } from "./lizard_pick.mjs";
 
 // What the sender paints outside a LIZARD frame, in SAMPLES: the codec's margin (fc.quiet modules, src/lizard_phy.h
@@ -23,7 +23,7 @@ import { PICTURE_SIZES } from "./lizard_pick.mjs";
 const marginSamples = (spec, fc) => (spec.quiet ?? fc.quiet) * fc.cell;
 
 // ai: LDPC rate indices to names (src/ldpc.h): the format's four
-const RATE = { 2: "1/2", 3: "2/3", 4: "3/4", 6: "7/8" };
+const RATE = { 2: "1/2", 3: "2/3", 4: "3/4", 6: "6/7" };
 
 // Block contents are a function of the block id, so a receiver can check any block it decodes
 // without being told which frame it came from.
@@ -73,7 +73,7 @@ export const sourceFor = (stream) => {
 // ai: of that frame is then bad (the CRC let a wrong block through), counted and dropped. A frame with none is a file's,
 // ai: or a test frame whose every verified block is wrong, the one case not counted: the CRC alone judges it.
 // ai: frame(ok, blocks): ok[k] set for each verified block k, at k * (payload + ID_BYTES). Returns got, the frame's every block
-// ai: not judged bad, control blocks (a transfer's header or manifest) included, with their bytes; seen (got's count),
+// ai: not judged bad, control blocks (a transfer's session header) included, its bare id, its file's TOI and its bytes; seen (got's count),
 // ai: bad; test, whether the frame was judged the test stream's; judged, its data blocks held to the stream.
 // ai: The judge keeps nothing from frame to frame (2026-09-29): which blocks are new is the receiver's page's to say, the
 // ai: one set of ids that a new transfer or Clear lets go (lizard-web/recv.mjs). Until then each decode worker's judge kept the
@@ -90,52 +90,41 @@ export function blockJudge(payload = PAYLOAD, stream = "blake3") {
       let bad = 0;
       for (let k = 0; k < ok.length; k++) {
         if (!ok[k]) continue;
-        const o = k * B, id = idGet(blocks, o), bytes = blocks.slice(o + ID_BYTES, o + B);
-        if (isControlId(id)) { got.push({ id, bytes }); continue; }
+        const o = k * B, id = idGet(blocks, o), toi = toiGet(blocks, o), bytes = blocks.slice(o + ID_BYTES, o + B);
+        if (isControlId(id)) { got.push({ id, toi, bytes }); continue; }
         const same = match(id, bytes);
         if (same) test = true;
-        data.push({ id, bytes, same });
+        data.push({ id, toi, bytes, same });
       }
-      for (const d of data) if (test && !d.same) bad++; else got.push({ id: d.id, bytes: d.bytes });
+      for (const d of data) if (test && !d.same) bad++; else got.push({ id: d.id, toi: d.toi, bytes: d.bytes });
       return { got, seen: got.length, bad, test, judged: test ? data.length : 0 };
     },
   };
 }
 
 // ai: The blind receiver in the C (sim/ob.mjs LizardAny): it registers against every ring, reads the word there and
-// ai: decodes the picture the word names, to spec.nmax. It holds the last word it read and decodes a wordless frame
-// ai: with it (since 2026-09-27: the ring bootstraps the word, and a frame whose word does not decode leaves the held
-// ai: one as it is): the one piece of state that carries from frame to frame, so frames go through one of these in the
-// ai: order they were captured. Nothing else carries. An animated word (a carousel symbol, src/fmt.h) names no version:
-// ai: its symbol goes to the carousel's assembly (sim/ob.mjs carousel, reset with the receiver), and once a header
-// ai: stands the configuration it states (its first five bytes, a static word's) is held as a static word's is; a frame
-// ai: whose word does not read is not decoded (2026-11-18: the word before the frame). fmt.fps: the display rate the
-// ai: last assembled header states, 0 where none has (a static word states none). Blocks are judged from the light
+// ai: decodes the picture the word names, to spec.nmax. A frame whose word does not read is not decoded (2026-11-18: the
+// ai: word before the frame); nothing carries from one frame to the next. Blocks are judged from the light
 // ai: (blockJudge); spec.stream names a replay's generator, BLAKE3 when left out.
 async function makeBlind(spec) {
   await initOb();
   const nmax = spec.nmax ?? BLIND_NMAX, fa = new LizardAny(nmax);
   const judge = blockJudge(fa.blockBytes - ID_BYTES, spec.stream ?? "blake3");
-  let held = 0, fps = 0, builds = 0;
+  let builds = 0;
   return {
     label: `lizard blind to ${nmax}`, family: "lizard", variants: ["blind"], usefulBytes: fa.blockBytes - ID_BYTES, nmax,
     decode(img, iw, ih, truth, rgba = false, axis = null) {
-      const t = performance.now(), r = fa.decode(img, iw, ih, { held, rgba, axis }), total = performance.now() - t;
-      if (r.fmt && r.fmt.kind === 0) held = r.fmt.held;
-      else if (r.fmt) {
-        const k = carousel.add(r.fmt.id, r.fmt.sym);
-        if (k && carousel.held()) { held = carousel.held(); fps = carousel.fps(); }
-      }
+      const t = performance.now(), r = fa.decode(img, iw, ih, { rgba, axis }), total = performance.now() - t;
       // ai: built: this frame built a picture's codec (its first sight of that ring and picture; src/wasm.c pic_for).
       const built = r.builds > builds;
       builds = r.builds;
-      return [{ ...judge.frame(r.ok, r.blocks), found: r.found, n: r.pictureN, ring: r.ring, held: r.held, fmt: r.fmt && { ...r.fmt, fps }, quad: r.quad, built, ber: NaN, mi: NaN, ms: { detect: r.msDetect, total } }];
+      return [{ ...judge.frame(r.ok, r.blocks), found: r.found, n: r.pictureN, ring: r.ring, fmt: r.fmt, quad: r.quad, built, ber: NaN, mi: NaN, ms: { detect: r.msDetect, total } }];
     },
-    reset() { held = fps = 0; carousel.reset(); },
+    reset() {},
     prof, free() { fa.free(); },
   };
 }
-// variants: [{ name, gamma }]. Each block starts with its 4-byte fountain id.
+// variants: [{ name, gamma }]. Each block starts with its 12-byte id (src/xfer.h: the bare id, the source block and symbol, then the 48-bit TOI).
 async function makeLizard(spec) {
   await initOb();
   const { n = 512, subch = 32, mode = 1, span = 0, tiers = null, bitmap, variants = [{ name: "ldpc" }] } = spec;
@@ -143,15 +132,20 @@ async function makeLizard(spec) {
   const quiet = marginSamples(spec, fc);
   // The page's pixels come from the codec's own paint, which has only its margin: an experiment's override has no way there.
   const noRGBA = spec.quiet !== undefined && spec.quiet !== fc.quiet ? `spec.quiet ${spec.quiet} is the simulator's override; the codec paints ${fc.quiet}` : null;
-  let source = sourceFor(spec.stream), ink = 0x000000, paper = 0xffffff;
+  // ai: TOI: every block's (src/xfer.h); the test stream's spec.toi (1 unless given: the format has no test stream, TOI 0
+  // ai: is none, so it goes under a TOI as any send's; a live sender draws one, lizard-web/send-worker.mjs), or a sender's
+  // ai: (sim/xfer.mjs XferSender: toiFor(id) a block's), setSource's
+  const testToi = Math.floor(spec.toi ?? 1) % 2 ** 48 || 1;   // ai: the test stream's TOI, 48 bits
+  let source = sourceFor(spec.stream), toi = testToi, ink = 0x000000, paper = 0xffffff;
+  const toiOfId = (id) => (typeof toi === "number" ? toi : toi.toiFor(id));
   return {
     label: `lizard ${n} ${tiers ? tiers.map(([r, b]) => `${b}x${RATE[r]}`).join("+") : `${subch}sub`}${span ? " span" + span : ""}`, family: "lizard", variants: variants.map((v) => v.name), usefulBytes: B - ID_BYTES, blocksPerFrame: T, modules: fc.side, bitmap: fc.bitmap,
     // ai: the paint's samples a module and the codec's margin in modules (src/lizard_phy.h LIZARD_QUIET), for a painter
     // ai: that places symbols in modules (lizard-web/send-worker.mjs: two codes a gap apart, 2026-09-30)
     cell: fc.cell, quiet: fc.quiet,
-    // baseId may instead be the frame's T ids, for a sender whose ids are not a run (sim/xfer.mjs: chunk and symbol).
+    // baseId may instead be the frame's T ids, for a sender whose ids are not a run (sim/xfer.mjs: source block and symbol).
     frame(seq, baseId = seq * T) {
-      for (let t = 0; t < T; t++) { const id = typeof baseId === "number" ? baseId + t : baseId[t], o = t * B; idPut(buf, o, id); source(id, buf.subarray(o + ID_BYTES, o + B)); }
+      for (let t = 0; t < T; t++) { const id = typeof baseId === "number" ? baseId + t : baseId[t], o = t * B; idPut(buf, o, id, toiOfId(id)); source(id, buf.subarray(o + ID_BYTES, o + B)); }
       fc.setParity(seq & 3);
       return { w: fc.side, h: fc.side, quiet, drive: fc.encode(buf), truth: null };
     },
@@ -165,10 +159,12 @@ async function makeLizard(spec) {
     },
     // ai: the code's colours frameRGBA paints in (0xRRGGBB; 2026-11-16, Send's Colours): its ink and its paper
     setColours(i, p) { ink = i & 0xffffff; paper = p & 0xffffff; },
+    // ai: the sender's clock the word states (src/lizard_phy.h lizard_clock): fps 0 to 240 (0 a still), delay 1 to 30
+    setClock(fps, delay = 1) { fc.setClock(fps, delay); },
     // ai: The frame's T blocks alone, each its id (little-endian) then its payload, B bytes a block, for an encoder
     // ai: elsewhere (the sender's GPU encoder, gpu/encoder.mjs). A view reused by the next call.
     frameBlocks(seq, baseId = seq * T) {
-      for (let t = 0; t < T; t++) { const id = typeof baseId === "number" ? baseId + t : baseId[t], o = t * B; idPut(buf, o, id); source(id, buf.subarray(o + ID_BYTES, o + B)); }
+      for (let t = 0; t < T; t++) { const id = typeof baseId === "number" ? baseId + t : baseId[t], o = t * B; idPut(buf, o, id, toiOfId(id)); source(id, buf.subarray(o + ID_BYTES, o + B)); }
       return buf;
     },
     // One decoder result turned into the harness's, shared by the one-call path and the split one so the two
@@ -179,7 +175,7 @@ async function makeLizard(spec) {
       for (let k = 0; k < T; k++) {
         if (!r.ok[k]) continue;
         const o = k * B, id = idGet(r.blocks, o);
-        // A transfer's header or manifest block (sim/xfer.mjs) is no test stream's, so it is not compared: its CRC is
+        // A transfer's session header (sim/xfer.mjs) is no test stream's, so it is not compared: its CRC is
         // the judge, as for a file. Not fresh, since it is not payload, and handed on every time it is read, since its
         // id is the same in every transfer and only its bytes say whether it is a new one.
         if (isControlId(id)) { n2++; got.push({ id, bytes: r.blocks.slice(o + ID_BYTES, o + B) }); continue; }
@@ -201,7 +197,9 @@ async function makeLizard(spec) {
     },
     reset() { seen.forEach((s) => s.clear()); },
     seenCount: () => seen.reduce((t, x) => t + x.size, 0),
-    setSource(fn) { source = fn; },
+    // ai: a transfer's blocks (fn(id, out) its payloads) under a TOI: a number (every block's), or the sender itself
+    // ai (each block under its own TOI, the file's or its session header's: sim/xfer.mjs XferSender toiFor, 2026-11-20)
+    setSource(fn, t = testToi) { source = fn; toi = typeof t === "number" ? t >>> 0 : t; },
     prof, free() { fc.free(); },
   };
 }

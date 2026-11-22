@@ -4,54 +4,156 @@
 #include <stdlib.h>
 #include <string.h>
 
-// ai: The block's CRC-32C (Castagnoli: 0x1EDC6F41, reflected 0x82F63B78, the register set to all ones and the result
-// ai: inverted; "123456789" gives 0xE3069283; SPEC 7.1). Since 2026-11-05 (IEEE 802.3's CRC-32 before): the polynomial
-// ai: both PC and phone processors compute in one instruction, eight bytes at a time. arm64: ARMv8's CRC32C instructions
-// ai: (the CRC32 extension, optional in ARMv8.0 and in every ARMv8.1 core: asked of the kernel, HWCAP_CRC32, on Linux and
-// ai: Android, always there on Apple's); x86-64: SSE4.2's crc32 (in x86-64-v2, every native build's floor). The loop
-// ai: below elsewhere (the wasm, the scalar build); every form the same value (test/crc_check.c).
-#if defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))
-#include <arm_acle.h>
+// ai: The block's CRC-64 (SPEC 7.1), since 2026-11-21 (CRC-32C from 2026-11-05, IEEE 802.3's CRC-32 before): a
+// ai: BCH-derived generator, G = (x + 1) m1 m3 m5 m7 m9 (x^3 + x + 1) over GF(2^12), 0xE0CB4CBE2D1C3403 with x^64,
+// ai: reflected 0xC02C38B47D32D307; the register set to all ones and the result inverted; "123456789" gives
+// ai: 0xBB3BA0D234061B3E. Roots alpha^0 .. alpha^10: distance at least 12 on any codeword to 4,095 bits (the block and
+// ai: its CRC are 3,840), so every error of up to 11 bits, every odd-weight error and every burst to 64 bits is caught.
+// ai: By carry-less multiplication where the processor has it (x86-64's PCLMULQDQ by cpuid, arm64's PMULL by the
+// ai: kernel's HWCAP_PMULL, always on Apple's), over the bytes to the last whole 16; the rest, and every other target
+// ai: (the wasm, OB_SCALAR), sliced by eight through crc64_tables.h. The same value for every input (test/crc_check.c
+// ai: holds both to the bit loop).
+#include "crc64_tables.h"
+// ai: The fold (both targets, one arithmetic; research/build/crc64-clmul-2026-11-21/model.py derives the constants
+// ai: and models every instruction against the bit loop). In the reflected domain a 128-bit lane D bits before the
+// ai: lane it lands on is folded onto it as its low qword times x^(D + 63) mod P and its high qword times x^(D - 1) mod
+// ai: P, each reflected (the reflected product carries one factor x): four lanes 64 bytes apart while 64 bytes remain,
+// ai: folded into one (by 384, 256 and 128 bits), then a lane at a time; the last lane times x^64 (its low qword by
+// ai: x^127 mod P, its high qword moved down), then Barrett's reduction to 64 bits: q = th + floor(th mu' / x^64), mu'
+// ai: = floor(x^128 / P) - x^64, the register tl + (q P' mod x^64). n a multiple of 16, 64 or more; c the register
+// ai: as it stands, returned as it ends (neither inverted).
+#define CRC64_K512_LO 0xc69c7fe0129c058full
+#define CRC64_K512_HI 0xa9bfcb035e069d2full
+#define CRC64_K384_LO 0x37e9b58a68364616ull
+#define CRC64_K384_HI 0x5af19904b0033c71ull
+#define CRC64_K256_LO 0xfe845b60565108c8ull
+#define CRC64_K256_HI 0xb7bf980fed556b55ull
+#define CRC64_K128_LO 0x03ecaf64caf59255ull
+#define CRC64_K128_HI 0xddb86ecfc0a519aeull   /* x^127 mod P: also the last lane's x^128 */
+#define CRC64_MU 0x4b7010d952f90699ull
+#define CRC64_P 0xc02c38b47d32d307ull
+#if defined(OB_X86) && (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
+#include <wmmintrin.h>
+#define OB_HAVE_CLMUL64() (__builtin_cpu_supports("pclmul"))
+__attribute__((target("pclmul,sse4.1"))) static uint64_t crc64_fold(const uint8_t *p, int n, uint64_t c) {
+  const __m128i k512 = _mm_set_epi64x((long long)CRC64_K512_HI, (long long)CRC64_K512_LO);
+  const __m128i k384 = _mm_set_epi64x((long long)CRC64_K384_HI, (long long)CRC64_K384_LO);
+  const __m128i k256 = _mm_set_epi64x((long long)CRC64_K256_HI, (long long)CRC64_K256_LO);
+  const __m128i k128 = _mm_set_epi64x((long long)CRC64_K128_HI, (long long)CRC64_K128_LO);
+  const __m128i bar = _mm_set_epi64x((long long)CRC64_P, (long long)CRC64_MU);
+#define OB_FOLD(a, k) _mm_xor_si128(_mm_clmulepi64_si128((a), (k), 0x00), _mm_clmulepi64_si128((a), (k), 0x11))
+  __m128i x0 = _mm_loadu_si128((const __m128i *)p), x1 = _mm_loadu_si128((const __m128i *)(p + 16));
+  __m128i x2 = _mm_loadu_si128((const __m128i *)(p + 32)), x3 = _mm_loadu_si128((const __m128i *)(p + 48));
+  x0 = _mm_xor_si128(x0, _mm_cvtsi64_si128((long long)c));
+  int i = 64;
+  for (; i + 64 <= n; i += 64) {
+    x0 = _mm_xor_si128(OB_FOLD(x0, k512), _mm_loadu_si128((const __m128i *)(p + i)));
+    x1 = _mm_xor_si128(OB_FOLD(x1, k512), _mm_loadu_si128((const __m128i *)(p + i + 16)));
+    x2 = _mm_xor_si128(OB_FOLD(x2, k512), _mm_loadu_si128((const __m128i *)(p + i + 32)));
+    x3 = _mm_xor_si128(OB_FOLD(x3, k512), _mm_loadu_si128((const __m128i *)(p + i + 48)));
+  }
+  __m128i a = _mm_xor_si128(_mm_xor_si128(OB_FOLD(x0, k384), OB_FOLD(x1, k256)), _mm_xor_si128(OB_FOLD(x2, k128), x3));
+  for (; i < n; i += 16) a = _mm_xor_si128(OB_FOLD(a, k128), _mm_loadu_si128((const __m128i *)(p + i)));
+#undef OB_FOLD
+  a = _mm_xor_si128(_mm_clmulepi64_si128(a, k128, 0x10), _mm_srli_si128(a, 8));
+  const uint64_t th = (uint64_t)_mm_cvtsi128_si64(a), tl = (uint64_t)_mm_extract_epi64(a, 1);
+  const uint64_t q = th ^ ((uint64_t)_mm_cvtsi128_si64(_mm_clmulepi64_si128(a, bar, 0x00)) << 1);
+  const __m128i r = _mm_clmulepi64_si128(_mm_cvtsi64_si128((long long)q), bar, 0x10);
+  return tl ^ (((uint64_t)_mm_extract_epi64(r, 1) << 1) | ((uint64_t)_mm_cvtsi128_si64(r) >> 63));
+}
+#elif defined(OB_NEON) && defined(__clang__) && (defined(__linux__) || defined(__APPLE__))
 #if defined(__linux__)
 #include <sys/auxv.h>
-#ifndef HWCAP_CRC32
-#define HWCAP_CRC32 (1 << 7)
+#ifndef HWCAP_PMULL
+#define HWCAP_PMULL (1 << 4)
 #endif
-#define OB_HAVE_CRC32C() ((getauxval(AT_HWCAP) & HWCAP_CRC32) != 0)
-#elif defined(__APPLE__)
-#define OB_HAVE_CRC32C() 1
+#define OB_HAVE_CLMUL64() ((getauxval(AT_HWCAP) & HWCAP_PMULL) != 0)
+#else
+#define OB_HAVE_CLMUL64() 1
 #endif
-#ifdef OB_HAVE_CRC32C
-__attribute__((target("crc"))) static uint32_t crc32c_hw(const uint8_t *p, int n) {
-  uint32_t c = 0xffffffffu;
-  int i = 0;
-  for (; i + 8 <= n; i += 8) { uint64_t v; memcpy(&v, p + i, 8); c = __crc32cd(c, v); }
-  for (; i < n; i++) c = __crc32cb(c, p[i]);
-  return ~c;
+#define OB_CLMUL_TARGET __attribute__((target("aes")))
+OB_CLMUL_TARGET static inline uint64x2_t clmul_ll(uint64x2_t a, uint64x2_t b) {
+  return vreinterpretq_u64_p128(vmull_p64((poly64_t)vgetq_lane_u64(a, 0), (poly64_t)vgetq_lane_u64(b, 0)));
 }
-#endif
-#elif defined(OB_X86) && (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
-#include <nmmintrin.h>
-#define OB_HAVE_CRC32C() __builtin_cpu_supports("sse4.2")
-__attribute__((target("sse4.2"))) static uint32_t crc32c_hw(const uint8_t *p, int n) {
-  uint64_t c = 0xffffffffu;
-  int i = 0;
-  for (; i + 8 <= n; i += 8) { uint64_t v; memcpy(&v, p + i, 8); c = _mm_crc32_u64(c, v); }
-  for (; i < n; i++) c = _mm_crc32_u8((uint32_t)c, p[i]);
-  return ~(uint32_t)c;
+OB_CLMUL_TARGET static inline uint64x2_t clmul_hh(uint64x2_t a, uint64x2_t b) {
+  return vreinterpretq_u64_p128(vmull_high_p64(vreinterpretq_p64_u64(a), vreinterpretq_p64_u64(b)));
 }
-#endif
-uint32_t ob_crc32c(const uint8_t *p, int n) {
-#ifdef OB_HAVE_CRC32C
-  if (OB_HAVE_CRC32C()) return crc32c_hw(p, n);
-#endif
-  uint32_t c = 0xffffffffu;
-  for (int i = 0; i < n; i++) {
-    c ^= p[i];
-    for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0x82f63b78u & (0u - (c & 1)));
+OB_CLMUL_TARGET static inline uint64x2_t fold64(uint64x2_t a, uint64x2_t k) { return veorq_u64(clmul_ll(a, k), clmul_hh(a, k)); }
+OB_CLMUL_TARGET static uint64_t crc64_fold(const uint8_t *p, int n, uint64_t c) {
+  const uint64x2_t k512 = vcombine_u64(vcreate_u64(CRC64_K512_LO), vcreate_u64(CRC64_K512_HI));
+  const uint64x2_t k384 = vcombine_u64(vcreate_u64(CRC64_K384_LO), vcreate_u64(CRC64_K384_HI));
+  const uint64x2_t k256 = vcombine_u64(vcreate_u64(CRC64_K256_LO), vcreate_u64(CRC64_K256_HI));
+  const uint64x2_t k128 = vcombine_u64(vcreate_u64(CRC64_K128_LO), vcreate_u64(CRC64_K128_HI));
+  uint64x2_t x0 = vreinterpretq_u64_u8(vld1q_u8(p)), x1 = vreinterpretq_u64_u8(vld1q_u8(p + 16));
+  uint64x2_t x2 = vreinterpretq_u64_u8(vld1q_u8(p + 32)), x3 = vreinterpretq_u64_u8(vld1q_u8(p + 48));
+  x0 = veorq_u64(x0, vcombine_u64(vcreate_u64(c), vcreate_u64(0)));
+  int i = 64;
+  for (; i + 64 <= n; i += 64) {
+    x0 = veorq_u64(fold64(x0, k512), vreinterpretq_u64_u8(vld1q_u8(p + i)));
+    x1 = veorq_u64(fold64(x1, k512), vreinterpretq_u64_u8(vld1q_u8(p + i + 16)));
+    x2 = veorq_u64(fold64(x2, k512), vreinterpretq_u64_u8(vld1q_u8(p + i + 32)));
+    x3 = veorq_u64(fold64(x3, k512), vreinterpretq_u64_u8(vld1q_u8(p + i + 48)));
   }
+  uint64x2_t a = veorq_u64(veorq_u64(fold64(x0, k384), fold64(x1, k256)), veorq_u64(fold64(x2, k128), x3));
+  for (; i < n; i += 16) a = veorq_u64(fold64(a, k128), vreinterpretq_u64_u8(vld1q_u8(p + i)));
+  // ai: x^64 times the lane: its low qword by x^127 mod P (k128's high), its high qword moved down
+  const uint64_t lo = vgetq_lane_u64(a, 0), hi = vgetq_lane_u64(a, 1);
+  const uint64x2_t t = veorq_u64(vreinterpretq_u64_p128(vmull_p64((poly64_t)lo, (poly64_t)CRC64_K128_HI)), vcombine_u64(vcreate_u64(hi), vcreate_u64(0)));
+  const uint64_t th = vgetq_lane_u64(t, 0), tl = vgetq_lane_u64(t, 1);
+  const uint64_t q = th ^ (vgetq_lane_u64(vreinterpretq_u64_p128(vmull_p64((poly64_t)th, (poly64_t)CRC64_MU)), 0) << 1);
+  const uint64x2_t r = vreinterpretq_u64_p128(vmull_p64((poly64_t)q, (poly64_t)CRC64_P));
+  return tl ^ ((vgetq_lane_u64(r, 1) << 1) | (vgetq_lane_u64(r, 0) >> 63));
+}
+#endif
+uint64_t ob_crc64(const uint8_t *p, int n) {
+  uint64_t c = ~0ull;
+#ifdef OB_HAVE_CLMUL64
+  if (n >= 64 && OB_HAVE_CLMUL64()) { const int m = n & ~15; c = crc64_fold(p, m, c); p += m; n -= m; }
+#endif
+  int i = 0;
+  for (; i + 8 <= n; i += 8) {
+    const uint64_t v = c ^ ((uint64_t)p[i] | (uint64_t)p[i + 1] << 8 | (uint64_t)p[i + 2] << 16 | (uint64_t)p[i + 3] << 24 |
+                            (uint64_t)p[i + 4] << 32 | (uint64_t)p[i + 5] << 40 | (uint64_t)p[i + 6] << 48 | (uint64_t)p[i + 7] << 56);
+    c = CRC64_T[7][v & 0xff] ^ CRC64_T[6][(v >> 8) & 0xff] ^ CRC64_T[5][(v >> 16) & 0xff] ^ CRC64_T[4][(v >> 24) & 0xff] ^
+        CRC64_T[3][(v >> 32) & 0xff] ^ CRC64_T[2][(v >> 40) & 0xff] ^ CRC64_T[1][(v >> 48) & 0xff] ^ CRC64_T[0][v >> 56];
+  }
+  for (; i < n; i++) c = (c >> 8) ^ CRC64_T[0][(c ^ p[i]) & 0xff];
   return ~c;
 }
+
+// ai: The format word's CRC-5 (fmt.h, SPEC 5.1; 2026-11-22): x^5 + x^2 + 1 (USB's) over the word's 35-bit index, most
+// ai: significant first, from 0, not reflected: (c x^5) mod G. By carry-less multiplication where the processor has it
+// ai: (OB_HAVE_CLMUL64, as the CRC-64's): Barrett's reduction, q = floor(c MU / x^35) with MU = floor(x^40 / G) (degree
+// ai: 35), the remainder the low five bits of q G, two products (research/build/word-index-2026-11-22/crc5_model.py
+// ai: holds it to the bit loop). Elsewhere (the wasm, OB_SCALAR) the bit loop, which test/crc_check.c holds it to over
+// ai: every index.
+#define CRC5_G 0x25ull
+#define CRC5_MU 0x967c6ea12ull
+static uint32_t crc5_bits(uint64_t c) {
+  uint64_t r = (c & 0x7ffffffffull) << 5;
+  for (int i = 39; i >= 5; i--) if (r >> i & 1) r ^= CRC5_G << (i - 5);
+  return (uint32_t)(r & 31);
+}
+#if defined(OB_HAVE_CLMUL64) && defined(OB_X86)
+__attribute__((target("pclmul,sse4.1"))) static uint32_t crc5_clmul(uint64_t c) {
+  const __m128i p = _mm_clmulepi64_si128(_mm_cvtsi64_si128((long long)(c & 0x7ffffffffull)), _mm_cvtsi64_si128((long long)CRC5_MU), 0x00);
+  const uint64_t q = ((uint64_t)_mm_cvtsi128_si64(p) >> 35) | ((uint64_t)_mm_extract_epi64(p, 1) << 29);
+  return (uint32_t)_mm_cvtsi128_si64(_mm_clmulepi64_si128(_mm_cvtsi64_si128((long long)q), _mm_cvtsi64_si128((long long)CRC5_G), 0x00)) & 31;
+}
+#elif defined(OB_HAVE_CLMUL64)
+OB_CLMUL_TARGET static uint32_t crc5_clmul(uint64_t c) {
+  const uint64x2_t p = vreinterpretq_u64_p128(vmull_p64((poly64_t)(c & 0x7ffffffffull), (poly64_t)CRC5_MU));
+  const uint64_t q = (vgetq_lane_u64(p, 0) >> 35) | (vgetq_lane_u64(p, 1) << 29);
+  return (uint32_t)vgetq_lane_u64(vreinterpretq_u64_p128(vmull_p64((poly64_t)q, (poly64_t)CRC5_G)), 0) & 31;
+}
+#endif
+uint32_t ob_crc5(uint64_t c) {
+#ifdef OB_HAVE_CLMUL64
+  if (OB_HAVE_CLMUL64()) return crc5_clmul(c);
+#endif
+  return crc5_bits(c);
+}
+uint32_t ob_crc5_bits(uint64_t c) { return crc5_bits(c); }
 
 // j is the TRACK cell's index, not a module: the track takes every second run of OB_BAND_RUN cells of the band, the word the rest.
 int ob_thin_track(int side, int j) {

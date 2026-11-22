@@ -21,10 +21,9 @@ kotlin {
     sourceSets {
         commonMain {
             // ai: liblizard/kotlin's plain-JVM code both apps use (Readout.kt, the screens' words and figures; Pick.kt, the
-            // ai: format a room holds; Tar.kt, a bundle's tar), compiled here once for both; PhaseLock.kt, the reference
-            // ai: the C++ phase lock is held to, left out. commonMain sees the JDK: its two targets are both JVMs.
+            // ai: format a room holds; Tar.kt, a bundle's tar), compiled here once for both. commonMain sees the JDK: its
+            // ai: two targets are both JVMs.
             kotlin.srcDir("../liblizard/kotlin")
-            kotlin.exclude("PhaseLock.kt")
             dependencies {
                 api(compose.runtime)
                 api(compose.foundation)

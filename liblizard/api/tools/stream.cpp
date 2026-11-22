@@ -1,10 +1,10 @@
 // ai: lizard_stream (2026-11-18): stream files, a sender's frames painted ahead into a .lizard ("LIZARD stream 1",
 // ai: core/rx/lizfile.h) that a player shows at its fps without painting, on the C API (liz_sender_export) and the
 // ai: .lizard reader.
-// ai:   lizard_stream export FILE OUT.lizard [--blocks N] [--ring 0|1|2] [--fps F] [--codes 1|2] [--frames N | --laps L]
+// ai:   lizard_stream export FILE OUT.lizard [--blocks N] [--ring 0|1|2] [--fps F] [--codes 1|2] [--frames N | --cycles L]
 // ai:                 [--painter auto|gpu|cpu] [--seed S] [--assets DIR] [--level L]
-// ai:     FILE's frames (the default: LIZARD-480 in the 128 ring at 15 a second, one code, 2.5 laps of the file's
-// ai:     blocks); the count made odd, so a camera taking every other frame sees every frame across two laps of the loop;
+// ai:     FILE's frames (the default: LIZARD-480 in the 128 ring at 15 a second, one code, 2.5 cycles of the file's
+// ai:     blocks); the count made odd, so a camera taking every other frame sees every frame across two cycles of the loop;
 // ai:     packed by zstd at L (1 by default) on every core (sender.h exportStart: the GPU's frames drained, or each CPU
 // ai:     painter packing its own).
 // ai:     A line each tenth: frames, ms a frame; the file's bytes and a frame's raw size at the end.
@@ -55,18 +55,18 @@ int doExport(int argc, char** argv) {
   liz_format fmt{std::atoi(arg(argc, argv, "--blocks", "30").c_str()), std::atoi(arg(argc, argv, "--ring", "1").c_str()),
                  std::atoi(arg(argc, argv, "--fps", "15").c_str()), std::atoi(arg(argc, argv, "--codes", "1").c_str())};
   const std::string painter = arg(argc, argv, "--painter", "auto"), assets = arg(argc, argv, "--assets", LIZ_ASSETS);
-  liz_sender* s = liz_sender_new(data.data(), data.size(), name.c_str(), nullptr, LIZ_TX_COPY);
+  liz_sender* s = liz_sender_new(data.data(), data.size(), name.c_str(), LIZ_TX_COPY);
   if (!s) return fail(std::string("sender: ") + liz_last_error());
   const std::string seed = arg(argc, argv, "--seed", "");
   if (!seed.empty() && liz_sender_seed(s, uint32_t(std::stoul(seed))) != LIZ_OK) return fail(std::string("seed: ") + liz_last_error());
-  // ai: configured (the chunks are made from then), every chunk made, then configured again: the frames painted ahead
-  // ai: meanwhile (the header and the manifest alone) dropped, so the stream's first frame carries data; the lap known
+  // ai: configured (the source blocks are made from then), every source block made, then configured again: the frames painted ahead
+  // ai: meanwhile (the session header alone) dropped, so the stream's first frame carries data; the cycle known
   const int p = painter == "gpu" ? LIZ_PAINTER_GPU : painter == "cpu" ? LIZ_PAINTER_CPU : LIZ_PAINTER_AUTO;
   const char* as = assets.c_str();   // ai: the frame ring is the GPU painter's, whatever paints
   if (liz_sender_configure(s, &fmt, p, 0, as, nullptr) != LIZ_OK) return fail(std::string("configure: ") + liz_last_error());
-  int64_t lap = 0;
+  int64_t cycle = 0;
   const auto tw = std::chrono::steady_clock::now();
-  while ((lap = liz_sender_lap(s)) <= 0) {
+  while ((cycle = liz_sender_cycle(s)) <= 0) {
     if (std::chrono::steady_clock::now() - tw > std::chrono::minutes(30)) return fail("the file's chunks were not made in 30 minutes");
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
@@ -76,8 +76,8 @@ int doExport(int argc, char** argv) {
   liz_sender_geometry(s, &g);
   int frames = std::atoi(arg(argc, argv, "--frames", "0").c_str());
   if (frames <= 0) {
-    const double laps = std::atof(arg(argc, argv, "--laps", "2.5").c_str());   // ai: each half (every other frame) 1.25 laps: whole for a camera in step at half the rate
-    frames = int(std::ceil(laps * double(lap) / g.frame_blocks));
+    const double cycles = std::atof(arg(argc, argv, "--cycles", "2.5").c_str());   // ai: each half (every other frame) 1.25 cycles: whole for a camera in step at half the rate
+    frames = int(std::ceil(cycles * double(cycle) / g.frame_blocks));
   }
   frames |= 1;
   std::printf("export: %s (%zu B) as LIZARD-%d, ring %d, %d fps, %d code%s, %d x %d frames, %d of them\n", name.c_str(), data.size(), 16 * fmt.blocks, fmt.ring,
@@ -176,8 +176,7 @@ int doCheck(int argc, char** argv) {
       int rect[2][4];
       const int k = liz_layout_rects(int(fi.w), int(fi.h), 1, rect);
       for (int j = 0; j < k; j++) {
-        int held = 0;
-        const int got = liz_decode(d, luma.data() + size_t(rect[j][1]) * fi.w + rect[j][0], rect[j][2], rect[j][3], int(fi.w), LIZ_GREY8, &held, ver.data(), nullptr);
+        const int got = liz_decode(d, luma.data() + size_t(rect[j][1]) * fi.w + rect[j][0], rect[j][2], rect[j][3], int(fi.w), LIZ_GREY8, ver.data(), nullptr);
         if (got > 0) { blocks[i].insert(blocks[i].end(), ver.begin(), ver.begin() + size_t(got) * LIZ_BLOCK); counts[i] += got; }
       }
     }
@@ -222,7 +221,7 @@ int main(int argc, char** argv) {
   if (cmd == "export" && argc >= 4) return doExport(argc, argv);
   if (cmd == "check" && argc >= 3) return doCheck(argc, argv);
   if (cmd == "play" && argc >= 3) return doPlay(argc, argv);
-  std::fprintf(stderr, "lizard_stream export FILE OUT.lizard [--blocks N] [--ring 0|1|2] [--fps F] [--codes 1|2] [--frames N | --laps L]\n"
+  std::fprintf(stderr, "lizard_stream export FILE OUT.lizard [--blocks N] [--ring 0|1|2] [--fps F] [--codes 1|2] [--frames N | --cycles L]\n"
                        "              [--painter auto|gpu|cpu] [--seed S] [--assets DIR] [--level L]\n"
                        "lizard_stream check OUT.lizard [--threads N]\n"
                        "lizard_stream play OUT.lizard [--frames N] [--threads N]\n");

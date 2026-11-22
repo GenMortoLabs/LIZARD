@@ -1,5 +1,5 @@
 // RaptorQ (RFC 6330), the transfer's fountain, for end-to-end runs: liblizard/src/rq.c inside the codec's module
-// (liblizard/build.sh), the instance sim/ob.mjs's default build shares. A chunk is one source block of 471-byte symbols;
+// (liblizard/build.sh), the instance sim/ob.mjs's default build shares. A chunk is one source block of 460-byte symbols;
 // a symbol's ESI is its id's 24 bits.
 import { baseModule } from "./ob.mjs";
 

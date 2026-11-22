@@ -63,7 +63,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MenuDefaults
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,7 +77,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.ui.text.font.FontWeight
 import dev.lizard.readout.Readout
 import kotlin.math.floor
-import kotlinx.coroutines.delay
 
 // ai: The parts of both apps (2026-10-31; each app's Parts.kt before, the Android app's of 2026-10-01 and the desktop's
 // ai: port of it), the web's (lizard-web/ui.css): sizes the web's, a target LocalTarget's (48 dp under a finger, 40
@@ -216,21 +214,6 @@ fun NameLine(before: String, name: String, after: String, style: TextStyle, colo
         Text(end + if (comma) "," else "", style = style, color = color, maxLines = 1)
         if (rest.isNotEmpty()) Text(" $rest", style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
-}
-
-// ai: A line that comes and goes with a poll, held still (2026-11-02): shown once it has held `on` ms, kept until it has
-// ai: been gone `off` ms; a new text over one shown takes its place at once. The receivers' hints, whose rules sit on
-// ai: a rate that wavers about the code's, came and went with each quarter-second poll (shown at once since: its room
-// ai: is kept for the run once shown, Receive.kt, so only its words would blink).
-@Composable
-fun steady(text: String, on: Long = 1000, off: Long = 2000): String {
-    var shown by remember { mutableStateOf("") }
-    LaunchedEffect(text) {
-        if (text.isNotEmpty()) { if (shown.isEmpty()) delay(on); shown = text }
-        else { delay(off); shown = "" }
-    }
-    // ai: with no wait, a text in this frame, not the next (the effect's write lands a frame later)
-    return if (on == 0L && text.isNotEmpty()) text else shown
 }
 
 // ai: A section's heading (the web's section h2): small, grey, 24 dp over it

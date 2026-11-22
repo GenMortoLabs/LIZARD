@@ -415,7 +415,6 @@ bool parse(const std::string& spec, Sender& s, Display& d, Optics& o, std::strin
     else if (key == "fps") { if (!take(1, 255, true)) return false; s.fps = int(x); }
     else if (key == "codes") { if (!take(1, 2, true)) return false; s.codes = int(x); }
     else if (key == "file") { if (val.empty()) { why = "file=: a path"; return false; } s.file = val; }
-    else if (key == "type") { s.type = val; }
     else if (key == "id") { if (!take(0, 4294967295.0, true)) return false; s.firstId = uint32_t(x); }
     else if (key == "hz") { if (!take(1, 1000, false)) return false; d.hz = x; }
     else if (key == "ppm") { if (!take(-100000, 100000, false)) return false; d.ppm = x; }
@@ -478,7 +477,7 @@ std::unique_ptr<Scene> Scene::create(const Sender& s, const Display& d, const Op
     if (!e) { why = std::string("the encoder: ") + liz_last_error(); return nullptr; }
     p.enc.push_back(e);
   }
-  p.tx = s.file.empty() ? liz_tx_new_test(s.firstId) : liz_tx_new_path(s.file.c_str(), nullptr, s.type.empty() ? nullptr : s.type.c_str());
+  p.tx = s.file.empty() ? liz_tx_new_test(s.firstId) : liz_tx_new_path(s.file.c_str(), nullptr, 0);
   if (!p.tx) { why = (s.file.empty() ? std::string("the test stream: ") : s.file + ": ") + liz_last_error(); return nullptr; }
 
   // ai: the display's clock

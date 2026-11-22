@@ -27,7 +27,7 @@ static void needBlocks(int blocks) { need(blocks >= LIZ_MIN_BLOCKS && blocks <= 
 
 liz_geometry geometryOf(const liz_format& f) {
   needBlocks(f.blocks);
-  need(f.fps >= 1 && f.fps <= 255, "fps is 1 to 255, not " + std::to_string(f.fps));
+  need(f.fps >= 1 && f.fps <= 240, "fps is 1 to 240, not " + std::to_string(f.fps));   // ai: src/fmt.h OB_FMT_FPS_MAX
   need(f.codes == 1 || f.codes == 2, "codes is 1 or 2, not " + std::to_string(f.codes));
   const int r = ringIndex(f.ring);
   liz_geometry g{};

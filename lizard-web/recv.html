@@ -134,9 +134,9 @@
   </details>
   <details class="dev" id="foldPerf"><summary>Performance</summary>
     <div class="grid">
-      <!-- ai: the apps' Decoder (2026-11-06): GPU or CPU; with neither chosen auto runs, named after what it runs
-           (recv.mjs showDecoder): the GPU where WebGPU makes the decoder, else the C -->
-      <label>GPU acceleration <select id="dec" data-chips><option value="auto" selected hidden disabled>On</option><option value="gpu">On</option><option value="cpu">Off</option></select></label>
+      <!-- ai: the apps' GPU acceleration: the page decodes with the C alone (its WebGPU decoder went 2026-11-22), so
+           greyed, never kept, as Phase lock -->
+      <label id="decRow">GPU acceleration <select id="dec" disabled data-chips><option selected data-none>Not supported</option></select></label>
     </div>
   </details>
   <!-- ai: Developer Tools ("Advanced" until 2026-10-03): the lab line and the readouts (no replay recording since

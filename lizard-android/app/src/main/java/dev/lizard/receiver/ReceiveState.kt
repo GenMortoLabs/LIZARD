@@ -628,17 +628,13 @@ class ReceiveState(private val a: MainActivity) {
         }
     }
 
-    // ai: One hint, the first that holds, while the camera reads a word (dev.lizard.ui hintOf; the desktop's rules): a
-    // ai: camera the phase lock holds takes no rate hint, nor a file (no rate of its own: as fast as it is decoded)
-    fun hint(j: JsonObject?): Warn? = hintOf(j, phase == RxPhase.On, upload = fileMode, locked = lock?.let { "off" !in it } == true)
-
 
     // ai: A second's line for the log while a symbol is in view (Engine.rx before; tools/phone read it): what the receiver
     // ai: read, and what it could have read at this format. With the phase held every capture is a clean one, so the
-    // ai: ceiling is a clean capture's blocks at the painted rate, read off the captures since the last line, whatever
+    // ai: ceiling is a clean capture's blocks at the camera's rate, read off the captures since the last line, whatever
     // ai: share of them the phase let through: clean are those with at least half the blocks of the third best of them
-    // ai: (and an eighth of the word's), the ceiling their mean, 471 B a block, at the painted rate or the camera's if
-    // ai: that is lower. At the end: the clean captures that read no new block (a sender or compositor late), the frames
+    // ai: (and an eighth of the word's), the ceiling their mean, 460 B a block, at the camera's rate (no word states the
+    // ai: painted rate since 2026-11-19; the line's "painted N" went with it). At the end: the clean captures that read no new block (a sender or compositor late), the frames
     // ai: the receiver dropped, and the decode's ms a frame. The tools' patterns stop before them.
     private var rxSeen = 0.0
     private fun rxLine(j: JsonObject) {
@@ -657,7 +653,6 @@ class ReceiveState(private val a: MainActivity) {
         rxSeen = newest
         val w = j.obj("word")
         val version = w?.num("version")?.toInt() ?: 0
-        val painted = w?.num("fps")?.toInt() ?: 0
         if (version == 0 || blocks.size < 8 || 2 * blocks.size < all) return
         val byBlocks = blocks.sortedDescending()
         val least = maxOf(1, (byBlocks[minOf(2, byBlocks.size - 1)] + 1) / 2, (Native.blocksFor(Pick.STEP * version) + 7) / 8)
@@ -667,12 +662,11 @@ class ReceiveState(private val a: MainActivity) {
         val cost = if (gpuMs > 0) "%.2f ms of GPU a frame".format(gpuMs) else "%.1f ms of CPU a frame".format(j.num("cpuMs"))
         val each = if (clean.isEmpty()) 0.0 else clean.average()
         val camera = if (all > 1 && newest > first) (all - 1) * 1000.0 / (newest - first) else 0.0
-        val rate = if (painted > 0) minOf(painted.toDouble(), camera) else camera
         // ai: the symbol's side in camera px against the crop each frame gives it (2:1: half the frame's long side, at most
         // ai: its short side), and the share of frames found
         val crop = cam?.size?.let { s -> if (a.settings.layout == "2:1") minOf(maxOf(s.width, s.height) / 2, minOf(s.width, s.height)) else minOf(s.width, s.height) } ?: 0
-        Log.i(TAG, "rx: %s, LIZARD-%d painted %d, goodput %.0f KB/s, %d of %d captures clean, %.1f blocks a clean capture, ceiling %.0f KB/s, %d frames a second, symbol %.0f px of a %d crop, found %.0f%%, %d repeated, %d dropped, %s".format(
-            j.str("state"), Pick.STEP * version, painted, j.num("goodputKBs"), clean.size, blocks.size, each, each * Pick.PAYLOAD * rate / 1000, j.num("processedFps").toInt(),
+        Log.i(TAG, "rx: %s, LIZARD-%d, goodput %.0f KB/s, %d of %d captures clean, %.1f blocks a clean capture, ceiling %.0f KB/s, %d frames a second, symbol %.0f px of a %d crop, found %.0f%%, %d repeated, %d dropped, %s".format(
+            j.str("state"), Pick.STEP * version, j.num("goodputKBs"), clean.size, blocks.size, each, each * Pick.PAYLOAD * camera / 1000, j.num("processedFps").toInt(),
             j.num("side"), crop, 100 * j.num("foundShare"), repeated, j.num("dropped").toInt(), cost))
     }
 

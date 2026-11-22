@@ -45,6 +45,9 @@
 #include "receiver.h"
 #include "replay.h"
 #include "stream.h"
+extern "C" {
+#include "xfer.h"
+}
 
 #if defined(_WIN32)
 #include <io.h>
@@ -117,6 +120,13 @@ std::string text(const json& j, const char* k) {
   if (!j.is_object()) return "";
   const auto it = j.find(k);
   return it != j.end() && it->is_string() ? it->get<std::string>() : "";
+}
+
+// ai: a whole number at k, or 0
+int64_t whole(const json& j, const char* k) {
+  if (!j.is_object()) return 0;
+  const auto it = j.find(k);
+  return it != j.end() && it->is_number_integer() ? it->get<int64_t>() : 0;
 }
 
 std::string num(double v, int digits) {
@@ -1047,6 +1057,7 @@ struct Session::Impl {
   std::atomic<cam::Camera*> lockCam{nullptr};   // ai: the camera whose results feed the lock (the worker sets it at each start)
   std::mutex lockMu;
   std::string lockBar;                   // ai: lockMu: why the camera started last cannot delay a capture ("" it can)
+  PhaseLock::Lever lockLever;            // ai: lockMu: what its lever is (camera.h lever)
   uint64_t lockCaps = 0;                 // ai: the camera's thread's: its results since its capture session began
   std::atomic<bool> lockOn{true};        // ai: the user's setting (Session::phaseLock), on unless set
 
@@ -1142,9 +1153,12 @@ struct Session::Impl {
   // ai: and why it cannot delay a capture where it cannot (the lock Off for its sessions)
   void armLock() {
     const std::string bar = camera->delayBar();
+    const cam::Lever lv = camera->lever();
     {
       std::lock_guard<std::mutex> l(lockMu);
       lockBar = bar;
+      lockLever.pulses = lv.pulses;
+      lockLever.marks = lv.marks;
     }
     cam::Camera* cp = camera.get();
     lockCam = cp;
@@ -1157,11 +1171,13 @@ struct Session::Impl {
   void onCapture(const cam::Capture& c) {
     if (c.fresh) {
       std::string bar;
+      PhaseLock::Lever lv;
       {
         std::lock_guard<std::mutex> l(lockMu);
         bar = lockBar;
+        lv = lockLever;
       }
-      phaseLock->opened(bar);
+      phaseLock->opened(bar, lv);
       lockCaps = 0;
     }
     if (lockCaps++ % 30 == 15) phaseLock->want(lockOn ? platformMode() : PhaseLock::Mode::Off);
@@ -1607,11 +1623,20 @@ struct Session::Impl {
       r->r->forget(root);
       return "";
     }
-    const std::string id = root.substr(0, 16);
-    if (!plainName(id)) return "no transfer " + root;
+    // ai: a folder by its id (the root's 16 hex digits and the tag's 6, -2 on for a second beside a received file not
+    // ai: yet taken out), or every folder of a root (its hex or its first 16 digits; the store's forget, store.h)
+    if (root.size() < 16 || !plainName(root)) return "no transfer " + root;
+    const bool folder = root.size() != 16 && root.size() != 64;
+    const std::string want = folder ? root : root.substr(0, 16);
     std::error_code e;
-    fs::remove_all(store / "lizard-xfer" / fs::u8path(id), e);
-    return e ? e.message() : "";
+    for (const auto& d : fs::directory_iterator(store / "lizard-xfer", e)) {
+      const std::string n = d.path().filename().u8string();
+      if (folder ? n != want : n.compare(0, 16, want) != 0) continue;
+      std::error_code r;
+      fs::remove_all(d.path(), r);
+      if (r) return r.message();
+    }
+    return "";
   }
 
   // ai: the rules (the worker's, between commands)
@@ -1637,9 +1662,9 @@ struct Session::Impl {
   // ai: into kept/<root16>-<n>/ (session.h's header): filing.json first, then the file renamed in (else copied, made
   // ai: durable, and the store's removed: a copy whose source will not go is taken all the same), then meta.json
   // ai: removed from `from`, which leaves it nothing a store's open keeps. A file the default client packed (pack.h:
-  // ai: its type says so) is unpacked into kept/ under its own name and type, made durable, the store's let go; one
-  // ai: that does not unpack is taken as it came, said in the log; with keepPacked every one is taken as it came, the
-  // ai: app unpacking it as it files it. A throw leaves the file in the store and no folder.
+  // ai: its description's compression 1, its name <name>.zst) is unpacked into kept/ under its name less the .zst, made
+  // ai: durable, the store's let go; one that does not unpack is taken as it came, <name>.zst (filing.json's packed),
+  // ai: said in the log; with keepPacked every one is taken as it came, the app unpacking it as it files it. A throw leaves the file in the store and no folder.
   // ai: Its root.
   std::string take(const fs::path& from) {
     std::error_code e;
@@ -1651,7 +1676,8 @@ struct Session::Impl {
       }
     if (src.empty()) throw std::runtime_error(from.u8string() + " holds no finished file");
     const json m = parsed(slurp(from / "meta.json"));
-    const std::string root = text(m, "root"), type = text(m, "type");
+    const std::string root = text(m, "root");
+    const bool zstd = whole(m, "compression") == XFER_COMP_ZSTD;   // ai: the name's .zst (a name without one kept whole)
     fs::create_directories(keptDir, e);
     fs::path dir;
     const std::string id = root.size() >= 16 && plainName(root.substr(0, 16)) ? root.substr(0, 16) : from.filename().u8string();
@@ -1664,25 +1690,23 @@ struct Session::Impl {
       if (e) throw std::runtime_error(keptDir.u8string() + ": " + e.message());
     }
     if (dir.empty()) throw std::runtime_error("no free folder in " + keptDir.u8string());
-    std::string name = src.filename().u8string(), fileType = type, original;
+    std::string name = src.filename().u8string();
     bool unpacked = false;
     try {
       std::string w;
       fs::create_directories(dir / "file");
-      if (!cfg.keepPacked && packedType(type, original)) {
-        const std::string plain = unpackedName(name);
+      if (!cfg.keepPacked && zstd) {
+        const std::string plain = name.size() > 4 && name.compare(name.size() - 4, 4, ".zst") == 0 ? name.substr(0, name.size() - 4) : name;
         const fs::path to = dir / "file" / fs::u8path(plain);
         const std::string why = unpack(src.u8string(), to.u8string());
         unpacked = why.empty() && syncPath(to);
-        if (unpacked) {
-          name = plain;
-          fileType = original;
-        } else {
+        if (unpacked) name = plain;
+        else {
           fs::remove(to, e);
           say("kept: " + name + " not unpacked (" + (why.empty() ? "not written to the disk" : why) + "), taken as it came");
         }
       }
-      if (!writeWhole(dir / "filing.json", dump({{"name", name}, {"type", fileType}, {"root", root}}), w)) throw std::runtime_error(w);
+      if (!writeWhole(dir / "filing.json", dump({{"name", name}, {"root", root}, {"packed", zstd && !unpacked}}), w)) throw std::runtime_error(w);
       if (unpacked) {
         fs::remove(from / "meta.json", e);
         fs::remove(src, e);
@@ -1833,14 +1857,17 @@ struct Session::Impl {
     }
     const json f = j.contains("file") ? j["file"] : json();
     const std::string root = f.is_object() ? text(f, "root") : "";
+    const auto flag = [](const json& o, const char* k) { return o.is_object() && o.contains(k) && o[k].is_boolean() && o[k].get<bool>(); };
+    const bool verified = flag(f, "verified") && !root.empty() && !flag(j, "test");
     if (root != heldRoot) {
       heldRoot = root;
       stoppedFor = false;
       tookFor = false;
       refusedFor = false;
     }
-    const auto flag = [](const json& o, const char* k) { return o.is_object() && o.contains(k) && o[k].is_boolean() && o[k].get<bool>(); };
-    const bool verified = flag(f, "verified") && !root.empty() && !flag(j, "test");
+    // ai: a file in focus not yet in: the take and the stop owed again when it is (2026-11-20: a file received again
+    // ai: after its tags were let go has the root of the one before)
+    if (!verified) { stoppedFor = false; tookFor = false; }
     if (verified && r && !tookFor) {
       tookFor = true;
       takeFinished();
@@ -1855,6 +1882,9 @@ struct Session::Impl {
         describeNow();
         say("camera: stopped, the file is in");
       }
+      // ai: the file in (taken out above) and the camera off: its transfer's tags let go (receiver.h release), so a
+      // ai: Start that meets the same file receives it again, a download clicked twice (2026-11-20)
+      if (r) r->r->release();
     }
     // ai: a transfer the store refused (store.h limit and room, 2026-11-15): the camera stopped and the phase the
     // ai: refusal in the readout's words, once a refusal; a Start reads its header again (applyLimit), refused again
@@ -2339,9 +2369,9 @@ std::unique_ptr<Session> Session::create(const Config& c, std::string& why) {
           return std::vector<double>{0};
         }
       },
-      [raw](int64_t us) {
+      [raw](const PhaseLock::Ask& a) {
         cam::Camera* c = raw->lockCam.load();
-        return c && c->delayOnce(us);
+        return c && (a.pulse >= 0 ? c->pulse(a.pulse) : c->delayOnce(a.us));
       });
   p->worker = std::thread([raw] { raw->loop(); });
   return std::unique_ptr<Session>(new Session(std::move(p)));
@@ -2696,10 +2726,9 @@ std::string Session::kept(const std::string& dataDir) {
       const fs::path f = d.path() / "file" / fs::u8path(name);
       if (!fs::is_regular_file(f, e)) continue;   // ai: placed already, or a take not yet whole
       const int64_t at = msOf(fs::last_write_time(d.path(), e));
-      const std::string type = text(m, "type");
-      json t{{"id", d.path().filename().u8string()}, {"name", name}, {"type", type}, {"root", text(m, "root")}, {"path", f.u8string()}, {"at", at}};
-      std::string original;
-      if (packedType(type, original)) t["packed"] = json{{"name", unpackedName(name)}, {"type", original}};
+      const auto pk = m.find("packed");
+      json t{{"id", d.path().filename().u8string()}, {"name", name}, {"root", text(m, "root")}, {"path", f.u8string()}, {"at", at},
+             {"packed", pk != m.end() && pk->is_boolean() && pk->get<bool>()}};
       takes.emplace_back(at, std::move(t));
     }
   std::stable_sort(takes.begin(), takes.end(), [](const auto& a, const auto& b) { return a.first < b.first; });

@@ -20,13 +20,13 @@
 // ai:                                      digests, a stage each, and a total. passes > 0 then times that many
 // ai:                                      passes over the list, one thread, ms a frame, with the core and clock
 // ai:                                      each pass ended on.
-// ai: A list is a line a frame, "w h held path": raw 8-bit luma, w x h of it; held is the version a receiver holds
-// ai: for a frame whose word does not read (any.h), or -1 for the receiver's own rule, the last word read in the list.
+// ai: A list is a line a frame, "w h path": raw 8-bit luma, w x h of it, each decoded on its own (any.h: a frame whose
+// ai: word does not read is not decoded; the held word's column went 2026-11-19).
 // ai: A frame's digests (FNV-1a, 64 bits) are in the order the decode produces them, so the first that differs names
 // ai: the stage:
 // ai:   reg   the registration: found, finders, quad, orientation, track score, best mark, the ring, and the finder's
 // ai:         own account of itself (acquire.c ob_finder_info)
-// ai:   word  the format word, the picture, whether the held word stood in
+// ai:   word  the format word and the picture
 // ai:   spec  lizard_phy.c's test hook: the whole spectrum after the detrend, and every block's soft values
 // ai:   stat  each block's LDPC iterations and its estimate
 // ai:   blk   the ok flags and every block's bytes
@@ -342,7 +342,7 @@ static int unit(int full) { (void)full; printf("unit: a scalar build has no vect
 typedef struct { lizard_any_t any; int top, B; uint8_t *blocks, *ok; } rx_t;
 // ai: via: what gave the finder its quad (acquire.c ob_finder_info[4]): 0 the corner marks, 1 the line fit, 2 the crop
 // ai: round one mark, -1 nothing.
-typedef struct { dig_t reg, word, stat, blk; uint32_t spec; int found, via, ring, n, held, has_word, version, fps, got, total; float ms_detect, ms_sample, ms_decode; } out_t;
+typedef struct { dig_t reg, word, stat, blk; uint32_t spec; int found, via, ring, n, has_word, version, got, total; float ms_detect, ms_sample, ms_decode; } out_t;
 
 static int rx_init(rx_t *rx) {
   memset(rx, 0, sizeof *rx);
@@ -356,18 +356,18 @@ static int rx_init(rx_t *rx) {
 static void rx_free(rx_t *rx) { lizard_any_free(&rx->any); free(rx->blocks); free(rx->ok); }
 
 // ai: arm: take lizard_phy.c's hash of the spectrum and the soft values, which costs a pass over both (off when timing).
-static void decode_one(rx_t *rx, const uint8_t *px, int w, int h, int held, int arm, out_t *o) {
+static void decode_one(rx_t *rx, const uint8_t *px, int w, int h, int arm, out_t *o) {
   lizard_any_t *a = &rx->any;
   ob_result_t res;
   memset(o, 0, sizeof *o);
   memset(rx->blocks, 0, (size_t)rx->top * rx->B); memset(rx->ok, 0, (size_t)rx->top);
   ob_debug_hash = arm ? 1 : 0;
   for (int k = 0; k < 8; k++) ob_finder_info[k] = -2;
-  o->got = lizard_any_frame(a, px, w, h, 1.0f, rx->blocks, rx->ok, held, &res);
+  o->got = lizard_any_frame(a, px, w, h, 1.0f, rx->blocks, rx->ok, &res);
   o->spec = arm && ob_debug_hash != 1 ? ob_debug_hash : 0;   // ai: still 1: the frame never reached the transform
   ob_debug_hash = 0;
   const ob_fmt_t *fm = lizard_any_word(a);
-  o->found = res.found; o->via = (int)ob_finder_info[4]; o->ring = a->which; o->n = a->n; o->held = a->held; o->has_word = fm != 0; o->version = fm ? fm->version : 0; o->fps = fm ? fm->fps : 0;
+  o->found = res.found; o->via = (int)ob_finder_info[4]; o->ring = a->which; o->n = a->n; o->has_word = fm != 0; o->version = fm ? fm->version : 0;
   o->ms_detect = res.ms_detect; o->ms_sample = res.ms_sample; o->ms_decode = res.ms_decode;
   if (!arm) return;
   dig_t d = DIG0;
@@ -375,7 +375,7 @@ static void decode_one(rx_t *rx, const uint8_t *px, int w, int h, int held, int 
   d = dig(d, &res.mark_score, sizeof res.mark_score); d = dig_int(d, a->which);
   d = dig(d, ob_finder_info, 8 * sizeof(float));
   o->reg = d;
-  d = DIG0; d = dig_int(d, o->has_word); d = dig_int(d, o->version); d = dig_int(d, o->fps); d = dig_int(d, a->n); d = dig_int(d, a->held);
+  d = DIG0; d = dig_int(d, o->has_word); d = dig_int(d, o->version); d = dig_int(d, a->n);
   o->word = d;
   d = DIG0;
   if (a->last) {
@@ -389,16 +389,16 @@ static void decode_one(rx_t *rx, const uint8_t *px, int w, int h, int held, int 
   o->blk = d;
 }
 static dig_t out_line(const char *kind, int idx, const char *name, const out_t *o, dig_t total) {
-  printf("%s %04d %-26s reg %016llx word %016llx spec %08x stat %016llx blk %016llx  found %d via %s ring %d n %d word %d/%d held %d blocks %d/%d\n", kind, idx, name,
+  printf("%s %04d %-26s reg %016llx word %016llx spec %08x stat %016llx blk %016llx  found %d via %s ring %d n %d word %d blocks %d/%d\n", kind, idx, name,
     (unsigned long long)o->reg, (unsigned long long)o->word, o->spec, (unsigned long long)o->stat, (unsigned long long)o->blk,
-    o->found, o->via == 0 ? "marks" : o->via == 1 ? "lines" : o->via == 2 ? "crop" : "none", o->ring, o->n, o->version, o->fps, o->held, o->got, o->total);
+    o->found, o->via == 0 ? "marks" : o->via == 1 ? "lines" : o->via == 2 ? "crop" : "none", o->ring, o->n, o->version, o->got, o->total);
   total = dig(total, &o->reg, sizeof o->reg); total = dig(total, &o->word, sizeof o->word); total = dig(total, &o->spec, sizeof o->spec);
   total = dig(total, &o->stat, sizeof o->stat); return dig(total, &o->blk, sizeof o->blk);
 }
 
 // ai: ---------------------------------------------------------------- frames
 
-typedef struct { int w, h, held; char path[512], name[64]; uint8_t *px; } frame_t;
+typedef struct { int w, h; char path[512], name[64]; uint8_t *px; } frame_t;
 
 static int frames(const char *list, int passes) {
   FILE *fl = fopen(list, "r");
@@ -409,7 +409,7 @@ static int frames(const char *list, int passes) {
   while (fgets(line, sizeof line, fl)) {
     frame_t f;
     memset(&f, 0, sizeof f);
-    if (sscanf(line, "%d %d %d %511s", &f.w, &f.h, &f.held, f.path) != 4) continue;
+    if (sscanf(line, "%d %d %511s", &f.w, &f.h, f.path) != 3) continue;
     const char *base = strrchr(f.path, '/'); base = base ? base + 1 : f.path;
     snprintf(f.name, sizeof f.name, "%.63s", base);
     char *dot = strrchr(f.name, '.'); if (dot) *dot = 0;
@@ -426,11 +426,10 @@ static int frames(const char *list, int passes) {
   static rx_t rx;
   if (rx_init(&rx)) { printf("lizard_any_init failed\n"); return 1; }
   dig_t total = DIG0;
-  int blocks = 0, registered = 0, held = 0;
+  int blocks = 0, registered = 0;
   for (int i = 0; i < nf; i++) {
     out_t o;
-    decode_one(&rx, fr[i].px, fr[i].w, fr[i].h, fr[i].held >= 0 ? fr[i].held : held, 1, &o);
-    if (o.has_word) held = o.version;
+    decode_one(&rx, fr[i].px, fr[i].w, fr[i].h, 1, &o);
     total = out_line("frame", i, fr[i].name, &o, total);
     blocks += o.got; registered += o.ring >= 0;
   }
@@ -440,13 +439,11 @@ static int frames(const char *list, int passes) {
   for (int p = 0; p < passes && per; p++) {
     double ms = 0, det = 0, smp = 0, dec = 0;
     int got = 0;
-    held = 0;
     for (int i = 0; i < nf; i++) {
       out_t o;
       const double t0 = now_ms();
-      decode_one(&rx, fr[i].px, fr[i].w, fr[i].h, fr[i].held >= 0 ? fr[i].held : held, 0, &o);
+      decode_one(&rx, fr[i].px, fr[i].w, fr[i].h, 0, &o);
       ms += now_ms() - t0;
-      if (o.has_word) held = o.version;
       got += o.got; det += o.ms_detect; smp += o.ms_sample; dec += o.ms_decode;
     }
     per[p] = ms / nf;
@@ -573,7 +570,7 @@ static int synth_pairs(void) {
     uint8_t *img = paint_page(&f, blocks, 24, &S, &enc);
     if (!img) { printf("out of memory\n"); return 1; }
     out_t o;
-    decode_one(&rx, img, S, S, 0, 1, &o);
+    decode_one(&rx, img, S, S, 1, &o);
     int back = 0;
     for (int b = 0; b < f.blocks; b++) back += rx.ok[b] && !memcmp(rx.blocks + (size_t)b * rx.B, blocks + (size_t)b * f.block_bytes, (size_t)f.block_bytes);
     const int good = o.ring == r && o.n == n && o.has_word && o.version == subch / LIZARD_STEP && back == f.blocks;
@@ -646,6 +643,6 @@ int main(int argc, char **argv) {
   if (argc >= 2 && !strcmp(argv[1], "unit")) return unit(argc >= 3 && !strcmp(argv[2], "full"));
   if (argc >= 2 && !strcmp(argv[1], "synth")) return synth();
   if (argc >= 3 && !strcmp(argv[1], "frames")) return frames(argv[2], argc >= 4 ? atoi(argv[3]) : 0);
-  printf("usage: neon_check unit [full] | synth | frames <list> [passes]\n  a list line: w h held path   (raw 8-bit luma; held -1: the last word read in the list)\n");
+  printf("usage: neon_check unit [full] | synth | frames <list> [passes]\n  a list line: w h path   (raw 8-bit luma)\n");
   return 2;
 }

@@ -2,10 +2,9 @@
 //   lizard_cpu_check info
 //   lizard_cpu_check replay <run> [frames] [threads] [seq|none|time]
 // ai: replay: the frames of the recording research/replays/real/<run>.lizard (tools/recording.h; a path with a '/'
-// ai: too), each decoded once. seq (one thread, the default there): the held word is the last word read in frame order, as the
-// ai: web's blind replay carries it (sim/phy.mjs makeBlind), so the block total is comparable with
-// ai: `node scripts/exp/capture_check.mjs` (its default arm, blind) on the same run. none (the default on several
-// ai: threads): nothing held, so a frame's
+// ai: too), each decoded once and on its own (nothing carries from frame to frame), so the block total is comparable
+// ai: with `node scripts/exp/capture_check.mjs` (its default arm, blind) on the same run. seq (one thread, the default
+// ai: there) and none (the default on several threads) differ only in the hash below: a frame's
 // ai: result does not depend on the order frames finish in, and the digest over every frame's result (what it found,
 // ai: its word, its blocks, each block's iterations and estimate) is the same at any thread count: the race check. On
 // ai: one thread a second digest, "floats", is the codec's own hash of the floats and soft values behind each decode:
@@ -14,7 +13,7 @@
 // ai: receivers run.
 //   lizard_cpu_check blocks [threads]
 // ai: blocks: frames from stdin in groups, as lizard_gpu_check blocks takes them (a u32 count, 0 ends, then a frame
-// ai: each: u32 w, h, tag and w h bytes of luma), each decoded once on `threads` threads (8) with nothing held and the
+// ai: each: u32 w, h, tag and w h bytes of luma), each decoded once on `threads` threads (8), each on its own, and the
 // ai: lens's axis at the frame's centre (as a replay's axes give it): a frame's reading to stdout, u32 tag, found, the
 // ai: version decoded at (0 none), verified blocks, and of them those not the test stream's (the receiver's judge,
 // ai: XferJudge), then u32 0xFFFFFFFF and the records' count after each group: the print lab's in-process decode
@@ -43,7 +42,9 @@
 static double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 static std::string envOr(const char* k, const char* d) { const char* v = getenv(k); return v ? v : d; }
 
-struct FrameResult { cpu_frame_t fr{}; int got = 0; double ms = 0; uint64_t digest = 0; uint32_t deep = 0; };
+// ai: tried: the blocks the LDPC ran on (not declined); converged: those whose syndrome cleared; wrong: those converged
+// ai: to a codeword the block CRC then refused (a wrong codeword: what a false block past the CRC needs first)
+struct FrameResult { cpu_frame_t fr{}; int got = 0; double ms = 0; uint64_t digest = 0; uint32_t deep = 0; int tried = 0, converged = 0, wrong = 0; };
 
 static void fnv(uint64_t& h, const void* p, size_t n) {
   const uint8_t* b = (const uint8_t*)p;
@@ -53,7 +54,7 @@ static void fnv(uint64_t& h, const void* p, size_t n) {
 // ai: What a frame's decode produced, less its timings.
 static uint64_t digestOf(const cpu_dec_t* d, const cpu_frame_t& fr, int got, const uint8_t* blocks, const uint8_t* ok, int bb) {
   uint64_t h = 1469598103934665603ull;
-  const int head[8] = {fr.found, fr.ring, fr.n, fr.held, fr.word, fr.version, fr.kind, got};
+  const int head[6] = {fr.found, fr.ring, fr.n, fr.word, fr.version, got};
   fnv(h, head, sizeof head);
   if (fr.found) fnv(h, fr.quad, sizeof fr.quad);
   if (fr.n) {
@@ -86,8 +87,8 @@ static int replay(const std::string& run, int want, int threads, std::string mod
   frames = (int)px.size();
   if (!frames) { fprintf(stderr, "no frames in %s\n", recordingPath(envOr("LIZ_BARCODE", "../research"), run).c_str()); return 2; }
   if (mode.empty()) mode = threads == 1 ? "seq" : "none";
-  if ((mode == "seq" || mode == "time") && threads != 1) { fprintf(stderr, "%s carries the held word in frame order: one thread\n", mode.c_str()); return 2; }
-  const bool hashing = threads == 1 && mode != "time", ordered = mode == "seq" || mode == "time";
+  if ((mode == "seq" || mode == "time") && threads != 1) { fprintf(stderr, "%s runs on one thread\n", mode.c_str()); return 2; }
+  const bool hashing = threads == 1 && mode != "time";
   const auto axes = replayAxes(mj, dims);
   const int passes = std::max(1, atoi(envOr("LIZ_PASSES", "1").c_str())), nmax = atoi(envOr("LIZ_NMAX", "1536").c_str());
   std::vector<FrameResult> res(frames);
@@ -102,49 +103,52 @@ static int replay(const std::string& run, int want, int threads, std::string mod
       if (!d) { failed = true; return; }
       const int bb = cpu_dec_block_bytes(d), top = cpu_dec_top(d);
       std::vector<uint8_t> blocks((size_t)top * bb), ok(top);
-      int held = 0;
-      cpu_hold_t* hold = cpu_hold_new();
       cpu_prof_reset();
       for (int i = t; i < frames; i += threads) {
         FrameResult r;
         if (hashing) cpu_hash_arm();
         const double a = nowMs();
         cpu_dec_set_axis(axes[i][0], axes[i][1]);
-        r.got = cpu_dec_frame(d, px[i].data(), dims[i].first, dims[i].second, ordered ? held : 0, blocks.data(), ok.data(), &r.fr);
+        r.got = cpu_dec_frame(d, px[i].data(), dims[i].first, dims[i].second, blocks.data(), ok.data(), &r.fr);
         r.ms = nowMs() - a;
-        if (r.fr.word) { const int v = cpu_hold_take(hold, r.fr.kind, r.fr.version, r.fr.count, r.fr.id, r.fr.sym); if (v) held = v; }
         r.digest = digestOf(d, r.fr, r.got, blocks.data(), ok.data(), bb);
         if (hashing) r.deep = cpu_hash_take();
+        if (r.fr.n) {
+          const int8_t* its; const float* est;
+          cpu_dec_block_stats(d, &its, &est);
+          for (int b = 0; its && b < std::min(r.fr.total, top); b++) {
+            r.tried += its[b] != -2; r.converged += its[b] >= 0; r.wrong += its[b] >= 0 && !ok[(size_t)b];
+          }
+        }
         res[i] = r;
       }
       if (threads == 1) for (int k = 0; k < CPU_PROF_N; k++) prof[k] = cpu_prof_ms(k);
-      cpu_hold_free(hold);
       cpu_dec_free(d);
     });
     for (auto& x : th) x.join();
     passMs.push_back(nowMs() - t0);
   }
   if (failed) { fprintf(stderr, "the codec refused a decoder\n"); return 1; }
-  long blocks = 0;
-  int found = 0, words = 0, held = 0, finished = 0;
+  long blocks = 0, tried = 0, converged = 0, wrong = 0;
+  int found = 0, words = 0, finished = 0;
   uint64_t all = 1469598103934665603ull, deep = 1469598103934665603ull;
   std::vector<double> ms;
   for (auto& r : res) {
-    blocks += r.got; found += r.fr.found != 0; words += r.fr.word != 0; held += r.fr.held != 0; finished += r.fr.n != 0;
+    blocks += r.got; found += r.fr.found != 0; words += r.fr.word != 0; finished += r.fr.n != 0;
+    tried += r.tried; converged += r.converged; wrong += r.wrong;
     fnv(all, &r.digest, sizeof r.digest);
     fnv(deep, &r.deep, sizeof r.deep);
     ms.push_back(r.ms);
   }
   // ai: LIZ_PERFRAME=1: a line a frame, in frame order after the run, in lizard_gpu_check's form for the fields the C has
-  // ai: ("frame <index> found <0|1> ring <r> version <v> held <0|1> blocks <n> word <v>", word 0 where none read or the
-  // ai: word animated; then "anim <0|1> id <i> sym <hex>", an animated word's carousel symbol, and "count <a> <t> <c>", a static
-  // ai: word's 7/8, 2/3 and 1/2 blocks), so one run of many cells
+  // ai: ("frame <index> found <0|1> ring <r> version <v> blocks <n> word <v>", word 0 where none read, then "count <a>
+  // ai: <t> <c>", the word's 6/7, 2/3 and 1/2 blocks), so one run of many cells
   // ai: splits by frame (scripts/gpu/native/peaks.mjs readFrames)
   if (envOr("LIZ_PERFRAME", "") == "1")
     for (int i = 0; i < frames; i++) {
       const auto& r = res[(size_t)i];
-      printf("frame %d found %d ring %d version %d held %d blocks %d word %d anim %d id %d sym %02x%02x%02x count %d %d %d\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.fr.held != 0, r.got, r.fr.word ? r.fr.version : 0,
-             r.fr.word && r.fr.kind ? 1 : 0, r.fr.id, r.fr.sym[0], r.fr.sym[1], r.fr.sym[2], r.fr.count[0], r.fr.count[1], r.fr.count[2]);
+      printf("frame %d found %d ring %d version %d blocks %d word %d count %d %d %d\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.got, r.fr.word ? r.fr.version : 0,
+             r.fr.count[0], r.fr.count[1], r.fr.count[2]);
     }
   std::sort(ms.begin(), ms.end());
   std::sort(passMs.begin(), passMs.end());
@@ -152,8 +156,9 @@ static int replay(const std::string& run, int want, int threads, std::string mod
   for (double v : ms) sum += v;
   char deepText[40] = "";
   if (hashing) snprintf(deepText, sizeof deepText, ", floats %016llx", (unsigned long long)deep);
-  printf("%s: %d frames, %d found, %d words, %d held, %d finished, %ld verified blocks; digest %016llx%s (%s, %s)\n", run.c_str(), frames, found, words, held, finished, blocks,
+  printf("%s: %d frames, %d found, %d words, %d finished, %ld verified blocks; digest %016llx%s (%s, %s)\n", run.c_str(), frames, found, words, finished, blocks,
          (unsigned long long)all, deepText, mode.c_str(), cpu_simd() ? "vector" : "scalar");
+  printf("  LDPC: %ld blocks tried, %ld converged, %ld converged and refused by the CRC (a wrong codeword)\n", tried, converged, wrong);
   printf("  %d thread%s: %.2f ms a frame on its thread (median %.2f, slowest %.1f); a pass of the frames %.0f ms, %.1f frames a second\n", threads, threads == 1 ? "" : "s", sum / frames, ms[ms.size() / 2],
          ms.back(), passMs[passMs.size() / 2], 1000.0 * frames / passMs[passMs.size() / 2]);
   if (threads == 1) {
@@ -173,8 +178,7 @@ static int blocksFromStdin(int threads) {
     if (!decs.back()) { fprintf(stderr, "the codec refused a decoder\n"); return 1; }
   }
   const int bb = cpu_dec_block_bytes(decs[0]), top = cpu_dec_top(decs[0]);
-  std::atomic<uint64_t> gen{0};
-  lizard::XferJudge judge(gen);
+  lizard::XferJudge judge;
   auto readAll = [](void* p, size_t n) { return fread(p, 1, n, stdin) == n; };
   long frames = 0;
   const double t0 = nowMs();
@@ -197,15 +201,15 @@ static int blocksFromStdin(int threads) {
       for (uint32_t i; (i = next++) < n;) {
         const int w = (int)hd[i][0], h = (int)hd[i][1];
         cpu_dec_set_axis(w * 0.5f, h * 0.5f);
-        got[i] = cpu_dec_frame(decs[(size_t)t], px[i].data(), w, h, 0, blocks.data(), ok.data(), &fr[i]);
+        got[i] = cpu_dec_frame(decs[(size_t)t], px[i].data(), w, h, blocks.data(), ok.data(), &fr[i]);
         for (int b = 0; b < std::min(fr[i].total, top); b++)
-          if (ok[(size_t)b]) packed[i].insert(packed[i].end(), blocks.begin() + (size_t)b * bb, blocks.begin() + (size_t)b * bb + 476);
+          if (ok[(size_t)b]) packed[i].insert(packed[i].end(), blocks.begin() + (size_t)b * bb, blocks.begin() + (size_t)b * bb + bb);
       }
     });
     for (auto& x : th) x.join();
     for (uint32_t i = 0; i < n; i++) {
-      const auto jv = judge.frame(packed[i].data(), packed[i].size() / 476, [](const uint8_t*) {});
-      const uint32_t rec[5] = {hd[i][2], fr[i].found ? 1u : 0u, (uint32_t)std::max(fr[i].version, 0), (uint32_t)(packed[i].size() / 476), (uint32_t)jv.bad};
+      const auto jv = judge.frame(packed[i].data(), packed[i].size() / bb, [](const uint8_t*) {});
+      const uint32_t rec[5] = {hd[i][2], fr[i].found ? 1u : 0u, (uint32_t)std::max(fr[i].version, 0), (uint32_t)(packed[i].size() / bb), (uint32_t)jv.bad};
       fwrite(rec, sizeof rec, 1, stdout);
     }
     const uint32_t tail[2] = {0xFFFFFFFFu, n};

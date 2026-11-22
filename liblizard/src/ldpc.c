@@ -20,16 +20,16 @@ static int views_neon(ldpc_t *c);
 #define OB_LDPC_WIDE 1
 #endif
 
-// ai: The rate indices are the format's four, 2, 3, 4 and 6 (1/2, 2/3, 3/4, 7/8); 0, 1 and 5 (1/4, 1/3, 5/6) were lab
+// ai: The rate indices are the format's four, 2, 3, 4 and 6 (1/2, 2/3, 3/4, 6/7); 0, 1 and 5 (1/4, 1/3, 5/6) were lab
 // ai: rates (archive/ldpc-lab-rates/) and have no code. norm is the min-sum scale in sixteenths, 13 at every rate.
 typedef struct { int norm; const char *name; double r; } profile_t;
 static const profile_t PROFILE[LDPC_RATES] = {
   [2] = { 13, "1/2", 0.5 },
   [3] = { 13, "2/3", 2.0 / 3 },
   [4] = { 13, "3/4", 0.75 },
-  [6] = { 13, "7/8", 0.875 },
+  [6] = { 13, "6/7", 6.0 / 7 },
 };
-const char *const ldpc_rate_name[LDPC_RATES] = { [2] = "1/2", [3] = "2/3", [4] = "3/4", [6] = "7/8" };
+const char *const ldpc_rate_name[LDPC_RATES] = { [2] = "1/2", [3] = "2/3", [4] = "3/4", [6] = "6/7" };
 double ldpc_rate_value(int rate) { return rate >= 0 && rate < LDPC_RATES ? PROFILE[rate].r : 0; }
 
 static int mod(int a, int z) { a %= z; return a < 0 ? a + z : a; }

@@ -10,6 +10,7 @@
 #include <stdexcept>
 
 #include "json.hpp"
+#include "xfer.h"
 #include "wg.h"
 
 namespace lizard {
@@ -42,6 +43,9 @@ std::unique_ptr<GpuPainter> GpuPainter::create(const std::string& assets, std::f
   if (!json.contains("tab")) throw std::runtime_error("the GPU sender's " + assets + "/setup/send.json predates the rate profile: regenerate liblizard/out");
   // ai: encode's test bit (Params' dims.w bit 31) means the test stream made on the device only in a paint that says so
   if (json.value("stream", std::string()) != "blake3") throw std::runtime_error("the GPU sender's " + assets + "/setup/send.json predates the test stream made on the device: regenerate liblizard/out");
+  // ai: the kernels write the block's id as XFER_ID_BYTES bytes (the bare id and the 48-bit TOI, src/xfer.h)
+  if (json.value("ids", 0) != XFER_ID_BYTES) throw std::runtime_error("the GPU sender's " + assets + "/setup/send.json predates the 12-byte block id: regenerate liblizard/out");
+  if (json.value("rqPar", 0) != 6) throw std::runtime_error("the GPU sender's " + assets + "/setup/send.json predates the 48-bit TOI: regenerate liblizard/out");
   const std::string blob = json["tab"]["blob"];
   const std::string err = p->k_.load(text, readFile(assets + "/" + blob));
   if (!err.empty()) throw std::runtime_error(err);
@@ -93,6 +97,12 @@ std::string GpuPainter::pipes(int n) {
   return "";
 }
 
+void GpuPainter::setClock(int fps, int delay) {
+  if (!fReady_ || !BORDER_ || (f_.fmt.fps == fps && f_.fmt.delay == delay) || lizard_clock(&f_, fps, delay)) return;
+  sendBorder(f_, t_.W, t_.border);
+  dev_->upload(*BORDER_, 0, t_.border.data(), t_.border.size());
+}
+
 std::string GpuPainter::configure(int subch, int span, int fps, int frames, int codes, int gap, int aheadFrames, uint64_t aheadBytes, int margin, bool ringOnly) {
   if (fReady_) { lizard_free(&f_); fReady_ = false; }
   // ai: the format's picture (src/lizard_phy.h lizard_n_for)
@@ -100,8 +110,6 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
   if (lizard_init(&f_, n, subch, span)) return "the codec refused LIZARD-" + std::to_string(subch);
   fReady_ = true;
   fps_ = fps;
-  gWords_.reset();
-  wordsWhy_ = "no GPU paint configured";
   try {
     if (!ringOnly) {
       const std::string pe = pipes(n);
@@ -177,8 +185,6 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
         frames_ = R;
         depth_ = depth;
         staging_.assign(Z * V * k_.blockBytes, 0);
-        wordsWhy_ = words();
-        if (!wordsWhy_.empty()) log_("gpu sender: no animated header on the GPU: " + wordsWhy_);
         log_("gpu sender: LIZARD-" + std::to_string(subch) + (t.codes > 1 ? " x " + std::to_string(t.codes) : "") + " at " + std::to_string(n) + ", " + std::to_string(t.FW) + " x " + std::to_string(t.W) + " px, encodes of " + std::to_string(R) +
              (t.copy ? ", rsh's copy" : "") + ", a ring of " + std::to_string(depth) + " frames, " + std::to_string(d.allocated.load() >> 20) + " MB on " + name_);
         return "";
@@ -193,13 +199,13 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
   }
 }
 
-double GpuPainter::encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq, bool test, const uint8_t* pos,
+double GpuPainter::encode(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq, bool test,
                           const std::function<void(wg::Encoder&)>& fill) {
-  Pending p = submit(blocks, count, parity, out, seq, test, pos, fill);
+  Pending p = submit(blocks, count, parity, out, seq, test, fill);
   return finish(p);
 }
 
-GpuPainter::Pending GpuPainter::submit(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq, bool test, const uint8_t* pos,
+GpuPainter::Pending GpuPainter::submit(const uint8_t* blocks, int count, int parity, std::vector<uint8_t>* out, uint64_t seq, bool test,
                                        const std::function<void(wg::Encoder&)>& fill) {
   const SendTables& t = t_;
   const int V = t.blocks, B = t.blockBytes, BB = k_.blockBytes;
@@ -209,10 +215,10 @@ GpuPainter::Pending GpuPainter::submit(const uint8_t* blocks, int count, int par
   if (static_cast<int>(first) + count > depth_) throw std::runtime_error("an encode of " + std::to_string(count) + " frames from slot " + std::to_string(first) + " would wrap the ring of " + std::to_string(depth_));
   auto& d = *dev_;
   const int Z = count * t.codes;   // ai: the symbols, a frame's codes one after the other
-  // ai: the test stream's ids alone, packed 8 bytes a block (PAINT reads the id's two words and makes the payload), else
+  // ai: the test stream's ids alone, packed XFER_ID_BYTES (12) a block (PAINT reads the id's three words and makes the payload), else
   // ai: the blocks at BB bytes, unless `fill` writes them on the device
   if (!fill) {
-    const size_t at = test ? 8 : static_cast<size_t>(BB), take = test ? 8 : static_cast<size_t>(B);
+    const size_t idb = XFER_ID_BYTES, at = test ? idb : static_cast<size_t>(BB), take = test ? idb : static_cast<size_t>(B);
     for (int i = 0; i < Z * V; i++) std::memcpy(staging_.data() + static_cast<size_t>(i) * at, blocks + static_cast<size_t>(i) * B, take);
     d.writeBuffer(*BLOCKS_, 0, staging_.data(), static_cast<uint64_t>(Z) * V * at);
   }
@@ -232,16 +238,6 @@ GpuPainter::Pending GpuPainter::submit(const uint8_t* blocks, int count, int par
   enc.setPipeline(*tpose_); enc.setBindGroup(*gTpose_); enc.dispatch(n / 4 / k_.tposeTile, n / k_.tposeTile, RZ);
   if (!t.copy) { enc.setPipeline(*rsv_); enc.setBindGroup(*gRsv_); enc.dispatch((n / 4 + k_.rsvThreads - 1) / k_.rsvThreads, t.q, RZ); }
   enc.setPipeline(t.copy ? *rshCopy_ : *rsh_); enc.setBindGroup(*gRsh_); enc.dispatch((t.RW + k_.rshThreads - 1) / k_.rshThreads, t.W, R);
-  if (pos) {
-    // ai: the animated header (wordsWhy): each code's word cells the symbol at its position, OB_CAR_N its static word kept
-    if (!gWords_) throw std::runtime_error("no animated header on the GPU here: " + wordsWhy_);
-    const uint32_t wu[8] = {static_cast<uint32_t>(carSpans_), first, static_cast<uint32_t>(t.FS), static_cast<uint32_t>(carNwb_),
-                            static_cast<uint32_t>(t.codes), 0u, 0u, 0u};
-    d.writeBuffer(*WU_, 0, wu, sizeof wu);
-    const std::vector<uint32_t> pw(pos, pos + static_cast<size_t>(count) * t.codes);
-    d.writeBuffer(*POS_, 0, pw.data(), 4ull * pw.size());
-    enc.setPipeline(*words_); enc.setBindGroup(*gWords_); enc.dispatch((static_cast<uint32_t>(carSpans_) + 63) / 64, R, 1);
-  }
   enc.endPass();
   enc.resolveQuerySet(*qs_[fl], 0, 2, *time_[fl], 0);
   if (out) enc.copyBufferToBuffer(*FRAME_, uint64_t(first) * 4 * t.FS, *READ_, 0, uint64_t(R) * 4 * t.FS);
@@ -273,57 +269,6 @@ double GpuPainter::finish(Pending& p) {
   uint64_t ts[2];
   std::memcpy(ts, d.read(*time_[p.flight], 0, 16), 16);
   return double((ts[1] - ts[0]) & d.timestampMask) * d.timestampPeriod / 1e6;
-}
-
-// ai: every symbol's word for the format configured (wordsWhy): made at each configure, WORDS's pipeline once a painter
-std::string GpuPainter::words() {
-  gWords_.reset();
-  if (!fReady_ || !FRAME_ || ringOnly_) return "no GPU paint configured";
-  try {
-    using namespace wg;
-    auto& d = *dev_;
-    if (!words_) {
-      const std::string path = assets_ + "/spv/send_words.spv";
-      if (!std::filesystem::exists(path)) return "the tree has no animated header kernel (" + path + "): regenerate liblizard/out";
-      bglWords_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RW, Bind::Uniform, Bind::RO}, "send words");
-      words_ = d.createPipeline(spirv(path), bglWords_, "send words");
-    }
-    std::vector<uint32_t> spans;
-    int cells = 0, nwb = 0;
-    const std::string we = wordSpans(f_, t_, spans, cells, nwb);
-    if (!we.empty()) return we;
-    // ai: every symbol's word: the header the format's own configuration (src/fmt.h ob_car_content: the static word's
-    // ai: five bytes and the sender's rate), symbol p's animated word (src/fmt.h ob_fmt_encode) as its cells' bits
-    const ob_layout_t& L = f_.frame;
-    const int bytes = ob_fmt_bytes(L.w < L.h ? L.w : L.h, L.reserve);
-    uint8_t hdr[OB_CAR_SYM * OB_CAR_N], cw[OB_FMT_BYTES_MAX], content[OB_CAR_CONTENT_MAX];
-    ob_fmt_t cfg = f_.fmt;
-    cfg.fps = fps_;
-    const int clen = ob_car_content(&cfg, content), k = clen < 0 ? -1 : ob_car_header(content, clen, hdr);
-    if (k < 0) return "the animated header's content";
-    std::vector<uint32_t> wall(static_cast<size_t>(OB_CAR_N) * nwb, 0);
-    for (int p = 0; p < OB_CAR_N; p++) {
-      ob_fmt_t w{};
-      w.kind = OB_FMT_ANIM; w.id = p;
-      ob_car_symbol(hdr, k, p, w.sym);
-      if (ob_fmt_encode(&w, cw, bytes)) return "the animated word did not encode";
-      for (int side = 0; side < 4; side++) for (int c = 0; c < cells; c++)
-        if (ob_fmt_bit(cw, bytes, side, c)) { const int i = side * cells + c; wall[static_cast<size_t>(p) * nwb + (i >> 5)] |= 1u << (i & 31); }
-    }
-    SPANS_ = d.createBuffer(4ull * spans.size(), STORAGE | COPY_DST, "send SPANS", false);
-    d.upload(*SPANS_, 0, spans.data(), 4ull * spans.size());
-    WALL_ = d.createBuffer(4ull * wall.size(), STORAGE | COPY_DST, "send WALL", false);
-    d.upload(*WALL_, 0, wall.data(), 4ull * wall.size());
-    WU_ = d.createBuffer(32, UNIFORM | COPY_DST, "send WU", false);
-    POS_ = d.createBuffer(4ull * static_cast<uint64_t>(frames_) * static_cast<uint64_t>(t_.codes), STORAGE | COPY_DST, "send POS", false);
-    gWords_ = d.createBindGroup(bglWords_, {SPANS_, WALL_, FRAME_, WU_, POS_});
-    d.flush();
-    carSpans_ = static_cast<int>(spans.size() / 3);
-    carNwb_ = nwb;
-    return "";
-  } catch (const std::exception& e) {
-    return std::string("the animated header on the GPU: ") + e.what();
-  }
 }
 
 void GpuPainter::readSlot(int slot, std::vector<uint8_t>& out) {

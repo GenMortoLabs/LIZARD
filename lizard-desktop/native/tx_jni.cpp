@@ -66,7 +66,7 @@ struct Tx {
 Tx* tx(jlong h) { return reinterpret_cast<Tx*>(h); }
 
 // ai: The makes' epoch (2026-11-16): txCancelMakes moves it on, and a txCreate begun under an older one stops at its
-// ai: next piece of work (pack's rounds of frames, the hash's chunks); a make of -1 nothing stops (the test stream's)
+// ai: next piece of work (pack's rounds of frames, the hash's source blocks); a make of -1 nothing stops (the test stream's)
 std::atomic<int64_t> makes{0};
 
 // ai: the file to send mapped read-only for as long as the sender lives (the Sender reads it in place): "" or why not;
@@ -135,25 +135,27 @@ lizard::mac::Place placeOf(JNIEnv* e, jfloatArray a) {
 #endif
 }  // namespace
 
-// ai: path: the file to send ("" for the test stream); name and type as its header carries them; dir: where its packed
-// ai: form goes where packing pays (pack.h, the default client's compression; removed at txDestroy), and the transfer's
+// ai: path: the file to send ("" for the test stream); name as its description carries it; dir: where its packed
+// ai: form goes where packing pays (pack.h, the default client's compression, the description then saying compression
+// ai: 1; removed at txDestroy), and the transfer's
 // ai: spill (xfer_tx.h: its symbols on disk, no encoder kept; its file unlinked as it is made). make: the epoch it was
 // ai: begun under (txCancelMakes), -1 none. 0, with the reason in txError(), where it cannot go or was cancelled.
-FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring type, jstring dir, jlong make) {
+FN(jlong, txCreate)(JNIEnv* e, jclass, jstring path, jstring name, jstring dir, jlong make) {
   auto t = std::make_unique<Tx>();
-  std::string p = str(e, path), n = str(e, name), ty = str(e, type);
-  const std::string d = str(e, dir);
+  std::string p = str(e, path);
+  const std::string n = str(e, name), d = str(e, dir);
   const std::function<bool()> stopped = [make] { return make >= 0 && makes.load(std::memory_order_relaxed) != make; };
+  uint8_t compression = XFER_COMP_NONE;
   try {
     if (!p.empty()) {
-      const lizard::Packed k = lizard::pack(p, n, ty, d, stopped);
-      if (k.packed) { t->packed = k.path; p = k.path; n = k.name; ty = k.type; }
+      const lizard::Packed k = lizard::pack(p, n, d, stopped);
+      if (k.packed) { t->packed = k.path; p = k.path; compression = XFER_COMP_ZSTD; }
       t->bytes = k.size;
       const std::string why = mapFile(p, t->map, t->mapLen);
       if (!why.empty()) { setError(why); return 0; }
     }
     static const uint8_t empty = 0;
-    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, ty, p.empty() ? "" : d, stopped);
+    t->s = std::make_unique<lizard::Sender>(p.empty() ? nullptr : (t->map ? t->map : &empty), t->mapLen, n, compression, p.empty() ? "" : d, stopped);
   } catch (const std::exception& x) {
     unmapFile(t->map, t->mapLen);
     setError(x.what());
@@ -189,17 +191,18 @@ FN(jstring, lizardInfo)(JNIEnv* e, jclass, jstring path) {
   return jstr(e, std::string("{\"kind\":\"") + (r->kind() == lizard::lizfile::Kind::Stream ? "stream" : "replay") + "\",\"meta\":" + r->meta() + "}");
 }
 
-// ai: Export (Sender::exportStart, 2026-11-18, Send's Export): the sender's frames into a stream file at path, laps of
+// ai: Export (Sender::exportStart, 2026-11-18, Send's Export): the sender's frames into a stream file at path, cycles of
 // ai: the file's blocks, shown meanwhile (display) or not (the GPU drained, or each CPU painter packing), packed by zstd
-// ai: at level; name, type and the format as the stream's meta.json names them. "" or why not.
-FN(jstring, txExport)(JNIEnv* e, jclass, jlong h, jstring path, jdouble laps, jboolean display, jint level, jstring name, jstring type,
+// ai: at level; the name and the format as the stream's meta.json names them. "" or why not.
+FN(jstring, txExport)(JNIEnv* e, jclass, jlong h, jstring path, jdouble cycles, jboolean display, jint level, jstring name,
                       jint blocks, jint ring, jint fps, jint codes, jint frameBlocks) {
   lizard::Sender::ExportJob j;
   j.path = str(e, path);
-  j.laps = laps;
+  j.cycles = cycles;
   j.display = display == JNI_TRUE;
   if (level > 0) j.packing.level = level;
-  j.info.name = str(e, name); j.info.type = str(e, type);
+  j.info.name = str(e, name);
+  j.info.compression = tx(h)->packed.empty() ? XFER_COMP_NONE : XFER_COMP_ZSTD;   // ai: the transfer's bytes as meta.json names them
   j.info.blocks = blocks; j.info.ring = ring; j.info.fps = fps; j.info.codes = codes; j.info.frameBlocks = frameBlocks;
   std::string r;
   try {
@@ -289,20 +292,13 @@ FN(jstring, txConfigure)(JNIEnv* e, jclass, jlong h, jint subch, jint span, jint
   return jstr(e, r);
 }
 
-// ai: Refresh (Sender::setRefresh, 2026-11-17; Rate refresh 2026-11-12): the delays of the code rates 7/8, 3/4, 2/3 and
+// ai: Refresh (Sender::setRefresh, 2026-11-17; Rate refresh 2026-11-12): the delays of the code rates 6/7, 3/4, 2/3 and
 // ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to Sender::REFRESH_MAX; the UI ties a and b),
 // ai: the picture before's repeated between; from the next frame made, kept across configures
 FN(void, txRefresh)(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   const int every[4] = {a, b, c, d};
   std::lock_guard<std::mutex> l(tx(h)->mu);
   tx(h)->s->setRefresh(every);
-}
-
-// ai: The animated header (Sender::setCarousel, 2026-11-15, Send's Header in Refresh): frames each carousel symbol is shown, 0 the
-// ai: static word; the next frame made takes it (no configure)
-FN(void, txCarousel)(JNIEnv*, jclass, jlong h, jint frames) {
-  std::lock_guard<std::mutex> l(tx(h)->mu);
-  tx(h)->s->setCarousel(frames);
 }
 
 // ai: Developer Tools' Seed (Sender::seed, 2026-11-14): a file's schedule from seed (an unsigned 32-bit value in an int),

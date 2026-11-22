@@ -55,7 +55,7 @@ internal fun MainActivity.devReadout(): String {
         val word = j.obj("word")
         val v = word?.int("version")?.toInt() ?: 0
         put("code", "found ${f(100 * j.num("foundShare"), 0)}%" + (if (j.num("side") > 0) ", symbol ${f(j.num("side"), 0)} px" else "") +
-                (if (v > 0) ", LIZARD-${Pick.STEP * v}${word?.int("fps")?.takeIf { it > 0 }?.let { " at $it fps" } ?: ""}" else ", no word yet"),
+                (if (v > 0) ", LIZARD-${Pick.STEP * v}" else ", no word yet"),
             "${Readout.rate(j.num("goodputKBs"))}, ${j.int("blocks")} blocks in ${f(j.num("windowSecs"), 2)} s" +
                 (j.obj("totals")?.let { t -> "; total ${t.int("blocks")} blocks in ${t.int("frames")} frames" } ?: ""))
         val file = j.obj("file")
@@ -63,7 +63,7 @@ internal fun MainActivity.devReadout(): String {
             j.flag("test") -> "the test stream"
             file == null -> "none yet"
             else -> "${file.str("name").ifEmpty { "(no name)" }}: ${Readout.partOf(file.num("received"), file.int("size"))}" +
-                ", chunks ${file.int("chunksVerified")} of ${file.int("chunks")} verified${if (file.flag("verified")) ", whole" else ""}"
+                ", chunks ${file.int("sourceBlocksVerified")} of ${file.int("sourceBlocks")} verified${if (file.flag("verified")) ", whole" else ""}"
         })
     }
     // ai: the phase lock (the session's, lock.h: PhaseLock.State's fields; NaN as null), or why it is off

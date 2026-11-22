@@ -80,7 +80,7 @@ test("the test stream in every ring, one code and two", () => {
         const blocks = got.decoded.reduce((n, d) => n + d.count, 0);
         assert.equal(blocks, g.frameBlocks, `ring ${ring}, ${codes} codes, frame ${i}: every block`);
         assert.ok(got.verdict.test && got.verdict.bad === 0, "judged the test stream's");
-        assert.equal(r.decoder.held >> 22, 13, "the held configuration's version");
+        assert.ok(got.decoded.every((d) => !d.count || d.blocksPerSymbol === 13), "decoded at the word's version");
       }
       s.free(); r.free();
     }
@@ -99,7 +99,7 @@ function cBytes(n) {
 
 test("a 5 MB file through two codes, the native library's root", () => {
   const bytes = cBytes(5000000);
-  const s = new liz.Sender({ bytes, name: "roundtrip.bin", type: "application/octet-stream" }, { blocks: 30, codes: 2 });
+  const s = new liz.Sender({ bytes, name: "roundtrip.bin" }, { blocks: 30, codes: 2 });
   const r = new liz.Receiver({ layout: 2 });
   assert.equal(s.info.root, "30859af3062484f3ecb237460cf24e8a44a88a8cd4b1431d02d9d0d9934a202f", "the sender's root, the native's");
   let frames = 0;
@@ -143,10 +143,10 @@ test("this build's paint against the native build's", { skip: !process.env.LIZ_N
         }
       assert.equal(border, 0, `ring ${ring}, ${codes} codes: the border to the byte`);
       assert.ok(worst <= 1, `ring ${ring}, ${codes} codes: the picture within a level (${picture} pixels off, at most ${worst})`);
-      const d = new liz.Decoder(), held = { held: 0 };
+      const d = new liz.Decoder();
       const read = (img) => {
         const { c, cw, ch } = canvas(img, g, codes);
-        return liz.layoutRects(cw, ch, codes).map((q) => d.decode(c.subarray(q.y * cw + q.x), q.w, q.h, { fmt: "grey", stride: cw, held }));
+        return liz.layoutRects(cw, ch, codes).map((q) => d.decode(c.subarray(q.y * cw + q.x), q.w, q.h, { fmt: "grey", stride: cw }));
       };
       const a = read(mine), b = read(native);
       assert.deepEqual(a.map((x) => Buffer.from(x.blocks)), b.map((x) => Buffer.from(x.blocks)), "the same blocks from both");

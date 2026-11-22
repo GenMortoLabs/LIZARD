@@ -23,7 +23,6 @@ namespace fs = std::filesystem;
 namespace lizard {
 
 namespace {
-const std::string PREFIX = "application/zstd; original=\"";
 constexpr size_t SAMPLE = size_t{1} << 20, HEAD = 18;   // ai: a sample's slice; a frame's header at most (ZSTD_FRAMEHEADERSIZE_MAX)
 constexpr double SAMPLE_MAX = 0.9, WHOLE_MAX = 0.97;
 
@@ -43,60 +42,18 @@ std::vector<uint8_t> frameOf(const uint8_t* p, size_t n) {
   o.resize(static_cast<size_t>(z));
   return o;
 }
-bool printable(const std::string& s) {
-  return std::all_of(s.begin(), s.end(), [](char c) { return c >= 0x20 && c <= 0x7e; });
-}
-// ai: UTF-8 cut to n bytes at a character's start
-std::string cutName(const std::string& name, size_t n) {
-  n = std::min(n, name.size());
-  while (n < name.size() && n > 0 && (static_cast<uint8_t>(name[n]) & 0xc0) == 0x80) n--;
-  return name.substr(0, n);
-}
 }  // namespace
 
-std::string packType(const std::string& type) {
-  std::string t = PREFIX;
-  for (char c : type) {
-    if (c == '"' || c == '\\') t += '\\';
-    t += c;
-  }
-  t += '"';
-  return t.size() <= XFER_TYPE_MAX ? t : "";
-}
-
-bool packedType(const std::string& type, std::string& original) {
-  if (type.size() <= PREFIX.size() || type.compare(0, PREFIX.size(), PREFIX) || type.back() != '"') return false;
-  std::string o;
-  for (size_t i = PREFIX.size(); i + 1 < type.size(); i++) {
-    char c = type[i];
-    if (c == '"') return false;
-    if (c == '\\') {
-      if (i + 2 >= type.size()) return false;
-      c = type[++i];
-    }
-    o += c;
-  }
-  original = o;
-  return true;
-}
-
-std::string unpackedName(const std::string& name) {
-  return name.size() > 4 && name.compare(name.size() - 4, 4, ".zst") == 0 ? name.substr(0, name.size() - 4) : name;
-}
-
-Packed pack(const std::string& path, const std::string& name, const std::string& type, const std::string& dir,
-            const std::function<bool()>& stopped) {
+Packed pack(const std::string& path, const std::string& name, const std::string& dir, const std::function<bool()>& stopped) {
   const auto check = [&] { if (stopped && stopped()) throw std::runtime_error("cancelled"); };
   Packed r;
-  r.path = path; r.name = name; r.type = type;
+  r.path = path; r.name = name;
   std::ifstream f(fs::u8path(path), std::ios::binary);
   if (!f) throw std::runtime_error("the file could not be read");
   f.seekg(0, std::ios::end);
   const uint64_t L = static_cast<uint64_t>(f.tellg());
   r.size = r.original = L;
-  // ai: a type the header would drop (not printable ASCII) packs as none
-  const std::string pt = packType(printable(type) ? type : "");
-  if (!L || pt.empty()) return r;
+  if (!L) return r;
   check();
   {
     // ai: the sample: three slices of 1 MiB (start, middle, end) as one frame, the whole file under 3 MiB
@@ -164,8 +121,7 @@ Packed pack(const std::string& path, const std::string& name, const std::string&
   }
   r.packed = true;
   r.path = out.u8string();
-  r.name = name.empty() ? name : cutName(name, XFER_NAME_MAX - 4) + ".zst";
-  r.type = pt;
+  r.name = name + ".zst";   // ai: cut in its stem, its .<ext>.zst kept, where it passes 255 bytes (src/xfer.h xfer_name_cut)
   r.size = size;
   return r;
 }

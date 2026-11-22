@@ -109,7 +109,6 @@ class DesktopReceive(private val app: App) : ReceiveHost {
     override val line get() = r.line
     override val showStats get() = r.showStats
     override val heat: Warn? = null
-    override val hint get() = r.hint
     override val note get() = r.driverNote.ifEmpty { r.fileNote }
     override fun clearNote() { if (r.driverNote.isNotEmpty()) r.driverNote = "" else r.fileNote = "" }
     override val running get() = r.running

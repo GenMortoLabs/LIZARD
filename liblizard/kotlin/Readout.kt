@@ -57,9 +57,9 @@ object Readout {
     // ai: rows its facts, a label and a value each ("" a value not yet known, its row kept); size a received file's own (its
     // ai: size, or a bundle's count of files) and files how many it holds (a bundle's, else 1; 0 none in), for Receive.kt's card
     // ai: spin (2026-11-14): the file's work after the light, the head's spinner in the percentage's place
-    // ai: (Details.spinning) and the rail's DecodingSquare in the percentage square's, this its figure: every chunk in hand
-    // ai: and the solves finishing, the chunks verified of all ("52/64"); then the filing, the share saved ("50%",
-    // ai: 2026-11-15), or the chunks again where the app counts none
+    // ai: (Details.spinning) and the rail's DecodingSquare in the percentage square's, this its figure: every source block in hand
+    // ai: and the solves finishing, the source blocks verified of all ("52/64"); then the filing, the share saved ("50%",
+    // ai: 2026-11-15), or the source blocks again where the app counts none
     data class Line(val text: String, val tone: Tone = Tone.Plain, val frac: Double? = null, val pct: String = "",
                     val name: String? = null, val test: Boolean = false, val rows: List<Pair<String, String>> = emptyList(),
                     val size: String = "", val files: Int = 0, val spin: String? = null)
@@ -71,20 +71,20 @@ object Readout {
     // ai: What the native receiver says (its stats JSON: liblizard/core/rx/receiver.h stats) that the screen reads.
     data class Rx(
         val state: String = "", val error: String = "", val goodputKBs: Double = 0.0, val foundShare: Double = 0.0,
-        val bandVersion: Int = 0, val fps: Int = 0, val hasFile: Boolean = false, val name: String = "a file",
-        // ai: received: the file's bytes in (a verified chunk's all, another's blocks in hand to its length)
+        val bandVersion: Int = 0, val hasFile: Boolean = false, val name: String = "a file",
+        // ai: received: the file's bytes in (a verified source block's all, another's blocks in hand to its length)
         val size: Long = 0, val received: Long = 0, val verified: Boolean = false,
-        // ai: the transfer's own seconds, its first data block to its last chunk verified (the receiver's clock,
+        // ai: the transfer's own seconds, its first data block to its last source block verified (the receiver's clock,
         // ai: XferProgress.secs, 2026-10-10; the screen's poll clock until then carried one file's start into the next)
         val secs: Double = 0.0,
-        // ai: the file's chunks, those verified, and inHand: every chunk verified or its solve under way, the list checked
+        // ai: the file's source blocks, those verified, and inHand: every source block verified or its solve under way, the list checked
         // ai: (XferProgress.inHand, 2026-11-14): the light's part over
-        val chunks: Int = 0, val chunksVerified: Int = 0, val inHand: Boolean = false,
+        val sourceBlocks: Int = 0, val sourceBlocksVerified: Int = 0, val inHand: Boolean = false,
     )
 
     // ai: One state at a time, the first that holds, as recv.mjs showState: error, starting, getting ready (no answer
     // ai: from the receiver yet), receiving, received, camera off, the test stream, or looking (a word read with no file
-    // ai: yet says "Looking" too since 2026-10-05: the receiver's "found" is its held word, which stays once read, so
+    // ai: yet says "Looking" too since 2026-10-05: the receiver's "found" is its last word read, which stays once read, so
     // ai: "Found the code, waiting for the file" stood after the code had left the view). on: the camera runs; ready: the receiver has planned (its state past "starting").
     // ai: no answer from the receiver yet: the line's "Getting ready", and the preview's cover with its spinner (Receive.kt)
     fun gettingReady(on: Boolean, starting: Boolean, loading: Boolean, rx: Rx) =
@@ -104,11 +104,11 @@ object Readout {
         // ai: the test stream first while the camera reads it (2026-10-05): it takes over from a file received or in
         // ai: progress, which shows again once the camera is back on its frames (receiver.cpp's state the same)
         on && rx.state == "test" -> Line("Test stream", test = true, rows = listOf("Speed" to rate(rx.goodputKBs)))
-        // ai: every chunk in hand, the solves finishing (2026-11-14): with the camera on or after its stop, which leaves the
+        // ai: every source block in hand, the solves finishing (2026-11-14): with the camera on or after its stop, which leaves the
         // ai: receiver solving; the head's spinner, the meter full, Decoding in Time left's place, no speed (the camera's
         // ai: part over)
-        rx.hasFile && !rx.verified && rx.inHand -> Line(rx.name, frac = 1.0, name = rx.name, spin = "${rx.chunksVerified}/${rx.chunks}",
-            rows = listOf("Received" to bytes(rx.received), "Size" to bytes(rx.size), "Decoding" to "${rx.chunksVerified} of ${rx.chunks}", "Speed" to ""))
+        rx.hasFile && !rx.verified && rx.inHand -> Line(rx.name, frac = 1.0, name = rx.name, spin = "${rx.sourceBlocksVerified}/${rx.sourceBlocks}",
+            rows = listOf("Received" to bytes(rx.received), "Size" to bytes(rx.size), "Decoding" to "${rx.sourceBlocksVerified} of ${rx.sourceBlocks}", "Speed" to ""))
         rx.hasFile && !rx.verified && on -> {
             val frac = fraction(rx)
             val now = rx.goodputKBs
@@ -126,7 +126,7 @@ object Readout {
                 Line(rx.name, frac = 1.0, name = rx.name, spin = "$share%", rows = listOf("Received" to bytes(rx.size),
                     "Saving" to partOf(saving.done.toDouble(), saving.total),
                     "To" to (if (saving.folder.isEmpty()) "Downloads" else "Downloads/${saving.folder}"), "Speed" to ""))
-            } else Line(rx.name, frac = 1.0, name = rx.name, spin = "${rx.chunks}/${rx.chunks}",
+            } else Line(rx.name, frac = 1.0, name = rx.name, spin = "${rx.sourceBlocks}/${rx.sourceBlocks}",
                 rows = listOf("Received" to bytes(rx.size), "Size" to bytes(rx.size), "Saving" to "", "Speed" to ""))
         rx.hasFile && rx.verified -> {
             // ai: the file's facts once in: its size, a bundle's files, the transfer's own time and speed (the column's
@@ -153,11 +153,11 @@ object Readout {
     }
 
     // ai: The lab line (Developer Tools): the last second's rate, the registered share and, while a word is read, the format,
-    // ai: the web's #lab ("1571 KB/s, 97% registered, LIZARD-480 at 60 fps", or "no code yet").
+    // ai: the web's #lab ("1571 KB/s, 97% registered, LIZARD-480", or "no code yet").
     fun lab(on: Boolean, rx: Rx): String {
         if (!on) return ""
         if (rx.foundShare <= 0 && rx.goodputKBs <= 0) return "no code yet"
-        val named = if (rx.bandVersion > 0 && rx.state != "looking") ", LIZARD-${Pick.STEP * rx.bandVersion}${if (rx.fps > 0) " at ${rx.fps}${NB}fps" else ""}" else ""
+        val named = if (rx.bandVersion > 0 && rx.state != "looking") ", LIZARD-${Pick.STEP * rx.bandVersion}" else ""
         return "${rx.goodputKBs.roundToInt()}${NB}KB/s, ${(100 * rx.foundShare).roundToInt()}% registered$named"
     }
 }

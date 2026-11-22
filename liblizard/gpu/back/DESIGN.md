@@ -3,20 +3,21 @@
 Input: each frame of a batch (B frames, any picture size each), sampled through the front half's map by the fused
 pass 1 (section 10). Output: CRC-verified blocks with their ids, read back once a batch, with a verdict and an
 iteration count a block, each block's pilot reading and each frame's grid shift. The reference for every rule is
-`src/lizard_phy.c` `lizard_finish_ext`, `src/ldpc.c`, `src/layout.c` `ob_crc32c`. The decoder is judged on blocks that pass
-their CRC-32C against the truth stream, on ms a frame at batch B (the iGPU's; the 4090 counts blocks), and on a
+`src/lizard_phy.c` `lizard_finish_ext`, `src/ldpc.c`, `src/layout.c` `ob_crc64`. The decoder is judged on blocks that pass
+their CRC-64 against the truth stream, on ms a frame at batch B (the iGPU's; the 4090 counts blocks), and on a
 negative control; never on parity with the C. The tables named below come from the wasm codec (`init()` from
 `sim/ob.mjs`, section 8).
 
-Every block is 476 payload bytes, the first 4 the block id (LE). The pictures are 384, 512, 768, 1024, 1152, 1280 and
+Every block is 472 payload bytes, the first 12 the block id (its 64-bit word LE). The pictures are 384, 512, 768, 1024, 1152, 1280 and
 1536 (`plan/common.mjs` `SIZES`, the sizes of `sim/lizard_pick.mjs` `PICTURE_SIZES` a format has; tops 80, 128, 320,
 560, 720, 880 and 1024 sub-channels). The code
 rate follows the
-frequency (`src/lizard_phy.h` `lizard_tiers_for`): from the lowest frequencies out, 7/8 blocks of 4496 slots (n 4608, 4480
-sent, then 16 pilot slots), 3/4 of 5152 (n 5120, k 3840, m 1280, 10 block rows of 13 or 14 data slots, then 32 pilot
-slots), 2/3 of 5760 (n 5760, 15 block rows) and 1/2 of 7680 (n 7680, 30 block rows), every code at z = 128, the blocks
-packed one after another from the frame's first slot whatever the sub-channels, the slots past the last block padded
-(the whitening alone). The soft values and the LDPC are the rule stage (`back/tiers.mjs`;
+frequency (`src/lizard_phy.h` `lizard_tiers_for`): from the lowest frequencies out, 6/7 blocks of 4480 slots (n 4608, 4480
+sent), 3/4 of 5120 (n 5120, k 3840, m 1280, 10 block rows of 13 or 14 data slots), 2/3 of 5760 (n 5760, 15 block rows)
+and 1/2 of 7680 (n 7680, 30 block rows), every code at z = 128, the blocks packed one after another from the frame's
+first data slot whatever the sub-channels, the slots past the last block padded (the whitening alone). The pilots are
+apart from the blocks: in every sub-channel coefficient 0 is a count pilot and coefficient 160 a reference pilot, and
+the blocks take the other 318 coefficients in order (636 data slots a sub-channel; `src/lizard_phy.c` `pb_fcoef`). The soft values and the LDPC are the rule stage (`back/tiers.mjs`;
 the kernels `glsl/back_tiers.mjs`, TAB's layout and the codes' shapes `plan/back_tiers.mjs`): a frame's profile is a row of its table by the frame's version, and the arithmetic of sections
 1 and 4 to 7 runs a code at a time, each code with its own block rows and its own learned stop. Where a section gives
 one code's numbers, they are the 3/4 code's.
@@ -59,19 +60,19 @@ every constant of the detrend is divided the same way at the store.
 - **C bit map and whitening** (`map_in`): codeword bit j of block b is slot inv[j] of the block (from the block's
   first slot), sign flipped where white[slot of the frame] = 1. perm[i] = i P mod nt (`perm_fill`, LINEAR, the format's
   one bit map: P = 1957 at the 3/4 code's 5120), inv = perm^-1; white = PRBS-23, x^23 + x^18 + 1 from the all-ones state, one bit a slot of the
-  frame in pos order (`whiten_fill`). The slots past a block's codeword carry the pilots (the whitening XOR a bit of
-  the painted picture's count, SPEC 7.3), which the soft stage reads and fits the grid's shift from (32 such slots at
-  3/4, 16 at 7/8, none at 2/3 and 1/2, whose codewords fill their blocks). 476 * 8 + 32 = 3840 bits, the k of the 3/4, 2/3 and
-  1/2 codes; the 7/8 code's k is 3968, and its bits past 3840 go in as known zeros at 127, as the C's do.
+  frame in pos order (`whiten_fill`), a data slot taking its frame coefficient's. Each sub-channel's count pilot
+  carries the whitening XOR a bit of the painted picture's count (bit j & 1 in sub-channel j, both axes), its reference
+  the whitening alone (SPEC 7.3); the soft stage reads both and fits the grid's shift from them. 472 * 8 + 64 = 3840 bits, the k of the 3/4, 2/3 and
+  1/2 codes; the 6/7 code's k is 3968, and its bits past 3840 go in as known zeros at 127, as the C's do.
 - **C LDPC**: normalised min-sum, layered by block row, norm 13/16, posteriors clamped to +-8191, messages to
   +-127, cap 30 iterations, sweep direction alternating each iteration, exit on a clear syndrome. Integer
   arithmetic, kept integer: the norm and caps were set on 78 000 blocks and mean what they were measured to mean only
   in integers. The C gives up on a failing codeword by its stall rule (violated checks after iteration 9 above 0.95
   of the count after iteration 1); the GPU by each code's learned stop (section 6), which gives up by a small net's
   reading and verifies the same codewords but for its budget of 1 in 1,000.
-- **C CRC-32C and compaction**: the 476 payload bytes are systematic bits 0..3807, MSB first in each byte; the CRC
-  is bits 3808..3839 MSB first; `ob_crc32c` is CRC-32C, the reflected polynomial 0x82F63B78, init and final xor
-  0xFFFFFFFF.
+- **C CRC-64 and compaction**: the 472 payload bytes are systematic bits 0..3775, MSB first in each byte; the CRC
+  is bits 3776..3839 MSB first; `ob_crc64` is CRC-64/LIZARD (SPEC 7.1), the reflected polynomial 0xC02C38B47D32D307,
+  init and final xor all ones.
   Equal means verified; a verified block claims a record slot and is written; nothing else leaves the device.
 
 Drift is acceptable everywhere before the int8 quantisation and in the quantisation itself: a slot within f32
@@ -82,21 +83,21 @@ decision-directed second pass and burst accumulation. The GPU reads every frame 
 
 Frame f of a batch of B (frames may differ in picture size; every stage reads `sel[f]` and `frames[f].valid` as
 the sampler does). `sel[f]` is a vec4u: (ring, 1 + version, picture slot, 0). PICK (F6) writes (ring, found, 0, 0);
-F8 (`gpu/glsl/word.mjs`) then (ring, 1 + v, slot, 0) for the version v its word or the batch's held word names, else
-y 0. A frame is sampled and listed when y >= 2; z indexes the picture sizes.
+F8 (`gpu/glsl/word.mjs`) then (ring, 1 + g, slot, 0) for the configuration g its own word states (the version and
+the block counts), else y 0. A frame is sampled and listed when y >= 2; z indexes the picture sizes.
 
 | name | writer -> reader | element and order |
 |---|---|---|
-| LISTS, ARGS | gate -> all | u32 [SLOTS sizes][1 + B] (SLOTS = 8, `plan/common.mjs`): count, then frame indices, then each frame's (w, h), each frame's version (the one F8 read in sel.y = 1 + v, or the held one; a frame with neither is not listed; the rule stage runs that version's profile), each frame's row count (`listsRows`: the disc rows that count takes, section 3 "Rows a frame"), then each frame's ring (`listsRing`), then every listed frame (`listsAll`); u32 [SLOTS][12] indirect args, (x, y, z) for pass 1, reduce, pass 2 (the most rows a listed frame of the size takes) and tsoft (the chunks of the size's most listed version; talign and tblocks on reduce's), then u32 [4][3] each code's LDPC (`argsLdpc`: the code's most blocks over the listed frames' versions, the listed frames, 1); (SLOTS (1 + B) + 6 B) words, `listsWords`; 432 B, `argsWords` |
+| LISTS, ARGS | gate -> all | u32 [SLOTS sizes][1 + B] (SLOTS = 8, `plan/common.mjs`): count, then frame indices, then each frame's (w, h), each frame's configuration (the one F8 read in sel.y = 1 + g; a frame without one is not listed; the rule stage runs its layout), each frame's row count (`listsRows`: the disc rows that count takes, section 3 "Rows a frame"), then each frame's ring (`listsRing`), then every listed frame (`listsAll`); u32 [SLOTS][12] indirect args, (x, y, z) for pass 1, reduce, pass 2 (the most rows a listed frame of the size takes) and tsoft (the chunks of the size's most listed version; talign and tblocks on reduce's), then u32 [4][3] each code's LDPC (`argsLdpc`: the code's most blocks over the listed frames' versions, the listed frames, 1); (SLOTS (1 + B) + 6 B) words, `listsWords`; 432 B, `argsWords` |
 | PART | A1 -> reduce, A2 | f32 [n][4] a column: (sum z, sum z cx[y], sum z qx[y], the column mean) |
 | COEF | reduce -> A2 | f32 [8]: px, py, pxy, pxx, pyy, 0, 0, 0 |
 | Y | A1 -> A2 | complex, v major: (v, x) at (v - 1) n + x, 1 <= v < V; f16x2 (f32x2 on the 4090); V rows of room a frame |
 | S | A2 -> B | the disc, one entry a used coefficient, row compact (section 3); f16x2 or f32x2 |
 | L | B -> C | int8 [subch][640] packed 4 a u32, slot order (the C's `ext_llr`) |
-| EP, BLK | tsoft -> tblocks -> tldpc | EP (est, pilot) a sub-channel; BLK a block: (f32 est, u32 declined) |
-| PILOT | soft -> host | f32 [blocksMax] a frame, each block's pilot reading; then two f32 a frame, its grid shift |
+| EP, BLK | tsoft -> tblocks -> tldpc | EP (est, count pilot, reference, 0) a sub-channel; BLK a block: (f32 est, u32 declined) |
+| PILOT | soft -> host | four f32 a frame, its readings (r, its standard error, r2, its standard error); then two f32 a frame, its grid shift |
 | V, ITS | C -> host | one 32-bit word a block each, at f * blocksMax + b: u32 verdict (0 not run, 1 verified, 2 declined, 3 stall or cap, 4 CRC), i32 iterations (the C's codes) |
-| REC | C -> host | u32 count, then 484 B records: word 0 = frame + 65536 block, word 1 = iterations, 476 payload bytes (id first); cap = blocks in the batch |
+| REC | C -> host | u32 count, then 480 B records: word 0 = frame + 65536 block, word 1 = iterations, 472 payload bytes (id first); cap = blocks in the batch |
 | BCOUNTS | all -> host | u32 [B][8]: columns transformed, rows transformed (the frame's rows), coefficients stored, blocks tried, verified, records, sub-channels quantised, iterations run |
 
 S holds subch * 320 entries exactly (verified against `npos`), under the C's half plane (vblocks * n * 64). V and
@@ -143,8 +144,7 @@ gate writes each frame's rows beside its version in LISTS
 returns on a row past the frame's before its first barrier (LISTS is read-only there, so the branch is uniform) and
 its indirect dispatch takes the most rows any listed frame of the size needs. S past a frame's rows is left stale:
 the soft stage reads only its own blocks' coefficients, all inside them. Every frame decodes on its own, with no
-memory across frames or batches, so the word is the only source: a frame whose word is not read decodes at the
-batch's held word, or, with none held, is not listed. irows and ipic (the sender's inverse transforms,
+memory across frames or batches, so the word is the only source: a frame whose word is not read is not listed. irows and ipic (the sender's inverse transforms,
 `wgsl/inverse.mjs`, the sender's) run the size's V: a symbol's rows past its version are zero.
 
 Precision: f16 for Y, S and the workgroup-memory exchange where `shader-f16` exists (the iGPU, phones), f32 on
@@ -188,30 +188,31 @@ As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `glsl/back_transfor
 ## 4. Soft values
 
 Formula and moments: section 1. The rule stage's soft pass, a dispatch a picture slot each (`glsl/back_tiers.mjs`):
-- **talign**, a workgroup a frame, a thread a block: the grid's shift by the pilots (each block's own tail against its
-  known symbols and the block's sign from its own pilots' sum, zi = k zr (u dx + v dy) fitted by least squares twice,
-  kept wherever the fit stands, 8 pilots or more), to the end of PILOT. A thread gathers its tail
-  once, straight-line (its index loads, then its S and UC loads); the first fit is about a zero shift, the second
-  about the first's answer (the tail turned); each fit's seven sums over the 128 threads on 16 threads, then one.
+- **talign**, a workgroup a frame, 160 threads over its sub-channels (j = t, t + 160, ...): the grid's shift by the
+  pilots (every sub-channel's two against their whitening; the count's sign cancels in every term; zi = k zr (u dx + v
+  dy) fitted by least squares twice, kept wherever the fit stands, 8 pilots or more; each pilot unweighted, where the C
+  weights it by 1 / N of its sub-channel), to the end of PILOT. The first fit is about a zero shift, the second about
+  the first's answer (the pilots turned); each fit's seven sums over the 160 threads on 16 threads, then one.
 - **tsoft**, a workgroup an 8-sub-channel chunk of a frame, 256 threads = 8 sub-channels x 32 lanes x 10
   coefficients: gather a sub-channel's 320 coefficients from S through the UV table (u32 an entry, the S index of
   pos[i]; subch * 320 entries), each turned back by the frame's shift through UC, reduce m2 and m4, compute a2, nv,
-  k and est, quantise every coefficient to two int8 into L, and the sub-channel's part of a block's pilot reading
-  where a tail meets it (`tailIn`: at most one tail a sub-channel, blocks being 4496 slots or more; a tail may run
-  across two); est and the part to EP. Lane l takes the coefficient pairs 2 p, 2 p + 1 for p = l + 32 k (k 0 to 4), so a
-  pair is one L word and the lanes' UV, UC and L accesses are consecutive; the kernel is straight-line (every index
-  load, then every S load, then the turn under one branch on the frame's shift). Each value takes its slot's
-  whitening (a pair's four slots are four bits of one WHITE word), so L holds the whitened values; a pilot part is
-  the sum of the tail's whitened values in the sub-channel over its rms axis value sqrt(m2 / 2), the sum reduced with
-  m2 and m4 in one tree (0 where no tail meets it or m2 is 0). Dispatched (chunks of the
+  k and est, quantise every data coefficient to two int8 into L; est and the two pilots' values (the turned value
+  against its whitening, x + y) to EP. Lane l takes the data coefficient pairs 2 p, 2 p + 1 for p = l + 32 k (k 0 to
+  4), each through its frame coefficient (`fcoefIn`, past the pilots), so a pair is one L word; the last lane's last
+  pair (p 159) is the sub-channel's two pilots, read into the moments and EP and not stored, so the moments run over
+  all 320 coefficients as the C's. The kernel is straight-line (every index load, then every S load, then the turn under
+  one branch on the frame's shift). Each value takes its frame slot's whitening, so L holds the whitened values, in
+  data-slot order (159 words a sub-channel). Dispatched (chunks of the
   slot's top, 1, B); a workgroup past the frame's chunks (two a version) returns before its first barrier.
-- **tblocks**, a workgroup a frame: a block's estimate (its sub-channels' est, each by the slots of the block it
-  holds, over the block's slots), its decline under its code's bar (section 5), its pilot (the parts of the one or two
-  sub-channels its tail meets, over the tail's slots; NaN for a 2/3 or 1/2 block), to BLK and PILOT.
+- **tblocks**, a workgroup a frame: a block's estimate (its sub-channels' est, each by the data slots of the block
+  it holds, 636 a sub-channel, over the block's slots), its decline under its code's bar (section 5), to BLK; then the
+  frame's two readings over its sub-channels (`src/lizard_phy.c` `lizard_pilot`): r_g = sum c_j / (sum ref k_g / k)
+  over the sub-channels j = g mod 2, its standard error by the delta method (the root of the sum of (c_j - r_g
+  ref_j)^2 over |the denominator|), NaN where a parity has none, to PILOT's first four floats a frame.
 
-L stays in the C's slot order, whitened: L[slot] = (white[slot] ? -1 : 1) * llr[slot], WHITE a bit a slot of the
+L stays in the C's data-slot order, whitened: L[slot] = (white[slot] ? -1 : 1) * llr[slot], WHITE a bit a slot of the
 frame over 1024 sub-channels in TAB. The LDPC reads the bit map at its gather, from TAB: a code's INV (codeword bit
-j's slot of the block, two u16 a word, 0xffff for a bit never sent: the 7/8 code's 128 known zeros, which the gather
+j's slot of the block, two u16 a word, 0xffff for a bit never sent: the 6/7 code's 128 known zeros, which the gather
 sets to 127 without reading INV), its loads
 L[block's first slot + inv[j]] (the block's first slot a multiple of 16, so L's word (slot0 + x slots) / 4 on).
 
@@ -226,7 +227,7 @@ captures the iterations it saves are among the LDPC's largest costs.
 The rate profile's kernel (`tldpcSource`, `glsl/back_tiers.mjs`; a dispatch a code: (the code's most blocks in a
 served version, frames)) runs layered min-sum a code at a time: the code's n, k, z and slots are the module's
 constants, its block rows (unequal at 2/3 and 1/2) and data slots (col | shift << 16) come from its uniform, its bit
-map from TAB over L whitened (section 4), the bits past the 476-byte payload and its CRC (3,840: at 7/8 alone) are known zeros at
+map from TAB over L whitened (section 4), the bits past the 472-byte payload and its CRC (3,840: at 6/7 alone) are known zeros at
 127, and each code gives up by its own learned stop (below). The check records are each lane's own (lane i is check
 i of every row), the posteriors two i16 a word (updated by atomic XOR, since two lanes may write the two halves of
 one word in a layer), an i32 a word where 32 KB still holds them, or an int16_t each with plain stores (where the
@@ -270,7 +271,7 @@ rule makes a wrong block verify, and what a rule costs is the blocks it gives up
   layer input-major so the lanes read consecutive words) sit in TAB's NET, so the stage keeps its 8 storage buffers;
   4 (6 + 2 H) + 4 B of workgroup memory. The nets, their trainer and their files are
   `stop/` (`scripts/gpu/back/stop/README.md`). Each code of the rate profile has its own net, trained the same way
-  on that code's neutral channel to its plateau (`stop/stop.safetensors` the 3/4 code's, `stop_78.safetensors`,
+  on that code's neutral channel to its plateau (`stop/stop.safetensors` the 3/4 code's, `stop_67.safetensors`,
   `stop_23.safetensors` and `stop_12.safetensors`, picked by the code's checks, `stop/rule.mjs` `ruleUrlFor`), their
   words one after another in the rule stage's table (`back/tiers.mjs` `ruleContents`).
 
@@ -293,26 +294,27 @@ The arithmetic. Float32 in one order everywhere (the kernel, `stop/rule.mjs` `sc
 against float64, nor under a compiler that fuses each multiply-add; the flips sit within float32 rounding of T.
 `scripts/gpu/back/stop/check_rule.mjs` holds `rule.mjs` to `fit.py`'s words and scores bit for bit.
 
-## 7. CRC-32C, compaction, the result record
+## 7. CRC-64, compaction, the result record
 
 On a clear syndrome the workgroup packs the systematic bits (a posterior < 0 is a 1) MSB first into the 120 words of
-`packw`. The CRC-32C is split over 119 lanes (`glsl/back_tiers.mjs`, as the sender's paint's `wgsl/back_ldpc.mjs` `CRC_SPLIT`; `back/ref_ldpc.mjs` `crcPowers`):
-lane w runs the reflected CRC over its 4-byte chunk from a zero state, multiplies by x^(8 * bytes after it) mod P (a
-32-step carry-less multiply against a 120-word table in the code's uniform) and XORs into one workgroup atomic; the
-initial state's term and the final inversion are one folded constant. It is compared with bytes 476..479 (word 119) read as a
-big endian u32. Equal: verdict 1, `atomicAdd` on REC.count claims a slot, lanes 0..120 write the record's 121 words.
+`packw`. The CRC-64 is split over 118 lanes (`glsl/back_tiers.mjs`, as the sender's paint's `wgsl/back_ldpc.mjs` `CRC_SPLIT`; `back/ref_ldpc.mjs` `crcPowers`),
+a 64-bit value as two u32 (high, low): lane w runs the reflected CRC over its 4-byte chunk from a zero state, multiplies
+by x^(8 * bytes after it) mod P (a 64-step carry-less multiply against a 240-word table in the code's uniform, two words
+a chunk) and XORs into two workgroup atomics; the initial state's term and the final inversion are one folded constant.
+It is compared with bytes 472..479 (words 118 and 119) read as a big endian u64. Equal: verdict 1, `atomicAdd` on
+REC.count claims a slot, lanes 0..119 write the record's 120 words.
 Unequal: verdict 4.
 - **V and ITS are one word a block**, u32 verdict and i32 iterations, at `f * blocksMax + b` (WGSL has no byte
   stores). Verdict 0 not run, 1 verified, 2 declined, 3 stall, cap or given up by the stop, 4 CRC; ITS the iterations,
   or the C's codes: -2 declined, -3 stall or given up, -1 cap. The gate zeroes both and REC's count.
-- **REC** is u32 count then 484-byte records at 4 + 484 r: word 0 = frame + 65536 block, word 1 = iterations as i32,
-  words 2 to 120 the 476 payload bytes. Its cap is B x blocksMax records; a verified block past the
+- **REC** is u32 count then 480-byte records at 4 + 480 r: word 0 = frame + 65536 block, word 1 = iterations as i32,
+  words 2 to 119 the 472 payload bytes. Its cap is B x blocksMax records; a verified block past the
   cap is still counted (BCOUNTS column 4 against column 5).
 - **BCOUNTS** columns 3 blocks tried (not declined), 4 verified, 5 records written, 6 sub-channels quantised (8 a
   chunk), 7 iterations run (summed over the frame's codewords).
 
 The host reads REC whole, V, ITS, BCOUNTS and PILOT in the batch's one readback (`core/dec/front.cpp`). The checks
-hold each payload after its 5-byte id to the test stream (BLAKE3 of the id, SPEC 9.3: the receiver's judge, the
+hold each payload after its 12-byte id to the test stream (BLAKE3 of the id's low five bytes, the tools' own: the receiver's judge, the
 replay's per-frame `bad`), which must be 0; a receiver has only the CRC, which is what makes the CRC the last word.
 
 ## 8. Tables and where each comes from
@@ -327,11 +329,11 @@ time.
 | cx, qx, X1, X2, sx2, sq2 | `M._lizard_tables_out(p)`, `Lizard.tables()` | 6 n + 2 f32 |
 | block first slot, count | `M._lizard_block_runs(pFirst, pCount)`, `Lizard.ldpcCode().first, .count` | blocks i32 each: each block's own first slot of the frame and its slots (4496, 5152, 5760 or 7680 by its code) |
 | LDPC dims and schedule | `M._lizard_ldpc_tables(tier, pDims, pLay)` (pLay = 0 sizes it), `Lizard.ldpcCode().code` (tier 0: the profile's innermost code) | dims at 3/4: n 5120, k 3840, m 1280, z 128, zp 128, mb 10, kb 30, norm 13, slotsMax 16, slotsTotal 152, slots 132; lay 275 i32 |
-| block bytes | the return of `M._lizard_setup(...)`, `Lizard.blockBytes` | 476 |
+| block bytes | the return of `M._lizard_setup(...)`, `Lizard.blockBytes` | 472 |
 | a version's profile | `M._lizard_tiers_for(subch, pTiers)` | up to 4 tiers of (rate, blocks, slots a block) |
 | perm, inv, white | not exported; regenerated in JS from section 1 (`bitmap.mjs`) and held to what the C paints by `scripts/gpu/back/check_tiers.mjs` | perm nt; white a bit a slot |
 | g0, step | `M._lizard_grid_out(p)` | 2 f32 |
-| CRC-32C | `M._ob_test_crc_hash(p, len)` | |
+| CRC-64 | `M._ob_test_crc_hash(p, len, out)` (its 8 bytes into out, MSB first) | |
 | decline bar, verdicts | `M._ob_test_crc_gate_out(est, blkEst, bar, declined)` | blocks each |
 | truth stream | `streamBlock(id, len)` (sim/ob.mjs, `_stream_fill`); `sourceFor(spec.stream)` (sim/phy.mjs) | |
 | the C's spectrum | `Lizard.measure(true)` then `read()`: 2 * 320 * subch f32, the detrended coefficients in pos order | |
@@ -355,7 +357,7 @@ the rule stage, and one set of per-frame strides from `dims.mjs derived(sizes, {
 const bh = await BackHalf.build(device, { B, sizes, precision, picture, log });   // on gen's recording device
 // the native host, per lane: backLane (LISTS, ARGS, PART, Y, S, BCOUNTS, L, BLK, PILOT, EP, V, ITS, REC and the
 // bind groups), encodeBack (the six dispatches), and the readback: REC, V, ITS, BCOUNTS, PILOT, bh.readBytes a batch
-//   records: { frame, block, its, id, payload (476 B, id first) }, the verified blocks only
+//   records: { frame, block, its, id, payload (472 B, id first) }, the verified blocks only
 //   a frame: verdict, its (blocksMax each), counts (COUNT: columns, rows, stored, tried, verified, records, subch,
 //   iterations), pilots (a block's pilot reading), shift (the grid's)
 ```

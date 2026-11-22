@@ -227,7 +227,7 @@ const image_t *lizard_held_image(const struct lizard_s *f);
 const ob_reg_t *lizard_held_reg(const struct lizard_s *f);
 
 // The block CRC (test/vectors.mjs) and the decline gate (the GPU back half's is held to it), from src/lizard_phy.c.
-uint32_t ob_test_crc_hash(const uint8_t *p, int n);
+void ob_test_crc_hash(const uint8_t *p, int n, uint8_t *out);
 int ob_test_crc_gate(const struct lizard_s *f, const float *est, float *blk_est, float *bar, uint8_t *declined);
 
 #endif

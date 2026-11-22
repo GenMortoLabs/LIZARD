@@ -3,9 +3,10 @@
 // ai: frame's blocks are made here from their ids alone: BLOCKS (rqBlocksSource), each block the XOR of its tuple's
 // ai: columns (RFC 6330 5.3.5.3, LT and PI; the tuple of 5.3.5.4 made here, TUPLE's rqCols, src/rq.c rq_row's twin), a
 // ai: control block's payload one symbol the host wrote, written as the painter's BLOCKS hold a block
-// ai: (core/tx/gpu_painter.cpp: 480 B apart, the 5-byte id then the 471-byte payload), so the painter paints them in the
+// ai: (core/tx/gpu_painter.cpp: 480 B apart, the 12-byte id: the bare id and its TOI's low 24 bits in the first two words,
+// ai: then the TOI's high 24 bits and a reserved byte (PAR's), then the 460-byte payload, word-aligned), so the painter paints them in the
 // ai: same submission and no block's bytes cross from the host. SYM: a chunk's L intermediate symbols from its first,
-// ai: 480 B each (30 vec4u, the 471-byte symbol zero padded), then the control payloads.
+// ai: 480 B each (30 vec4u, the 460-byte symbol zero padded), then the control payloads.
 // ai: The solve on the GPU (XOR's levels, HDPC, the Gauss-Jordan in dependency levels, a source check) was built and
 // ai: measured the same day and taken back out: the cores make the chunks as fast or faster on every device measured,
 // ai: once, at the start (STATUS "RaptorQ's encoder on the GPU in the sender").
@@ -49,9 +50,10 @@ fn rqCols(pl: vec4u, isi: u32, s: u32) -> u32 {
   return n;
 }`;
 
-// ai: BLOCKS: SYM, IDS (each block's id, its low 32 bits and its top 8), TAB, CHUNKS (a chunk's first symbol and its
-// ai: plan), OUT (the painter's BLOCKS: OUT_WORDS words a block, 119 written), PAR (the blocks, the control payloads'
-// ai: first symbol, the chunks, the controls). Two blocks a workgroup: its first lane the block's columns (a data
+// ai: BLOCKS: SYM, IDS (each block's id, its low 32 bits and its high 32), TAB, CHUNKS (a chunk's first symbol and its
+// ai: plan), OUT (the painter's BLOCKS: OUT_WORDS words a block, 118 written: the id's 3, the payload's 115), PAR (the blocks, the control payloads'
+// ai: first symbol, the source blocks, the controls, the file's TOI's high 24 bits, a data block's word 2, and the session's,
+// ai: the session header's, each word's top byte 0). Two blocks a workgroup: its first lane the block's columns (a data
 // ai: block its tuple's, a control block its payload's one symbol; none past the file: zeros), then 30 lanes XORing 16
 // ai: bytes each, then all 32 writing the shifted words from workgroup memory.
 export const RQ_OUT_WORDS = 120;
@@ -77,7 +79,7 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) li: vec3
   var id = vec2u(0u);
   if (live) { id = ids[b]; }
   if (live && w == 0u) {
-    let c = (id.x >> 24u) | ((id.y & 255u) << 8u);
+    var c = (id.x >> 24u) | ((id.y & 255u) << 8u);
     let e = id.x & 0xffffffu;
     var n = 0u;
     if (c == 0xffffu) {
@@ -102,11 +104,12 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) li: vec3
   }
   workgroupBarrier();
   if (!live) { return; }
-  for (var j = w; j < 119u; j += 32u) {
+  for (var j = w; j < 118u; j += 32u) {
     var v = 0u;
     if (j == 0u) { v = id.x; }
-    else if (j == 1u) { v = (id.y & 255u) | (P[s][0] << 8u); }
-    else { v = (P[s][j - 2u] >> 24u) | (P[s][j - 1u] << 8u); }
+    else if (j == 1u) { v = id.y; }
+    else if (j == 2u) { v = select(par[4], par[5], ((id.x >> 24u) | ((id.y & 255u) << 8u)) == 0xffffu) & 0xffffffu; }
+    else { v = P[s][j - 3u]; }
     outw[b * ${outWords}u + j] = v;
   }
 }

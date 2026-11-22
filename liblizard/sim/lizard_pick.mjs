@@ -3,7 +3,7 @@
 //
 // A FORMAT IS ITS SUB-CHANNEL COUNT and nothing else, a multiple of 16 (src/lizard_phy.h LIZARD_STEP): the codec rejects any
 // other count. Version k is 16k sub-channels, the number its word carries; the blocks a frame are the rate profile's
-// (tiersFor below), fewer than 2k of them (7 at LIZARD-64, 124 at LIZARD-1024), each 471 B of payload.
+// (tiersFor below), fewer than 2k of them (7 at LIZARD-64, 124 at LIZARD-1024), each 460 B of payload.
 //
 // THE FIRST LADDER (2026-09-20, one code rate; the history of the decision, not the rule: VERSIONS below is).
 // Versions 2 to 32, so 16 to 256 sub-channels in steps of 8. The version number IS the block count, which is worth
@@ -74,10 +74,10 @@ export const PAINTED_MARGIN = () => {
 // ai: Every multiple of 16 from 64 to 1072 (64 formats since 2026-11-18, the word's six version bits; 61 to 1024 from
 // ai: 2026-11-01), the word naming subch / 16, versions 4 to 67 (src/lizard_phy.h LIZARD_STEP, src/fmt.h OB_FMT_VERSION_MIN,
 // ai: OB_FMT_VERSION_MAX); the slider
-// ai: steps 16 sub-channels. The smallest, LIZARD-64, carries seven blocks (7/8 x 4, 3/4, 2/3, 1/2), two 7/8 pilot
-// ai: blocks of each parity. LIZARD-32 and -48 left on 2026-11-01 (their odd blocks' pilots one 7/8 block's 8
+// ai: steps 16 sub-channels. The smallest, LIZARD-64, carries seven blocks (6/7 x 4, 3/4, 2/3, 1/2), two 6/7 pilot
+// ai: blocks of each parity. LIZARD-32 and -48 left on 2026-11-01 (their odd blocks' pilots one 6/7 block's 8
 // ai: coefficients, which read past the pilots' model on mixed captures and under 0.9 on clean ones); from 2026-10-29 to
-// ai: 2026-10-31 the ladder started at LIZARD-16 (two 3/4 blocks; under the slot-packed profile one 7/8 and one 3/4, too
+// ai: 2026-10-31 the ladder started at LIZARD-16 (two 3/4 blocks; under the slot-packed profile one 6/7 and one 3/4, too
 // ai: few pilots for the phase lock's two readings); from 2026-10-01 to 2026-10-29 it
 // ai: stepped by 8, versions subch / 8 (LIZARD-8, one block a frame, on it until 2026-10-25; a frame of one block has
 // ai: no diversity and carries one pilot parity alone).
@@ -90,46 +90,47 @@ export const versionOf = (subch) => subch / STEP;   // what the format word carr
 // ai: The default senders' layout (src/lizard_phy.c lizard_tiers_for, the same integers and order of search; the format's
 // ai: rate profile from 2026-10-07 to 2026-11-18, which every receiver derived; since, a frame's word states its counts,
 // ai: layoutOf): [[rate, blocks, slots], ...] inner first
-// ai: over the frame's 640 subch slots, 7/8 blocks of 4496 slots on about TIER_IN thousandths of them, 3/4 blocks of
-// ai: 5152 filling (the remainder padded), 2/3 blocks of 5760 on about TIER_23 thousandths, 1/2 blocks of 7680 on about
+// ai: over the frame's SUB_SLOTS subch data slots, 6/7 blocks of 4480 slots on about TIER_IN thousandths of them, 3/4 blocks
+// ai: of 5120 filling (the remainder padded), 2/3 blocks of 5760 on about TIER_23 thousandths, 1/2 blocks of 7680 on about
 // ai: the outer TIER_OUT; the tiers with blocks only; [] for a count that is no format's. blocksFor: the blocks a frame
-// ai: carries, each 476 B. BLOCK_SLOTS: a block's slots by rate index (src/lizard_phy.c lizard_block_slots: its code's sent
-// ai: bits, then its pilots, 16 at 7/8 and 32 at 3/4).
+// ai: carries, each 472 B. BLOCK_SLOTS: a block's slots by rate index (src/lizard_phy.c lizard_block_slots: its code's sent
+// ai: bits alone: the pilots apart from the blocks since 2026-11-21, two coefficients a sub-channel, a tail on every block
+// ai: from 2026-11-20 to 11-21). SUB_SLOTS: a sub-channel's data slots (src/lizard_phy.c OB_DSUB2: 320 coefficients less
+// ai: the count and reference pilots, two slots each).
 export const TIER_IN = 390, TIER_23 = 150, TIER_OUT = 200;
-export const BLOCK_SLOTS = { 6: 4496, 4: 5152, 3: 5760, 2: 7680 };
+export const BLOCK_SLOTS = { 6: 4480, 4: 5120, 3: 5760, 2: 7680 };
+export const SUB_SLOTS = 636;
+// ai: The default senders' layout (src/lizard_phy.c lizard_tiers_for): the 6/7, 2/3 and 1/2 counts their target thousandths
+// ai: of the slots in whole blocks, rounded half up; the 1/2, then the 2/3, then the 6/7 trimmed until one 3/4 block fits;
+// ai: the 3/4 filling the rest. A least-squares search over every count until 2026-11-19, the same counts at every version.
 export function tiersFor(subch) {
   if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1)) return [];
-  // ai: in units of 16 slots (every block's slots are a multiple of 16): the same order and ties as the C's slots, and
-  // ai: every cost an integer under 2^53 (each term's root at most 1000 x 40,960)
-  const u = 16, all = (640 * subch) / u, s7 = BLOCK_SLOTS[6] / u, s3 = BLOCK_SLOTS[4] / u, s2 = BLOCK_SLOTS[3] / u, s1 = BLOCK_SLOTS[2] / u;
-  let best = -1, ba = 0, bt = 0, bc = 0;
-  for (let a = 0; s7 * a <= all - s3; a++) for (let t = 0; s7 * a + s2 * t <= all - s3; t++) for (let c = 0; s7 * a + s2 * t + s1 * c <= all - s3; c++) {
-    const d7 = 1000 * s7 * a - TIER_IN * all, d3 = 1000 * s2 * t - TIER_23 * all, d2 = 1000 * s1 * c - TIER_OUT * all, cost = d7 * d7 + d3 * d3 + d2 * d2;
-    if (best < 0 || cost < best) { best = cost; ba = a; bt = t; bc = c; }
-  }
-  const m = Math.floor((all - s7 * ba - s2 * bt - s1 * bc) / s3);
-  return [...(ba ? [[6, ba, BLOCK_SLOTS[6]]] : []), [4, m, BLOCK_SLOTS[4]], ...(bt ? [[3, bt, BLOCK_SLOTS[3]]] : []), ...(bc ? [[2, bc, BLOCK_SLOTS[2]]] : [])];
+  const all = SUB_SLOTS * subch, S = BLOCK_SLOTS, round = (tgt, s) => Math.floor((2 * tgt * all + 1000 * s) / (2000 * s));
+  let a = round(TIER_IN, S[6]), t = round(TIER_23, S[3]), c = round(TIER_OUT, S[2]);
+  const room = () => all - a * S[6] - t * S[3] - c * S[2];
+  while (room() < S[4]) { if (c) c--; else if (t) t--; else if (a) a--; else return []; }
+  const m = Math.floor(room() / S[4]);
+  return [...(a ? [[6, a, S[6]]] : []), [4, m, S[4]], ...(t ? [[3, t, S[3]]] : []), ...(c ? [[2, c, S[2]]] : [])];
 }
 export const blocksFor = (subch) => tiersFor(subch).reduce((n, [, b]) => n + b, 0);
-// ai: A frame's layout from its word's counts (src/fmt.c ob_fmt_layout, 2026-11-18): [7/8, 2/3, 1/2] blocks, the 7/8 0 to
-// ai: COUNT78_MAX and the others 0 to COUNT_MAX, the 3/4 filling the rest; all four tiers as [rate, blocks, slots] (0
-// ai: blocks kept), or [] where it is no frame: no room for one 3/4 block, or fewer than two blocks carrying pilots (7/8
-// ai: and 3/4). countsFor: the default senders' counts (tiersFor).
-export const COUNT78_MAX = 255, COUNT_MAX = 127;
+// ai: A frame's layout from its word's counts (src/fmt.c ob_fmt_layout, 2026-11-18): [6/7, 2/3, 1/2] blocks, the 6/7 0 to
+// ai: COUNT67_MAX and the others 0 to COUNT_MAX, the 3/4 filling the rest; all four tiers as [rate, blocks, slots] (0
+// ai: blocks kept), or [] where it is no frame: no room for one 3/4 block. countsFor: the default senders' counts
+// ai: (tiersFor).
+export const COUNT67_MAX = 255, COUNT_MAX = 127;
 export function layoutOf(subch, [a, t, c]) {
-  if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1) || ![a, t, c].every((x, i) => Number.isInteger(x) && x >= 0 && x <= (i ? COUNT_MAX : COUNT78_MAX))) return [];
-  const all = 640 * subch, used = a * BLOCK_SLOTS[6] + t * BLOCK_SLOTS[3] + c * BLOCK_SLOTS[2];
+  if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1) || ![a, t, c].every((x, i) => Number.isInteger(x) && x >= 0 && x <= (i ? COUNT_MAX : COUNT67_MAX))) return [];
+  const all = SUB_SLOTS * subch, used = a * BLOCK_SLOTS[6] + t * BLOCK_SLOTS[3] + c * BLOCK_SLOTS[2];
   if (used + BLOCK_SLOTS[4] > all) return [];
   const m = Math.floor((all - used) / BLOCK_SLOTS[4]);
-  if (a + m < 2) return [];
   return [[6, a, BLOCK_SLOTS[6]], [4, m, BLOCK_SLOTS[4]], [3, t, BLOCK_SLOTS[3]], [2, c, BLOCK_SLOTS[2]]];
 }
 export const countsFor = (subch) => { const t = tiersFor(subch), of = (r) => t.find(([q]) => q === r)?.[1] ?? 0; return [of(6), of(3), of(2)]; };
 // ai: the most blocks any layout of subch sub-channels holds (src/lizard_phy.c lizard_blocks_max_for)
 export function blocksMaxFor(subch) {
-  const all = 640 * subch;
+  const all = SUB_SLOTS * subch;
   let most = 0;
-  for (let a = 0; a <= COUNT78_MAX && a * BLOCK_SLOTS[6] + BLOCK_SLOTS[4] <= all; a++) most = Math.max(most, a + Math.floor((all - a * BLOCK_SLOTS[6]) / BLOCK_SLOTS[4]));
+  for (let a = 0; a <= COUNT67_MAX && a * BLOCK_SLOTS[6] + BLOCK_SLOTS[4] <= all; a++) most = Math.max(most, a + Math.floor((all - a * BLOCK_SLOTS[6]) / BLOCK_SLOTS[4]));
   return most;
 }
 // The border in modules a side, which src/lizard_phy.c sets as the corner mark's own size plus the guard interval,

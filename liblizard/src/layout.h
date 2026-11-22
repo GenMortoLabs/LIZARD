@@ -147,6 +147,11 @@ void ob_layout_free(ob_layout_t *L);
 // moves, so a sender may change it between the frames of a running transfer.
 void ob_layout_set_fmt(ob_layout_t *L, const uint8_t *cw);
 
-uint32_t ob_crc32c(const uint8_t *p, int n);
+// The block CRC, the BCH-derived CRC-64 over n bytes (layout.c; SPEC 7.1).
+uint64_t ob_crc64(const uint8_t *p, int n);
+// The format word's CRC-5 of its 35-bit index c (fmt.h, SPEC 5.1): x^5 + x^2 + 1, by carry-less multiplication where the
+// processor has it; ob_crc5_bits the bit loop, the same value (test/crc_check.c).
+uint32_t ob_crc5(uint64_t c);
+uint32_t ob_crc5_bits(uint64_t c);
 
 #endif

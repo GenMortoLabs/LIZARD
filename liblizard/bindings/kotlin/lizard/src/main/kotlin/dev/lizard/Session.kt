@@ -71,8 +71,8 @@ class Session(
     // ai: every camera listed (opens devices to look: not on a UI thread), and a cheap mark of what is plugged in
     fun cameras(): String = SessionNative.cameras()
     fun camerasStamp(): String = SessionNative.camerasStamp()
-    // ai: dataDir's kept/ files not yet placed, oldest first: [{id, name, type, root, path, at}, packed {name, type} where
-    // ai: path is a packed file]; one placed ("" or why)
+    // ai: dataDir's kept/ files not yet placed, oldest first: [{id, name, root, path, at, packed}], packed true where
+    // ai: path is the default client's zstd stream of the file, for the app to unpack as it files it; one placed ("" or why)
     fun kept(dataDir: String): String = SessionNative.kept(dataDir)
     fun placed(dataDir: String, id: String): String = SessionNative.placed(dataDir, id)
     // ai: the unfinished transfers, newest first: [{id, name, length, fraction, root, at}]; one deleted with no session

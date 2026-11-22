@@ -34,7 +34,7 @@ struct Consts {
   double CAP_MS;
   uint32_t TWIN_FRAMES, TWIN_ROUNDS, VERSION_MIN, VERSION_MAX, SLOTS, ARGS_WORDS, argsWords, COUNTS, REC_BYTES, PAYLOAD;
   // ai: the anchors' (gpu/glsl/anchors.mjs): anchors a frame, and vec4f a frame of its record
-  uint32_t ANCH_K = 0, ANCH_REC = 0;
+  uint32_t ANCH_K = 0, ANCH_REC = 0, ANCH_GS = 0;
   std::map<std::string, uint32_t> ARGS_SLOT;
   static Consts of(const json& c);
 };
@@ -61,7 +61,7 @@ struct Lane {
   BufP dumpBuf;   // ai: LIZ_DUMP_S's copy of the back half's spectrum, made on the first batch that dumps
   bool busy = false, watched = false;
   uint32_t W = 0, H = 0;
-  BufP peaksBuf, selUni, selUni2, framesBuf, mapsBuf, countsBuf, readingsBuf, candBuf, quadsBuf, scoreBuf, selBuf, resultBuf, heldUni, p5Uni, ldUni, measBuf, residBuf;
+  BufP peaksBuf, selUni, selUni2, framesBuf, mapsBuf, countsBuf, readingsBuf, candBuf, quadsBuf, scoreBuf, selBuf, resultBuf, p5Uni, ldUni, measBuf, residBuf;
   GroupP refitGroup, refitPostGroup, pickGroup;   // ai: refitPostGroup: the tree's front.refitPost
   // ai: the anchors (SPEC 6.13): ANCH_FIND's records (a vec4f an anchor) and ANCH_FIT's (ANCH_REC vec4f a frame,
   // ai: which pass 1 reads), no clear (every one a batch reads is written in it); their groups bind the texture
@@ -82,7 +82,7 @@ struct Lane {
   std::vector<Level> level;
   uint32_t slots = 0, gx = 0, gy = 0;
   BufP rawBuf, accBuf;
-  GroupP selGroup, classifyGroup, scoreGroup, voteGroup, peaksGroup, gatherGroup, completeGroup, wordGroup, heldGroup, pyrGroup, traceGroup;
+  GroupP selGroup, classifyGroup, scoreGroup, voteGroup, peaksGroup, gatherGroup, completeGroup, wordGroup, pyrGroup, traceGroup;
   GroupP nodesGroup;
   struct Fcn2Level { uint32_t l, w, h; GroupP group, xgroup, group2, xgroup2; BufP plane, uni; };   // ai: group2, xgroup2: a level below coarseFrom's
   std::vector<Fcn2Level> fcn2Levels;
@@ -127,21 +127,20 @@ struct FrameOut {
   bool empty = false;
   uint64_t tag = 0;   // ai: the caller's, as enqueued
   int ring = -1, version = 0, n = 0, size = -1;
-  bool held = false;
-  int config = 0;   // ai: the configuration decoded at (src/fmt.h ob_fmt_held: version << 22 | the counts), 0 none
+  int config = 0;   // ai: the configuration decoded at (version << 22 | the 6/7 count << 14 | the 2/3 << 7 | the 1/2), 0 none
   struct { float found = 0, ring = -1; std::array<float, 8> corners{}; } finder;
   bool hasWord = false;
-  // ai: the frame's own word (src/fmt.h): kind 0 static (version, count: its 7/8, 2/3 and 1/2 blocks) or 1 animated
-  // ai: (a carousel symbol: id, sym)
-  struct { int kind = 0, version = 0, id = 0, count[3] = {0, 0, 0}; uint8_t sym[3] = {0, 0, 0}; } word;
+  // ai: the frame's own word (src/fmt.h): its version and count, its 6/7, 2/3 and 1/2 blocks, and the sender's clock
+  // ai: (fps 0 to 240, 0 a still; delay 1 to 30, its places' largest)
+  struct { int version = 0, count[3] = {0, 0, 0}, fps = 0, delay = 0; } word;
   int anchors = 0;   // ai: result word 31: the anchors ANCH_FIT found on the frame (0: the frame not found)
   std::vector<uint32_t> counts;       // ai: COUNTERS a frame
   std::vector<uint32_t> backCounts;   // ai: the back half's COUNTS a frame
   std::vector<Record> records;        // ai: the frame's verified blocks
-  // ai: the pilots (SPEC 7.3; decoder.mjs pilotOf): the mean of the soft stage's per-block r over the even blocks the
-  // ai: frame's version carries (pilotR: bit 0 of the painted count) and over the odd (pilotR2: bit 1), with their
-  // ai: standard errors, where the soft stage ran on it (pilotBlocks 0: none; NaN where no block of a parity was read)
-  int pilotBlocks = 0;
+  // ai: the pilots (SPEC 7.3; src/lizard_phy.c lizard_pilot): the frame's count pilots over its references, the even
+  // ai: sub-channels' (pilotR: bit 0 of the painted count) and the odd (pilotR2: bit 1), with their standard errors,
+  // ai: where the soft stage ran on it (pilotSubch: the sub-channels read, 0 none; NaN where a parity read none)
+  int pilotSubch = 0;
   float pilotR = 0, pilotSd = 0, pilotR2 = 0, pilotSd2 = 0;
   // ai: the frame as the ring held it, w x h bytes in rows of w, where its batch kept it (run's keep: Save replays)
   std::vector<uint8_t> luma;
@@ -259,7 +258,7 @@ class FrontHalf {
   // ai: layout and group), the border's second search (anchNodes: F7's NODES centred, on its layout, its own round's
   // ai: group, anchNodesGroup), ANCH_REFIT and ANCH_FIT after F7's REFIT_POST in its refit's pass, the C's order; a
   // ai: batch with no F7 runs ANCH_FIND and ANCH_FIT alone. Pass 1 reads their records.
-  Pipe anchFind, anchFit, anchRefit, anchPredict, anchNodes;
+  Pipe anchFind, anchFit, anchRefit, anchPredict, anchNodes, anchSums;
   BufP anchUni;
   // ai: The develop (enqueueRaw; the tree's spv/ingest_develop.spv, from core/ingest/develop.comp): its pipeline, its
   // ai: layout (the staged samples, the gamma table, the luma out) and the table (develop.h gammaLut)
@@ -268,10 +267,6 @@ class FrontHalf {
   BufP developLut;
 
   int B = 0;        // ai: the lanes' size
-  // ai: HELD's (run): the last configuration posted's number (a new one each run given held >= 0, taken once on the device
-  // ai: in place of the carried one); holdWords false keeps none (LIZ_HOLD=0, the finder's judges)
-  uint32_t heldPost = 0;
-  bool holdWords = true;
   std::vector<std::unique_ptr<Lane>> lanes;
   struct Planned { uint32_t W = 0, H = 0; };
   std::optional<Planned> planned;
@@ -309,14 +304,12 @@ class FrontHalf {
   std::mutex ringMu;
   void release(Slot* s);
   Lane* freeLane();
-  // ai: A batch of staged slots on a free lane: recorded and submitted. held: -1 the held configuration carried on the
-  // ai: device (gpu/glsl/word.mjs HELD: the last static word read before each frame in capture order, launch to launch),
-  // ai: which frames with animated words decode at; 0 or a configuration posted (src/fmt.h ob_fmt_held), the batch
-  // ai: starting from it (a carousel's header, a reset, a batch on its own).
+  // ai: A batch of staged slots on a free lane: recorded and submitted, each frame decoded at its own word's
+  // ai: configuration (none read: not decoded).
   // ai: profile: a pass and a timestamp pair a stage group (decoder.mjs batch's profile: STAGES), so the batch's
   // ai: out.stageMs says which stage costs what; its gpuMs is their sum. keep: the batch's first `keep` frames read
   // ai: back as the ring holds them (FrameOut::luma), for a replay.
-  std::unique_ptr<InFlight> run(const std::vector<Slot*>& slots, int held, bool profile = false, int keep = 0);
+  std::unique_ptr<InFlight> run(const std::vector<Slot*>& slots, bool profile = false, int keep = 0);
   // ai: The batch read back once its ticket is done (waits for it), the batcher told, the twins measured if due; a
   // ai: throw gives the lane back.
   BatchOut finish(std::unique_ptr<InFlight> f);

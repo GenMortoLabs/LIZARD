@@ -1,11 +1,12 @@
 // ai: The native transfer's check: the stream liblizard/gen/xfer_stream.mjs wrote (a 9 MB file of
-// ai: 3 chunks from the web's sender, 20% of blocks lost, frames repeated, blocks and frames reordered) through XferRx in
+// ai: 3 source blocks from the web's sender, 20% of blocks lost, frames repeated, blocks and frames reordered) through XferRx in
 // ai: frames of 40 blocks, the file rebuilt byte-exact and its BLAKE3 root verified, every count against the web's own
-// ai: chain on the same stream (ref.json); the same stream again after clear(); the stream with one wrong block (a chunk
-// ai: rejected, its symbols banned, the counts against the web's again); and the BLAKE3 test stream, every frame
+// ai: chain on the same stream (ref.json); the same stream again after clear(); the stream with one wrong block (the root
+// ai: not made, the file refused whole and collected again, the counts against the web's again: exact with LIZ_SOLVERS=0,
+// ai: the fraction at most the web's on solver threads); and the BLAKE3 test stream, every frame
 // ai: judged test, its one wrong block bad, nothing passed to the transfer. A reader thread polls progress() throughout.
 // ai: Since 2026-10-22 (a transfer kept across receivers, store.h): half the stream into one receiver and the other half
-// ai: into the next on the same directory, the file whole (a fresh receiver given that half alone is not done); a parked
+// ai: into the next on the same folder, the file whole (a fresh receiver given that half alone is not done); a parked
 // ai: transfer forgotten by a later receiver, and the transfer in hand by its own. Each case starts on an empty folder.
 //
 //   xfer_check [dir]      dir: xfer_stream.mjs's output (default $LIZ_XFER, else build/xfer); exit 1 on any difference
@@ -61,17 +62,21 @@ static Run feed(XferRx& rx, const std::vector<uint8_t>& s) {
   r.p = rx.progress();
   r.got = {{"frames", frames}, {"seen", seen}, {"bad", bad}, {"test", test}, {"judged", judged}, {"fresh", fresh}, {"forwarded", r.p.forwarded},
            {"doneAt", r.p.done ? json(r.p.doneAt) : json(nullptr)}, {"done", r.p.done}, {"verified", r.p.verified}, {"rejected", r.p.rejected},
-           {"manifestRejected", r.p.manifestRejected}, {"refused", r.p.refused}, {"over", r.p.over}, {"fraction", r.p.fraction}};
+           {"refused", r.p.refused}, {"over", r.p.over}, {"fraction", r.p.fraction}};
   printf("  fed %.1f ms, drained %.1f ms (solves %.1f ms), queue at most %u, lost %llu\n", fed, r.ms, r.p.solveMs, r.maxQueued, (unsigned long long)r.p.lost);
   return r;
 }
 
 static int fails = 0;
-static void compare(const char* what, const json& got, const json& ref) {
+// ai: solves on the worker (LIZ_SOLVERS=0) keep the JS chain's order exactly; on solver threads a file refused at its
+// ai: root (the wrong-block stream) is reset when the last solve commits, the blocks fed meanwhile lost to it, so its
+// ai: fraction then is held at most the JS's (`atMost`)
+static bool inlineSolves() { const char* ns = getenv("LIZ_SOLVERS"); return ns && *ns && atoi(ns) == 0; }
+static void compare(const char* what, const json& got, const json& ref, bool atMost = false) {
   printf("  %-18s %14s %14s\n", "", "native", "js");
   for (auto& [k, v] : got.items()) {
     const json& w = ref.contains(k) ? ref[k] : json(nullptr);
-    const bool same = k == "fraction" ? w.is_number() && std::abs(v.get<double>() - w.get<double>()) < 1e-9 : v == w;
+    const bool same = k == "fraction" ? w.is_number() && (atMost ? v.get<double>() <= w.get<double>() + 1e-9 : std::abs(v.get<double>() - w.get<double>()) < 1e-9) : v == w;
     if (!same) fails++;
     printf("  %-18s %14s %14s%s\n", k.c_str(), v.dump().c_str(), w.dump().c_str(), same ? "" : "   DIFFERS");
   }
@@ -89,7 +94,7 @@ static void fileChecks(const XferProgress& p, const std::vector<uint8_t>& file, 
   expect(p.done && !p.path.empty(), "done, file at " + p.path);
   expect(out == file, "byte-exact: " + std::to_string(out.size()) + " of " + std::to_string(file.size()) + " B");
   expect(p.root == root && root == hex, "root verified: BLAKE3(file) = header root = sender root " + root.substr(0, 16));
-  expect(p.name == "check-9MB.bin" && p.length == file.size() && p.chunks == 3, "header: " + p.name + ", " + std::to_string(p.length) + " B, " + std::to_string(p.chunks) + " chunks");
+  expect(p.name == "check-9MB.bin" && p.length == file.size() && p.sourceBlocks == 3, "header: " + p.name + ", " + std::to_string(p.length) + " B, " + std::to_string(p.sourceBlocks) + " chunks");
 }
 
 int main(int argc, char** argv) {
@@ -101,11 +106,11 @@ int main(int argc, char** argv) {
   const json ref = json::parse(rf);
   const std::string root = ref["root"];
   auto log = [](const std::string& s) { printf("  [log] %s\n", s.c_str()); };
-  printf("stream: %zu blocks (%zu frames of 40), a lap %d blocks, joined at frame %d; file %zu B\n", stream.size() / XFER_BLOCK,
-         (stream.size() / XFER_BLOCK + 39) / 40, ref["lap"].get<int>(), ref["join"].get<int>(), file.size());
+  printf("stream: %zu blocks (%zu frames of 40), a cycle %d blocks, joined at frame %d; file %zu B\n", stream.size() / XFER_BLOCK,
+         (stream.size() / XFER_BLOCK + 39) / 40, ref["cycle"].get<int>(), ref["join"].get<int>(), file.size());
 
   namespace sfs = std::filesystem;
-  for (const char* d : {"/store", "/store-bad", "/store-test", "/store-resume", "/store-fresh", "/store-forget", "/store-renamed", "/store-renamed2"}) sfs::remove_all(dir + d);
+  for (const char* d : {"/store", "/store-bad", "/store-test", "/store-resume", "/store-fresh", "/store-forget", "/store-renamed", "/store-renamed2", "/store-release"}) sfs::remove_all(dir + d);
   {
     XferRx rx(dir + "/store", log);
     printf("file stream:\n");
@@ -126,17 +131,21 @@ int main(int argc, char** argv) {
   }
   if (const auto bad = slurp(dir + "/bad.bin"); !bad.empty()) {
     XferRx rx(dir + "/store-bad", log);
-    rx.keepChunks(true);   // ai: the per-chunk list (r.p.per) below
+    rx.keepSbs(true);   // ai: the per-source block list (r.p.per) below
     printf("file stream with one wrong block of chunk 1:\n");
     Run r = feed(rx, bad);
-    compare("bad", r.got, ref["bad"]);
-    expect(r.p.rejected >= 1 && r.p.per.size() == 3 && r.p.per[1] < 254, "chunk 1 rejected, collected again from fresh ids");
+    compare("bad", r.got, ref["bad"], !inlineSolves());
+    // ai: the root not made (one block of source block 1 wrong): the file refused whole, every source block collecting
+    // ai: again, none verified (2026-11-21, the manifest gone)
+    bool collecting = r.p.per.size() == 3;
+    for (uint8_t v : r.p.per) collecting = collecting && v < 254;
+    expect(r.p.rejected == 3 && r.p.verified == 0 && collecting, "refused whole at the root, every source block collected again");
   }
   if (const auto renamed = slurp(dir + "/renamed.bin"); !renamed.empty()) {
     // ai: the same file from another sender (src/xfer.h xfer_same_file): its header in the stream's second half under
-    // ai: another name and type, the transfer kept, the file whole at the same block, filed under the first name
+    // ai: another name, the transfer kept, the file whole at the same block, filed under the first name
     XferRx rx(dir + "/store-renamed", log);
-    printf("file stream, its second half's headers another sender's (another name and type):\n");
+    printf("file stream, its second half's headers another sender's (another name):\n");
     Run r = feed(rx, renamed);
     compare("renamed", r.got, ref["renamed"]);
     fileChecks(r.p, file, root);
@@ -162,7 +171,10 @@ int main(int argc, char** argv) {
   {
     const size_t n = stream.size() / XFER_BLOCK, half = (n / 2 / 40) * 40 * XFER_BLOCK;
     const std::vector<uint8_t> first(stream.begin(), stream.begin() + half), second(stream.begin() + half, stream.end());
-    const std::string id = root.substr(0, 16);
+    // ai: a transfer's folder: the root's 16 hex digits and its TOI's 12 (xfer_rx_core.cpp keyOf)
+    char toiHex[16];
+    snprintf(toiHex, sizeof toiHex, "%012llx", (unsigned long long)ref["toi"].get<uint64_t>());
+    const std::string id = root.substr(0, 16) + toiHex;
     printf("resume: the first half into one receiver, the second into the next on the same directory:\n");
     XferProgress p1;
     { XferRx a(dir + "/store-resume", log); p1 = feed(a, first).p; }
@@ -187,6 +199,23 @@ int main(int argc, char** argv) {
       auto p = b.progress();
       expect(!p.header && !sfs::exists(gone), "the transfer in hand forgotten: no header, the folder gone");
     }
+  }
+  {
+    // ai: a finished transfer's TOIs let go (releaseDone, 2026-11-20: the session's when its camera stops for a file in):
+    // ai: the same stream again is the file received again; before the release it is nothing new
+    printf("release: the stream whole, again, released, then again:\n");
+    XferRx a(dir + "/store-release", log);
+    Run r1 = feed(a, stream);
+    Run r2 = feed(a, stream);
+    expect(r1.p.done && r2.p.files.size() == 1, "the same stream twice before a release: one file (" + std::to_string(r2.p.files.size()) + ")");
+    a.releaseDone();
+    Run r3 = feed(a, stream);
+    const auto& fs = r3.p.files;
+    expect(fs.size() == 2 && fs[0].done && fs[1].done && fs[0].root == root && fs[1].root == root && r3.p.done,
+           "after the release the same stream again: the file received a second time (" + std::to_string(fs.size()) + " files)");
+    // ai: the first file not taken out (no session here): the second beside it, the first's left whole
+    expect(fs[0].path != fs[1].path && sfs::exists(fs[0].path) && sfs::exists(fs[1].path) && sfs::file_size(fs[0].path) == file.size(),
+           "the second in a folder of its own, the first left whole: " + fs[1].path);
   }
   printf("%s\n", fails ? "FAILED" : "PASS");
   return fails ? 1 : 0;

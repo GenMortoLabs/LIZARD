@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { makePhy, sourceFor } from "../liblizard/sim/phy.mjs";
 import { init as initOb } from "../liblizard/sim/ob.mjs";
 import { init, Encoder } from "../liblizard/sim/fountain.mjs";
-import { XferSender, blake3, hex, DEFAULT_LOG2, PAYLOAD, idChunk } from "../liblizard/sim/xfer.mjs";
+import { XferSender, blake3, hex, DEFAULT_LOG2, PAYLOAD, idSbn } from "../liblizard/sim/xfer.mjs";
 import { N_FOR, versionOf } from "../liblizard/sim/lizard_pick.mjs";
 
 const at = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -71,7 +71,7 @@ async function clip(path, frameOf, frames = FRAMES) {
   // ai: The crop the receiver decodes: the centred square of the short side, or the whole clip under CROP=full.
   const cw = process.env.CROP === "full" ? CW : Math.min(CW, CH), ch = process.env.CROP === "full" ? CH : Math.min(CW, CH), x0 = Math.floor((CW - cw) / 2), y0 = Math.floor((CH - ch) / 2);
   const A = MOTION ?? 0, move = motionPath(A), drawn = { max: [0, 0], step: [0, 0], stepSum: 0 };
-  let shown = -1, sym = null, sw = 0, sh = 0, ox = 0, oy = 0, prev = [0, 0];
+  let shown = -1, esi = null, sw = 0, sh = 0, ox = 0, oy = 0, prev = [0, 0];
   for (let i = 0; i < frames; i++) {
     const seq = Math.floor((i * FD) / FC), d = move(i);
     if (seq !== shown) {
@@ -82,12 +82,12 @@ async function clip(path, frameOf, frames = FRAMES) {
       // ai: CW=1280 CH=720 LIZARD-96's 744 px lost its margin on every side (found 2026-09-26). Under MOTION it must fit
       // ai: wherever the motion takes it.
       if (ox - A < x0 || oy - A < y0 || ox + sw + A > x0 + cw || oy + sh + A > y0 + ch) throw new Error(`clip: a ${sw} x ${sh} px frame${A ? ` moved up to ${A} px each way` : ""} does not fit the receiver's ${cw} x ${ch} crop of a ${CW} x ${CH} clip; raise CW and CH${A ? " or lower MOTION" : ""}`);
-      if (sym?.length !== sw * sh) sym = Buffer.alloc(sw * sh);
-      for (let r = 0; r < sh; r++) for (let c = 0; c < sw; c++) { const k = ((r / PX) | 0) * fr.w + ((c / PX) | 0); sym[r * sw + c] = fr.drive ? Math.round(20 + 215 * fr.drive[k]) : fr.dark[k] ? 20 : 235; }
+      if (esi?.length !== sw * sh) esi = Buffer.alloc(sw * sh);
+      for (let r = 0; r < sh; r++) for (let c = 0; c < sw; c++) { const k = ((r / PX) | 0) * fr.w + ((c / PX) | 0); esi[r * sw + c] = fr.drive ? Math.round(20 + 215 * fr.drive[k]) : fr.dark[k] ? 20 : 235; }
     }
     if (seq !== shown || A) {
       y.fill(235);
-      for (let r = 0; r < sh; r++) sym.copy(y, (oy + d[1] + r) * CW + ox + d[0], r * sw, (r + 1) * sw);
+      for (let r = 0; r < sh; r++) esi.copy(y, (oy + d[1] + r) * CW + ox + d[0], r * sw, (r + 1) * sw);
       if (VERIFY) {
         const xm = x0 + SHIFT;
         [[0, 0], [1, 0], [1, 1], [0, 1]].forEach(([cx, cy], k) => { for (let r = 4; r < 20; r++) for (let c = 4; c < 20; c++) y[(y0 + (cy ? ch - 1 - r : r)) * CW + xm + (cx ? cw - 1 - c : c)] = MARK[k]; });
@@ -204,11 +204,12 @@ if (process.env.ONLY !== "files") {
   // the expectations below are still the per-camera-frame ones.
   row("new bytes per decoded frame", (per2 * FD) / FC, s.freshPerFrame, "B");
   row("bytes per decoded frame, repeats", per2, s.usefulPerFrame, "B");
-  // The rate the sender stated IN THE BAND, come back through the clip, the fake camera and a worker: the only
-  // number here that did not travel over the network (src/fmt.h).
+  // The version the sender stated IN THE BAND, come back through the clip, the fake camera and a worker: the only
+  // number here that did not travel over the network (src/fmt.h). ai: A static word states no rate (the animated
+  // header's alone, SPEC 5.2), so a static sender's band reads 0 fps.
   {
-    const v = versionOf(phy2 ? REPICK : SUBCH), ok = s.bandFps === FD && s.bandVersion === v;
-    console.log(`band read through the lens: version ${s.bandVersion}, ${s.bandFps} fps stated  ${ok ? "as painted" : `WRONG, the clip was painted at version ${v}, ${FD} fps`}`);
+    const v = versionOf(phy2 ? REPICK : SUBCH), ok = s.bandVersion === v;
+    console.log(`band read through the lens: version ${s.bandVersion}  ${ok ? "as painted" : `WRONG, the clip was painted at version ${v}`}`);
     if (!ok) process.exitCode = 1;
   }
   // ai: A re-pick: each half's version read and decoded at the display's rate in some window of its own (a window is 5 s).
@@ -247,14 +248,14 @@ if (process.env.ONLY !== "files") {
 // but the decode settings.
 const CASES = {
   "600k": { length: 600000 }, empty: { length: 0 }, one: { length: PAYLOAD }, small: { length: 50000 },
-  "10m": { length: 10e6 }, "64m": { length: 64e6 },   // 64 MB: four chunks of 16 MiB
-  // Chunk 1 painted wrong in the first lap, every 64th block from its fourth, each with its CRC right: the chunk decodes
-  // to the wrong bytes, its chaining value says so, and the page must refuse it and take the chunk again from the
-  // second lap. More than one block, so a frame the receiver happened to skip cannot hide the test.
+  "10m": { length: 10e6 }, "64m": { length: 64e6 },   // 64 MB: four source blocks of 16 MiB
+  // Source block 1 painted wrong in the first cycle, every 64th block from its fourth, each with its CRC right: the source block decodes
+  // to the wrong bytes, its chaining value says so, and the page must refuse it and take the source block again from the
+  // second cycle. More than one block, so a frame the receiver happened to skip cannot hide the test.
   corrupt: { length: 3 * 2 ** 20 - 12345, log2: 20, corrupt: 1 },
   // ai: Resumed by the next page (2026-10-22, transfers kept in OPFS across page loads): the first 55% of the frames
   // ai: to one page, which is killed, the rest to a new page on the same profile. The rest alone cannot carry the file
-  // ai: (each chunk needs a lap's share of its blocks), so a file handed back whole is the first page's blocks resumed.
+  // ai: (each source block needs a cycle's share of its blocks), so a file handed back whole is the first page's blocks resumed.
   resume: { length: 3 * 2 ** 20 - 12345, log2: 20, resume: 0.55 },
 };
 const XFER = (process.env.XFER ?? "600k").split(",").filter(Boolean);
@@ -267,23 +268,23 @@ if (!ONLY_TEST) {
     const bytes = new Uint8Array(c.length), fname = `check-${name}.bin`;
     for (let i = 0, v = c.length + 1; i < bytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bytes[i] = v >>> 16; }
     const phy = await makePhy(spec), B = phy.blocksPerFrame;
-    const xs = new XferSender(bytes, { name: fname, type: "application/octet-stream", chunkLog2: c.log2 ?? DEFAULT_LOG2, M, Encoder });
+    const xs = new XferSender(bytes, { name: fname, sbLog2: c.log2 ?? DEFAULT_LOG2, M, Encoder });
     const src = (id, out) => xs.block(id, out);
-    // ai: the corrupt case: every 64th of the chunk's first K symbols in the order they are sent, so its first solve
+    // ai: the corrupt case: every 64th of the source block's first K symbols in the order they are sent, so its first solve
     // ai: decodes wrong and the symbols after them are clean (its ids in 0 .. K - 1 until the sender's random start of
     // ai: 2026-11-14, which left this case corrupting nothing; each pass's order shuffled since 2026-11-15)
     const order = new Map();
     const corrupted = (id) => {
-      if (idChunk(id) !== c.corrupt) return false;
+      if (idSbn(id) !== c.corrupt) return false;
       let k = order.get(id);
       if (k === undefined) { k = order.size; order.set(id, k); }
       return k < xs.K[c.corrupt] && k % 64 === 3;
     };
-    phy.setSource(c.corrupt === undefined ? src : (id, out) => { src(id, out); if (corrupted(id)) out[5] ^= 1; return out; });
+    phy.setSource(c.corrupt === undefined ? src : (id, out) => { src(id, out); if (corrupted(id)) out[5] ^= 1; return out; }, xs);
     const least = Math.ceil(xs.K.reduce((a, b) => a + b, 0) / B);
-    // A lap and a little (two for the corrupt case), a control block a frame at most. The fake camera loops the clip,
+    // A cycle and a little (two for the corrupt case), a control block a frame at most. The fake camera loops the clip,
     // which repeats ids: that only helps a receiver that missed them the first time.
-    const frames = Math.ceil((Math.max(1, xs.sched.lap) * (c.corrupt === undefined ? 1.08 : 2.1)) / Math.max(1, B - 1)) + 24;
+    const frames = Math.ceil((Math.max(1, xs.carousel.cycle) * (c.corrupt === undefined ? 1.08 : 2.1)) / Math.max(1, B - 1)) + 24;
     const clipFrames = Math.ceil((frames * FC) / FD), path = `${dir}/file.y4m`, t0 = Date.now();
     let first = null;
     if (c.resume) {
@@ -295,11 +296,11 @@ if (!ONLY_TEST) {
       first = await chrome(resolve(pathA), ca / FC + 8);
       rmSync(pathA, { force: true });
       const x1 = first.xfer;
-      console.log(`  the first page, ${(ca / FC).toFixed(0)} s of the clip's first ${Math.round(100 * c.resume)}%: ${x1?.verified ?? 0} of ${x1?.header?.chunks ?? "?"} chunks verified, ${/complete/.test(first.file ?? "") ? "COMPLETE" : "not complete"}; killed`);
+      console.log(`  the first page, ${(ca / FC).toFixed(0)} s of the clip's first ${Math.round(100 * c.resume)}%: ${x1?.verified ?? 0} of ${x1?.header?.sourceBlocks ?? "?"} chunks verified, ${/complete/.test(first.file ?? "") ? "COMPLETE" : "not complete"}; killed`);
       if (/complete/.test(first.file ?? "")) process.exitCode = 1;
     } else await clip(path, (seq) => phy.frame(seq, xs.frameIds(B)), clipFrames);
     const clipSecs = (c.resume ? Math.ceil(((frames - Math.ceil(frames * c.resume)) * FC) / FD) : clipFrames) / FC;
-    console.log(`${name}: ${c.length} B, ${xs.chunks} chunk${xs.chunks === 1 ? "" : "s"} of 2^${xs.chunkLog2}, ${xs.manifest.length} manifest block${xs.manifest.length === 1 ? "" : "s"}, header in the light only; clip ${clipFrames} frames (${clipSecs.toFixed(0)} s) made in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+    console.log(`${name}: ${c.length} B, ${xs.sourceBlocks} chunk${xs.sourceBlocks === 1 ? "" : "s"} of 2^${xs.sbLog2}, header in the light only; clip ${clipFrames} frames (${clipSecs.toFixed(0)} s) made in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
     rmSync(`${RECEIVED}/${fname}`, { force: true });
     const s = await chrome(resolve(path), clipSecs * (c.corrupt === undefined ? 2 : 1.5) + 30, (st) => /complete|FAILED/.test(st.file ?? ""), `&save=post${process.env.STORE ? "&store=" + process.env.STORE : ""}`);
     const m = /in ([\d.]+) s \(([\d.]+) KB/.exec(s.file ?? ""), secs = least / FD;
@@ -326,7 +327,7 @@ if (!ONLY_TEST) {
     const x = s.xfer;
     if (x) {
       const mem = x.mem ?? {};
-      console.log(`  header ${x.lightSeen ? "read from the light" : "never read from the light"}; ${x.verified ?? "?"} of ${x.header?.chunks ?? "?"} chunks verified, ${x.rejected ?? 0} rejected, manifest ${x.manifestHave ?? 0} of ${x.manifest ?? 0}${x.listOk ? " checked against the root" : ""}; blocks held ${x.store === "opfs" ? "on disk (OPFS)" : `in memory (${(mem.storeBytes / 1048576).toFixed(1)} MB)`}`);
+      console.log(`  header ${x.lightSeen ? "read from the light" : "never read from the light"}; ${x.verified ?? "?"} of ${x.header?.sourceBlocks ?? "?"} chunks verified, ${x.rejected ?? 0} rejected; blocks held ${x.store === "opfs" ? "on disk (OPFS)" : `in memory (${(mem.storeBytes / 1048576).toFixed(1)} MB)`}`);
       console.log(`  solving and checking took ${((x.solveMs ?? 0) / 1000).toFixed(2)} s of the fountain worker's time in all`);
       console.log(`  fountain worker: heap ${(mem.codecHeap / 1048576).toFixed(1)} MB; Chrome's renderer peaked at ${(s.chromeMem.renderer / 1048576).toFixed(0)} MB resident (the page and every worker, ${s.workers} decoding at the end), the whole tree ${(s.chromeMem.total / 1048576).toFixed(0)} MB`);
     }

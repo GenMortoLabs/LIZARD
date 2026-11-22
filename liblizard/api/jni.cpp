@@ -173,72 +173,61 @@ void encoderPaintBuffer(JNIEnv* e, jclass, jlong v, jbyteArray blocks, jint pict
 jlong decoderNew(JNIEnv* e, jclass, jint nmax) { return made(e, liz_decoder_new(nmax)); }
 void decoderFree(JNIEnv*, jclass, jlong v) { liz_decoder_free(h<liz_decoder>(v)); }
 jint decoderMaxBlocks(JNIEnv* e, jclass, jlong v) { return ok(e, liz_decoder_max_blocks(h<liz_decoder>(v))); }
-// ai: the decode's result into ints (found, ring, n, word, blocks, fps, held_used, total, verified, pilot_blocks,
-// ai: animated) and floats (quad[8], pilot_r[2], pilot_sd[2])
+// ai: the decode's result into ints (found, ring, n, word, blocks, total, verified, pilot_subch) and floats (quad[8],
+// ai: pilot_r[2], pilot_sd[2])
 void putDecoded(JNIEnv* e, const liz_decoded& d, jintArray ints, jfloatArray floats) {
-  const jint i[11] = {d.found, d.ring, d.n, d.word, d.blocks, d.fps, d.held_used, d.total, d.verified, d.pilot_blocks, d.animated};
+  const jint i[8] = {d.found, d.ring, d.n, d.word, d.blocks, d.total, d.verified, d.pilot_subch};
   float f[12];
   std::memcpy(f, d.quad, sizeof d.quad);
   std::memcpy(f + 8, d.pilot_r, sizeof d.pilot_r);
   std::memcpy(f + 10, d.pilot_sd, sizeof d.pilot_sd);
-  e->SetIntArrayRegion(ints, 0, 11, i);
+  e->SetIntArrayRegion(ints, 0, 8, i);
   e->SetFloatArrayRegion(floats, 0, 12, f);
 }
-// ai: the decode's outputs hold what it writes: verified the decoder's most blocks, held 1, ints 11, floats 12
-bool decodeOuts(JNIEnv* e, jlong v, jintArray held, jbyteArray verified, jintArray ints, jfloatArray floats) {
-  return holds(e, verified, int64_t(liz_decoder_max_blocks(h<liz_decoder>(v))) * LIZ_BLOCK, "verified") && holds(e, held, 1, "held") &&
-         holds(e, ints, 11, "ints") && holds(e, floats, 12, "floats");
+// ai: the decode's outputs hold what it writes: verified the decoder's most blocks, ints 8, floats 12
+bool decodeOuts(JNIEnv* e, jlong v, jbyteArray verified, jintArray ints, jfloatArray floats) {
+  return holds(e, verified, int64_t(liz_decoder_max_blocks(h<liz_decoder>(v))) * LIZ_BLOCK, "verified") && holds(e, ints, 8, "ints") &&
+         holds(e, floats, 12, "floats");
 }
-jint decodeCommon(JNIEnv* e, jlong v, const uint8_t* px, jint w, jint hh, jint stride, jint fmt, jintArray held, jbyteArray verified,
-                  jintArray ints, jfloatArray floats) {
-  jint hv = 0;
-  e->GetIntArrayRegion(held, 0, 1, &hv);
-  int heldWord = hv, rc;
-  liz_decoded d{};
-  { Crit out(e, verified); rc = liz_decode(h<liz_decoder>(v), px, w, hh, stride, liz_pixfmt(fmt), &heldWord, out.bytes(), &d); }
-  if (ok(e, rc) < 0) return rc;
-  hv = heldWord;
-  e->SetIntArrayRegion(held, 0, 1, &hv);
-  putDecoded(e, d, ints, floats);
-  return rc;
-}
-jint decode(JNIEnv* e, jclass, jlong v, jbyteArray px, jint offset, jint w, jint hh, jint stride, jint fmt, jintArray held,
-            jbyteArray verified, jintArray ints, jfloatArray floats) {
-  if (!holds(e, px, spanOf(offset, w, hh, stride, bppOf(fmt)), "px") || !decodeOuts(e, v, held, verified, ints, floats)) return 0;
-  jint heldWord = 0;
-  e->GetIntArrayRegion(held, 0, 1, &heldWord);
+jint decode(JNIEnv* e, jclass, jlong v, jbyteArray px, jint offset, jint w, jint hh, jint stride, jint fmt, jbyteArray verified,
+            jintArray ints, jfloatArray floats) {
+  if (!holds(e, px, spanOf(offset, w, hh, stride, bppOf(fmt)), "px") || !decodeOuts(e, v, verified, ints, floats)) return 0;
   // ai: the image read in place: between here and the release no JNI call is made, the results written after it
   jbyte* p = static_cast<jbyte*>(e->GetPrimitiveArrayCritical(px, nullptr));
-  int hw = heldWord, rc;
+  int rc;
   liz_decoded d{};
   {
     Crit out(e, verified);
-    rc = liz_decode(h<liz_decoder>(v), reinterpret_cast<uint8_t*>(p) + offset, w, hh, stride, liz_pixfmt(fmt), &hw, out.bytes(), &d);
+    rc = liz_decode(h<liz_decoder>(v), reinterpret_cast<uint8_t*>(p) + offset, w, hh, stride, liz_pixfmt(fmt), out.bytes(), &d);
   }
   e->ReleasePrimitiveArrayCritical(px, p, JNI_ABORT);
   if (ok(e, rc) < 0) return rc;
-  heldWord = hw;
-  e->SetIntArrayRegion(held, 0, 1, &heldWord);
   putDecoded(e, d, ints, floats);
   return rc;
 }
-jint decodeBuffer(JNIEnv* e, jclass, jlong v, jobject px, jint offset, jint w, jint hh, jint stride, jint fmt, jintArray held,
-                  jbyteArray verified, jintArray ints, jfloatArray floats) {
-  if (!holdsBuf(e, px, spanOf(offset, w, hh, stride, bppOf(fmt)), "px") || !decodeOuts(e, v, held, verified, ints, floats)) return 0;
-  return decodeCommon(e, v, direct(e, px) + offset, w, hh, stride, fmt, held, verified, ints, floats);
+jint decodeBuffer(JNIEnv* e, jclass, jlong v, jobject px, jint offset, jint w, jint hh, jint stride, jint fmt, jbyteArray verified,
+                  jintArray ints, jfloatArray floats) {
+  if (!holdsBuf(e, px, spanOf(offset, w, hh, stride, bppOf(fmt)), "px") || !decodeOuts(e, v, verified, ints, floats)) return 0;
+  const uint8_t* src = direct(e, px) + offset;   // ai: before the critical region: no JNI call inside it
+  int rc;
+  liz_decoded d{};
+  { Crit out(e, verified); rc = liz_decode(h<liz_decoder>(v), src, w, hh, stride, liz_pixfmt(fmt), out.bytes(), &d); }
+  if (ok(e, rc) < 0) return rc;
+  putDecoded(e, d, ints, floats);
+  return rc;
 }
 
-jlong txNew(JNIEnv* e, jclass, jbyteArray bytes, jstring name, jstring type) {
-  Str n(e, name), t(e, type);
+jlong txNew(JNIEnv* e, jclass, jbyteArray bytes, jstring name) {
+  Str n(e, name);
   if (!holds(e, bytes, 0, "bytes")) return 0;
   const jsize len = e->GetArrayLength(bytes);
   liz_tx* tx;
-  { Elems b(e, bytes); if (len && !b.p) return 0; tx = liz_tx_new(b.bytes(), size_t(len), n.c, t.c, LIZ_TX_COPY); }   // ai: hashes the whole file
+  { Elems b(e, bytes); if (len && !b.p) return 0; tx = liz_tx_new(b.bytes(), size_t(len), n.c, LIZ_TX_COPY); }   // ai: hashes the whole file
   return made(e, tx);
 }
-jlong txNewPath(JNIEnv* e, jclass, jstring path, jstring name, jstring type) {
-  Str p(e, path), n(e, name), t(e, type);
-  return made(e, liz_tx_new_path(p.c, n.c, t.c));
+jlong txNewPath(JNIEnv* e, jclass, jstring path, jstring name) {
+  Str p(e, path), n(e, name);
+  return made(e, liz_tx_new_path(p.c, n.c, 0));
 }
 jlong txNewTest(JNIEnv* e, jclass, jint first) { return made(e, liz_tx_new_test(uint32_t(first))); }
 void txFree(JNIEnv*, jclass, jlong v) { liz_tx_free(h<liz_tx>(v)); }
@@ -251,7 +240,7 @@ jint txNext(JNIEnv* e, jclass, jlong v, jint n, jbyteArray out) {
 void txInfo(JNIEnv* e, jclass, jlong v, jlongArray out, jbyteArray root) {
   liz_tx_info i{};
   if (ok(e, liz_tx_info_get(h<liz_tx>(v), &i)) < 0) return;
-  const jlong l[4] = {i.test, jlong(i.length), jlong(i.chunks), jlong(i.lap)};
+  const jlong l[4] = {i.test, jlong(i.length), jlong(i.source_blocks), jlong(i.cycle)};
   e->SetLongArrayRegion(out, 0, 4, l);
   e->SetByteArrayRegion(root, 0, 32, reinterpret_cast<const jbyte*>(i.root));
 }
@@ -276,18 +265,18 @@ void rxFrame(JNIEnv* e, jclass, jlong v, jbyteArray blocks, jint count, jintArra
 void rxProgress(JNIEnv* e, jclass, jlong v, jintArray ints, jlongArray longs, jdoubleArray doubles) {
   liz_progress p{};
   if (ok(e, liz_rx_progress(h<liz_rx>(v), &p)) < 0) return;
-  const jint i[5] = {p.header, p.done, jint(p.chunks), jint(p.verified), jint(p.rejected)};
+  const jint i[5] = {p.header, p.done, jint(p.source_blocks), jint(p.verified), jint(p.rejected)};
   const jlong l[2] = {jlong(p.length), jlong(p.bytes_in)};
   const jdouble d[2] = {p.fraction, p.solve_ms};
   e->SetIntArrayRegion(ints, 0, 5, i);
   e->SetLongArrayRegion(longs, 0, 2, l);
   e->SetDoubleArrayRegion(doubles, 0, 2, d);
 }
-jbyteArray rxChunks(JNIEnv* e, jclass, jlong v) {
-  const int n = ok(e, liz_rx_chunks(h<liz_rx>(v), nullptr, 0));
+jbyteArray rxSourceBlocks(JNIEnv* e, jclass, jlong v) {
+  const int n = ok(e, liz_rx_source_blocks(h<liz_rx>(v), nullptr, 0));
   if (n < 0) return nullptr;
   jbyteArray a = e->NewByteArray(n);
-  if (n) { Crit c(e, a); liz_rx_chunks(h<liz_rx>(v), c.bytes(), n); }
+  if (n) { Crit c(e, a); liz_rx_source_blocks(h<liz_rx>(v), c.bytes(), n); }
   return a;
 }
 jstring rxMeta(JNIEnv* e, jclass, jlong v, jint which) { return e->NewStringUTF(liz_rx_meta(h<liz_rx>(v), which)); }
@@ -391,15 +380,15 @@ void receiverClear(JNIEnv*, jclass, jlong v) { liz_receiver_clear(h<JReceiver>(v
 void receiverCameraClosed(JNIEnv*, jclass, jlong v) { liz_receiver_camera_closed(h<JReceiver>(v)->r); }
 
 // ai: a sender and the file's bytes it reads (copied in)
-jlong senderNew(JNIEnv* e, jclass, jbyteArray bytes, jstring name, jstring type) {
-  Str n(e, name), t(e, type);
+jlong senderNew(JNIEnv* e, jclass, jbyteArray bytes, jstring name) {
+  Str n(e, name);
   liz_sender* s;
-  if (!bytes) s = liz_sender_new(nullptr, 0, n.c, t.c, 0);
+  if (!bytes) s = liz_sender_new(nullptr, 0, n.c, 0);
   else {
     const jsize len = e->GetArrayLength(bytes);
     Elems b(e, bytes);   // ai: hashes the whole file
     if (len && !b.p) return 0;
-    s = liz_sender_new(b.bytes(), size_t(len), n.c, t.c, LIZ_TX_COPY);
+    s = liz_sender_new(b.bytes(), size_t(len), n.c, LIZ_TX_COPY);
   }
   return made(e, s);
 }
@@ -452,10 +441,10 @@ const JNINativeMethod METHODS[] = {
     M(decoderNew, "(I)J"),
     M(decoderFree, "(J)V"),
     M(decoderMaxBlocks, "(J)I"),
-    M(decode, "(J[BIIIII[I[B[I[F)I"),
-    M(decodeBuffer, "(JLjava/nio/ByteBuffer;IIIII[I[B[I[F)I"),
-    M(txNew, "([BLjava/lang/String;Ljava/lang/String;)J"),
-    M(txNewPath, "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)J"),
+    M(decode, "(J[BIIIII[B[I[F)I"),
+    M(decodeBuffer, "(JLjava/nio/ByteBuffer;IIIII[B[I[F)I"),
+    M(txNew, "([BLjava/lang/String;)J"),
+    M(txNewPath, "(Ljava/lang/String;Ljava/lang/String;)J"),
     M(txNewTest, "(I)J"),
     M(txFree, "(J)V"),
     M(txNext, "(JI[B)I"),
@@ -464,7 +453,7 @@ const JNINativeMethod METHODS[] = {
     M(rxFree, "(J)V"),
     M(rxFrame, "(J[BI[I)V"),
     M(rxProgress, "(J[I[J[D)V"),
-    M(rxChunks, "(J)[B"),
+    M(rxSourceBlocks, "(J)[B"),
     M(rxMeta, "(JI)Ljava/lang/String;"),
     M(rxData, "(J)[B"),
     M(rxClear, "(J)V"),
@@ -480,7 +469,7 @@ const JNINativeMethod METHODS[] = {
     M(receiverFile, "(J)Ljava/lang/String;"),
     M(receiverClear, "(J)V"),
     M(receiverCameraClosed, "(J)V"),
-    M(senderNew, "([BLjava/lang/String;Ljava/lang/String;)J"),
+    M(senderNew, "([BLjava/lang/String;)J"),
     M(senderFree, "(J)V"),
     M(senderConfigure, "(JIIIIIILjava/lang/String;Ljava/lang/String;)V"),
     M(senderReady, "(J)Z"),

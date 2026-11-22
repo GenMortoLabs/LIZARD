@@ -17,8 +17,8 @@ export const ARGS_WORDS = 12;
 export const argsLdpc = (c) => SLOTS * ARGS_WORDS + 3 * c;
 // ai: ARGS whole, u32 words: ARGS_WORDS a picture slot, then 3 a code.
 export const argsWords = SLOTS * ARGS_WORDS + 3 * NC;
-// ai: LISTS: a size's count and frames (SLOTS (1 + B)), then from listsHead each frame's (w, h), configuration (src/fmt.h
-// ai: ob_fmt_held: version << 22 | its counts; the version alone before 2026-11-18), rows and
+// ai: LISTS: a size's count and frames (SLOTS (1 + B)), then from listsHead each frame's (w, h), configuration (version
+// ai: << 22 | its static word's counts, ../glsl/common.mjs CFG; the version alone before 2026-11-18), rows and
 // ai: ring, then from listsAll every listed frame of every size in the batch's order (the LDPC's workgroups' frames:
 // ai: a workgroup a (block of a code, listed frame)).
 export const listsHead = (B) => SLOTS * (1 + B);

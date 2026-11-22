@@ -25,39 +25,20 @@ void cpu_dec_set_axis(float x, float y) { lizard_set_axis(x, y); }
 int cpu_dec_top(const cpu_dec_t *d) { return lizard_any_top(&d->any); }
 int cpu_dec_block_bytes(const cpu_dec_t *d) { return d->block_bytes; }
 
-int cpu_dec_frame(cpu_dec_t *d, const uint8_t *img, int iw, int ih, int held, uint8_t *blocks, uint8_t *ok, cpu_frame_t *out) {
+int cpu_dec_frame(cpu_dec_t *d, const uint8_t *img, int iw, int ih, uint8_t *blocks, uint8_t *ok, cpu_frame_t *out) {
   memset(&d->res, 0, sizeof d->res);
-  const int got = lizard_any_frame(&d->any, img, iw, ih, 1.0f, blocks, ok, held, &d->res);
+  const int got = lizard_any_frame(&d->any, img, iw, ih, 1.0f, blocks, ok, &d->res);
   if (out) {
     const ob_fmt_t *fm = lizard_any_word(&d->any);
-    out->found = d->res.found; out->ring = d->any.which; out->n = d->any.n; out->held = d->any.held;
+    out->found = d->res.found; out->ring = d->any.which; out->n = d->any.n;
     out->word = fm != 0; out->version = fm ? fm->version : 0;
-    out->kind = fm ? fm->kind : 0; out->id = fm ? fm->id : 0;
     for (int i = 0; i < 3; i++) out->count[i] = fm ? fm->count[i] : 0;
-    memcpy(out->sym, fm ? fm->sym : (const uint8_t[3]){ 0, 0, 0 }, 3);
+    out->fps = fm ? fm->fps : 0; out->delay = fm ? fm->delay : 0;
     out->total = d->any.last ? d->any.last->blocks : 0;
     memcpy(out->quad, d->res.quad, sizeof out->quad);
-    out->pilot_blocks = lizard_any_pilot(&d->any, out->pilot_r, out->pilot_sd);
+    out->pilot_subch = lizard_any_pilot(&d->any, out->pilot_r, out->pilot_sd);
   }
   return got;
-}
-struct cpu_hold { ob_car_rx_t car; int held, fps; };
-cpu_hold_t *cpu_hold_new(void) { return calloc(1, sizeof(cpu_hold_t)); }
-void cpu_hold_free(cpu_hold_t *h) { free(h); }
-void cpu_hold_reset(cpu_hold_t *h) { ob_car_reset(&h->car); h->held = 0; h->fps = 0; }
-int cpu_hold_held(const cpu_hold_t *h) { return h->held; }
-int cpu_hold_fps(const cpu_hold_t *h) { return h->fps; }
-int cpu_hold_take(cpu_hold_t *h, int kind, int version, const int count[3], int id, const uint8_t sym[3]) {
-  if (kind == OB_FMT_STATIC) {
-    ob_fmt_t f = { .kind = OB_FMT_STATIC, .version = version, .count = { count[0], count[1], count[2] } };
-    const int v = ob_fmt_held(&f);
-    if (v) h->held = v;
-  } else if (kind == OB_FMT_ANIM) {
-    ob_fmt_t f;
-    const int k = ob_car_add(&h->car, id, sym), v = k && ob_car_config(h->car.hdr, k, &f) ? ob_fmt_held(&f) : 0;
-    if (v) { h->held = v; h->fps = f.fps; }
-  }
-  return h->held;
 }
 void cpu_dec_block_stats(const cpu_dec_t *d, const int8_t **its, const float **est) {
   *its = 0; *est = 0;

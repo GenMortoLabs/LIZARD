@@ -17,9 +17,9 @@ export const FEATURES = ["bad", "low", "first", "fall", "it", "grow"];   // ai: 
 export const INPUTS = ["bad", "low", "first", "prev", "t", "grow"];       // ai: the kernel's raw inputs
 export const GROW_ONE = 256;                                               // ai: the kernel's grow for a ratio of 1
 export const RULE_URL = new URL("./stop.safetensors", import.meta.url);
-// ai: Each code's file by its checks m: the format's four codes at z = 128 (2026-10-31), 7/8 640, 3/4 1280 (RULE_URL),
+// ai: Each code's file by its checks m: the format's four codes at z = 128 (2026-10-31), 6/7 640, 3/4 1280 (RULE_URL),
 // ai: 2/3 1920 and 1/2 3840, each trained on the same recipe and budget against its own code.
-export const RULE_URLS = Object.freeze({ 1280: RULE_URL, 640: new URL("./stop_78.safetensors", import.meta.url), 1920: new URL("./stop_23.safetensors", import.meta.url), 3840: new URL("./stop_12.safetensors", import.meta.url) });
+export const RULE_URLS = Object.freeze({ 1280: RULE_URL, 640: new URL("./stop_67.safetensors", import.meta.url), 1920: new URL("./stop_23.safetensors", import.meta.url), 3840: new URL("./stop_12.safetensors", import.meta.url) });
 export function ruleUrlFor(m) {
   const url = RULE_URLS[m];
   if (!url) throw new Error(`stop rule: no file for a code of ${m} checks`);

@@ -27,30 +27,16 @@ namespace {
 double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 constexpr int PAYLOAD = XFER_PAYLOAD, ID_BYTES = XFER_ID_BYTES;
 constexpr int TX_GPU_FRAMES = 32;   // ai: frames a GPU encode at most (configure)
-bool control(xfer_id_t id) { return xfer_id_chunk(id) == XFER_CONTROL; }   // ai: sim/xfer.mjs isControlId
+bool control(xfer_id_t id) { return xfer_id_sbn(id) == XFER_CONTROL; }   // ai: sim/xfer.mjs isControlId
 // ai: a string's text fit for the stats JSON (a driver's message may hold quotes or a backslash)
 std::string esc(const std::string& s) {
   std::string o;
   for (char c : s) { if (c == '"' || c == '\\') o += '\\'; if (static_cast<unsigned char>(c) >= 0x20) o += c; }
   return o;
 }
-// ai: the transfer's schedule's draws (xfer_tx.cpp, sim/xfer.mjs): murmur3's finaliser; xorshift32, a state never 0
-uint32_t mix32(uint32_t x) { x ^= x >> 16; x *= 0x85ebca6bu; x ^= x >> 13; x *= 0xc2b2ae35u; x ^= x >> 16; return x; }
-uint32_t xorshift(uint32_t& s) { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
-// ai: pass's order of the carousel's 255 positions under key (Sender::carouselPosition)
-void carouselPass(uint32_t key, uint64_t pass, uint8_t order[OB_CAR_N]) {
-  uint32_t s = mix32(key ^ mix32(static_cast<uint32_t>(pass) * 0x85ebca6bu + 0x27d4eb2fu));
-  if (!s) s = 0x9e3779b9u;
-  for (int i = 0; i < OB_CAR_N; i++) order[i] = static_cast<uint8_t>(i);
-  for (int i = OB_CAR_N - 1; i > 0; i--) std::swap(order[i], order[xorshift(s) % static_cast<uint32_t>(i + 1)]);
-}
-uint32_t freshKey() {
-  std::random_device rd;   // ai: the clock mixed in: some C++ libraries' random_device repeats from run to run
-  return rd() ^ mix32(static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
-}
 }  // namespace
 
-// ai: An export's state (sender.h exportStart), under mu_: the file, how many frames go (target: 0 until the lap is
+// ai: An export's state (sender.h exportStart), under mu_: the file, how many frames go (target: 0 until the cycle is
 // ai: known) from which (from), the frames taken and not packed (raw), packed and not written (packed: by the writer's
 // ai: order, a fused painter's every frame, the others' admitted ones alone), the writer's next frame, and its threads.
 struct Sender::Sink {
@@ -80,31 +66,22 @@ struct Sender::Sink {
   std::thread writer, drainer;
 };
 
-int Sender::carouselPosition(uint32_t key, uint64_t slot) {
-  uint8_t order[OB_CAR_N];
-  carouselPass(key, slot / OB_CAR_N, order);
-  return order[slot % OB_CAR_N];
-}
-
-uint32_t Sender::carouselKey() {
-  std::lock_guard<std::mutex> l(mu_);
-  return carKey_;
-}
-
-Sender::Sender(const uint8_t* data, size_t length, const std::string& name, const std::string& type, const std::string& spillDir,
+Sender::Sender(const uint8_t* data, size_t length, const std::string& name, uint8_t compression, const std::string& spillDir,
                const std::function<bool()>& stopped) {
-  // ai: deferred: the first configure says who makes the chunks (sender.h)
-  if (data) xfer_ = std::make_unique<XferTx>(data, length, name, type, -1, spillDir, stopped, true);
+  // ai: deferred: the first configure says who makes the source blocks (sender.h)
+  if (data) xfer_ = std::make_unique<XferTx>(data, length, name, -1, spillDir, stopped, true, compression);
   // ai: the test stream starts at a random id each start, as the page's (lizard-web/send.mjs), so a receiver takes a restarted
   // ai: one as new with no signal
   std::random_device rd;
   nextId_ = (rd() & 0x3fffffffu) | 1u;
-  carKey_ = freshKey();
+  // ai: under a TOI of its own, as any send's: the format has no test stream (TOI 0 is none, src/xfer.h)
+  const xfer_toi_t toi = xfer_toi_t(rd() & 0xffffffu) << 24 | (rd() & 0xffffffu);   // ai: 48 bits
+  testToi_ = toi ? toi : 1;
   winStart_ = nowMs();
 }
 
 // ai: the threads first, then the transfer's workers (a worker in GpuStream::put let go by its stop, then joined), then the
-// ai: stream: a worker hands its chunk to the stream and wakes the painter through mu_ and cv_, which outlive both
+// ai: stream: a worker hands its source block to the stream and wakes the painter through mu_ and cv_, which outlive both
 Sender::~Sender() {
   stopAll();
   // ai: the export's writer, then the GPU's packer, before the painter's device goes (zstd_ is declared before gpu_, so
@@ -146,8 +123,8 @@ std::unique_ptr<Sender> Sender::play(const std::string& path, std::string& why) 
     p->test = m.value("test", false);
     if (m.contains("file")) {
       const auto& fi = m["file"];
-      p->name = fi.value("name", ""); p->type = fi.value("type", ""); p->root = fi.value("root", "");
-      p->length = fi.value("length", uint64_t(0)); p->lap = fi.value("lap", uint64_t(0));
+      p->name = fi.value("name", ""); p->compression = fi.value("compression", 0); p->root = fi.value("root", "");
+      p->length = fi.value("length", uint64_t(0)); p->cycle = fi.value("cycle", uint64_t(0));
     }
   } catch (const std::exception& e) { why = path + ": its meta.json is not a stream's (" + e.what() + ")"; return nullptr; }
   if (p->codes < 1 || p->codes > 2 || p->ring < 0 || p->ring >= LIZARD_RINGS || p->fps < 1 || p->pictures < 1 ||
@@ -166,7 +143,6 @@ std::unique_ptr<Sender> Sender::play(const std::string& path, std::string& why) 
     }
   std::unique_ptr<Sender> s(new Sender());
   s->play_ = std::move(p);
-  s->carKey_ = freshKey();
   s->winStart_ = nowMs();
   return s;
 }
@@ -192,8 +168,6 @@ std::string Sender::configure(const TxFormat& fIn) {
     f.subch = LIZARD_STEP * play_->blocks; f.span = 2 * LIZARD_RING[play_->ring]; f.fps = play_->fps; f.codes = play_->codes;
     f.gap = play_->codes > 1 ? play_->gapModules : f.gap; f.painter = 0;
   }
-  int car;
-  { std::lock_guard<std::mutex> l(mu_); car = carousel_; }
   if (f.codes < 1 || f.codes > 2) return "codes are 1 or 2, not " + std::to_string(f.codes);
   if (f.gap < 0 || f.gap > 64) return "the gap is 0 to 64 modules, not " + std::to_string(f.gap);
   // ai: one codec made here to say what the format is (and that it is one); each painter makes its own
@@ -242,9 +216,6 @@ std::string Sender::configure(const TxFormat& fIn) {
         if (!c.ok) gpuWhy_ = "its frames are not the C's (border " + std::to_string(c.borderDiff) + " pixels apart, the square up to " + std::to_string(c.squareMax) + " levels" +
                              (c.anchorDiff ? ", the anchors " + std::to_string(c.anchorDiff) + " pixels apart" : "") + ")";
       }
-      // ai: the animated header (setCarousel) on: each frame's word cells its own symbol, painted by WORDS after rsh (the
-      // ai: check above holds the static word to the C's); where the GPU cannot, the CPU paints
-      if (gpuWhy_.empty() && car > 0 && !gpu_->wordsWhy().empty()) gpuWhy_ = gpu_->wordsWhy();
     } catch (const std::exception& e) { gpuWhy_ = e.what(); }
     if (gpuWhy_.empty()) gpu = true;
     else if (f.painter == 1) { lizard_free(&probe); return "the GPU cannot paint here: " + gpuWhy_; }
@@ -255,18 +226,18 @@ std::string Sender::configure(const TxFormat& fIn) {
     catch (const std::exception& x) { e = x.what(); }
     if (!e.empty()) { lizard_free(&probe); return "no frame ring on the device: " + e; }
   }
-  // ai: The file's chunks, decided here once (the first configure to get this far): the CPU's workers solve them either
+  // ai: The file's source blocks, decided here once (the first configure to get this far): the CPU's workers solve them either
   // ai: way; where the GPU paints, holds the file's symbols (gpu_stream.h's budget) and makes its self-test's blocks as
-  // ai: the C does, each chunk's symbols go up as it is made and the GPU makes every frame's blocks from their ids (a
+  // ai: the C does, each source block's symbols go up as it is made and the GPU makes every frame's blocks from their ids (a
   // ai: later configure that paints on the CPU reads them back); else the CPU's encoders (the spill past RAM) as ever.
   // ai: LIZ_TX_RQ=cpu: the CPU's (the lab's A/B).
-  if (xfer_ && xfer_->chunks() && holder_ == RQ_NONE) {
+  if (xfer_ && xfer_->sourceBlocks() && holder_ == RQ_NONE) {
     const char* rqEnv = std::getenv("LIZ_TX_RQ");
     const bool cpuOnly = rqEnv && std::string(rqEnv) == "cpu";
     std::unique_ptr<GpuStream> st;
     if (gpu && !cpuOnly) {
       try {
-        st = GpuStream::create(*gpu_->vk(), f.assets, {xfer_->length(), xfer_->chunkSize(), xfer_->chunks(), xfer_->controls()});
+        st = GpuStream::create(*gpu_->vk(), f.assets, {xfer_->length(), xfer_->sbSize(), xfer_->sourceBlocks(), xfer_->controls()});
         rqWhy_ = st->selfTest();
         if (!rqWhy_.empty()) st.reset();
       } catch (const std::exception& e) { st.reset(); rqWhy_ = e.what(); }
@@ -288,7 +259,6 @@ std::string Sender::configure(const TxFormat& fIn) {
     sink_->drain = !sink_->job.display && gpu;
     fmt_.hostFrames = fmt_.hostFrames || (!sink_->fused && !sink_->gpuPack);
   }
-  gpuWords_ = gpu && gpu_->wordsWhy().empty();
   n_ = n;
   // ai: an export with no screen on the CPU: a painter a core, each packing what it paints (exportStart)
   const bool fusedNow = sink_ && !sink_->job.display && !gpu;
@@ -302,13 +272,13 @@ std::string Sender::configure(const TxFormat& fIn) {
   side_ = probe.px + 2 * LIZARD_QUIET * probe.pxm;
   gap_ = f.codes > 1 ? f.gap * probe.pxm : 0;
   width_ = f.codes * side_ + (f.codes - 1) * gap_;
-  // ai: the profile as text: "7/8 x 34, 3/4 x 18, 2/3 x 10, 1/2 x 10" at LIZARD-592 (the stats' tiers), read before
+  // ai: the profile as text: "6/7 x 34, 3/4 x 18, 2/3 x 10, 1/2 x 10" at LIZARD-592 (the stats' tiers), read before
   // ai: the probe is freed
   tiers_.clear();
   rateOf_.clear();
   for (int t = 0; t < probe.tiers; t++) {
     const int r = probe.tier[t].rate == 6 ? 0 : probe.tier[t].rate == 4 ? 1 : probe.tier[t].rate == 3 ? 2 : 3;
-    tiers_ += (t ? ", " : "") + std::string(r == 0 ? "7/8" : r == 1 ? "3/4" : r == 2 ? "2/3" : "1/2") + " x " + std::to_string(probe.tier[t].blocks);
+    tiers_ += (t ? ", " : "") + std::string(r == 0 ? "6/7" : r == 1 ? "3/4" : r == 2 ? "2/3" : "1/2") + " x " + std::to_string(probe.tier[t].blocks);
     rateOf_.insert(rateOf_.end(), static_cast<size_t>(probe.tier[t].blocks), static_cast<uint8_t>(r));
   }
   rateOf_.resize(static_cast<size_t>(probe.blocks), 3);   // ai: (the tiers lay every block: a guard, not a case)
@@ -365,7 +335,7 @@ void Sender::playProduce() {
   for (;;) {
     cv_.wait(l, [&] { return stop_ || made_ < shown_ + static_cast<uint64_t>(room); });
     if (stop_) return;
-    Job j{made_++, {}, play_->frameBlocks, 0, {0, 0}};
+    Job j{made_++, {}, play_->frameBlocks};
     dataOf_[j.seq] = j.data;
     jobs_.push_back(std::move(j));
     cv_.notify_all();
@@ -447,30 +417,23 @@ void Sender::produce() {
   std::vector<xfer_id_t> hostIds;   // ai: a frame's data ids whose payloads the GPU encoder reads back (the CPU paints)
   std::vector<int> hostAt;
   std::vector<uint8_t> hostOut;
-  uint8_t order[OB_CAR_N];   // ai: the carousel's order for pass orderOf under orderKey (carouselPosition), made again as either moves
-  uint64_t orderOf = ~0ull;
-  uint32_t orderKey = 0;
   // ai: a GPU-packed export with the codes shown: no frame into a slot whose frame the packer has yet to read
   const auto slotFree = [&] { return !sink_ || !sink_->gpuPack || !sink_->job.display || made_ < sink_->readTo + static_cast<uint64_t>(std::max(1, depth_)); };
   for (;;) {
     cv_.wait(l, [&] { return stop_ || (made_ < shown_ + static_cast<uint64_t>(room) && slotFree()); });
     if (stop_) return;
-    // ai: an export with no screen makes nothing before every chunk is (its frames would carry the header alone, made as
-    // ai: fast as the painter goes for nothing: a 50 MB file's chunks took 19,000 of them, 2026-11-18); the export's
+    // ai: an export with no screen makes nothing before every source block is (its frames would carry the header alone, made as
+    // ai: fast as the painter goes for nothing: a 50 MB file's source blocks took 19,000 of them, 2026-11-18); the export's
     // ai: first frame is the first made after (sinkAdmit)
     if (sink_ && !sink_->job.display && xfer_ && sink_->target == 0) {
-      uint64_t lap = 0;
-      { std::lock_guard<std::mutex> x(xferMu_); lap = xfer_->lapWhenMade(); }
-      if (lap == 0) { cv_.wait_for(l, std::chrono::milliseconds(5)); continue; }
+      uint64_t cycle = 0;
+      { std::lock_guard<std::mutex> x(xferMu_); cycle = xfer_->cycleWhenMade(); }
+      if (cycle == 0) { cv_.wait_for(l, std::chrono::milliseconds(5)); continue; }
       sinkAdmit(made_);
     }
-    Job j{made_++, std::vector<uint8_t>(static_cast<size_t>(T) * B), 0, carousel_, {0, 0}};
-    for (int c = 0; j.car > 0 && c < fmt_.codes; c++) {
-      const uint64_t slot = static_cast<uint64_t>(fmt_.codes) * (j.seq / static_cast<uint64_t>(j.car)) + static_cast<uint64_t>(c);
-      if (slot / OB_CAR_N != orderOf || carKey_ != orderKey) { orderOf = slot / OB_CAR_N; orderKey = carKey_; carouselPass(orderKey, orderOf, order); }
-      j.pos[c] = order[slot % OB_CAR_N];
-    }
+    Job j{made_++, std::vector<uint8_t>(static_cast<size_t>(T) * B), 0};
     const std::vector<int> sched = scheduleLocked();
+    if (!sched.empty()) j.delay = std::clamp(*std::max_element(sched.begin(), sched.end()), 1, REFRESH_MAX);
     l.unlock();
     int fresh = 0;
     for (int t = 0; t < T; t++) {
@@ -494,11 +457,12 @@ void Sender::produce() {
         if (held[t]) { std::memcpy(o, last.data() + static_cast<size_t>(t) * B, static_cast<size_t>(B)); continue; }
         const xfer_id_t id = ids[k++];
         xfer_id_put(o, id);
+        xfer_toi_put(o, xfer_ ? xfer_->toiFor(id) : testToi_);   // ai: every id under its TOI: the file's, its session header's or the test stream's
         if (xfer_) {
           if (!gpuFile || control(id)) xfer_->block(id, o + ID_BYTES);
           else if (!onGpu_) { hostIds.push_back(id); hostAt.push_back(t); }
         } else if (!onGpu_) stream_fill(id, o + ID_BYTES, PAYLOAD);   // ai: the GPU makes the test stream from the id itself
-        if (!xfer_ || !control(id)) j.data++;   // ai: new data blocks only: a repeat adds nothing to the lap
+        if (!xfer_ || xfer_->isFileData(id)) j.data++;   // ai: the file's new data blocks only: a repeat and the header add nothing to the cycle
       }
       if (!hostIds.empty()) {
         hostOut.resize(hostIds.size() * PAYLOAD);
@@ -545,12 +509,6 @@ void Sender::paint(int) {
     error_ = "a painter's codec failed";
     return;
   }
-  // ai: the animated header (setCarousel): the format's own configuration and the sender's rate (src/fmt.h
-  // ai: ob_car_content); a static word states no rate
-  uint8_t hdr[OB_CAR_SYM * OB_CAR_N], content[OB_CAR_CONTENT_MAX];
-  ob_fmt_t cfg = f.fmt;
-  cfg.fps = fm.fps;
-  const int clen = ob_car_content(&cfg, content), hk = clen < 0 ? -1 : ob_car_header(content, clen, hdr);
   std::vector<float> drive(static_cast<size_t>(f.px) * f.px);
   const int W = side_, codes = fm.codes, gap = gap_;
   const size_t per = static_cast<size_t>(blocks_) * blockBytes_;
@@ -570,18 +528,8 @@ void Sender::paint(int) {
     out.resize(bytes);
     const double t0 = nowMs();
     lizard_parity(&f, static_cast<int>(j.seq & 3));
-    if (j.car <= 0 && f.fmt.kind != OB_FMT_STATIC) {
-      const uint8_t b[4] = {0, 0, 0, 0};   // ai: the carousel turned off: the static word again
-      lizard_fmt_word(&f, OB_FMT_STATIC, b);
-    }
+    lizard_clock(&f, fm.fps, j.delay);   // ai: the border's word: the sender's clock (src/fmt.h), repainted where it moved
     for (int k = 0; k < codes; k++) {
-      if (j.car > 0 && hk > 0) {
-        // ai: code k's symbol (setCarousel): the id the producer drew for it
-        const int p = j.pos[k];
-        uint8_t b[4] = {static_cast<uint8_t>(p), 0, 0, 0};
-        ob_car_symbol(hdr, hk, p, b + 1);
-        lizard_fmt_word(&f, OB_FMT_ANIM, b);
-      }
       lizard_encode(&f, j.blocks.data() + k * per, drive.data());
       lizard_paint_grey(&f, drive.data(), part.data());
       const size_t x0 = static_cast<size_t>(k) * (W + gap);
@@ -677,7 +625,7 @@ void Sender::paintGpu() {
   double msPer = 0;   // ai: the newest encode's GPU ms a frame
   const auto fitOf = [&] { return batched && msPer > 0 ? std::clamp(static_cast<int>(budget / msPer), 1, R) : 1; };
   std::vector<std::vector<uint8_t>> outs(R);
-  std::vector<uint8_t> blocks, pos;
+  std::vector<uint8_t> blocks;
   std::vector<Job> js;
   // ai: frames painted ahead: those ready and those in flight (counted as painted: a start that counted only the ready
   // ai: ones stayed in its catch-up with encodes in flight, an encode a frame, the S26's CPU a frame +40%)
@@ -735,11 +683,6 @@ void Sender::paintGpu() {
       const int k = std::min({catchUp ? R : fitOf(), static_cast<int>(jobs_.size()), room});
       js.clear();
       for (int i = 0; i < k; i++) { js.push_back(std::move(jobs_.front())); jobs_.pop_front(); }
-      // ai: each frame's codes' carousel positions, OB_CAR_N the static word (a frame made with it off), none where no
-      // ai: frame of the encode has it on or the GPU cannot paint it
-      bool anyCar = false;
-      pos.assign(static_cast<size_t>(k) * fmt_.codes, OB_CAR_N);
-      for (int i = 0; gpuWords_ && i < k; i++) for (int c = 0; js[i].car > 0 && c < fmt_.codes; c++) { pos[static_cast<size_t>(i) * fmt_.codes + c] = js[i].pos[c]; anyCar = true; }
       if (host) for (int i = 0; i < k; i++) if (outs[i].empty() && !spare_.empty()) { outs[i] = std::move(spare_.back()); spare_.pop_back(); }
       l.unlock();
       const size_t per = js[0].blocks.size();
@@ -761,7 +704,8 @@ void Sender::paintGpu() {
       for (const Job& j : js) f.seqs.push_back(j.seq);
       try {
         std::lock_guard<std::mutex> g(devMu_);
-        f.p = gpu_->submit(blocks.data(), k, static_cast<int>(js[0].seq & 3), host ? outs.data() : nullptr, js[0].seq, !xfer_, anyCar ? pos.data() : nullptr, fill);
+        gpu_->setClock(fmt_.fps, js[0].delay);   // ai: the border's word: the sender's clock, uploaded where it moved
+        f.p = gpu_->submit(blocks.data(), k, static_cast<int>(js[0].seq & 3), host ? outs.data() : nullptr, js[0].seq, !xfer_, fill);
       } catch (const std::exception& e) { err = e.what(); }
       l.lock();
       if (!err.empty()) { error_ = "the GPU painter stopped: " + err; cv_.notify_all(); break; }
@@ -928,13 +872,13 @@ void Sender::sinkEnd(std::unique_lock<std::mutex>& l, const std::string& error) 
 bool Sender::sinkAdmit(uint64_t seq) {
   Sink& k = *sink_;
   if (k.target == 0 && !k.stop) {
-    uint64_t lap = 0;
-    if (xfer_) { std::lock_guard<std::mutex> x(xferMu_); lap = xfer_->lapWhenMade(); }
-    if (!xfer_ || lap > 0) {
-      // ai: from the next frame made: those made ahead were scheduled before every chunk was in
+    uint64_t cycle = 0;
+    if (xfer_) { std::lock_guard<std::mutex> x(xferMu_); cycle = xfer_->cycleWhenMade(); }
+    if (!xfer_ || cycle > 0) {
+      // ai: from the next frame made: those made ahead were scheduled before every source block was in
       k.from = made_;
       const int per = k.job.info.frameBlocks > 0 ? k.job.info.frameBlocks : blocks_ * fmt_.codes;
-      k.target = (k.job.frames > 0 ? k.job.frames : static_cast<int>(std::ceil(k.job.laps * static_cast<double>(lap) / std::max(1, per)))) | 1;
+      k.target = (k.job.frames > 0 ? k.job.frames : static_cast<int>(std::ceil(k.job.cycles * static_cast<double>(cycle) / std::max(1, per)))) | 1;
       if (!k.fused && !k.gpuPack) k.next = k.from;
       cv_.notify_all();
     }
@@ -1331,35 +1275,23 @@ std::vector<int> Sender::scheduleLocked() const {
   return s;
 }
 
-// ai: the animated header (sender.h setCarousel), clamped to 0 .. CAROUSEL_MAX; the producer's next frame takes it
-void Sender::setCarousel(int frames) {
-  std::lock_guard<std::mutex> l(mu_);
-  carousel_ = std::clamp(frames, 0, CAROUSEL_MAX);
-}
-
 bool Sender::seed(uint32_t seed) {
-  {
-    std::lock_guard<std::mutex> l(mu_);
-    carKey_ = mix32(seed ^ 0x3c6ef372u);
-  }
   std::lock_guard<std::mutex> x(xferMu_);
   return xfer_ && xfer_->reseed(seed);
 }
 
 // ai: The stats a second (the app asks): label, n, subch, fps (asked), shownFps (frames on the screen a second over the
-// ai: window), offeredKBs (data blocks shown a second x 471 B, 1000 B a KB, as the page's), paintMs (a frame's encode
+// ai: window), offeredKBs (data blocks shown a second x 460 B, 1000 B a KB, as the page's), paintMs (a frame's encode
 // ai: and paint on one painter; on the GPU its ms a frame, an encode's timestamps over its frames), paintBatch (the GPU's
 // ai: frames an encode over the window, 0 none), painters (the
 // ai: GPU's: frames an encode), painter ("gpu" or "cpu"), device (the GPU's), gpuWhy (why not the GPU where it was
-// ai: asked for), ahead (painted, not shown), side, test, and for a file chunks, made (the chunks made so far), rq
-// ai: ("gpu": the GPU makes the blocks from the CPU's solved chunks, "cpu": the CPU's encoders; "" before the first
-// ai: configure), rqWhy (why not the GPU), lap (data blocks a lap), pass (laps
-// ai: shown, 1 the first), root, seed (the schedule's, 2026-11-14); refresh (setRefresh's four delays, 7/8 to 1/2) and
+// ai: asked for), ahead (painted, not shown), side, test, and for a file source blocks, made (the source blocks made so far), rq
+// ai: ("gpu": the GPU makes the blocks from the CPU's solved source blocks, "cpu": the CPU's encoders; "" before the first
+// ai: configure), rqWhy (why not the GPU), cycle (data blocks a cycle), pass (cycles
+// ai: shown, 1 the first), root, seed (the schedule's, 2026-11-14); refresh (setRefresh's four delays, 6/7 to 1/2) and
 // ai: refreshPlaces (setRefreshBlocks's per place in force; offeredKBs counts new data blocks alone, a repeat none);
 // ai: fresh (the share of a frame's blocks new in each frame: the sum of 1/delay over the places, over their count; 1
-// ai: with none held), so a rate figured from blocks a frame counts new ones;
-// ai: carousel (the animated header's frames a symbol, setCarousel, as frames made now paint it: 0 the static word, and
-// ai: 0 where the GPU paints and cannot); error, the last failure.
+// ai: with none held), so a rate figured from blocks a frame counts new ones; error, the last failure.
 std::string Sender::stats() {
   const double now = nowMs(), secs = std::max(1e-3, (now - winStart_) / 1000);
   if (secs >= 0.5) {
@@ -1382,7 +1314,6 @@ std::string Sender::stats() {
     << ",\"codes\":" << fmt_.codes << ",\"shown\":" << shown_ << ",\"blocks\":" << blocks_ << ",\"tiers\":\"" << tiers_ << "\""
     << ",\"refresh\":\"" << byRate_[0] << "," << byRate_[1] << "," << byRate_[2] << "," << byRate_[3] << "\""
     << ",\"refreshPlaces\":" << (byPlace_.size() == static_cast<size_t>(blocks_) && blocks_ ? "true" : "false")
-    << ",\"carousel\":" << (onGpu_ && !gpuWords_ ? 0 : carousel_)
     << ",\"test\":" << (play_ ? (play_->test ? "true" : "false") : xfer_ ? "false" : "true");
   double fresh = 0;
   const std::vector<int> sched = scheduleLocked();
@@ -1390,23 +1321,23 @@ std::string Sender::stats() {
   o.precision(4);
   o << ",\"fresh\":" << (sched.empty() ? 1.0 : fresh / static_cast<double>(sched.size()));
   o.precision(1);
-  // ai: a stream (play): its file and the laps of it shown, its pictures and the one on the screen
+  // ai: a stream (play): its file and the cycles of it shown, its pictures and the one on the screen
   if (play_) {
-    const uint64_t lap = play_->lap;
+    const uint64_t cycle = play_->cycle;
     o.precision(2);
     o << ",\"stream\":true,\"pictures\":" << play_->pictures << ",\"picture\":" << (shown_ > playBase_ ? (shown_ - playBase_) % static_cast<uint64_t>(play_->pictures) : 0)
-      << ",\"lap\":" << lap << ",\"pass\":" << (lap ? 1.0 + static_cast<double>(dataAll_) / static_cast<double>(lap) : 1.0) << ",\"root\":\"" << esc(play_->root) << "\"";
+      << ",\"cycle\":" << cycle << ",\"pass\":" << (cycle ? 1.0 + static_cast<double>(dataAll_) / static_cast<double>(cycle) : 1.0) << ",\"root\":\"" << esc(play_->root) << "\"";
   }
   if (xfer_) {
     std::lock_guard<std::mutex> x(xferMu_);
-    const uint32_t lap = xfer_->lap();
+    const uint32_t cycle = xfer_->cycle();
     o.precision(2);
-    o << ",\"chunks\":" << xfer_->chunks() << ",\"made\":" << xfer_->madeCount()
+    o << ",\"sourceBlocks\":" << xfer_->sourceBlocks() << ",\"made\":" << xfer_->madeCount()
       << ",\"rq\":\"" << (holder_ == RQ_GPU ? "gpu" : holder_ == RQ_CPU ? "cpu" : "") << "\",\"rqWhy\":\"" << esc(rqWhy_) << "\""
-      << ",\"lap\":" << lap << ",\"pass\":" << (lap ? 1.0 + static_cast<double>(dataAll_) / lap : 1.0)
+      << ",\"cycle\":" << cycle << ",\"pass\":" << (cycle ? 1.0 + static_cast<double>(dataAll_) / cycle : 1.0)
       << ",\"root\":\"" << xfer_->rootHex() << "\",\"seed\":" << xfer_->seed();
   }
-  // ai: a transfer's worker that failed (xfer_tx.h fault: its chunks cannot all be made) is the error where none other is
+  // ai: a transfer's worker that failed (xfer_tx.h fault: its source blocks cannot all be made) is the error where none other is
   std::string err = error_;
   if (err.empty() && xfer_) { std::lock_guard<std::mutex> x(xferMu_); err = xfer_->fault(); }
   o << ",\"error\":\"" << esc(err) << "\"}";

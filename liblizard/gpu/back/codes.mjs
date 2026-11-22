@@ -2,7 +2,7 @@
 // ai: GPU decoder's rule stage (tiers.mjs) and the sender's GPU paint (../encoder.mjs sendTab, ../../gen/sender.mjs)
 // ai: build their tables from, read from the wasm so the GPU never holds a code of its own.
 import { init, Lizard } from "../../sim/ob.mjs";
-import { subchOf, PICTURE_SIZES } from "../../sim/lizard_pick.mjs";
+import { subchOf, PICTURE_SIZES, SUB_SLOTS } from "../../sim/lizard_pick.mjs";
 import { VERSIONS, CODES } from "../plan/back_tiers.mjs";
 import { VERSION_MIN } from "../wordcode.mjs";
 
@@ -26,7 +26,7 @@ export async function ruleTables() {
       tiers.push({ c, firstBlock, slot0, count });
       firstBlock += count; slot0 += count * slots;
     }
-    if (slot0 > 640 * subchOf(v)) throw new Error(`LIZARD-${subchOf(v)}: its tiers take ${slot0} slots of ${640 * subchOf(v)}`);
+    if (slot0 > SUB_SLOTS * subchOf(v)) throw new Error(`LIZARD-${subchOf(v)}: its tiers take ${slot0} data slots of ${SUB_SLOTS * subchOf(v)}`);
     tiers.used = slot0;
     profiles.push(tiers);
   }
@@ -38,7 +38,7 @@ export async function ruleTables() {
     const codes = CODES.map((_, t) => {
       M._lizard_ldpc_tables(t, pD, 0);
       const d = M.HEAP32.slice(pD >> 2, (pD >> 2) + 12);
-      // ai: np: codeword bits never sent (the last np of the data, the 7/8 code's known zeros: 128; bitmap.mjs sentBit), nt = n - np the bits a
+      // ai: np: codeword bits never sent (the last np of the data, the 6/7 code's known zeros: 128; bitmap.mjs sentBit), nt = n - np the bits a
       // ai: block's slots carry before its pilots (slots here: the code's lay entries, ldpc_tables's; a block's slots are CODES')
       const code = { n: d[0], k: d[1], m: d[2], z: d[3], zp: d[4], mb: d[5], kb: d[6], norm: d[7], slotsMax: d[8], slotsTotal: d[9], slots: d[10], np: d[11], nt: d[0] - d[11] };
       if (code.nt > CODES[t].slots || (CODES[t].slots - code.nt) % 2) throw new Error(`the ${CODES[t].name} code sends ${code.nt} bits, past its block's ${CODES[t].slots} slots`);

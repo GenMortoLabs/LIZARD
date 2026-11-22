@@ -7,7 +7,7 @@
 // Messages run one at a time in arrival order (the chain below), so a frame asked for after a re-pick is encoded with
 // the new code and one asked for before it with the old: the page's block ids stay right across the change.
 //
-// A file goes as a chunked transfer (sim/xfer.mjs): its header and manifest in the light, a fountain per chunk, and the
+// A file goes as a chunked transfer (sim/xfer.mjs): its header in the light, a fountain per source block, and the
 // block ids chosen here by the transfer's schedule, so the page's baseId only counts blocks. It is made when the page's
 // file is picked ("prepare"), and a start names it by its pick; a start with bytes makes one there, as before.
 // ai: codes: symbols a frame, 1 or 2 (the page's "codes"). Two are painted side by side in one buffer, a gap of
@@ -18,7 +18,7 @@
 // ai: with the next, one format and one word for both.
 // ai: Under the page's GPU encoder (gpu/encoder.mjs, since 2026-09-29) frames are asked for a batch at a time
 // ai: ("frames": count frames from seq) and come back as their blocks alone, one buffer, frame after frame, each codes x
-// ai: blocksPerFrame x 476 bytes; the page encodes them. The test stream's come as their ids alone (test, 2026-11-15):
+// ai: blocksPerFrame x 472 bytes; the page encodes them. The test stream's come as their ids alone (test, 2026-11-15):
 // ai: the encoder makes each payload from its id on the device (BLAKE3, SPEC 9.3), so nothing here hashes.
 // ai: Rate refresh (refresh.mjs, the page's "refresh", sent with every start too): a block of a held rate repeats the
 // ai: id at its place in the frame before, so only the new places take ids (the transfer's schedule, or the test
@@ -36,14 +36,21 @@ let phy = null, xs = null, codes = 1, chain = Promise.resolve();
 // ai: the code's colours the paint takes (the page's Colours, 2026-11-16: "colours", and start's), 0xRRGGBB, kept for each
 // ai: codec made (a start, a respec)
 let colours = [0x000000, 0xffffff];
+// ai: the sender's clock the word states, [fps, the largest Refresh delay] (src/fmt.h): the page's, at Start and as it moves
+let clock = [60, 1];
 // ai: The transfer made at a pick's first Start ("prepare", sent just before "start"; at the pick from 2026-10-19 to
 // ai: 2026-11-01): the file packed where that pays (sim/pack.mjs, the default client's compression) and its root hashed. made: { pick, xs } while no run sends it; a run takes
 // ai: it (xsPick its pick) and a stop gives it back, so the next Start sends the same transfer on, with nothing made again.
 let made = null, xsPick = null;
+// ai: the test stream's TOI, drawn at each start and kept over a re-pick: the format has no test stream (TOI 0 is none),
+// ai: so it goes under a TOI as any send's (src/xfer.h; the native senders' rule)
+let testToi = 1;
+// ai: 48 bits (the TOI's), 0 none stepped over
+const drawToi = () => { const r = crypto.getRandomValues(new Uint32Array(2)); return ((r[0] & 0xffffff) * 2 ** 24 + (r[1] & 0xffffff)) || 1; };
 const refresh = new Refresh();
 // ai: the test stream's n new ids from the page's base (a frame's own range: baseId to baseId + its blocks)
 const run = (base, n) => Float64Array.from({ length: n }, (_, i) => base + i);   // ai: ids are 40 bits (sim/xfer.mjs)
-// ai: a frame's new data blocks: its new ids but the transfer's header and manifest (every test stream block is data)
+// ai: a frame's new data blocks: its new ids but the transfer's header (every test stream block is data)
 const dataOf = (ids, fresh) => { let n = 0; for (let t = 0; t < ids.length; t++) if (fresh[t] && (!xs || !isControlId(ids[t]))) n++; return n; };
 function dropRun() {
   if (xs) { if (xsPick !== null && !made) made = { pick: xsPick, xs }; else xs.free(); }
@@ -53,16 +60,16 @@ function dropRun() {
 let fetched = null;
 const source = () => (id, out) => { const b = fetched?.get(id); if (b) out.set(b); else xs.block(id, out); };
 async function fetchFor(ids) { fetched = ids && xs?.remote ? await xs.remote.fetch(ids) : null; }
-// ai: a pool's transfer made whole behind its first frames (xfer-pool.mjs, streaming): the bytes it carries and its lap
+// ai: a pool's transfer made whole behind its first frames (xfer-pool.mjs, streaming): the bytes it carries and its cycle
 // ai: then said to the page ("made", by pick), or the failure; nothing for one let go first
 function whenMade(x, said) {
   x.remote?.made?.then(
-    () => postMessage({ type: "made", ...said, sent: x.length, lap: x.sched?.lap ?? 0 }),
+    () => postMessage({ type: "made", ...said, sent: x.length, cycle: x.carousel?.cycle ?? 0 }),
     (e) => { if (x.remote) postMessage({ type: "made", ...said, error: String(e?.message ?? e) }); });
 }
 // ai: The file's transfer: packed where that pays (sim/pack.mjs; the bytes the transfer carries are `sent`), made by
-// ai: the pool (xfer-pool.mjs). Between the pack's frames and the pool's chunks the worker takes its other messages
-// ai: (pause) and asks `stopped`: a preparation the page cancels ends there, a frame (4 MiB) or a chunk's hash on
+// ai: the pool (xfer-pool.mjs). Between the pack's frames and the pool's source blocks the worker takes its other messages
+// ai: (pause) and asks `stopped`: a preparation the page cancels ends there, a frame (4 MiB) or a source block's hash on
 // ai: (2026-11-16; the page ended the whole worker before, which Chrome holds back about 2 s while it runs a script).
 const CANCELLED = new Error("cancelled");
 const pauseCh = new MessageChannel(), pauseQ = [];
@@ -70,11 +77,11 @@ pauseCh.port1.onmessage = () => pauseQ.shift()();
 const pause = () => new Promise((r) => { pauseQ.push(r); pauseCh.port2.postMessage(0); });   // ai: a task, no timer's clamp
 async function transferOf(bytes, xfer, stopped = () => false) {
   await Promise.all([initFountain(), initZstd()]);
-  const g = packing(bytes, xfer.name, xfer.type, Z);
+  const g = packing(bytes, xfer.name, Z);
   let r;
   while (!(r = g.next()).done) { await pause(); if (stopped()) throw CANCELLED; }
   const p = r.value;
-  return makeXfer(p.bytes, { ...xfer, name: p.name, type: p.type }, { M: await initOb(), Encoder, stopped });
+  return makeXfer(p.bytes, { ...xfer, name: p.name, compression: p.compression }, { M: await initOb(), Encoder, stopped });
 }
 // ai: the newest preparation the page let go ("cancel", taken as it comes, outside the chain; its number the page's)
 let cancelledUpTo = 0;
@@ -100,17 +107,20 @@ async function handle(m) {
     }
   } else if (m.type === "start") {
     phy?.free(); phy = null; dropRun();
-    phy = await makePhy(m.spec);
+    testToi = drawToi();
+    phy = await makePhy({ ...m.spec, toi: testToi });
     if (m.colours) colours = m.colours;
     phy.setColours(...colours);
+    if (m.clock) clock = m.clock;
+    phy.setClock(...clock);
     if (m.pick != null) {
       if (made?.pick !== m.pick) throw new Error("the file's transfer was not made: choose it again");
       xs = made.xs; xsPick = m.pick; made = null;
-      phy.setSource(source());
+      phy.setSource(source(), xs);   // ai: each block under its own TOI (XferSender toiFor)
     } else if (m.bytes) {
       xs = await transferOf(new Uint8Array(m.bytes), m.xfer);
       whenMade(xs, { pick: null });
-      phy.setSource(source());
+      phy.setSource(source(), xs);   // ai: each block under its own TOI (XferSender toiFor)
     }
     // ai: Developer Tools' Seed (2026-11-14): the schedule drawn from it before the first frame (a transfer made at the pick
     // ai: drew a random one); none given, the random one stands
@@ -122,16 +132,18 @@ async function handle(m) {
   } else if (m.type === "respec") {
     // A re-pick (the room changed): a new code for the same transfer. Refused if the block size would move, which
     // would break the fountain's stream, exactly as the page used to refuse it.
-    const next = await makePhy(m.spec);
+    const next = await makePhy({ ...m.spec, toi: testToi });
     if (next.usefulBytes !== phy.usefulBytes) { next.free(); postMessage({ type: "respec", gen: m.gen, ok: false }); return; }
-    phy.free(); phy = next; phy.setColours(...colours); codes = m.codes ?? codes; gapModules = m.gap;
-    if (xs) phy.setSource(source());
+    phy.free(); phy = next; phy.setColours(...colours); phy.setClock(...clock); codes = m.codes ?? codes; gapModules = m.gap;
+    if (xs) phy.setSource(source(), xs);   // ai: each block under its own TOI (XferSender toiFor)
     refresh.setFormat(m.spec.subch, phy.blocksPerFrame);
     postMessage({ type: "respec", gen: m.gen, ok: true, label: phy.label, blocksPerFrame: phy.blocksPerFrame });
   } else if (m.type === "colours") {
     colours = [m.ink, m.paper]; phy?.setColours(...colours);
   } else if (m.type === "refresh") {
     refresh.setEvery(m.every);
+  } else if (m.type === "clock") {
+    clock = m.clock; phy?.setClock(...clock);
   } else if (m.type === "stop") {
     phy?.free(); phy = null; dropRun(); refresh.reset();
   } else if (m.type === "frame") {
@@ -158,8 +170,8 @@ async function handle(m) {
         if (k + 1 < codes) for (let x = 0; x < gap; x++) out.set(part.rgba.subarray((y + 1) * row - 4, (y + 1) * row), at + row + 4 * x);
       }
     }
-    // ai: data: the frame's new data blocks, its header and manifest blocks and its repeats not counted; the page
-    // ai: counts laps with it (xfer.lap data blocks a lap). Every new block of the test stream is data.
+    // ai: data: the frame's new data blocks, its header and its repeats not counted; the page
+    // ai: counts cycles with it (xfer.cycle data blocks a cycle). Every new block of the test stream is data.
     const data = dataOf(ids, fresh);
     postMessage({ type: "frame", gen: m.gen, seq: m.seq, w, codes, gap, buf: out.buffer, ms: performance.now() - t, data }, [out.buffer]);
   } else if (m.type === "frames") {
@@ -171,7 +183,7 @@ async function handle(m) {
     if (xs) await fetchFor(batchIds(all));
     const data = all.map(({ ids, fresh }) => dataOf(ids, fresh)), test = !xs;
     for (let f = 0; f < m.count; f++) {
-      if (test) { for (let t = 0; t < T; t++) idPut(out, f * per + t * B, all[f].ids[t]); continue; }
+      if (test) { for (let t = 0; t < T; t++) idPut(out, f * per + t * B, all[f].ids[t], testToi); continue; }
       for (let k = 0; k < codes; k++) out.set(phy.frameBlocks(m.seq + f, all[f].ids.subarray(k * V, (k + 1) * V)), f * per + k * V * B);
     }
     postMessage({ type: "frames", gen: m.gen, seq: m.seq, count: m.count, codes, test, buf: out.buffer, ms: performance.now() - t, data }, [out.buffer]);

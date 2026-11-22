@@ -109,7 +109,7 @@
              that fit the room, until 2026-11-07); #subch the value the page reads (the sub-channels), the slider a
              view over it (send.mjs); its label the rate profile's blocks, titled Blocks with Show statistics on and
              Density, the bytes alone, with it off (#blocksTitle) -->
-        <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 27.4 KB</span></span><input id="blocks" type="range" min="4" max="64" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
+        <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 27.1 KB</span></span><input id="blocks" type="range" min="4" max="64" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
         <!-- ai: the ring, the 128 by default (sim/lizard_pick.mjs RING_DEFAULT; an Auto option, the same ring, until 2026-10-05),
              named by its border's look with Show statistics off (Thin the 256, Medium the 128, Thick the 64, that order)
              and by its cells with it on (64, 128, 256): send.mjs ringOptions, the inline script below -->
@@ -136,10 +136,11 @@
         <!-- ai: the display rate, 1 to 60, which the word states -->
         <div class="blocks"><span class="row"><span>FPS</span><span id="fpsOut">60</span></span><input id="fps" type="range" min="1" max="60" step="1" value="60" aria-label="FPS"></div>
         <!-- ai: Refresh's delays (2026-11-17; refresh.mjs; the native sender's setRefresh): FPS above is the clock, each
-             slider the pictures between new blocks of its code rates, the format's tiers from the inside out, 1 to 60, 1
-             each by default; 7/8 and 3/4, the rates that carry the pilots, on one; a held rate's blocks repeat the frame
-             before's (send.mjs refreshOf, the worker's "refresh") -->
-        <div class="blocks"><span class="row"><span>7/8 + 3/4</span><span id="refresh78Out">1</span></span><input id="refresh78" type="range" min="1" max="60" step="1" value="1" aria-label="7/8 + 3/4"></div>
+             slider the pictures between new blocks of its code rate, the format's tiers from the inside out, 1 to 60, 1
+             each by default (6/7 and 3/4 on one slider from 2026-11-17 to 11-22, while their tails carried the pilots); a
+             held rate's blocks repeat the frame before's (send.mjs refreshOf, the worker's "refresh") -->
+        <div class="blocks"><span class="row"><span>6/7</span><span id="refresh67Out">1</span></span><input id="refresh67" type="range" min="1" max="60" step="1" value="1" aria-label="6/7"></div>
+        <div class="blocks"><span class="row"><span>3/4</span><span id="refresh34Out">1</span></span><input id="refresh34" type="range" min="1" max="60" step="1" value="1" aria-label="3/4"></div>
         <div class="blocks"><span class="row"><span>2/3</span><span id="refresh23Out">1</span></span><input id="refresh23" type="range" min="1" max="60" step="1" value="1" aria-label="2/3"></div>
         <div class="blocks"><span class="row"><span>1/2</span><span id="refresh12Out">1</span></span><input id="refresh12" type="range" min="1" max="60" step="1" value="1" aria-label="1/2"></div>
       </div>
@@ -168,10 +169,11 @@
     // ai: after the page showed, the chevrons turning as they did. ui.mjs remember and persist's rules, the same keys; the
     // ai: blocks slider and the labels drawn from the values as send.mjs showBlocks, showFps and showRefresh draw
     // ai: them. The modules run them again later and change nothing. The blocks a frame are the rate profile's
-    // ai: (sim/lizard_pick.mjs tiersFor, src/lizard_phy.c lizard_tiers_for): over the frame's 640 s slots, a 7/8 blocks of 4496,
-    // ai: t 2/3 of 5760 and c 1/2 of 7680 nearest 39, 15 and 20% of them in least squares (in units of 16 slots),
-    // ai: the 3/4 blocks of 5152 filling, a + m + t + c blocks; a value that is no format (LIZARD-64 to -1024 in steps of
-    // ai: 16; a kept "auto" from before 2026-11-07 among them) is the page's default, LIZARD-480, as send.mjs makes it.
+    // ai: (sim/lizard_pick.mjs tiersFor, src/lizard_phy.c lizard_tiers_for): over the frame's 636 s data slots, a 6/7 blocks
+    // ai: of 4480, t 2/3 of 5760 and c 1/2 of 7680, each 39, 15 and 20% of them in whole blocks rounded half up, then c, t
+    // ai: and a trimmed in that order until one 3/4 block of 5120 fits, the 3/4 filling: a + m + t + c blocks; a value that
+    // ai: is no format (LIZARD-64 to -1072 in steps of 16; a kept "auto" from before 2026-11-07 among them) is the page's
+    // ai: default, LIZARD-480, as send.mjs makes it.
     (() => { try {
       const ls = localStorage, $ = (id) => document.getElementById(id);
       for (const d of document.querySelectorAll("#settings>details")) { const v = ls.getItem("send:" + d.id); if (v !== null) d.open = v === "1"; }
@@ -185,22 +187,20 @@
       const s = +$("subch").value, v = s / 16;
       let k = 0;
       {
-        const all = 40 * s;
-        let best = -1;
-        for (let a = 0; 281 * a <= all - 322; a++) for (let t = 0; 281 * a + 360 * t <= all - 322; t++) for (let c = 0; 281 * a + 360 * t + 480 * c <= all - 322; c++) {
-          const d7 = 281000 * a - 390 * all, d3 = 360000 * t - 150 * all, d2 = 480000 * c - 200 * all, cost = d7 * d7 + d3 * d3 + d2 * d2;
-          if (best < 0 || cost < best) { best = cost; k = a + t + c + Math.floor((all - 281 * a - 360 * t - 480 * c) / 322); }
-        }
+        const all = 636 * s, round = (tgt, sl) => Math.floor((2 * tgt * all + 1000 * sl) / (2000 * sl));
+        let a = round(390, 4480), t = round(150, 5760), c = round(200, 7680);
+        while (all - 4480 * a - 5760 * t - 7680 * c < 5120 && a + t + c > 0) { if (c) c--; else if (t) t--; else a--; }
+        k = a + t + c + Math.floor((all - 4480 * a - 5760 * t - 7680 * c) / 5120);
       }
       $("blocks").value = String(v);
       // ai: Show statistics on: Blocks with the count and the ring by its cells; off: Density, the bytes alone, the ring by
       // ai: its border's look (send.mjs showStatsLabels)
-      const stats = $("stats").value === "1", kb = `${(k * 471 / 1000).toFixed(1)} KB`;
+      const stats = $("stats").value === "1", kb = `${(k * 460 / 1000).toFixed(1)} KB`;
       $("blocksTitle").textContent = stats ? "Blocks" : "Density";
       if (stats) { const r = $("ring"), rv = r.value; r.innerHTML = [64, 128, 256].map((x) => `<option value="${x}">${x}</option>`).join(""); r.value = rv; }
-      $("blocksOut").textContent = stats ? `${k}, ${kb}` : kb;   // ai: 471 B a block (sim/xfer.mjs PAYLOAD), before the modules load
+      $("blocksOut").textContent = stats ? `${k}, ${kb}` : kb;   // ai: 460 B a block (sim/xfer.mjs PAYLOAD), before the modules load
       $("fpsOut").textContent = `${+$("fps").value}`;
-      for (const k of ["78", "23", "12"]) $(`refresh${k}Out`).textContent = `${Math.max(1, Math.min(60, Math.round(+$(`refresh${k}`).value) || 1))}`;
+      for (const k of ["67", "34", "23", "12"]) $(`refresh${k}Out`).textContent = `${Math.max(1, Math.min(60, Math.round(+$(`refresh${k}`).value) || 1))}`;
       $("sizeOut").textContent = `${+$("size").value}%`;
       $("spacingOut").textContent = `${+$("spacing").value} modules`;
       { const one = $("codes").value !== "2"; $("spacingRow").classList.toggle("greyed", one); if (one) { $("spacing").disabled = true; $("spacing").dataset.greyed = "1"; } }

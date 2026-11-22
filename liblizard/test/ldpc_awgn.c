@@ -1,6 +1,6 @@
 // BI-AWGN waterfall for the format's four LDPC codes: for each, the channel mutual information at which the frame
 // error rate crosses 10%, which is the inner code's operating point under a fountain. The gap between that and the
-// rate (the code's k over the bits it sends, nt) is what the code wastes. The bits never sent (the 7/8 code's first
+// rate (the code's k over the bits it sends, nt) is what the code wastes. The bits never sent (the 6/7 code's first
 // np) come in as 0.
 // ai: A second table follows: the same crossing on the format's 3/4 code
 // ai: for decoder arms (ldpc_ref.h), each on the same frames: today's decoder as lizard_phy.c runs it (the int8 soft values,

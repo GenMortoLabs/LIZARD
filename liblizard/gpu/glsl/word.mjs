@@ -1,11 +1,12 @@
 // F8, the format word, in GLSL: the band read through the final map, each word cell against its track pairs' grey;
-// the word, static or animated, by Gauss-Jordan over GF(256) from its most reliable bytes (../wordcode.mjs); the
-// side-aware gate, held to the C's false-word rate; sel written (a static word's configuration, else HELD's for an
-// animated word, below; none for a frame whose word is not read) with the result: r[5] the version, or 256 + the id of
-// an animated word, r[6] the word's bits as a float's (uintBitsToFloat): a static word's 32 bits after its magic
-// (version, rate code, counts; src/fmt.h), or the symbol's three bytes, low first; 0 and 0 where no word is taken. One
+// the word by Gauss-Jordan over GF(256) from its most reliable bytes (../wordcode.mjs); the side-aware gate, held to
+// the C's false-word rate; the word's index split into the configuration (its version from the Word uniform's
+// before, its counts across the workgroup's lanes, each a 6/7 count's configurations) and the clock; sel written (the
+// configuration; none for a frame whose word is not read, which is not decoded: nothing carries from frame to frame)
+// with the result: r[5] the version, r[6] the word's last 32 bits as a float's (uintBitsToFloat; the index's low bits
+// and the CRC-5: src/fmt.h), r[30] the clock as a float's bits (fps | delay << 8); 0 where no word is taken. One
 // workgroup of 256 a frame.
-// ai: The Word, Lattice and Held uniforms are std140, every member an array of uvec4 or vec4; the uniform's layout and
+// ai: The Word and Lattice uniforms are std140, every member an array of uvec4 or vec4; the uniform's layout and
 // ai: tables come from ../plan/word.mjs. No private array is indexed at run
 // ai: time (the S26's Adreno returned zeros from one): the code's rows, GF(256)'s tables and the generator's columns are
 // ai: read from the uniform, the lattice too.
@@ -14,30 +15,33 @@ import { COONS } from "./sample.mjs";
 import { SLOTS } from "../plan/common.mjs";
 import { LATTICE_MAX } from "../plan/back_transform.mjs";
 import { RING_COUNT } from "../plan/finder.mjs";
-import { VERSION_MIN, TAU, SIDE_KEEP, MAGIC, MAGIC_ANIM, ID_MAX } from "../wordcode.mjs";
-import { CON_MIN, WMAX, ROWS, MIDS_MAX, VECS, UNKNOWN, SWAP, PER, SETS, TOP, BYTES_MAX, GATE, LAYOUT } from "../plan/word.mjs";
+import { VERSION_MIN, VERSION_MAX, TAU, SIDE_KEEP, MAGIC, DELAY_MAX, CLOCKS, WORDS as WORD_COUNT, SLOTS67, SLOTS34, SLOTS23, SLOTS12, VERSION_SLOTS } from "../wordcode.mjs";
+import { CON_MIN, WMAX, ROWS, MIDS_MAX, VECS, UNKNOWN, SWAP, PER, SETS, TOP, BYTES_MAX, GATE, LAYOUT, BEFORE_VECS } from "../plan/word.mjs";
+
+if (UNKNOWN !== 5) throw new Error(`F8's solve is written for five unknown bytes, the word has ${UNKNOWN}`);
+// ai: the words' count as two u32 (high, low): an index at or past it is no word
+const WORDS_HI = Math.floor(WORD_COUNT / 2 ** 32), WORDS_LO = WORD_COUNT % 2 ** 32;
 
 const TOPS = Math.ceil(SLOTS / 4);
 const WORDS = ["x", "y", "z", "w"];
-// ai: the Word uniform's members (std140, ../plan/word.mjs's layout), WORD's and HELD's
-const WORD_UNI = `uvec4 code[${LAYOUT.range}]; uvec4 range[${RING_COUNT}]; uvec4 plan[${RING_COUNT}]; uvec4 tops[${TOPS}]; uvec4 gate[${(RING_COUNT * GATE) / 4}]; uvec4 gf[${LAYOUT.cols - LAYOUT.gf}]; uvec4 cols[${LAYOUT.size - LAYOUT.cols}];`;
+// ai: the Word uniform's members (std140, ../plan/word.mjs's layout)
+const WORD_UNI = `uvec4 code[${LAYOUT.range}]; uvec4 range[${RING_COUNT}]; uvec4 plan[${RING_COUNT}]; uvec4 tops[${TOPS}]; uvec4 gate[${(RING_COUNT * GATE) / 4}]; uvec4 gf[${LAYOUT.cols - LAYOUT.gf}]; uvec4 cols[${LAYOUT.before - LAYOUT.cols}]; uvec4 before[${BEFORE_VECS}];`;
 // ai: the picture slot a version decodes in (the Word uniform's tops)
 const SLOT_OF = `uint slotOf(uint v) {
   return 0u${Array.from({ length: SLOTS - 1 }, (_, k) => ` + (v > W.tops[${k >> 2}].${WORDS[k & 3]} ? 1u : 0u)`).join("")};
 }`;
 
-// ai: Gauss-Jordan over GF(256) (2026-11-15; ordered statistics decoding over the code's bit rows before): RS(n, 5) is
-// ai: MDS, so the magic (byte 0) and any four other bytes give the word, for each magic in turn (the static word's and
-// ai: the animated one's). Each byte's hard value (its 8 cells MSB first, dark 1), its reliability (the least |qs| of
-// ai: its cells) and its least reliable bit; bytes 1 to n - 1 ranked by reliability (the lower index first on a tie),
-// ai: the first TOP kept. A magic's set 0 solves the UNKNOWN most reliable; sets 1 to UNKNOWN SWAP swap one of them for
-// ai: one of the next SWAP; the last UNKNOWN flip one's least reliable bit. A lane a set solves its UNKNOWN x UNKNOWN
-// ai: system by Gauss-Jordan in its own rows of workgroup memory (the magic's column moved to the right side; the
-// ai: Adreno's pivoted eliminations on private arrays returned zeros, workgroup memory is not private); a static solve
-// ai: whose counts make no frame of its version (common.mjs CFG cfgOk, src/fmt.h ob_fmt_layout), an animated one past
-// ai: ID_MAX, refused. A lane a (set, u32 of
-// ai: the word) builds that word of the candidate from the code's rows and scores it against qs; a lane a set sums them;
-// ai: lane 0 keeps the best, the first set on a tie (the static magic's first).
+// ai: Gauss-Jordan over GF(256) (2026-11-15; ordered statistics decoding over the code's bit rows before): RS(n, 6) is
+// ai: MDS, so the magic (byte 0) and any five other bytes give the word. Each byte's hard value (its 8 cells MSB
+// ai: first, dark 1), its reliability (the least |qs| of its cells) and its least reliable bit; bytes 1 to n - 1 ranked
+// ai: by reliability (the lower index first on a tie), the first TOP kept. Set 0 solves the UNKNOWN most reliable;
+// ai: sets 1 to UNKNOWN SWAP swap one of them for one of the next SWAP; the last UNKNOWN flip one's least reliable bit.
+// ai: A lane a set solves its UNKNOWN x UNKNOWN system by Gauss-Jordan in its own rows of workgroup memory (the
+// ai: magic's column moved to the right side; the Adreno's pivoted eliminations on private arrays returned zeros,
+// ai: workgroup memory is not private); a solve whose CRC-5 is wrong or whose index is past the last word refused
+// ai: (wordOk; src/fmt.c accept). A lane a (set, u32 of the word) builds that word of the
+// ai: candidate from the code's rows and scores it against qs; a lane a set sums them; lane 0 keeps the best, the
+// ai: first set on a tie.
 const SEARCH = /* glsl */ `
   uint at0 = rg * ${ROWS}u;
   uint nw = nb / 32u;
@@ -70,43 +74,43 @@ const SEARCH = /* glsl */ `
   }
   barrier();
   if (li < ${SETS}u) {
-    uint kind = li / ${PER}u;
-    uint t = li % ${PER}u;
-    uint magic = kind == 0u ? ${MAGIC}u : ${MAGIC_ANIM}u;
+    uint t = li;
+    uint magic = ${MAGIC}u;
     uint p0 = tb[0];
     uint p1 = tb[1];
     uint p2 = tb[2];
     uint p3 = tb[3];
+    uint p4 = tb[4];
     if (t >= 1u && t <= ${UNKNOWN * SWAP}u) {
       uint a = (t - 1u) / ${SWAP}u;
       uint b = tb[${UNKNOWN}u + (t - 1u) % ${SWAP}u];
-      if (a == 0u) { p0 = b; } else if (a == 1u) { p1 = b; } else if (a == 2u) { p2 = b; } else { p3 = b; }
+      if (a == 0u) { p0 = b; } else if (a == 1u) { p1 = b; } else if (a == 2u) { p2 = b; } else if (a == 3u) { p3 = b; } else { p4 = b; }
     }
     uint fl = t > ${UNKNOWN * SWAP}u ? t - ${UNKNOWN * SWAP + 1}u : ${UNKNOWN}u;
-    uint m0 = li * 20u;
+    uint m0 = li * 30u;
     setRow(m0, rg, p0, hb[p0] ^ (fl == 0u ? 0x80u >> wk[p0] : 0u), magic);
-    setRow(m0 + 5u, rg, p1, hb[p1] ^ (fl == 1u ? 0x80u >> wk[p1] : 0u), magic);
-    setRow(m0 + 10u, rg, p2, hb[p2] ^ (fl == 2u ? 0x80u >> wk[p2] : 0u), magic);
-    setRow(m0 + 15u, rg, p3, hb[p3] ^ (fl == 3u ? 0x80u >> wk[p3] : 0u), magic);
+    setRow(m0 + 6u, rg, p1, hb[p1] ^ (fl == 1u ? 0x80u >> wk[p1] : 0u), magic);
+    setRow(m0 + 12u, rg, p2, hb[p2] ^ (fl == 2u ? 0x80u >> wk[p2] : 0u), magic);
+    setRow(m0 + 18u, rg, p3, hb[p3] ^ (fl == 3u ? 0x80u >> wk[p3] : 0u), magic);
+    setRow(m0 + 24u, rg, p4, hb[p4] ^ (fl == 4u ? 0x80u >> wk[p4] : 0u), magic);
     bool ok = true;
-    for (uint c = 0u; c < 4u; c++) {
-      uint pr = 4u;
-      for (uint r = c; r < 4u; r++) { if (pr == 4u && mat[m0 + 5u * r + c] != 0u) { pr = r; } }
-      if (pr == 4u) { ok = false; break; }
+    for (uint c = 0u; c < 5u; c++) {
+      uint pr = 5u;
+      for (uint r = c; r < 5u; r++) { if (pr == 5u && mat[m0 + 6u * r + c] != 0u) { pr = r; } }
+      if (pr == 5u) { ok = false; break; }
       if (pr != c) {
-        for (uint j = 0u; j < 5u; j++) { uint x = mat[m0 + 5u * c + j]; mat[m0 + 5u * c + j] = mat[m0 + 5u * pr + j]; mat[m0 + 5u * pr + j] = x; }
+        for (uint j = 0u; j < 6u; j++) { uint x = mat[m0 + 6u * c + j]; mat[m0 + 6u * c + j] = mat[m0 + 6u * pr + j]; mat[m0 + 6u * pr + j] = x; }
       }
-      uint iv = gexp(255u - glog(mat[m0 + 5u * c + c]));
-      for (uint j = 0u; j < 5u; j++) { mat[m0 + 5u * c + j] = gmul(mat[m0 + 5u * c + j], iv); }
-      for (uint r = 0u; r < 4u; r++) {
-        uint fr = r == c ? 0u : mat[m0 + 5u * r + c];
-        if (fr != 0u) { for (uint j = 0u; j < 5u; j++) { mat[m0 + 5u * r + j] ^= gmul(fr, mat[m0 + 5u * c + j]); } }
+      uint iv = gexp(255u - glog(mat[m0 + 6u * c + c]));
+      for (uint j = 0u; j < 6u; j++) { mat[m0 + 6u * c + j] = gmul(mat[m0 + 6u * c + j], iv); }
+      for (uint r = 0u; r < 5u; r++) {
+        uint fr = r == c ? 0u : mat[m0 + 6u * r + c];
+        if (fr != 0u) { for (uint j = 0u; j < 6u; j++) { mat[m0 + 6u * r + j] ^= gmul(fr, mat[m0 + 6u * c + j]); } }
       }
     }
-    uint x0 = mat[m0 + 4u];
-    uint data = x0 | (mat[m0 + 9u] << 8u) | (mat[m0 + 14u] << 16u) | (mat[m0 + 19u] << 24u);
-    bool inRange = kind == 0u ? cfgOk(cfgOfWord(data)) : x0 <= ${ID_MAX}u;
-    sv[li] = uvec4(data, kind, ok && inRange ? 1u : 0u, 0u);
+    uint lo = mat[m0 + 5u] | (mat[m0 + 11u] << 8u) | (mat[m0 + 17u] << 16u) | (mat[m0 + 23u] << 24u);
+    uint hi = mat[m0 + 29u];
+    sv[li] = uvec4(lo, hi, ok && wordOk(lo, hi) ? 1u : 0u, 0u);
   }
   barrier();
   for (uint t = li; t < ${SETS * 16}u; t += 256u) {
@@ -114,9 +118,12 @@ const SEARCH = /* glsl */ `
     uvec4 c = sv[t >> 4u];
     float sc = 0.0;
     if (w < nw && c.z != 0u) {
-      uint cw = W.code[${VECS}u * (at0 + c.y) + (w >> 2u)][w & 3u];
+      uint cw = W.code[${VECS}u * at0 + (w >> 2u)][w & 3u];
       for (uint b = 0u; b < 32u; b++) {
-        if (((c.x >> b) & 1u) != 0u) { cw ^= W.code[${VECS}u * (at0 + 2u + b) + (w >> 2u)][w & 3u]; }
+        if (((c.x >> b) & 1u) != 0u) { cw ^= W.code[${VECS}u * (at0 + 1u + b) + (w >> 2u)][w & 3u]; }
+      }
+      for (uint b = 0u; b < 8u; b++) {
+        if (((c.y >> b) & 1u) != 0u) { cw ^= W.code[${VECS}u * (at0 + 33u + b) + (w >> 2u)][w & 3u]; }
       }
       for (uint b = 0u; b < 8u; b++) {
         uint m = cw >> (4u * b);
@@ -193,7 +200,9 @@ shared float rl[${BYTES_MAX}];
 shared uint wk[${BYTES_MAX}];
 shared uint tb[${TOP}];
 shared uvec4 sv[${SETS}];
-shared uint mat[${SETS * 20}];
+shared uint mat[${SETS * 30}];
+shared uint na[256];
+shared uvec4 wix;
 shared float part[${SETS * 16}];
 shared float tot[${SETS}];
 uint gbyte(uint i) { return (W.gf[i >> 4u][(i >> 2u) & 3u] >> (8u * (i & 3u))) & 255u; }
@@ -201,29 +210,68 @@ uint gexp(uint e) { return gbyte(e % 255u); }
 uint glog(uint x) { return gbyte(256u + x); }
 uint gmul(uint a, uint b) { return (a == 0u || b == 0u) ? 0u : gexp(glog(a) + glog(b)); }
 ${CFG}
-// ai: a static word's 32 bits after its magic (bytes 1 to 4, the first the most significant; data holds them low
-// ai: first: the version less 4 (6 bits), the 7/8 count (8), the 2/3 and 1/2 counts (7 each), their CRC-4) and its
-// ai: configuration (src/fmt.h ob_fmt_held: version << 22 | the counts), 0 where its CRC-4 is wrong (src/fmt.c crc4:
-// ai: x^4 + x + 1 over the 28 content bits, most significant first, from 0)
-uint bitsOfWord(uint data) { return (data << 24u) | ((data & 0xff00u) << 8u) | ((data >> 8u) & 0xff00u) | (data >> 24u); }
-uint crc4(uint c) { uint r = c << 4u; for (uint i = 31u; i >= 4u; i--) { if (((r >> i) & 1u) != 0u) { r ^= 0x13u << (i - 4u); } } return r & 15u; }
-uint cfgOfWord(uint data) { uint x = bitsOfWord(data); return (x & 15u) != crc4(x >> 4u) ? 0u : ((${VERSION_MIN}u + (x >> 26u)) << 22u) | ((x >> 4u) & 0x3fffffu); }
-// ai: a row of a set's system: position p's columns of the four unknown bytes, its value less the magic's part
+// ai: A candidate's five bytes after the magic, data lo (bytes 1 to 4, byte 1 low) and hi (byte 5), as the word's 40
+// ai: bits (src/fmt.c ob_fmt_pack: byte 1 the most significant): x.x the top 8 (byte 1), x.y the other 32; the index
+// ai: c = x >> 5 as (high 3 bits, low 32) and its CRC-5 x & 31 (src/fmt.c crc5: x^5 + x^2 + 1 over the 35 bits, most
+// ai: significant first, from 0, here as the register a bit at a time and five zeros after).
+uvec2 bitsOfWord(uint lo, uint hi) {
+  return uvec2(lo & 255u, (((lo >> 8u) & 255u) << 24u) | (((lo >> 16u) & 255u) << 16u) | ((lo >> 24u) << 8u) | (hi & 255u));
+}
+uvec2 indexOfWord(uvec2 x) { return uvec2(x.x >> 5u, (x.x << 27u) | (x.y >> 5u)); }
+uint crc5(uvec2 c) {
+  uint r = 0u;
+  for (int i = 34; i >= 0; i--) {
+    uint b = i >= 32 ? (c.x >> uint(i - 32)) & 1u : (c.y >> uint(i)) & 1u;
+    r = (r << 1u) | b;
+    if ((r & 32u) != 0u) { r ^= 0x25u; }
+  }
+  for (uint k = 0u; k < 5u; k++) { r <<= 1u; if ((r & 32u) != 0u) { r ^= 0x25u; } }
+  return r & 31u;
+}
+bool wordOk(uint lo, uint hi) {
+  uvec2 x = bitsOfWord(lo, hi);
+  uvec2 c = indexOfWord(x);
+  return crc5(c) == (x.y & 31u) && (c.x < ${WORDS_HI}u || (c.x == ${WORDS_HI}u && c.y < ${WORDS_LO}u));
+}
+// ai: The index's parts (src/fmt.c accept): (configuration x 241 + fps) x 30 + delay - 1, so q = c / CLOCKS the
+// ai: configuration's index and c % CLOCKS the clock, by long division in 16-bit steps (c under 2^35).
+uvec2 splitIndex(uvec2 c) {
+  uint a = (c.x << 16u) | (c.y >> 16u);
+  uint q1 = a / ${CLOCKS}u;
+  uint u = ((a % ${CLOCKS}u) << 16u) | (c.y & 0xffffu);
+  return uvec2((q1 << 16u) + u / ${CLOCKS}u, u % ${CLOCKS}u);
+}
+// ai: The configurations in index order (src/fmt.c ob_fmt_index): the slots past the 6/7 count a, the 2/3 count t and
+// ai: the one 3/4 block a frame needs; the 1/2 counts there; a version's configurations with the 6/7 count a.
+int roomOf(uint v, uint a, uint t) { return int(v * ${VERSION_SLOTS}u) - ${SLOTS34} - int(a) * ${SLOTS67} - int(t) * ${SLOTS23}; }
+uint cCount(int r) { return r < 0 ? 0u : min(127u, uint(r) / ${SLOTS12}u) + 1u; }
+uint tCount(uint v, uint a) {
+  uint n = 0u;
+  for (uint t = 0u; t < 128u; t++) { uint k = cCount(roomOf(v, a, t)); if (k == 0u) { break; } n += k; }
+  return n;
+}
+uint beforeAt(uint k) { return W.before[k >> 2u][k & 3u]; }
+// ai: a row of a set's system: position p's columns of the five unknown bytes (bytes 1 to 4, then 5), its value less
+// ai: the magic's part
 void setRow(uint at, uint r, uint p, uint v, uint magic) {
   uint i = 2u * (${BYTES_MAX}u * r + p);
-  uint g0 = W.cols[i >> 2u][i & 3u] & 255u;
+  uint g05 = W.cols[i >> 2u][i & 3u];
   uint g = W.cols[(i + 1u) >> 2u][(i + 1u) & 3u];
   mat[at] = g & 255u;
   mat[at + 1u] = (g >> 8u) & 255u;
   mat[at + 2u] = (g >> 16u) & 255u;
   mat[at + 3u] = g >> 24u;
-  mat[at + 4u] = v ^ gmul(g0, magic);
+  mat[at + 4u] = (g05 >> 8u) & 255u;
+  mat[at + 5u] = v ^ gmul(g05 & 255u, magic);
 }
-uint codeBit(uint at, uint kind, uint data, uint i) {
+uint codeBit(uint at, uint lo, uint hi, uint i) {
   uint k = i >> 5u;
-  uint w = W.code[${VECS}u * (at + kind) + (k >> 2u)][k & 3u];
+  uint w = W.code[${VECS}u * at + (k >> 2u)][k & 3u];
   for (uint b = 0u; b < 32u; b++) {
-    if (((data >> b) & 1u) != 0u) { w ^= W.code[${VECS}u * (at + 2u + b) + (k >> 2u)][k & 3u]; }
+    if (((lo >> b) & 1u) != 0u) { w ^= W.code[${VECS}u * (at + 1u + b) + (k >> 2u)][k & 3u]; }
+  }
+  for (uint b = 0u; b < 8u; b++) {
+    if (((hi >> b) & 1u) != 0u) { w ^= W.code[${VECS}u * (at + 33u + b) + (k >> 2u)][k & 3u]; }
   }
   return (w >> (i & 31u)) & 1u;
 }
@@ -297,7 +345,7 @@ void main() {
   for (uint bit = li; bit < nb; bit += 256u) {
     if (abs(q[bit]) < ${TAU}) { continue; }
     uint s = 1u << (bit / vr.x);
-    float one = 1024.0 + (((q[bit] > 0.0) != (codeBit(at0, wn.y, wn.x, bit) != 0u)) ? 1.0 : 0.0);
+    float one = 1024.0 + (((q[bit] > 0.0) != (codeBit(at0, wn.x, wn.y, bit) != 0u)) ? 1.0 : 0.0);
     g += mix(vec3(0.0), vec3(one), bvec3(true, (s & d1) == 0u, (s & d2) == 0u));
   }
   red[li] = vec4(g, 0.0);
@@ -312,56 +360,36 @@ void main() {
     uint e2 = gateAt(rg, m2);
     bool through = (e0 != 0xffffu && f2u(G.x) - 1024u * m0 <= e0) || (e1 != 0xffffu && f2u(G.y) - 1024u * m1 <= e1) || (e2 != 0xffffu && f2u(G.z) - 1024u * m2 <= e2);
     bool ok = con >= ${CON_MIN} && wn.z != 0u && through;
-    uint b1 = wn.x & 255u;
-    bool own = ok && wn.y == 0u;
-    uint g = own ? cfgOfWord(wn.x) : 0u;
-    result[f].r[5] = ok ? float(own ? (g >> 22u) : 256u + b1) : 0.0;
-    result[f].r[6] = ok ? uintBitsToFloat(own ? bitsOfWord(wn.x) : (wn.x >> 8u)) : 0.0;
-    result[f].r[7] = uintBitsToFloat(wn.w);
-    // ai: its own static word's configuration (sel.y 1 + it), sel.w 2; an animated word's frame HELD's (sel.w 1, waiting
-    // ai: for it); a frame whose word is not read none (sel.w 0: the word before the frame, 2026-11-18). Record word 29
-    // ai: the configuration decoded at as a float's bits (0 none), 30 whether it was held.
+    uvec2 x = bitsOfWord(wn.x, wn.y);
+    uvec2 qc = splitIndex(indexOfWord(x));
+    uint v = ${VERSION_MIN}u;
+    for (uint k = 1u; k <= ${VERSION_MAX - VERSION_MIN}u; k++) { if (beforeAt(k) <= qc.x) { v = ${VERSION_MIN}u + k; } }
+    wix = uvec4(ok ? 1u : 0u, v, qc.x - beforeAt(v - ${VERSION_MIN}u), qc.y);
+  }
+  // ai: the configuration from its index (src/fmt.c ob_fmt_config): the version from the Word uniform's before
+  // ai: (lane 0, above), each lane a 6/7 count's configurations, then lane 0 walks the 6/7 count, the 2/3 count and the
+  // ai: 1/2 count's remainder
+  ${uniformLoad("uvec4 wx", "wix")}
+  na[li] = wx.x != 0u ? tCount(wx.y, li) : 0u;
+  barrier();
+  if (li == 0u) {
+    bool ok = wx.x != 0u;
+    uint v = wx.y;
+    uint rem = wx.z;
+    uint a = 0u;
+    while (a < 255u && rem >= na[a] && na[a] != 0u) { rem -= na[a]; a++; }
+    uint t = 0u;
+    for (; t < 127u; t++) { uint k = cCount(roomOf(v, a, t)); if (rem < k) { break; } rem -= k; }
+    uint g = ok ? (v << 22u) | (a << 14u) | (t << 7u) | min(rem, 127u) : 0u;
+    ok = ok && cfgOk(g);
+    g = ok ? g : 0u;
+    uint fps = wx.w / ${DELAY_MAX}u;
+    uint delay = 1u + wx.w % ${DELAY_MAX}u;
+    result[f].r[5] = ok ? float(v) : 0.0;
+    result[f].r[6] = ok ? uintBitsToFloat(bitsOfWord(wn.x, wn.y).y) : 0.0;
+    result[f].r[30] = ok ? uintBitsToFloat(fps | (delay << 8u)) : 0.0;
     result[f].r[29] = uintBitsToFloat(g);
-    result[f].r[30] = 0.0;
-    sel[f] = own ? uvec4(rg, 1u + g, slotOf(g >> 22u), 2u) : uvec4(rg, 0u, 0u, ok ? 1u : 0u);
+    sel[f] = ok ? uvec4(rg, 1u + g, slotOf(g >> 22u), 0u) : uvec4(rg, 0u, 0u, 0u);
   }
-}
-`;
-
-// ai: F8's held configuration (2026-11-16; the version alone until 2026-11-18), after WORD in its pass: one invocation
-// ai: walks the launch's frames in capture order; a frame with its own static word (sel.w 2) makes its configuration
-// ai: (src/fmt.h ob_fmt_held) the held one, a frame with an animated word (sel.w 1) decodes at the held one (sel.y 1 + it,
-// ai: sel.z its picture; none where 0), record words 29 and 30 the configuration as a float's bits and whether it was
-// ai: held. The held configuration goes on from launch to launch in CARRY, one word pair for every lane of the decoder
-// ai: (x the configuration, y the host's last post taken), so a frame's held one is the last static word read before
-// ai: it, whatever the launch's size or how many are in flight. The host posts one of its own (Held: config, post; a
-// ai: carousel's header, or 0 at a reset or for a launch alone) by a new post number, taken once in CARRY's place;
-// ai: hold 0 keeps none (a lab's arm).
-// ai: Bindings: 0 sel, 1 the results, 2 CARRY, 3 the Word uniform, 4 Held (config, post, frames, hold).
-export const HELD = VERSION + /* glsl */ `
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-struct Result { float r[32]; };
-layout(set = 0, binding = 0, std430) buffer Sel { uvec4 sel[]; };
-layout(set = 0, binding = 1, std430) buffer Results { Result result[]; };
-layout(set = 0, binding = 2, std430) buffer Carry { uvec4 carry[]; };
-layout(set = 0, binding = 3, std140) uniform Word { ${WORD_UNI} } W;
-layout(set = 0, binding = 4, std140) uniform Held { uint config; uint post; uint frames; uint hold; } HB;
-${SLOT_OF}
-void main() {
-  uvec4 c = carry[0];
-  uint cur = HB.post != c.y ? HB.config : c.x;
-  for (uint f = 0u; f < HB.frames; f++) {
-    uvec4 s = sel[f];
-    if (s.w == 2u) {
-      if (HB.hold != 0u) { cur = s.y - 1u; }
-      sel[f].w = 0u;
-    } else if (s.w == 1u) {
-      uint g = HB.hold != 0u ? cur : 0u;
-      result[f].r[29] = uintBitsToFloat(g);
-      result[f].r[30] = g > 0u ? 1.0 : 0.0;
-      sel[f] = g > 0u ? uvec4(s.x, 1u + g, slotOf(g >> 22u), 0u) : uvec4(s.x, 0u, 0u, 0u);
-    }
-  }
-  carry[0] = uvec4(cur, HB.post, 0u, 0u);
 }
 `;

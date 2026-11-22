@@ -52,23 +52,20 @@ int lizard_setup_tiers(int n, int span, int r0, int b0, int r1, int b1, int r2, 
 // ai: A receiver told nothing: the module's one blind receiver (any.h), behind the exports.
 static lizard_any_t ANY = { .which = -1 };
 // ai: nmax: the largest picture this receiver decodes (1536, the ladder's top, in every receiver since 2026-09-29). Returns the
-// ai: block bytes (476), or -1.
+// ai: block bytes (472), or -1.
 int lizard_any_setup(int nmax) { return lizard_any_init(&ANY, nmax); }
-// ai: blocks and ok hold lizard_any_max_blocks() blocks. held: the configuration the caller holds for animated frames
-// ai: (fmt.h ob_fmt_held, lizard_car_held: its carousel's header), 0 for none. Returns the blocks decoded;
-// ai: lizard_any_which says which ring registered (-1 none), lizard_any_n the picture finished (0 none), lizard_any_held
-// ai: whether the frame was finished at the held configuration.
-int lizard_any_rx(const uint8_t *img, int iw, int ih, float gamma, uint8_t *blocks, uint8_t *ok, int held) {
-  return lizard_any_frame(&ANY, img, iw, ih, gamma, blocks, ok, held, &R);
+// ai: blocks and ok hold lizard_any_max_blocks() blocks. Returns the blocks decoded; lizard_any_which says which ring
+// ai: registered (-1 none), lizard_any_n the picture finished (0 none).
+int lizard_any_rx(const uint8_t *img, int iw, int ih, float gamma, uint8_t *blocks, uint8_t *ok) {
+  return lizard_any_frame(&ANY, img, iw, ih, gamma, blocks, ok, &R);
 }
 int lizard_any_which(void) { return ANY.which; }
 int lizard_any_n(void) { return ANY.n; }
-int lizard_any_held(void) { return ANY.held; }
 // ai: Pictures built since the setup, for a caller timing its first frames (the rig's workersFirst).
 int lizard_any_builds(void) { return ANY.builds; }
 int lizard_any_blocks(void) { return ANY.last ? ANY.last->blocks : 0; }
 int lizard_any_max_blocks(void) { return lizard_any_top(&ANY); }
-// ai: The word this frame's ring read, or 0: the held configuration is the caller's, never reported as read.
+// ai: The word this frame's ring read, or 0.
 const ob_fmt_t *lizard_any_fmt(void) { return lizard_any_word(&ANY); }
 // ai: the pilots the blind receiver's last frame read: out[0], out[1] r of the even and of the odd blocks, out[2],
 // ai: out[3] their standard errors; the blocks read, 0 for none
@@ -78,44 +75,21 @@ int lizard_any_pilot_get(float *out) { return lizard_any_pilot(&ANY, out, out + 
 // Focus refuses any other).
 int lizard_bitmap_get(void) { return fready ? F.bitmap : -1; }
 
-// What the last decode read out of the band, an ob_fmt_t (fmt.h: kind, version, fps (0: a word states none), count[3],
-// id as ints, then sym's 3 bytes), or 0 for nothing read.
+// What the last decode read out of the band, an ob_fmt_t (fmt.h: the version, then count[3], as ints), or 0 for nothing
+// read.
 const ob_fmt_t *lizard_fmt_rx_ptr(void) { return fready ? lizard_fmt_rx(&F) : 0; }
-// ai: The word the next encode paints (lizard_phy.h lizard_fmt_word): kind 0 static (the codec's version and layout);
-// ai: kind 1 animated, id b0 and the symbol's bytes b1 to b3.
-int lizard_fmt_word_set(int kind, int b0, int b1, int b2, int b3) {
-  const uint8_t b[4] = { (uint8_t)b0, (uint8_t)b1, (uint8_t)b2, (uint8_t)b3 };
-  return fready ? lizard_fmt_word(&F, kind, b) : -1;
-}
-// ai: The frame's layout the next encode paints (lizard_phy.h lizard_layout): 7/8, 2/3 and 1/2 blocks, the 3/4 filling;
+// ai: The frame's layout the next encode paints (lizard_phy.h lizard_layout): 6/7, 2/3 and 1/2 blocks, the 3/4 filling;
 // ai: 0, or -1 where it is no frame. lizard_blocks() then says the frame's blocks; lizard_blocks_max() the most any layout
 // ai: of this codec holds (what a told receiver's buffers hold, a frame's word choosing its own).
 int lizard_layout_set(int a, int t, int c) { const int k[3] = { a, t, c }; return fready ? lizard_layout(&F, k) : -1; }
+// ai: the sender's clock the word states (lizard_phy.h lizard_clock): fps 0 to 240 (0 a still), delay 1 to 30
+int lizard_clock_set(int fps, int delay) { return fready ? lizard_clock(&F, fps, delay) : -1; }
 int lizard_blocks_max(void) { return F.blocks_max; }
-// ai: One carousel's assembly (fmt.h ob_car_rx_t), the module's: reset for a new sender; add an animated word's symbol,
-// ai: k back once its header stands (0 before); the header's bytes (3k); the configuration it states as one int (fmt.h
-// ai: ob_fmt_held: lizard_any_rx's held), 0 where none stands; the display rate it states, 0 where none.
-static ob_car_rx_t CAR;
-void lizard_car_reset(void) { ob_car_reset(&CAR); }
-int lizard_car_add(int id, int s0, int s1, int s2) { const uint8_t s[3] = { (uint8_t)s0, (uint8_t)s1, (uint8_t)s2 }; return ob_car_add(&CAR, id, s); }
-const uint8_t *lizard_car_hdr(void) { return CAR.hdr; }
-int lizard_car_held(void) { ob_fmt_t g; return CAR.k && ob_car_config(CAR.hdr, CAR.k, &g) ? ob_fmt_held(&g) : 0; }
-int lizard_car_fps(void) { ob_fmt_t g; return CAR.k && ob_car_config(CAR.hdr, CAR.k, &g) ? g.fps : 0; }
-// ai: A header's symbol for a sender painting a carousel: the codec's configuration as content (fmt.h ob_car_content:
-// ai: fps the rate it states, 0 to 65,535), symbol id into out[0..2]; k, or -1.
-int lizard_car_symbol(int fps, int id, uint8_t *out) {
-  uint8_t content[OB_CAR_CONTENT_MAX], hdr[OB_CAR_SYM * OB_CAR_N];
-  if (!fready) return -1;
-  ob_fmt_t g = F.fmt;
-  g.fps = fps;
-  const int len = ob_car_content(&g, content), k = len < 0 ? -1 : ob_car_header(content, len, hdr);
-  return k < 0 || ob_car_symbol(hdr, k, id, out) ? -1 : k;
-}
 // ai: The pilots (lizard_phy.h lizard_parity, lizard_pilot): the count mod 4 the next encode paints, and what the last told
 // ai: decode read, out[0], out[1] r of the even and of the odd blocks, out[2], out[3] their standard errors; the
 // ai: blocks read, 0 for none.
 int lizard_parity_set(int c) { return fready ? lizard_parity(&F, c) : -1; }
-int lizard_pilot_get(float *out) { return fready ? lizard_pilot(&F, 0, out, out + 2) : 0; }
+int lizard_pilot_get(float *out) { return fready ? lizard_pilot(&F, out, out + 2) : 0; }
 // ai: the grid's shift the last decode read off the pilots and turned back (lizard_phy.h lizard_align), for a measurement
 // ai: that re-reads the coefficients lizard_dbg_coef holds, which are the ones before the turn (2026-10-07)
 int lizard_align_get(float *out) { if (!fready) return 0; lizard_align(&F, out); return 1; }
@@ -227,7 +201,7 @@ int lizard_rx_acquire_quad(const uint8_t *img, int iw, int ih, float gamma, cons
 int lizard_rx_finish(float *grid, uint8_t *blocks, uint8_t *ok) { return fready ? lizard_finish(&F, grid, blocks, ok, &R) : 0; }
 
 // ai: The mesh tables (the node lattice, the per-module kind map, which nodes carry a mark), for gpu/tables.mjs and the
-// ai: checks that read a symbol's cells (test/vectors.mjs, scripts/exp/ring_held.mjs and fmt_word.mjs).
+// ai: checks that read a symbol's cells (test/vectors.mjs, scripts/exp/fmt_word.mjs).
 int ob_test_mesh_tables_out(int32_t *dims, float *nodeX, float *nodeY, uint8_t *kind, int32_t *mark) {
   return fready ? ob_test_mesh_tables(&F.frame, dims, nodeX, nodeY, kind, mark) : 0;
 }
@@ -288,77 +262,100 @@ int ob_test_crc_gate_out(const float *est, float *blk_est, float *bar, uint8_t *
   return fready ? ob_test_crc_gate(&F, est, blk_est, bar, declined) : 0;
 }
 
-// ---- The transfer (xfer.h): the block id, the header and manifest blocks, BLAKE3 ----
-// The C functions with plain arguments are exported as they are (xfer_manifest_blocks, _write, _parse, _check,
-// xfer_root, xfer_chunk_cv, xfer_b3_hash); these wrap the rest for JS. A uint32 comes back as a signed int32, so JS
-// reads it with >>> 0; a block id (40 bits) and lengths past 2^32 cross as doubles, exact to 2^53.
+// ---- The transfer (xfer.h): the block id, the header, the file's check, BLAKE3 ----
+// The C functions with plain arguments are exported as they are (xfer_root_check, xfer_root, xfer_sb_cv,
+// xfer_b3_hash); these wrap the rest for JS. A uint32 comes back as a signed int32, so JS
+// reads it with >>> 0; a block's bare id (its source block and symbol, 40 bits), a TOI (48 bits, xfer.h) and lengths past
+// 2^32 cross as doubles, exact to 2^53.
 
-// The layout's numbers, so the JS keeps no copy: id bytes, payload bytes, symbol bits, chunk bits, the control chunk,
-// manifest blocks at most, entries a manifest block, name bytes at most, media type bytes at most, chunk_log2 least
-// and most, chunks at most, BLAKE3's hash byte.
+// The layout's numbers, so the JS keeps no copy: id bytes, payload bytes, symbol bits, source block bits, the control
+// source block, name bytes at most, sb_log2 least and most, source blocks at most, BLAKE3's
+// hash byte, TOI bits, the TOI's first byte in the id, an entry's bytes at most, a description's bytes at most.
 void xfer_layout(int32_t *out) {
-  const int32_t v[] = { XFER_ID_BYTES, XFER_PAYLOAD, XFER_SYMBOL_BITS, XFER_CHUNK_BITS, XFER_CONTROL, XFER_MAX_MANIFEST,
-                        XFER_PER_BLOCK, XFER_NAME_MAX, XFER_TYPE_MAX, XFER_LOG2_MIN, XFER_LOG2_MAX, XFER_MAX_CHUNKS, XFER_HASH_BLAKE3 };
+  const int32_t v[] = { XFER_ID_BYTES, XFER_PAYLOAD, XFER_ESI_BITS, XFER_SBN_BITS, XFER_CONTROL, XFER_NAME_MAX,
+                        XFER_LOG2_MIN, XFER_LOG2_MAX, XFER_MAX_SOURCE_BLOCKS, XFER_HASH_BLAKE3, XFER_TOI_BITS, XFER_ID_TOI,
+                        XFER_DESC_LONGEST, XFER_DESC_MAX };
   for (unsigned i = 0; i < sizeof v / sizeof *v; i++) out[i] = v[i];
 }
-double xfer_id_of(uint32_t chunk, uint32_t symbol) { return (double)xfer_id(chunk, symbol); }
+double xfer_id_of(uint32_t sbn, uint32_t symbol) { return (double)xfer_id(sbn, symbol); }
 // The test stream's payload for a block id (xfer.h stream_fill), the id a double (40 bits, exact).
 void stream_fill_of(double id, uint8_t *out, uint32_t len) { stream_fill(id >= 0 && id < 1099511627776.0 ? (uint64_t)id : 0, out, len); }
 // 1 where payload is the test stream's for the id (xfer.h stream_matches: a file's block stops at its first 64 bytes)
 int stream_matches_of(double id, const uint8_t *payload, uint32_t len) { return stream_matches(id >= 0 && id < 1099511627776.0 ? (uint64_t)id : 0, payload, len); }
 int xfer_kind_of(double id) { return id >= 0 && id < 1099511627776.0 ? xfer_id_kind((xfer_id_t)id) : XFER_KIND_RESERVED; }
 
-// The header's 471 bytes from its fields: length in bytes, the chunk size's log2, the root's 32 bytes, and name and
-// media type as bytes with their lengths (0 for none). 0, or -1 for fields the layout refuses.
-int xfer_hdr_write(uint8_t *payload, double length, int chunk_log2, const uint8_t *root, const uint8_t *name, int name_len,
-                   const uint8_t *type, int type_len) {
-  xfer_header_t h;
+// ai: a description's fields from the JS's: the length (a double, exact to 2^53), sb_log2, the root
+static int desc_of(xfer_header_t *h, double length, int sb_log2, const uint8_t *root) {
   if (!(length >= 0 && length <= 9007199254740992.0) || (double)(uint64_t)length != length) return -1;
-  if (name_len < 0 || name_len > XFER_NAME_MAX || type_len < 0 || type_len > XFER_TYPE_MAX) return -1;
-  if (xfer_header_init(&h, (uint64_t)length, chunk_log2)) return -1;
-  memcpy(h.root, root, XFER_CV);
-  h.name_len = (uint8_t)name_len; if (name_len) memcpy(h.name, name, (size_t)name_len);
-  h.type_len = (uint8_t)type_len; if (type_len) memcpy(h.type, type, (size_t)type_len);
-  return xfer_header_write(&h, payload);
+  if (xfer_header_init(h, (uint64_t)length, sb_log2)) return -1;
+  memcpy(h->root, root, XFER_CV);
+  return 0;
 }
-// A header block's payload read back. scalars, 9 int32: hash, chunk_log2, name_len, type_len, length's low 32 bits,
-// its high 32 bits, chunks, manifest blocks, the chunk size in bytes. root (32), name (255) and type (158) take the
-// bytes, or may be 0. 0, or XFER_ERR (-1), XFER_ERR_HASH (-3), and nothing is written then.
-int xfer_hdr_parse(const uint8_t *payload, int32_t *scalars, uint8_t *root, uint8_t *name, uint8_t *type) {
-  xfer_header_t h;
-  const int rc = xfer_header_parse(payload, &h);
+// The session header's 460 bytes: its description (desc, len bytes), xfer_session_write.
+int xfer_session_write_of(uint8_t *payload, const uint8_t *desc, uint32_t len) {
+  return xfer_session_write(payload, desc, len);
+}
+// The name a description carries for a name of len bytes (xfer_name_cut: cut in its stem, its extension kept): its
+// bytes into out (room for 255), their count.
+int xfer_name_cut_of(const uint8_t *name, uint32_t len, uint8_t *out) { return (int)xfer_name_cut(name, len, out); }
+// A session header read (xfer_session_parse). scalars, 2 int32: the description's offset and bytes. 0, or XFER_ERR (-1).
+int xfer_session_read(const uint8_t *payload, int32_t *scalars) {
+  xfer_session_t r;
+  const int rc = xfer_session_parse(payload, &r);
   if (rc) return rc;
-  const int32_t v[] = { h.hash, h.chunk_log2, h.name_len, h.type_len, (int32_t)(uint32_t)h.length,
-                        (int32_t)(uint32_t)(h.length >> 32), (int32_t)h.chunks, xfer_manifest_blocks(h.chunks), 1 << h.chunk_log2 };
+  scalars[0] = (int32_t)r.at; scalars[1] = (int32_t)r.len;
+  return 0;
+}
+// A file's TOI (xfer_toi_of), its length a double (exact to 2^53): the TOI as a double (exact), 0 for a length out of range.
+double xfer_toi_of_wasm(const uint8_t *root, double length, int sb_log2) {
+  if (!(length >= 0 && length < 1099511627776.0)) return 0;
+  return (double)xfer_toi_of(root, (uint64_t)length, sb_log2);
+}
+// A file's description (xfer_desc_write) from its fields, its name (0 for none) and its compression (XFER_COMP_*): its
+// byte count, or -1 for fields the layout refuses.
+int xfer_desc_write_of(uint8_t *out, double length, int sb_log2, const uint8_t *root, const uint8_t *name, int name_len, int compression) {
+  xfer_header_t h;
+  if (name_len < 0 || name_len > XFER_NAME_MAX || compression < 0 || compression > 255) return -1;
+  if (desc_of(&h, length, sb_log2, root)) return -1;
+  h.name_len = (uint8_t)name_len; if (name_len) memcpy(h.name, name, (size_t)name_len);
+  h.compression = (uint8_t)compression;
+  return xfer_desc_write(&h, out);
+}
+// A description (len bytes, whole; xfer_desc_read under the session header's TOI self_toi, 0 none) read back. scalars,
+// 11 int32: hash, sb_log2, name_len,
+// length's low 32 bits, its high 32 bits, source blocks, the source block size in bytes, the
+// compression, critical (1: an attribute this build does not know and must not present the file under), the TOI's low 32
+// bits and its high 16. root
+// (32) and name (255) take the bytes, or may be 0. 0, or -1, and nothing is written then.
+int xfer_desc_parse(const uint8_t *desc, uint32_t len, double self_toi, int32_t *scalars, uint8_t *root, uint8_t *name) {
+  xfer_header_t h;
+  xfer_toi_t toi = 0;
+  if (xfer_desc_read(desc, len, self_toi >= 0 && self_toi < 281474976710656.0 ? (xfer_toi_t)self_toi : 0, &h, &toi)) return -1;
+  const int32_t v[] = { h.hash, h.sb_log2, h.name_len, (int32_t)(uint32_t)h.length, (int32_t)(uint32_t)(h.length >> 32),
+                        (int32_t)h.source_blocks, 1 << h.sb_log2, h.compression, h.critical, (int32_t)(uint32_t)toi, (int32_t)(toi >> 32) };
   for (unsigned i = 0; i < sizeof v / sizeof *v; i++) scalars[i] = v[i];
   if (root) memcpy(root, h.root, XFER_CV);
   if (name) memcpy(name, h.name, XFER_NAME_MAX);
-  if (type) memcpy(type, h.type, XFER_TYPE_MAX);
   return 0;
 }
-// 1 where the header payloads a and b describe one file's blocks (xfer_same_file), 0 where not, -1 where either does
-// not parse.
-int xfer_same_file_of(const uint8_t *a, const uint8_t *b) {
+// 1 where the descriptions a and b describe one transfer's bytes (xfer_same_file), 0 where not, -1
+// where either does not parse.
+int xfer_same_file_of(const uint8_t *a, uint32_t alen, const uint8_t *b, uint32_t blen) {
   xfer_header_t x, y;
-  return xfer_header_parse(a, &x) || xfer_header_parse(b, &y) ? -1 : xfer_same_file(&x, &y);
+  return xfer_desc_read(a, alen, 0, &x, NULL) || xfer_desc_read(b, blen, 0, &y, NULL) ? -1 : xfer_same_file(&x, &y);
 }
-// Manifest block m's payload read under the header payload `hdr` (xfer_manifest_parse): its chaining values into cvs
-// (32 a chunk) at 14 m. -1 for a block that is not this transfer's manifest block m, or a header that does not parse.
-int xfer_mf_parse(const uint8_t *payload, const uint8_t *hdr, uint32_t m, uint8_t *cvs) {
+// The source block size's log2 a sender picks for a file of `length` bytes (xfer_sb_log2_for), -1 past what the layout holds.
+int xfer_sb_log2_of(double length) {
+  return length >= 0 && length <= 9007199254740992.0 ? xfer_sb_log2_for((uint64_t)length) : -1;
+}
+// Source block `index` as it decodes, for the object the description (desc_len bytes) describes (xfer_sb_check): 0 where
+// its length is right and, with one source block, its hash the root; with two or more its chaining value into cv (32
+// bytes, may be 0 with one). -1 otherwise.
+int xfer_sb_ok(const uint8_t *desc, uint32_t desc_len, uint32_t index, const uint8_t *data, uint32_t len, uint8_t *cv) {
   xfer_header_t h;
-  return xfer_header_parse(hdr, &h) ? -1 : xfer_manifest_parse(payload, &h, m, cvs);
+  return xfer_desc_read(desc, desc_len, 0, &h, NULL) ? -1 : xfer_sb_check(&h, index, data, len, cv);
 }
-// The chunk size's log2 a sender picks for a file of `length` bytes (xfer_chunk_log2_for), -1 past what the layout holds.
-int xfer_log2_for(double length) {
-  return length >= 0 && length <= 9007199254740992.0 ? xfer_chunk_log2_for((uint64_t)length) : -1;
-}
-// 0 where chunk `index`'s bytes are right for the file the header payload describes (xfer_chunk_check): cvs is the
-// chaining-value list once xfer_manifest_check has passed it, or 0 for a file of one chunk.
-int xfer_chunk_ok(const uint8_t *payload, uint32_t index, const uint8_t *data, uint32_t len, const uint8_t *cvs) {
-  xfer_header_t h;
-  return xfer_header_parse(payload, &h) ? -1 : xfer_chunk_check(&h, index, data, len, cvs);
-}
-// xfer_b3_subtree with the 1 KiB chunk counter as a double (xfer_chunk_cv is the same thing by chunk index).
+// xfer_b3_subtree with the 1 KiB chunk counter as a double (xfer_sb_cv is the same thing by chunk index).
 void xfer_b3_sub(const uint8_t *in, uint32_t len, double counter, int root, uint8_t *out) {
   xfer_b3_subtree(in, len, counter > 0 && counter < 18446744073709551616.0 ? (uint64_t)counter : 0, root, out);
 }

@@ -33,7 +33,7 @@ function showDetails() {
   if (!running) { details($("dt"), null); return; }
   const speed = live && !paused && offeredKBs > 0 ? rate(offeredKBs) : "";
   if (runTest) { details($("dt"), { name: "Test stream", test: true, spin: !live, rows: [["Speed", speed]] }); return; }
-  const stats = statsOn(), pass = lap ? Math.floor(dataSent / lap) + 1 : 0, rows = [["Size", bytes(fileBytes)]];
+  const stats = statsOn(), pass = cycle ? Math.floor(dataSent / cycle) + 1 : 0, rows = [["Size", bytes(fileBytes)]];
   if (stats) rows.push(["Compressed", sentBytes ? bytes(sentBytes) : ""]);
   if (runFiles > 1) rows.push(["Files", String(runFiles)]);
   rows.push(["Speed", speed]);
@@ -45,9 +45,9 @@ const $ = (id) => document.getElementById(id), canvas = $("c"), ctx = canvas.get
 // blocksPerFrame changes when repick() swaps the layout mid-stream: seq * blocksPerFrame would
 // then jump backwards onto ids already sent, and every one of them would read as a repeat.
 // ai: cfg: what is painted. running: from Start until Stop (preparing, then sending); live: a frame is painted.
-// ai: lap: a file's data blocks a lap (sim/xfer.mjs), 0 for the test stream; dataSent: data blocks painted this run.
+// ai: cycle: a file's data blocks a cycle (sim/xfer.mjs), 0 for the test stream; dataSent: data blocks painted this run.
 let timer = 0, seq = 0, nextId = 0, image = null, painted = 0, paintMs = 0, encMs = 0, lastReport = 0, cfg = null, shown = null;
-let running = false, live = false, lap = 0, dataSent = 0, dataWin = 0;
+let running = false, live = false, cycle = 0, dataSent = 0, dataWin = 0;
 // ai: Paused (2026-10-02): the run kept, nothing asked or
 // ai: painted, the last picture left on screen; a receiver holds what it has, and a resume paints on at once.
 let paused = false;
@@ -196,7 +196,7 @@ async function gpuEncoder() {
 }
 async function gpuConfigure(s, codes, gap) {
   const e = await gpuEncoder();
-  const cfg = await e.configure({ spec: s, codes, gap }), key = `${s.n}/${s.span}/${codes}/${codes > 1 ? gap : 0}`;
+  const cfg = await e.configure({ spec: s, codes, gap, clock: clockOf() }), key = `${s.n}/${s.span}/${codes}/${codes > 1 ? gap : 0}`;
   cfg.pending = 0; cfg.half = 0;
   if (!checked.has(key)) {
     const blocks = new Uint8Array(codes * cfg.V * cfg.B);
@@ -259,10 +259,10 @@ $("subch").addEventListener("change", showBlocks);
 // ai: itself since 2026-10-02 (#subch 480, #fps 60: set here, after the page was drawn, they flashed auto first). A
 // ai: setting the user changed is kept over these (persist, below), and a URL preset over that.
 
-// A LIZARD file goes as a chunked transfer (sim/xfer.mjs): chunks of 2^chunk bytes (?chunk=10..24, 16 MiB unless
-// ai: asked), a fountain each, the header and manifest in the light, and only there: the receiver reads it blind
+// A LIZARD file goes as a chunked transfer (sim/xfer.mjs): source blocks of 2^source block bytes (?source block=10..24, 16 MiB unless
+// ai: asked), a fountain each, the header in the light, and only there: the receiver reads it blind
 // ai: (2026-09-26).
-const URLP = new URLSearchParams(location.search), CHUNK_LOG2 = +URLP.get("chunk") || null;   // ai: null: src/xfer.h xfer_chunk_log2_for's
+const URLP = new URLSearchParams(location.search), SB_LOG2 = +URLP.get("chunk") || null;   // ai: null: src/xfer.h xfer_sb_log2_for's
 // ai: The size on screen and the surround, test-only menus until 2026-10-01, URL parameters since: fit=stretch|whole|fit,
 // ai: bg=none|noise|text|photo|checker|squares|mixed.
 const FIT = URLP.get("fit") ?? "stretch", SURROUND = URLP.get("bg") ?? "none";
@@ -411,7 +411,7 @@ function setPaused(p) {
   showRail();
 }
 // ai: The collapsed rail (send.html #rail): pause while sending, play to resume or to start, and the code's capacity,
-// ai: what it offers at most (codes x new blocks a frame (freshBlocks) x 471 B x pictures a second), while a run is configured. Written
+// ai: what it offers at most (codes x new blocks a frame (freshBlocks) x 460 B x pictures a second), while a run is configured. Written
 // ai: only when it changes (tick calls it every frame). The pictures a second are the asked rate, or the browser's own
 // ai: animation frames where fewer (drawFps, measured each second while sending; since 2026-10-04, so an external
 // ai: limiter shows in the MB/s: Edge's efficiency mode drew 30 of 60 while the rail offered 60's capacity).
@@ -506,18 +506,18 @@ async function start() {
   // ai: on disk the read is refused (NotReadableError, in the browser's own words "permission problems that have
   // ai: occurred after a reference to a file was acquired"). The page says what to do about it.
   // ai: the file's transfer is the worker's, made at the pick's first Start (prepare, 2026-11-01; at the pick before,
-  // ai: every chunk compressed for picks never sent) and kept through stops; one whose making failed is read and made
+  // ai: every source block compressed for picks never sent) and kept through stops; one whose making failed is read and made
   // ai: here, which says why
   if (!test) { file.posted ??= prepare(file); await file.posted; }
   if (my !== gen) return;
   const bytes = test || !file.failed ? null : await readOf(file, () => my === gen);
   if (my !== gen) return;   // ai: stopped, or started again, while the file was read
   // ai: The spec after the read, so the room is the one the preparing controls left.
-  const s = spec(), xfer = bytes ? { name: file.name, type: file.type, chunkLog2: CHUNK_LOG2 } : null;
+  const s = spec(), xfer = bytes ? { name: file.name, sbLog2: SB_LOG2 } : null;
   // The worker holds the codec and, for a file, the fountain: the page keeps neither.
   swInit();
   ahead.clear(); inflight = 0; reqSeq = 0; spare = []; respecPending = false; behind = 0;
-  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf(), colours: [inkOf(), paperOf()] });
+  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf(), clock: clockOf(), colours: [inkOf(), paperOf()] });
   // ai: The GPU encoder for this run, where the menu asks for it and it builds (WebGPU by name: its failure is the start's).
   // ai: Its configuration is this run's only if the run is still this one when it comes back.
   if (wantGpu()) {
@@ -534,11 +534,11 @@ async function start() {
   }
   // ai: What is painted: the label, the payload, the block's bytes, the blocks a frame, the codes and their gap.
   cfg = { label: made.label, mode: file ? "file" : "test", usefulBytes: made.usefulBytes, blocksPerFrame: made.blocksPerFrame, codes, gap };
-  shown = s; lap = made.xfer?.lap ?? 0; dataSent = 0; dataWin = 0; fileBytes = file?.size ?? 0; sentBytes = made.xfer?.length ?? 0;
+  shown = s; cycle = made.xfer?.cycle ?? 0; dataSent = 0; dataWin = 0; fileBytes = file?.size ?? 0; sentBytes = made.xfer?.length ?? 0;
   showEnc();
   showBlocks();
   // ai: length: the bytes the transfer carries, the file packed where that paid (sim/pack.mjs)
-  const xferLine = made.xfer ? `\nfile ${file.size} B${made.xfer.length !== file.size ? `, ${made.xfer.length} B packed (zstd)` : ""}: ${made.xfer.chunks} chunk${made.xfer.chunks === 1 ? "" : "s"} of 2^${made.xfer.chunkLog2}, ${made.xfer.manifest} manifest block${made.xfer.manifest === 1 ? "" : "s"}, BLAKE3 ${made.xfer.root.slice(0, 16)}..., seed ${made.xfer.seed}, header in the light` : "";
+  const xferLine = made.xfer ? `\nfile ${file.size} B${made.xfer.length !== file.size ? `, ${made.xfer.length} B packed (zstd)` : ""}: ${made.xfer.sourceBlocks} chunk${made.xfer.sourceBlocks === 1 ? "" : "s"} of 2^${made.xfer.sbLog2}, BLAKE3 ${made.xfer.root.slice(0, 16)}..., seed ${made.xfer.seed}, header in the light` : "";
   // What the window chose, so the guess is visible rather than implied. The capture is an assumption, not a measurement.
   const auto = () => {
     const r = room(), squeezed = SAMPLES(shown.n, ringOf(shown)) > r;
@@ -603,14 +603,14 @@ async function start() {
       const encLine = (gcfg ? `encoder: WebGPU, ${genc.adapterName}` : `encoder: wasm in the worker${gpuOff && $("enc").value !== "wasm" ? ` (WebGPU off: ${gpuOff})` : ""}`) + (st ? `\nGPU stages, ms a frame: ${Object.entries(st).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(", ")}` : "");
       const dt = (now - lastReport) / 1000, afps = rafRate();
       if (rafGaps.length >= 10) drawFps = afps;
-      // ai: which pass of the file shows and how long a pass takes (a lap, at this second's rate of data blocks): #tx's
+      // ai: which pass of the file shows and how long a pass takes (a cycle, at this second's rate of data blocks): #tx's
       // ai: since 2026-10-05 (#nums' until then)
-      const passSecs = lap && dataWin ? lap / (dataWin / dt) : 0;
-      const passLine = lap ? `\npass ${Math.floor(dataSent / lap) + 1}${passSecs ? `, ${passSecs.toFixed(1)} s a pass` : ""}` : "";
+      const passSecs = cycle && dataWin ? cycle / (dataWin / dt) : 0;
+      const passLine = cycle ? `\npass ${Math.floor(dataSent / cycle) + 1}${passSecs ? `, ${passSecs.toFixed(1)} s a pass` : ""}` : "";
       const line = `${auto().slice(1)}\n${cfg.label}${xferLine}${passLine}\n${samples} x ${samples} samples with the quiet zone${cfg.codes > 1 ? `, ${cfg.codes} side by side` : ""}, ${$("tx").dataset.scale} device px per cell\n${cfg.codes > 1 ? `${cfg.codes} x ` : ""}${cfg.blocksPerFrame} x ${cfg.usefulBytes} B = ${cfg.codes * cfg.blocksPerFrame * cfg.usefulBytes} B per frame\npainted ${(painted / dt).toFixed(1)}/s of ${$("fps").value} asked (${how})` +
         `\nworker ${ahead.size} ready ahead, ${behind} animation frames found nothing ready\nanimation frames ${afps.toFixed(1)} a second, the screen ${(1000 / tickMs).toFixed(1)} Hz by their intervals; pictures held 1, 2, 3, 4+ refreshes: ${held.join(", ")}\n${encLine}`;
       $("tx").textContent = line;
-      // ai: the new data blocks the pictures carried (the worker's data: a header, manifest or repeated block none; Rate
+      // ai: the new data blocks the pictures carried (the worker's data: a header or repeated block none; Rate
       // ai: refresh's repeats add nothing), as the native sender's offeredKBs
       offeredKBs = (dataWin / dt) * cfg.usefulBytes / 1000;
       // ai: #tx's first line names the format (auto(): "LIZARD-480 (54 blocks), picture ..."; the lab line #lab did until
@@ -645,7 +645,7 @@ function stop() {
 // A resize, a rotation or going fullscreen changes what fits, and both numbers are picked from it.
 // ai: Re-pick; the receiver reads the new version from the next frame's word.
 // This is safe mid-transfer because block_bytes is the same at every rate
-// (src/lizard_phy.h LIZARD_BLOCK, 476 B at every rate), not from n or the sub-channel
+// (src/lizard_phy.h LIZARD_BLOCK, 472 B at every rate), not from n or the sub-channel
 // count, so bytes per block does not move and the fountain, being rateless, does not mind that a frame now carries a
 // different number of blocks. The check below refuses the change if that ever stops being true.
 //
@@ -762,9 +762,9 @@ async function readOf(file, live = () => true) {
   return out;
 }
 // ai: A pick's transfer being prepared (2026-11-16): `prepping` while its file is read here and then made in the worker
-// ai: (packed, its chunks hashed by the pool), until the worker's "prepared". Stop or a new selection meanwhile cancels
+// ai: (packed, its source blocks hashed by the pool), until the worker's "prepared". Stop or a new selection meanwhile cancels
 // ai: it (cancelPrep, from stop): the read stops at its next piece, and the worker, told "cancel" with the prepare's
-// ai: number, stops at its next frame of the pack or chunk of the hash (it takes its messages between them); the next
+// ai: number, stops at its next frame of the pack or source block of the hash (it takes its messages between them); the next
 // ai: Start prepares anew. Kept through a stop once prepared, as before.
 async function prepare(p) {
   const my = ++prepGen;
@@ -778,7 +778,7 @@ async function prepare(p) {
   if (p !== chosen) { prepping = null; return; }
   swInit();
   prepping.worker = true;
-  sw.postMessage({ type: "prepare", pick: p.pick, prep: my, bytes: b.buffer, xfer: { name: p.name, type: p.type, chunkLog2: CHUNK_LOG2 } }, [b.buffer]);
+  sw.postMessage({ type: "prepare", pick: p.pick, prep: my, bytes: b.buffer, xfer: { name: p.name, sbLog2: SB_LOG2 } }, [b.buffer]);
 }
 function cancelPrep() {
   if (!prepping) return;
@@ -787,14 +787,14 @@ function cancelPrep() {
   if (p.worker) sw?.postMessage({ type: "cancel", prep: p.my });
   if (chosen?.pick === p.pick) chosen.posted = null;
 }
-// ai: A file's transfer whole in the worker (streaming, 2026-11-06: the pool makes its chunks behind the first frames):
-// ai: its lap known only now, the sending line said again with it; a failure ends the run.
+// ai: A file's transfer whole in the worker (streaming, 2026-11-06: the pool makes its source blocks behind the first frames):
+// ai: its cycle known only now, the sending line said again with it; a failure ends the run.
 let runPick = null, runName = "";
 function madeAll(m) {
   if (chosen?.pick === m.pick) { if (m.error) chosen.failed = new Error(m.error); else chosen.sent = m.sent; }
   if (!running || runPick !== m.pick) { if (!running) showReady(); return; }
   if (m.error) { fail("File not prepared", new Error(m.error)); return; }
-  sentBytes = m.sent; lap = m.lap;
+  sentBytes = m.sent; cycle = m.cycle;
   showDetails();
 }
 function madeFor(m) {
@@ -868,7 +868,7 @@ async function takeShared() {
     const r = await cache.match(req);
     if (r) {
       const name = decodeURIComponent(r.headers.get("x-name") || "file"), at = +r.headers.get("x-modified") || Date.now();
-      const f = new File([await r.blob()], name, { type: r.headers.get("content-type") || "", lastModified: at });
+      const f = new File([await r.blob()], name, { lastModified: at });
       got.push(itemOf(name, [{ path: name, blob: f, mtime: at / 1000 }]));
     }
     await cache.delete(req);
@@ -895,8 +895,8 @@ async function pickDir() {
 $("clearPick").onclick = (e) => { e.stopPropagation(); clearPick(); };
 $("pick").addEventListener("click", (e) => e.stopPropagation());   // ai: a tap on the list is not a tap on <main>
 $("payload").onchange = () => { if (running) stop(); showReady(); };
-// ai: Seed (Developer Tools, 2026-11-14): a file's schedule (sim/xfer.mjs XferSender seed: each chunk's first symbol, each
-// ai: round's order of the chunks, each frame's shuffle) drawn from it at each Start, so a send can be repeated; empty, a
+// ai: Seed (Developer Tools, 2026-11-14): a file's schedule (sim/xfer.mjs XferSender seed: each source block's first symbol, each
+// ai: round's order of the source blocks, each frame's shuffle) drawn from it at each Start, so a send can be repeated; empty, a
 // ai: random one each send. Kept as typed (#settings' persist, ?seed= a preset); a value that is no unsigned 32-bit
 // ai: number is refused, the field back to the last that was (this listener before persist's, so that one is kept).
 const seedOf = (t) => (/^\d{1,10}$/.test(t.trim()) && +t.trim() <= 0xffffffff ? +t.trim() : null);
@@ -1038,17 +1038,21 @@ $("subch").onchange = $("ring").onchange = () => roomChanged();
 // ai: and the page's pace and the word's rate follow it as they followed the box (both read #fps as they go)
 const showFps = () => { $("fpsOut").textContent = `${+$("fps").value}`; };   // ai: "FPS" over the bare count (2026-10-05; "Pictures a second", "60 a second" before)
 for (const ev of ["input", "change"]) $("fps").addEventListener(ev, showFps);
+$("fps").addEventListener("change", () => sendClock());
 // ai: Refresh's delays (2026-11-17; refresh.mjs; the native sender's setRefresh; Rate refresh's four 1-to-4 sliders
-// ai: of 2026-11-12 before): FPS is the clock, and three sliders 1 to 60 the pictures between new blocks of 7/8 and 3/4
-// ai: (tied: the two rates that carry the pilots), 2/3 and 1/2, each label the bare count as FPS's; kept as the other
-// ai: settings (send:<id>; a kept send:refresh34 unread). A release tells the worker the four, which applies them from
-// ai: the next frame it makes; every start sends them too.
-const REFRESH = ["refresh78", "refresh23", "refresh12"];
-const refreshOf = () => { const [p, a, b] = REFRESH.map((id) => $(id).value); return everyOf([p, p, a, b]); };
-const showRefresh = () => { const e = refreshOf(); REFRESH.forEach((id, g) => { $(`${id}Out`).textContent = `${e[g ? g + 1 : 0]}`; }); };
+// ai: of 2026-11-12 before): FPS is the clock, and four sliders 1 to 60 the pictures between new blocks of 6/7, 3/4, 2/3
+// ai: and 1/2 (6/7 and 3/4 on one from 2026-11-17 to 11-22, while their tails carried the pilots), each label the bare
+// ai: count as FPS's; kept as the other settings (send:<id>). A release tells the worker the four, which applies them
+// ai: from the next frame it makes; every start sends them too.
+const REFRESH = ["refresh67", "refresh34", "refresh23", "refresh12"];
+const refreshOf = () => everyOf(REFRESH.map((id) => $(id).value));
+// ai: the sender's clock every frame's word states (src/fmt.h, 2026-11-22): the FPS asked and the largest Refresh delay
+const clockOf = () => [Math.max(1, Math.min(240, Math.round(+$("fps").value) || 60)), Math.max(...refreshOf())];
+const sendClock = () => { const k = clockOf(); sw?.postMessage({ type: "clock", clock: k }); if (genc && gcfg) genc.setClock(...k).catch(gpuGiveUp); };
+const showRefresh = () => { const e = refreshOf(); REFRESH.forEach((id, g) => { $(`${id}Out`).textContent = `${e[g]}`; }); };
 for (const id of REFRESH) {
   $(id).addEventListener("input", showRefresh);
-  $(id).addEventListener("change", () => { showRefresh(); sw?.postMessage({ type: "refresh", every: refreshOf() }); });
+  $(id).addEventListener("change", () => { showRefresh(); sw?.postMessage({ type: "refresh", every: refreshOf() }); sendClock(); });
 }
 // ai: the size slider (sizeOf): its label live while dragged, the room changed on release
 const showSize = () => { $("sizeOut").textContent = `${Math.round(sizeOf() * 100)}%`; };

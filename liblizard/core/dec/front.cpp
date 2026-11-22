@@ -55,9 +55,16 @@ static constexpr double MiB = 1 << 20;
 // ai: 13 since 2026-11-18: a frame's configuration in F8's sel and record word 29 (src/fmt.h ob_fmt_held: version and
 // ai: the word's counts), HELD carrying it, the gate's lists and the rule stage's layout from it (TAB's TT table and the
 // ai: gate's codes table gone, the rule's blocks a version gone); word 6 the static word's 32 bits.
-// ai: 14 since 2026-11-18: the static word without a rate (its 7/8 count 8 bits, a CRC-4 F8 checks; the
+// ai: 14 since 2026-11-18: the static word without a rate (its 6/7 count 8 bits, a CRC-4 F8 checks; the
 // ai: configuration version << 22).
-static constexpr int TREE_VERSION = 14;
+// ai: 15 since 2026-11-19: the animated header tabled: F8 one magic, record word 5 the version alone; HELD, heldP and
+// ai: heldCarry gone (each frame decoded at its own word's configuration, nothing carried).
+// ai: 16 since 2026-11-20: the squares' fill over 64 x 64 points, their sums in ANCH_SUMS (anch.sums, on ANCH_FIND's
+// ai: layout and group, between ANCH_REFIT and ANCH_FIT), a lane's anch (ANCH_K + 2 ANCH_GS) B vec4f.
+// ai: 17 since 2026-11-21: the block's CRC-64/LIZARD. 18 since 2026-11-22: the pilots apart from the blocks (B, src/lizard_phy.c): PILOT a frame's four readings (dims.pilotRead), then its shift; EP a vec4 a sub-channel; L in data-slot order (dims.lStride 159 a sub-channel).
+// ai: 19 since 2026-11-22 evening: the word's index and the clock (RS(n, 6), five unknown bytes; the Word uniform's
+// ai: before; record word 30 the clock, word 6 the word's last 32 bits).
+static constexpr int TREE_VERSION = 19;
 
 Consts Consts::of(const json& c) {
   Consts k;
@@ -68,7 +75,7 @@ Consts Consts::of(const json& c) {
   k.TILE = c["TILE"]; k.B_CEIL = c["B_CEIL"]; k.CAP_MS = c["CAP_MS"];
   k.TWIN_FRAMES = c["TWIN_FRAMES"]; k.TWIN_ROUNDS = c["TWIN_ROUNDS"]; k.VERSION_MIN = c["VERSION_MIN"]; k.VERSION_MAX = c["VERSION_MAX"]; k.SLOTS = c["SLOTS"];
   k.ARGS_WORDS = c["ARGS_WORDS"]; k.argsWords = c["argsWords"]; k.COUNTS = c["COUNTS"]; k.REC_BYTES = c["REC_BYTES"]; k.PAYLOAD = c["PAYLOAD"];
-  k.ANCH_K = c["ANCH_K"]; k.ANCH_REC = c["ANCH_REC"];
+  k.ANCH_K = c["ANCH_K"]; k.ANCH_REC = c["ANCH_REC"]; k.ANCH_GS = c["ANCH_GS"];
   for (auto& [n, v] : c["ARGS_SLOT"].items()) k.ARGS_SLOT[n] = v;
   return k;
 }
@@ -118,6 +125,7 @@ std::unique_ptr<FrontHalf> FrontHalf::create(wg::Device& d, ReadFile read, const
   fh->S->build(fh->C.B_CEIL);
   fh->anchFind = fh->S->pair(T["anch"]["find"]);
   fh->anchFit = fh->S->pair(T["anch"]["fit"]);
+  fh->anchSums = fh->S->pair(T["anch"]["sums"]);
   fh->anchRefit = fh->S->pair(T["anch"]["refit"]);
   fh->anchPredict = fh->S->pair(T["anch"]["predict"]);
   fh->anchNodes = fh->S->pair(T["anch"]["nodes"]);
@@ -223,13 +231,12 @@ std::unique_ptr<Lane> FrontHalf::lane(int Bl) {
   ln->scoreBuf = mk(4ull * C.HYP * B, STORAGE | COPY_DST | COPY_SRC);
   ln->selBuf = mk(4ull * C.SEL_WORDS * ln->slotsG, STORAGE | COPY_DST);
   ln->resultBuf = mk(4ull * C.RESULT * B, STORAGE | COPY_DST | COPY_SRC);
-  ln->heldUni = mk(16, UNIFORM | COPY_DST);
   ln->p5Uni = mk(32, UNIFORM | COPY_DST);
   ln->ldUni = mk(80, UNIFORM | COPY_DST);
   ln->measBuf = mk(16ull * C.NODES_MAX * B, STORAGE | COPY_DST | COPY_SRC);
   ln->residBuf = mk(16ull * C.RESID * B, STORAGE | COPY_DST | COPY_SRC);
   // ai: decoder.mjs lane: the anchors' records, ANCH_FIND's and ANCH_FIT's
-  ln->anchBuf = mk(16ull * C.ANCH_K * B, STORAGE | COPY_SRC);
+  ln->anchBuf = mk(16ull * (C.ANCH_K + 2ull * C.ANCH_GS) * B, STORAGE | COPY_SRC);   // ai: the anchors, then the fill's sums (glsl/anchors.mjs fillSums)
   ln->arecBuf = mk(16ull * C.ANCH_REC * B, STORAGE | COPY_SRC);
   auto refit = P("refit"), pick = P("pick");
   ln->refitGroup = dev.createBindGroup(refit.bgl, {ln->framesBuf, FBP("nodesBuf"), ln->selBuf, ln->measBuf, ln->mapsBuf, ln->residBuf, FBP("fitUni")});
@@ -446,8 +453,6 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
     ln.nodesGroup = group(P("nodesP"), {FBP("nodesBuf"), FBP("tmplBuf"), ln.mapsBuf, ln.selBuf, ln.measBuf, S->bufPtr(S->tree["front"]["round"])}, true);
     ln.anchNodesGroup = group(P("nodesP"), {FBP("nodesBuf"), FBP("tmplBuf"), ln.mapsBuf, ln.selBuf, ln.measBuf, S->bufPtr(S->tree["anch"]["buffers"]["round"])}, true);
     ln.wordGroup = group(P("wordP"), {ln.mapsBuf, ln.selBuf, ln.residBuf, FBP("wordPtsBuf"), ln.resultBuf, FBP("wordUni"), FBP("wordLatUni")}, true);
-    // ai: F8's held version (gpu/glsl/word.mjs HELD): sel, the results, the decoder's CARRY, the word code, the lane's Held
-    ln.heldGroup = group(P("heldP"), {ln.selBuf, ln.resultBuf, FBP("heldCarry"), FBP("wordUni"), ln.heldUni}, false);
     // ai: decoder.mjs ensure: the anchors' two stages read the frame texture (binding 0), so their groups are made here
     // ai: with it: the texture, frames, maps, sel, resid, F8's lattice and the anchors' uniform; then ANCH_FIND's
     // ai: records, or ANCH_FIT's reading of them, its records and the result
@@ -747,16 +752,13 @@ void FrontHalf::encodeBack(wg::Encoder& e, Lane& ln, int frames, const std::func
   for (size_t k = 0; k < b.rldpc.size(); k++) { stepOf(lsteps[k], b.rldpc[k], !first); first = false; }
 }
 
-// ai: decoder.mjs batch, up to the submit: the frame records and held version written, each slot copied into its
+// ai: decoder.mjs batch, up to the submit: the frame records written, each slot copied into its
 // ai: lane layer, the buffers the batch writes cleared for its nb frames, one pass of every stage, the readback's
 // ai: copies; the slots freed at the submit (the copies are queued before any later upload into them).
-std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int held, bool profile, int keep) {
+std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool profile, int keep) {
   const int nb = (int)slots.size();
   if (!nb) throw wg::Error("a batch of no slots");
   if (nb > B) throw wg::Error(std::to_string(nb) + " frames in a batch of " + std::to_string(B));
-  { ob_fmt_t g;
-    if (held < -1 || (held > 0 && !ob_fmt_unheld(held, &g)))
-      throw wg::Error("held " + std::to_string(held) + ": -1 (carried), 0, or a configuration (src/fmt.h ob_fmt_held)"); }
   Lane* lnp = freeLane();
   if (!lnp) throw wg::Error(std::to_string(lanes.size()) + " batches in flight already");
   Lane& ln = *lnp;
@@ -766,9 +768,6 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   for (auto* s : slots) if (s) { W = std::max(W, s->w); H = std::max(H, s->h); }
   ensure(ln, W, H);
   const uint64_t Bl = ln.B;
-  // ai: HELD's uniform: a configuration posted (held >= 0) under a new post number, taken once in place of the carried one
-  if (held >= 0) heldPost++;
-  { uint32_t hu[4] = {(uint32_t)std::max(held, 0), heldPost, (uint32_t)nb, holdWords ? 1u : 0u}; dev.writeBuffer(*ln.heldUni, 0, hu, 16); }
   {
     std::vector<uint32_t> dims(4 * ln.slotsG, 0);
     for (int i = 0; i < nb; i++) if (slots[i]) { dims[4 * i] = slots[i]->w; dims[4 * i + 1] = slots[i]->h; dims[4 * i + 2] = slots[i]->axis; dims[4 * i + 3] = 1; }
@@ -955,15 +954,16 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, int he
   step(P("refitPost"), ln.refitPostGroup, n);
   // ai: decoder.mjs batch: the anchors in the same pass, behind REFIT_POST (no profile stage of its own): ANCH_FIND
   // ai: a workgroup per (anchor, frame), ANCH_PREDICT and the border's second search (NODES centred on its own round, a
-  // ai: workgroup a node), ANCH_REFIT, then ANCH_FIT a workgroup a frame, whose records pass 1 reads
+  // ai: workgroup a node), ANCH_REFIT, ANCH_SUMS (ANCH_GS workgroups a frame on ANCH_FIND's group: the squares' fill's
+  // ai: sums), then ANCH_FIT a workgroup a frame, whose records pass 1 reads
   step(anchFind, ln.anchFindGroup, C.ANCH_K, n);
   step(anchPredict, ln.anchRefitGroup, n);
   step(anchNodes, ln.anchNodesGroup, (uint32_t)nodesMax, n);
   step(anchRefit, ln.anchRefitGroup, n);
+  step(anchSums, ln.anchFindGroup, C.ANCH_GS, n);
   step(anchFit, ln.anchFitGroup, n);
   begin("word");
   step(P("wordP"), ln.wordGroup, n);
-  step(P("heldP"), ln.heldGroup, 1);
   encodeBack(e, ln, nb, begin);
   e.endPass();
   // ai: the readback's layout (the GPU back half's): counters, finder results, the back half's (REC, V, ITS, BCOUNTS,
@@ -1058,7 +1058,7 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
   }
   // ai: the back half's part: REC (a count, then REC_BYTES a record), V, ITS, BCOUNTS, PILOT
   const json& bk = S->back();
-  const uint64_t Bb = bk["B"], blocksMax = bk["dims"]["blocksMax"], recCap = bk["dims"]["recCap"];
+  const uint64_t Bb = bk["B"], blocksMax = bk["dims"]["blocksMax"], recCap = bk["dims"]["recCap"], pilotRead = bk["dims"]["pilotRead"];
   const uint8_t* rec = all + f->backOff;
   const uint64_t recBytes = bk["bytes"]["REC"], vBytes = bk["bytes"]["V"];
   const uint32_t* bcounts = (const uint32_t*)(rec + recBytes + 2 * vBytes);
@@ -1090,51 +1090,34 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
     if (!f->slots[i]) { fo.empty = true; continue; }
     const float* r = res + C.RESULT * i;
     fo.ring = r[0] == 1 ? (int)r[2] : -1;
-    // ai: the configuration decoded at, record word 29 as a float's bits (src/fmt.h ob_fmt_held; 0 none)
+    // ai: the configuration decoded at, record word 29 as a float's bits (version << 22 | the 6/7 count << 14 | the 2/3
+    // ai: << 7 | the 1/2; 0 none)
     uint32_t cfg;
     std::memcpy(&cfg, &r[29], 4);
     fo.config = (int)cfg;
     fo.version = (int)(cfg >> 22);
     fo.size = fo.version > 0 ? slotOf(fo.version) : -1;
     fo.n = fo.size >= 0 ? pics[fo.size]["n"].get<int>() : 0;
-    fo.held = r[30] == 1;
     fo.finder.found = r[0]; fo.finder.ring = r[2];
     for (int k = 0; k < 8; k++) fo.finder.corners[k] = r[17 + k];
-    // ai: F8's word (glsl/word.mjs): r[5] a static word's version, or 256 + an animated word's id; r[6] its bits as a
-    // ai: float's (uintBitsToFloat): a static word's 32 bits after its magic (src/fmt.h: version, rate code, counts), or
-    // ai: an animated word's three bytes, low first
+    // ai: F8's word (glsl/word.mjs): r[5] its version, the configuration word 29's; r[30] the clock as a float's bits
+    // ai: (fps | delay << 8; src/fmt.h)
     if (r[5] > 0) {
-      const int a = (int)r[5];
-      uint32_t b;
-      std::memcpy(&b, &r[6], 4);
+      uint32_t k;
+      std::memcpy(&k, &r[30], 4);
       fo.hasWord = true;
-      fo.word.kind = a >= 256 ? 1 : 0;
-      if (fo.word.kind) { fo.word.id = a - 256; for (int j = 0; j < 3; j++) fo.word.sym[j] = (uint8_t)(b >> (8 * j)); }
-      else {
-        fo.word.version = OB_FMT_VERSION_MIN + (int)(b >> 26);
-        fo.word.count[0] = (int)(b >> 18) & 255; fo.word.count[1] = (int)(b >> 11) & 127; fo.word.count[2] = (int)(b >> 4) & 127;
-      }
+      fo.word.version = (int)(cfg >> 22);
+      fo.word.count[0] = (int)(cfg >> 14) & 255; fo.word.count[1] = (int)(cfg >> 7) & 127; fo.word.count[2] = (int)cfg & 127;
+      fo.word.fps = (int)(k & 255); fo.word.delay = (int)(k >> 8 & 255);
     }
     fo.anchors = (int)r[31];   // ai: ANCH_FIT's count (PICK zeroes the record: 0 on a frame not found)
-    // ai: decoder.mjs pilotOf: over the blocks the version carries, where the soft stage ran (its count column 6)
-    // ai: the even blocks (bit 0 of the painted count) and the odd (bit 1), each its own mean and standard error
-    // ai: the blocks the frame carries: its configuration's layout (src/fmt.h ob_fmt_layout)
-    int nblk = 0;
-    { ob_fmt_t g;
-      int m = 0;
-      if (ob_fmt_unheld(fo.config, &g) && ob_fmt_layout(g.version, g.count, &m)) nblk = g.count[0] + m + g.count[1] + g.count[2]; }
+    // ai: the frame's two pilot readings, where the soft stage ran (its count column 6): tblocks' (glsl/back_tiers.mjs,
+    // ai: src/lizard_phy.c lizard_pilot's arithmetic), r and its standard error for bit 0 of the painted count (the even
+    // ai: sub-channels), then for bit 1 (the odd), NaN where a parity read none; pilotSubch the sub-channels read
     if (fo.version > 0 && fo.backCounts.size() > 6 && fo.backCounts[6] > 0) {
-      // ai: a parity with no finite pilot reads NaN, as lizard_pilot's does
-      fo.pilotR = fo.pilotSd = fo.pilotR2 = fo.pilotSd2 = NAN;
-      for (int g = 0; g < 2; g++) {
-        double s = 0, s2 = 0;
-        int k = 0;
-        for (int b = g; b < std::min<int>(nblk, (int)blocksMax); b += 2) { const float v = pilots[i * blocksMax + b]; if (std::isfinite(v)) { s += v; s2 += (double)v * v; k++; } }
-        if (!k) continue;
-        const double m = s / k, var = k > 1 ? (s2 - s * m) / (k - 1) : 0;
-        fo.pilotBlocks += k;
-        (g ? fo.pilotR2 : fo.pilotR) = (float)m; (g ? fo.pilotSd2 : fo.pilotSd) = (float)std::sqrt(std::max(var, 0.0) / k);
-      }
+      const float* pr = pilots + pilotRead * i;
+      fo.pilotR = pr[0]; fo.pilotSd = pr[1]; fo.pilotR2 = pr[2]; fo.pilotSd2 = pr[3];
+      fo.pilotSubch = (int)fo.backCounts[6];
     }
   }
   // ai: run's keep: each kept frame's bytes off the lane's keepBuf; LIZ_DUMP's written, and handed on only where the
@@ -1174,7 +1157,7 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
   }
   if (xcheck && nb && !trialling) crossCheckLdpc(ln, nb);
   // ai: LIZ_DUMP_S: a record a frame the word named (u32 0x44505347, u32 tag, i32 version, u32 n, u32 cbytes, u32
-  // ai: sStride, f32 dx, f32 dy (the pilots' shift, PILOT past the blocks), f32 pilotR, f32 pilotR2, u32 records, then
+  // ai: sStride, f32 dx, f32 dy (the pilots' shift, PILOT past the readings), f32 pilotR, f32 pilotR2, u32 records, then
   // ai: a (u32 block, u32 id) a verified block, then the frame's S, cbytes x sStride bytes), appended to the file
   if (f->dumpBytes) {
     const json& T = S->back()["transform"];
@@ -1187,7 +1170,7 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
         if (!dumpRoom()) break;
         gDumpFrames++;
         const uint32_t head[6] = {0x44505347u, (uint32_t)fo.tag, (uint32_t)fo.version, (uint32_t)fo.n, (uint32_t)cb, (uint32_t)ss};
-        const float fl[4] = {pilots[Bb * blocksMax + 2 * i], pilots[Bb * blocksMax + 2 * i + 1], fo.pilotR, fo.pilotR2};
+        const float fl[4] = {pilots[Bb * pilotRead + 2 * i], pilots[Bb * pilotRead + 2 * i + 1], fo.pilotR, fo.pilotR2};
         const uint32_t nrec = (uint32_t)fo.records.size();
         fwrite(head, 4, 6, fp); fwrite(fl, 4, 4, fp); fwrite(&nrec, 4, 1, fp);
         for (const auto& x : fo.records) { const uint32_t r2[2] = {(uint32_t)x.block, x.id}; fwrite(r2, 4, 2, fp); }

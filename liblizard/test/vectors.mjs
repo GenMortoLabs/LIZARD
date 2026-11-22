@@ -8,7 +8,7 @@ import { resolve } from "node:path";
 const path = process.argv[2] ?? "build/ob.mjs";
 const M = await (await import(resolve(path))).default();
 // ai: a block and its payload, bytes (src/xfer.h XFER_BLOCK, XFER_PAYLOAD)
-const BLOCK = 476, PAYLOAD = BLOCK - 5;
+const BLOCK = 472, PAYLOAD = BLOCK - 12;
 const sha = (u8) => createHash("sha256").update(u8).digest("hex");
 const hex = (u8) => Buffer.from(u8).toString("hex");
 let fails = 0;
@@ -51,25 +51,22 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
 // ai: 4 floor(c / 8) + s (5.3).
 {
   const pDims = M._malloc(24);
-  // ai: [subch, ring, layout (null the default senders'; [7/8, 2/3, 1/2] through _lizard_layout_set), word (null the
-  // ai: static word; [kind, b0, b1, b2, b3] through _lizard_fmt_word_set), the codeword]; since 2026-11-18 the static
-  // ai: word's 32 bits (version, the counts, the 7/8 eight bits, their CRC-4) and the animated word's id (5.5); RS(n, 5)
-  // ai: since 2026-11-15
-  for (const [subch, B, layout, word, exp] of [
-    [512, 64, null, null, "4c7070489b75e723c40b611c01cd0959"],
-    [1024, 64, null, null, "4cf0e48914ce18005280061cf58cf755"],
-    [576, 64, null, null, "4c808050aca5bf9b5c3e131027d467c4"],
-    [64, 64, null, null, "4c0010081bb95c6cf0e563c1da3a23b2"],
-    [64, 128, null, null, "4c0010081bfbebbed05ad3124c3ab4b8bc0fe1194f502b203bafce91be443e80"],
-    [256, 256, null, null, "4c3038204c511d0dc5e3c2635a6d2ef9b2476f0441bad19748f424796c6331df27fd8f8e1c1bda281f42c0791c6bfc57e86707919dede27a471970b800a212ec"],
-    [1072, 64, [90, 0, 30], null, "4cfd6801ec7447814412e8fbd161f685"],
-    [1072, 128, [151, 0, 0], null, "4cfe5c00076322789f137d044beed887078ca29d452c302eaf6e6f0812cad0b2"],
-    [656, 64, null, [1, 0, 0x4c, 0x97, 0xe9], "b3004c97e9e1cfce9d46a576420bd1f1"],
-    [64, 128, null, [1, 254, 1, 2, 3], "b3fe0102037b7cb2a17921eed7b08d874b477f2cd0f8d419b67a407300ff063e"],
+  // ai: [subch, ring, layout (null the default senders'; [6/7, 2/3, 1/2] through _lizard_layout_set), the clock [fps,
+  // ai: delay] (60 and 1 the codec's until set, _lizard_clock_set), the codeword]; since 2026-11-22 the word's 35-bit index
+  // ai: (configuration x 241 + fps) x 30 + delay - 1 and its CRC-5, RS(n, 6); the 32-bit static word and RS(n, 5) before
+  for (const [subch, B, layout, clock, exp] of [
+    [512, 64, null, [60, 1], "4c0d8f52f5d8e3acab9b60939a0619b8"],
+    [1024, 64, null, [60, 1], "4cd08c9abc0cf6350d2fffc59bbc62a4"],
+    [576, 64, null, [60, 4], "4c158a6daefb354d31456e238ebdee77"],
+    [64, 64, null, [60, 1], "4c0000dbc183ba98d76e1dbcb5fdb314"],
+    [64, 128, null, [60, 1], "4c0000dbc183841dd462708cab75202552c99e25077748d21528cf2bb4118ee5"],
+    [256, 256, null, [30, 2], "4c00ea01a67467de15e5d52ef86fbabe493fb716324852613e6e4cf216c2a64cfc6cc26e4df853d7950d959e13beef4576813758e4f3abb9fdecbdce1d79cbd3"],
+    [1072, 64, [90, 0, 30], [240, 30], "4cfc4a101d3258e791006e11e7ffad21"],
+    [1072, 128, [151, 0, 0], [0, 1], "4cfd4f2dd79dcff6bf932889d78a07c9c2e45e85092334f2be406a74304f94a4"],
   ]) {
     if (setup(nFor(subch), subch, 2 * B) < 0) throw new Error(`setup LIZARD-${subch} ring ${B}`);
     if (layout && M._lizard_layout_set(...layout)) throw new Error(`layout ${layout}`);
-    if (word && M._lizard_fmt_word_set(...word)) throw new Error(`word ${word}`);
+    if (M._lizard_clock_set(...clock)) throw new Error(`clock ${clock}`);
     M._ob_test_mesh_tables_out(pDims, 0, 0, 0, 0);
     const d = M.HEAP32.slice(pDims >> 2, (pDims >> 2) + 5), S = d[2];
     const pX = M._malloc(4 * d[0]), pY = M._malloc(4 * d[1]), pK = M._malloc(S * S), pMark = M._malloc(4 * d[0] * d[1]);
@@ -84,7 +81,7 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
     }
     const cw = new Uint8Array(exp.length / 2);
     for (let k = 0; k < cw.length; k++) for (let b = 0; b < 8; b++) cw[k] |= (sides[k % 4][8 * Math.floor(k / 4) + b] ?? 0) << (7 - b);
-    want(`5.2 LIZARD-${subch} ring ${B}${layout ? ` layout ${layout}` : ""}${word ? ` word ${word}` : ""} (${sides[0].length} word cells a side)`, hex(cw), exp);
+    want(`5.2 LIZARD-${subch} ring ${B}${layout ? ` layout ${layout}` : ""} clock ${clock} (${sides[0].length} word cells a side)`, hex(cw), exp);
   }
   M._free(pDims);
 }
@@ -95,58 +92,71 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
 // ai: (LIZARD-32 at n 256 in the 64 ring until 2026-11-01, LIZARD-16 until 2026-10-31.)
 {
   const e = encode(384, 64, () => {}, true, 256);
-  want("P2 slot bits sha256", sha(e.slots), "8f2adac0fa137c0fa12c53cf2812dc8e71703a5058465119b3023b951632391f");
-  want("P2 packed first 16", hex(pack(e.slots).subarray(0, 16)), "04043e000efd03e0f8ffffcc020c0c03");
+  want("P2 slot bits sha256", sha(e.slots), "98897095cdce9eb69dd90f9e50c7de831b63afd92cc4e082d1d2e0dc9c4135b1");
+  want("P2 packed first 16", hex(pack(e.slots).subarray(0, 16)), "0101360807bc03e0f8ffffde008c1c07");
   want("P2 drive side", String(e.side), "572");
-  want("P2 drive row 30 cols 30..33", Array.from(e.drive.subarray(30 * 572 + 30, 30 * 572 + 34), (v) => v.toFixed(7)).join(", "), "0.4596732, 0.4953838, 0.7447616, 1.0000000");
-  want("P2 grey row 30 cols 30..45", greyRow(e, 30, 30, 16), "117 126 190 255 255 190 96 86 177 250 246 170 76 54 104 156");
-  want("P2 grey row 345 cols 345..360", greyRow(e, 345, 345, 16), "201 177 144 124 141 192 243 245 183 96 34 18 29 54 103 180");
-  want("P2 grey row 81 cols 74..89 (anchor 0, 0)", greyRow(e, 81, 74, 16), "91 127 255 255 0 0 0 255 255 0 0 0 255 255 118 60");
+  want("P2 drive row 30 cols 30..33", Array.from(e.drive.subarray(30 * 572 + 30, 30 * 572 + 34), (v) => v.toFixed(7)).join(", "), "0.2779620, 0.4437774, 0.7467755, 0.9889030");
+  want("P2 grey row 30 cols 30..45", greyRow(e, 30, 30, 16), "71 113 190 252 255 206 126 93 141 219 254 214 136 70 56 92");
+  want("P2 grey row 345 cols 345..360", greyRow(e, 345, 345, 16), "178 87 19 17 77 156 199 201 189 164 116 49 3 20 103 200");
+  want("P2 grey row 81 cols 74..89 (anchor 0, 0)", greyRow(e, 81, 74, 16), "80 120 255 255 0 0 0 255 255 0 0 0 255 255 85 87");
   const sq = greySquare(e, 24, 548);
-  want("P2 square sha256", sha(sq), "9fd1323dcf7e1c422da633e4f4d60f6dbd54ba4b631a3ea010b43d7154a1c34b");
-  want("P2 square zeros / 255s", `${sq.filter((v) => v === 0).length} / ${sq.filter((v) => v === 255).length}`, "5869 / 6486");
+  want("P2 square sha256", sha(sq), "bdccc91d59adc8f5c930b4f30ef6cfda8e968aa2969d42a9e50d2ad3a8d29b21");
+  want("P2 square zeros / 255s", `${sq.filter((v) => v === 0).length} / ${sq.filter((v) => v === 255).length}`, "5896 / 6465");
   // ai: (2026-11-18: the border's word moved with its 32 bits, version, counts and CRC-4; 9c086111... with a rate code that
   // ai: day, 8dd1f3c8... the RS(n, 5) word before)
-  want("P2 whole drive sha256", sha(greySquare(e, 0, 572)), "1f97c6970e7d0d0a82356ddfe442981a81f44bc03e3ac21e698a546c38ce60dd");
+  want("P2 whole drive sha256", sha(greySquare(e, 0, 572)), "925401899ce0a6d28771ccaac2ed7a9d8adbb9c65464e78409e8d7a292e6afca");
 }
 // ai: 6.12 P3, LIZARD-64, every payload byte zero: n 384 in the 64 ring, side 474, pxm 3 (a copy), the picture
 // ai: from pixel 45, the resampled square [36, 438), the anchors (SPEC 6.13) 3 x 3 of 4 modules from modules 34, 77,
 // ai: 120 (7 x 7 of 2 until 2026-11-09).
 {
   const e = encode(nFor(64), 64, () => {});
-  want("P3 slot bits sha256", sha(e.slots), "8f2adac0fa137c0fa12c53cf2812dc8e71703a5058465119b3023b951632391f");
-  want("P3 packed first 16 (P2's)", hex(pack(e.slots).subarray(0, 16)), "04043e000efd03e0f8ffffcc020c0c03");
+  want("P3 slot bits sha256", sha(e.slots), "98897095cdce9eb69dd90f9e50c7de831b63afd92cc4e082d1d2e0dc9c4135b1");
+  want("P3 packed first 16 (P2's)", hex(pack(e.slots).subarray(0, 16)), "0101360807bc03e0f8ffffde008c1c07");
   want("P3 drive side", String(e.side), "474");
-  want("P3 grey row 45 cols 45..60", greyRow(e, 45, 45, 16), "128 163 255 255 139 81 199 255 184 67 76 141 153 135 144 175");
-  want("P3 grey row 107 cols 100..115 (anchor 0, 0)", greyRow(e, 107, 100, 16), "177 181 255 255 0 0 0 255 255 0 0 0 255 255 143 102");
-  want("P3 square sha256", sha(greySquare(e, 36, 438)), "d2614e0c291e3da3868c5d85a691d3dd8d33dc60baee923fa1f2d5837d4a01df");
-  want("P3 whole drive sha256", sha(greySquare(e, 0, 474)), "b40dcb0ff7e3861f403d2ee1c35bcaa00af0985e9045bc1faf270d3339bcb05a");   // ai: (0472f801... with a rate code 2026-11-18, 6e1dd56c... before)
+  want("P3 grey row 45 cols 45..60", greyRow(e, 45, 45, 16), "89 169 255 255 156 87 159 245 220 124 65 88 152 178 133 82");
+  want("P3 grey row 107 cols 100..115 (anchor 0, 0)", greyRow(e, 107, 100, 16), "169 133 255 255 0 0 0 255 255 0 0 0 255 255 205 147");
+  want("P3 square sha256", sha(greySquare(e, 36, 438)), "e415c3ea96728164142acdecd9177fbf410ddaa65736d9d8274da14ec974514f");
+  want("P3 whole drive sha256", sha(greySquare(e, 0, 474)), "c46faa2df19904f3fe845cfbe2e600b2935eeb7c9330b46dfd353c4f23ea4bcb");   // ai: (0472f801... with a rate code 2026-11-18, 6e1dd56c... before)
 }
-// ai: 7.4, LIZARD-64 (7/8 x 4, 3/4, 2/3 and 1/2 blocks from frame slots 0, 4496, 8992, 13,488, 17,984, 23,136 and
-// ai: 28,896, the padding from 36,576 to 40,960; LIZARD-32 until 2026-11-01, LIZARD-16 until 2026-10-31), block b = id b
-// ai: LE32 then byte j = j mod 256: each block's CRC-32, its first 128 slots, its tail (the pilots: a 7/8 block's 16,
-// ai: the 3/4 block's 32; the 2/3 and 1/2 blocks have none) and the padding's first.
+// ai: 7.4, LIZARD-64 (6/7 x 4, 3/4, 2/3 and 1/2 blocks from data slots 0, 4480, 8960, 13,440, 17,920, 23,040 and
+// ai: 28,800, the padding from 36,480 to 40,704; in every sub-channel coefficient 0 the count pilot and 160 the
+// ai: reference, the blocks over the other 318 in order: the pilots apart from the blocks since 2026-11-21, a tail on
+// ai: every block from 2026-11-20, the 6/7 and 3/4 blocks' alone before; LIZARD-32 until 2026-11-01, LIZARD-16 until
+// ai: 2026-10-31), block b = id b LE32 then byte j = j mod 256: each block's CRC-64 and its first 128 data slots, the
+// ai: padding's first 128, the first two sub-channels' four pilot slots at counts 0 and 3, and every frame slot packed.
 {
-  const e = encode(384, 64, (blocks, B) => { for (let b = 0; b < 7; b++) { blocks[b * B] = b; for (let j = 0; j < B - 4; j++) blocks[b * B + 4 + j] = j & 255; } });
+  // ai: data slot ds's frame slot: sub-channel j's data coefficient r is its coefficient 1 + r below the reference, 2 + r
+  // ai: past it (src/lizard_phy.c pb_fcoef)
+  const frameSlot = (ds) => { const dc = ds >>> 1, j = Math.floor(dc / 318), r = dc - 318 * j; return 2 * (320 * j + (r < 159 ? 1 + r : 2 + r)) + (ds & 1); };
+  const fill = (blocks, B) => { for (let b = 0; b < 7; b++) { blocks[b * B] = b; for (let j = 0; j < B - 4; j++) blocks[b * B + 4 + j] = j & 255; } };
+  const e = encode(384, 64, fill);
+  M._lizard_parity_set(3);
+  const e3 = encode(384, 64, fill, false);
+  M._lizard_parity_set(0);
+  const data = (x, from, n) => Uint8Array.from({ length: n }, (_, i) => x.slots[frameSlot(from + i)]);
+  const pilots = (x) => [0, 1].map((j) => [0, 160].map((c) => `${x.slots[2 * (320 * j + c)]}${x.slots[2 * (320 * j + c) + 1]}`).join(" ")).join(" | ");
   const blk = (b) => { const u = new Uint8Array(BLOCK); u[0] = b; for (let j = 0; j < BLOCK - 4; j++) u[4 + j] = j & 255; return u; };
   const WANT = [
-    { at: 0, nt: 4480, slots: 4496, crc: "0x5DAC3EBB", head: "75327e234757d37a0084f28264a9cb87", tail: "5a69" },
-    { at: 4496, nt: 4480, slots: 4496, crc: "0xD5FBDE46", head: "111ceac8970cb08c6ceec510afa2dc43", tail: "6e57" },
-    { at: 8992, nt: 4480, slots: 4496, crc: "0x48EF89B0", head: "da7b05a78b41e9efaa56a17156f265f1", tail: "80c1" },
-    { at: 13488, nt: 4480, slots: 4496, crc: "0xC0B8694D", head: "3003b3c57ffdd169de5670c9f1bfbdfc", tail: "bc79" },
-    { at: 17984, nt: 5120, slots: 5152, crc: "0x772B50AD", head: "2603840294ee52b278eab0c901015113", tail: "c22fe70f" },
-    { at: 23136, nt: 5760, slots: 5760, crc: "0xFF7CB050", head: "ad2f8bcbc984de716604c8901ac3f399", tail: "" },
-    { at: 28896, nt: 7680, slots: 7680, crc: "0x6268E7A6", head: "2b03baef986c0f08c897bc7aaeda824f", tail: "" },
+    { at: 0, crc: "0x1C630D6B95C449B6", head: "71369823575adf191b84f0346495b798" },
+    { at: 4480, crc: "0x0A8741ABAC7C1D92", head: "d384bfcab2af7daf927c3f4ba4402cac" },
+    { at: 8960, crc: "0x31AB94EBE6B4E1FE", head: "623dc8e6bcc36e2a04fa1185b1ba216d" },
+    { at: 13440, crc: "0x274FD82BDF0CB5DA", head: "a4b03ec8d2e4a17fb2a1d76df519744c" },
+    { at: 17920, crc: "0x47F23E6B73251926", head: "3334a645533364c8c518b8da7795aadb" },
+    { at: 23040, crc: "0x511672AB4A9D4D02", head: "124ee8647ae0278c8bd84cb81045318d" },
+    { at: 28800, crc: "0x6A3AA7EB0055B16E", head: "5f524a21753f6988a76845081d44666f" },
   ];
   WANT.forEach((w, b) => {
-    const p = M._malloc(BLOCK); M.HEAPU8.set(blk(b), p);
-    want(`7.4 block ${b} CRC-32`, "0x" + (M._ob_test_crc_hash(p, BLOCK) >>> 0).toString(16).toUpperCase().padStart(8, "0"), w.crc);
+    const p = M._malloc(BLOCK + 8); M.HEAPU8.set(blk(b), p);
+    M._ob_test_crc_hash(p, BLOCK, p + BLOCK);
+    want(`7.4 block ${b} CRC-64`, "0x" + hex(M.HEAPU8.subarray(p + BLOCK, p + BLOCK + 8)).toUpperCase(), w.crc);
     M._free(p);
-    want(`7.4 block ${b} slots 0..127 (frame slots ${w.at}..)`, hex(pack(e.slots.subarray(w.at, w.at + 128))), w.head);
-    if (w.slots > w.nt) want(`7.4 block ${b} tail slots ${w.nt}..${w.slots - 1}`, hex(pack(e.slots.subarray(w.at + w.nt, w.at + w.slots))), w.tail);
+    want(`7.4 block ${b} data slots 0..127 (data slots ${w.at}..)`, hex(pack(data(e, w.at, 128))), w.head);
   });
-  want("7.4 padding slots 36576..36703", hex(pack(e.slots.subarray(36576, 36704))), "332c1ead5f960d5aaf4c1e8d9f9e7cd8");
-  want("7.4 frame slots packed sha256", sha(pack(e.slots)), "8cd51a40531864b685d052b1879df24dcb7bb9700e9379e33b937ee45a4ed947");
+  want("7.4 padding data slots 36480..36607", hex(pack(data(e, 36480, 128))), "f3e66d1e579da948510084c880c53130");
+  want("7.4 pilots of sub-channels 0 and 1 (count x y, reference x y) at count 0", pilots(e), "00 11 | 11 00");
+  want("7.4 pilots of sub-channels 0 and 1 (count x y, reference x y) at count 3", pilots(e3), "11 11 | 00 00");
+  want("7.4 frame slots packed sha256", sha(pack(e.slots)), "848b0b3cc242edf288cda6e62acdbd1826be2bf9defb69cb31003a2207754f50");
 }
 // ai: 9.3, the test stream (BLAKE3 since 2026-11-15; SHAKE256 before)
 {
@@ -156,7 +166,7 @@ const greySquare = (e, a, b) => { const o = new Uint8Array((b - a) * (b - a)); l
     want(`9.3 id ${id}`, hex(M.HEAPU8.subarray(p, p + 16)), exp);
   }
   M._stream_fill_of(0, p, PAYLOAD);
-  want("9.3 id 0 tail", hex(M.HEAPU8.subarray(p + PAYLOAD - 8, p + PAYLOAD)), "c76f93a610f24f28");
+  want("9.3 id 0 tail", hex(M.HEAPU8.subarray(p + PAYLOAD - 8, p + PAYLOAD)), "169b3c33d27f0651");
   M._free(p);
 }
 // ai: The whole ladder, to diff between builds: every format's cell map (word cells included), its drive on a fixed

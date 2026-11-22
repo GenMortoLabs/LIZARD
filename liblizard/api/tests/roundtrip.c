@@ -5,7 +5,7 @@
  * ai:      its path is given;
  * ai:   3. the test stream in every ring, one code and two, painted and read back: every block verified, every frame the
  * ai:      test stream's, none bad; then one payload byte wrong: one bad;
- * ai:   4. a file (LIZ_TEST_MB, 36 by default: three chunks of 16 MiB, the last short) through two codes in a 2:1 frame (each half found by
+ * ai:   4. a file (LIZ_TEST_MB, 36 by default: three source blocks of 16 MiB, the last short) through two codes in a 2:1 frame (each half found by
  * ai:      liz_layout_rects) into a memory store, and through one code into a directory store: whole, its root the
  * ai:      sender's, its bytes the file's.
  * ai: Usage: lizard_roundtrip [pick table] [store dir]. Exit 1 on any failure.
@@ -92,8 +92,8 @@ static void picker(const char *path) {
 /* ai: a frame painted, then read as a camera frame would hold it: on white, a quarter taller than the frame (a symbol cut
  * ai: to its 2-module margin is missed now and then, where a surround reads every one), one code
  * ai: in a square read by its centre (layout 1), two in a 2:1 canvas read by its halves (layout 2) */
-static int read_frame(liz_decoder *d, const uint8_t *frame, const liz_geometry *g, int codes, int *held, uint8_t *verified,
-                      uint8_t *canvas) {
+static int read_frame(liz_decoder *d, const uint8_t *frame, const liz_geometry *g, int codes, uint8_t *verified,
+                      uint8_t *canvas, int *version) {
   const int ch = g->height + g->height / 4, cw = codes * ch;
   memset(canvas, 255, (size_t)cw * ch);
   const int x0 = (cw - g->width) / 2, y0 = (ch - g->height) / 2;
@@ -101,9 +101,11 @@ static int read_frame(liz_decoder *d, const uint8_t *frame, const liz_geometry *
   int rect[2][4], total = 0;
   const int n = liz_layout_rects(cw, ch, codes, rect);
   for (int k = 0; k < n; k++) {
-    const int got = liz_decode(d, canvas + (size_t)rect[k][1] * cw + rect[k][0], rect[k][2], rect[k][3], cw, LIZ_GREY8, held,
-                               verified + (size_t)total * LIZ_BLOCK, NULL);
+    liz_decoded o;
+    const int got = liz_decode(d, canvas + (size_t)rect[k][1] * cw + rect[k][0], rect[k][2], rect[k][3], cw, LIZ_GREY8,
+                               verified + (size_t)total * LIZ_BLOCK, &o);
     if (got > 0) total += got;
+    if (version && o.word) *version = o.blocks;
   }
   return total;
 }
@@ -123,17 +125,17 @@ static void test_stream(liz_decoder *d) {
       uint8_t *in = malloc((size_t)g.frame_blocks * LIZ_BLOCK), *frame = malloc((size_t)g.width * g.height);
       uint8_t *verified = malloc((size_t)liz_decoder_max_blocks(d) * 2 * LIZ_BLOCK);
       uint8_t *canvas = malloc((size_t)(g.height + g.height / 4) * 2 * (g.height + g.height / 4));
-      int held = 0;
       for (int i = 0; i < 4; i++) {
         liz_tx_next(tx, g.frame_blocks, in);
         CHECK(liz_encoder_paint(enc, in, (uint32_t)i, frame, g.width, LIZ_GREY8) == LIZ_OK, "paint");
-        const int got = read_frame(d, frame, &g, codes, &held, verified, canvas);
+        int version = 0;
+        const int got = read_frame(d, frame, &g, codes, verified, canvas, &version);
         liz_verdict v;
         liz_rx_frame(rx, verified, got, &v);
         frames++; blocks += got; missed += g.frame_blocks - got; judged_bad += v.bad;
         CHECK(got == g.frame_blocks, "ring %d, %d codes, frame %d: %d of %d blocks", ring, codes, i, got, g.frame_blocks);
         CHECK(v.test && !v.bad && v.judged == got, "ring %d, %d codes, frame %d: judged the test stream's", ring, codes, i);
-        CHECK(held >> 22 == 13, "ring %d: the held configuration %d (version %d)", ring, held, held >> 22);
+        CHECK(version == 13, "ring %d: the word's version %d", ring, version);
         if (i == 3 && got) {   /* ai: one payload byte wrong: that block is bad */
           verified[LIZ_ID_BYTES + 100] ^= 1;
           liz_rx_frame(rx, verified, got, &v);
@@ -149,7 +151,7 @@ static void test_stream(liz_decoder *d) {
 static void file(liz_decoder *d, int codes, const char *dir, size_t bytes) {
   uint8_t *data = malloc(bytes);
   for (size_t i = 0; i < bytes; i++) data[i] = next_byte();
-  liz_tx *tx = liz_tx_new(data, bytes, "roundtrip.bin", "application/octet-stream", 0);
+  liz_tx *tx = liz_tx_new(data, bytes, "roundtrip.bin", 0);
   CHECK(tx, "a sender for %zu bytes", bytes);
   if (!tx) { free(data); return; }
   liz_tx_info info;
@@ -164,19 +166,19 @@ static void file(liz_decoder *d, int codes, const char *dir, size_t bytes) {
   uint8_t *in = malloc((size_t)g.frame_blocks * LIZ_BLOCK), *frame = malloc((size_t)g.width * g.height);
   uint8_t *verified = malloc((size_t)liz_decoder_max_blocks(d) * 2 * LIZ_BLOCK);
   uint8_t *canvas = malloc((size_t)(g.height + g.height / 4) * 2 * (g.height + g.height / 4));
-  int held = 0, frames = 0, lost = 0;
+  int frames = 0, lost = 0;
   liz_progress p = {0};
-  /* ai: at most three laps of the schedule's frames once the lap is known: every chunk made, behind liz_tx_new (the
-   * ai: frames before carry the header, the manifest and the chunks made so far) */
+  /* ai: at most three cycles of the schedule's frames once the cycle is known: every source block made, behind liz_tx_new (the
+   * ai: frames before carry the session header and the source blocks made so far) */
   int cap = 1 << 20;
   for (; frames < cap && rx && !p.done; frames++) {
-    if (!info.lap) {
+    if (!info.cycle) {
       liz_tx_info_get(tx, &info);
-      if (info.lap) cap = frames + (int)(3 * (info.lap + 64) / (uint32_t)g.frame_blocks) + 16;
+      if (info.cycle) cap = frames + (int)(3 * (info.cycle + 64) / (uint32_t)g.frame_blocks) + 16;
     }
     if (liz_tx_next(tx, g.frame_blocks, in) < 0) break;
     liz_encoder_paint(enc, in, (uint32_t)frames, frame, g.width, LIZ_GREY8);
-    const int got = read_frame(d, frame, &g, codes, &held, verified, canvas);
+    const int got = read_frame(d, frame, &g, codes, verified, canvas, NULL);
     lost += g.frame_blocks - got;
     liz_verdict v;
     liz_rx_frame(rx, verified, got, &v);
@@ -203,7 +205,7 @@ static void file(liz_decoder *d, int codes, const char *dir, size_t bytes) {
       free(back);
     }
   }
-  printf("file: %zu B, %u chunks, %d code%s, %s store: %s after %d frames (%d blocks missed), root %s\n", bytes, info.chunks,
+  printf("file: %zu B, %u chunks, %d code%s, %s store: %s after %d frames (%d blocks missed), root %s\n", bytes, info.source_blocks,
          codes, codes > 1 ? "s" : "", dir ? "directory" : "memory", p.done ? "whole" : "NOT whole", frames, lost, want);
   free(in); free(frame); free(verified); free(canvas); free(data);
   liz_rx_free(rx); liz_encoder_free(enc); liz_tx_free(tx);

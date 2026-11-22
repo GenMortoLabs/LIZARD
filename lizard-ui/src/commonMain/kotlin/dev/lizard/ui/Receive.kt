@@ -73,7 +73,6 @@ interface ReceiveHost : ToolHost {
     override val kind: ToolKind get() = RECEIVE
     val line: Readout.Line
     val showStats: Boolean
-    val hint: Warn?                    // ai: the camera's hint (Sender too fast, its most), null for none
     val note: String                   // ai: a filing's or a Save's failure; "" none
     fun clearNote() {}                 // ai: its popup's OK
     val running: Boolean
@@ -96,7 +95,7 @@ interface ReceiveHost : ToolHost {
 
 // ai: Receive (the web's recv.html; both apps' since 2026-10-31): the camera's crop, the transfer (the actions: Open and
 // ai: the platform's others once a file is in, Start or Stop (the camera); then the state line, meter, figures, the
-// ai: heat warning, the hint: the desktop's order; a filing's failure is the preview's to say), Settings, Experimental, Developer Tools, About.
+// ai: heat warning: the desktop's order; a filing's failure is the preview's to say), Settings, Experimental, Developer Tools, About.
 // ai: Landscape: the column on the left, its edge dragged, the camera on the right as big as the rest allows; the rail
 // ai: when collapsed (play or pause, the rate, the percent, the green check and the file's actions, Home at its foot).
 // ai: Portrait (a phone): the bar over one column, the camera at its top.
@@ -190,8 +189,8 @@ fun ReceiveRail(h: ReceiveHost) {
     }
     val spin = h.line.spin
     if (kept == null && spin != null) {
-        // ai: every chunk in hand (2026-11-14), then the filing: the rate's square kept empty, the spinner over the
-        // ai: chunks verified, then the share saved
+        // ai: every source block in hand (2026-11-14), then the filing: the rate's square kept empty, the spinner over the
+        // ai: source blocks verified, then the share saved
         RateSquare(null)
         DecodingSquare(spin)
     } else if (kept == null) {
@@ -213,8 +212,9 @@ internal fun ReceiveSide(h: ReceiveHost, home: Boolean = false) {
 // ai: one row, Open the solid one filling it, the others their own width; Start or Stop alone under them,
 // ai: the full width; on the desktop every button its label's width, LocalButtonsFill; without the camera's permission
 // ai: the one button that gets it, why on the state line), 12 dp under
-// ai: them the transfer's block (Details), then 4 dp apart the heat warning and one hint (a filing's failure over the
-// ai: preview), 16 dp before the folds. A file in: its block only with Show statistics on.
+// ai: them the transfer's block (Details), then 4 dp apart the heat warning (a filing's failure over the
+// ai: preview), 16 dp before the folds. The camera's rate hint ("Sender at 24 fps", "recommended 15", from 2026-11-11)
+// ai: went 2026-11-19 with the animated header, whose header was the only place the sender's rate was stated. A file in: its block only with Show statistics on.
 @Composable
 private fun TransferPanel(h: ReceiveHost) {
     // ai: the camera's button, Fullscreen beside it where the platform has it (FullscreenBtn, Send's row's, 2026-11-13)
@@ -239,23 +239,17 @@ private fun TransferPanel(h: ReceiveHost) {
     val shown = ln.text.isNotEmpty() && ln.tone != Readout.Tone.Bad && (!good || (h.showStats && !h.running))
     val now = if (shown) Details(ln.name ?: ln.text, test = ln.test, end = ln.pct, spinning = ln.spin != null, frac = ln.frac, rows = ln.rows) else null
     // ai: Within a run (Start until it stops) the block once shown keeps its room until the run ends, drawn clear
-    // ai: when it falls silent (2026-11-02: Receiving, its meter and figures, and the hint each moved the folds under them
+    // ai: when it falls silent (2026-11-02: Receiving, its meter and figures each moved the folds under them
     // ai: as they came and went); none is held before it has had words, so a camera starting shows no gap (a run's whole
     // ai: room held from Start stood empty under Stop). The run's file in ends it at once, the kept row and the
     // ai: block's going in one frame (the camera stops a poll later); a run started over a file already kept holds on.
     val keptAtStart = remember(h.running) { h.kept != null }
     val run = h.running && (h.kept == null || keptAtStart)
     val last = remember(h.running) { arrayOfNulls<Details>(1) }
-    val lastHint = remember(h.running) { arrayOfNulls<Warn>(1) }
     if (run && now != null) last[0] = now
     (now ?: last[0].takeIf { run })?.let { DetailsBlock(it, Modifier.padding(top = 12.dp), clear = now == null) }
-    // ai: the warnings as rows under the block (2026-11-07; red lines and a sentence before): the heat, then the camera's
-    // ai: hint, held still while the camera runs (steady), its room kept as the block's is, gone with it
+    // ai: the warnings as rows under the block (2026-11-07; red lines and a sentence before): the heat
     h.heat?.let { WarnRow(it, Modifier.padding(top = 4.dp)) }
-    val hintKey = steady(h.hint?.let { "${it.label}\t${it.value}" }.orEmpty(), on = 0).takeIf { run }.orEmpty()
-    val hint = hintKey.takeIf { it.isNotEmpty() }?.split('\t')?.let { Warn(it[0], it.getOrElse(1) { "" }, hint = true) }
-    if (run && hint != null) lastHint[0] = hint
-    (hint ?: lastHint[0].takeIf { run })?.let { WarnRow(it, Modifier.padding(top = if (h.heat == null) 4.dp else 0.dp), clear = hint == null) }
     Spacer(Modifier.height(16.dp))
 }
 

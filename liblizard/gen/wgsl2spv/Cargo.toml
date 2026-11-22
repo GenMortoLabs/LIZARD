@@ -1,5 +1,6 @@
-# ai: gen.mjs's WGSL to SPIR-V: naga as a library, with the writer options naga-cli does not expose (main.rs); and back,
-# ai: the decoder's plain GLSL kernels as SPIR-V to WGSL for WebGPU (src/bin/spv2wgsl.rs, 2026-11-06).
+# ai: gen.mjs's WGSL to SPIR-V: naga as a library, with the writer options naga-cli does not expose (main.rs). Its
+# ai: spv2wgsl, the decoder's GLSL kernels as WGSL for the WebGPU receiver (2026-11-06), went with that receiver
+# ai: (archive/webgpu-receiver-2026-11-22/).
 [package]
 name = "wgsl2spv"
 version = "0.1.0"
@@ -7,7 +8,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-naga = { version = "=30.0.1", features = ["wgsl-in", "spv-out", "spv-in", "wgsl-out"] }
+naga = { version = "=30.0.1", features = ["wgsl-in", "spv-out"] }
 
 [profile.release]
 opt-level = 3

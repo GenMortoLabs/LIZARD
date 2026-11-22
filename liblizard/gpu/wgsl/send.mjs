@@ -28,7 +28,7 @@
 // ai: pixel and the side).
 
 import { CRC_SPLIT, PARAMS_STRUCT } from "./back_ldpc.mjs";
-import { KNOWN, NC } from "../plan/back_tiers.mjs";
+import { KNOWN, NC, PB_REF, DCOEF } from "../plan/back_tiers.mjs";
 
 export const TPOSE_TILE = 16;
 export const RSV_THREADS = 64;
@@ -53,29 +53,32 @@ struct G { a: vec4u, b: vec4u, c: vec4u, d: vec4u, e: vec4u }
 `;
 
 // ai: PAINT, a workgroup a (block, symbol), 128 threads (src/lizard_phy.c lizard_encode and map_out, the C's arithmetic
-// ai: exactly): the block's 476 payload bytes from BLOCKS, their CRC-32C (the LDPC's split CRC), its code's systematic
-// ai: codeword (the data bits, zeros past the 480 B where the code holds more (the 7/8 code's last 128), then the m parity bits: the IRA
-// ai: accumulator, a prefix XOR over the checks in check order, a lane ceil(m / 128) of them), its slots (slot i the
-// ai: codeword bit its code's bit map names, a slot past the codeword a bit of its frame's count: the pilots; each
-// ai: XOR the whitening at its slot of the frame) and the QPSK coefficients (+-a a bit, a = 0.70710678, every
-// ai: sub-channel at one amplitude) into the symbol's disc in S at the UV entries. A block's code and first slot come from its tier
-// ai: (src/lizard_phy.h lizard_tiers_for: 7/8 blocks of 4496 slots, 3/4 of 5152, 2/3 of 5760, 1/2 of 7680, packed from the
-// ai: frame's first slot, the lowest frequencies, out), the codes' shapes and tables from TAB, so the shader holds no code
-// ai: of its own. The frame's last block's workgroup also paints the padding past the last block, the whitening alone
-// ai: (src/lizard_phy.c lizard_encode), so every coefficient the frame holds is sent.
+// ai: exactly): the block's 472 payload bytes from BLOCKS, their CRC-64/LIZARD (the LDPC's split CRC), its code's systematic
+// ai: codeword (the data bits, zeros past the 480 B where the code holds more (the 6/7 code's last 128), then the m parity bits: the IRA
+// ai: accumulator, a prefix XOR over the checks in check order, a lane ceil(m / 128) of them), its data slots (slot i the
+// ai: codeword bit its code's bit map names, XOR the whitening at its frame coefficient's slot) and the QPSK coefficients
+// ai: (+-a a bit, a = 0.70710678, every sub-channel at one amplitude) into the symbol's disc in S at the UV entries of
+// ai: their frame coefficients (fcoef: each sub-channel's coefficients 0 and PB_REF are its pilots, the pilots apart from
+// ai: the blocks since 2026-11-21). A block's code and first data slot come from its tier (src/lizard_phy.h
+// ai: lizard_tiers_for: 6/7 blocks of 4480 slots, 3/4 of 5120, 2/3 of 5760, 1/2 of 7680, packed from the frame's first
+// ai: data slot, the lowest frequencies, out), the codes' shapes and tables from TAB, so the shader holds no code of its
+// ai: own. The frame's last block's workgroup also paints the padding past the last block, the whitening alone, and every
+// ai: sub-channel's two pilots (src/lizard_phy.c lizard_encode), so every coefficient the frame holds is sent.
 // ai: Bindings: BLOCKS (ro, 120 words a block, block b of symbol r at (r blocks + b) 120), TAB (ro, gpu/encoder.mjs
 // ai: sendTab: word 0 the whitening's offset, then 16 words a code at 16 + 16 c, (n, k, m, z, mb, rows, lay, perm,
 // ai: slots, nt): its block's slots, its block rows' first entries, its entries (col | shift << 16), its bit map two
-// ai: slots a word; the whitening a bit a slot), UV (ro, a coefficient's S entry), S (rw, the disc), P (uniform,
-// ai: wgsl/back_ldpc.mjs PARAMS_AT): sizes[0] = (blocks, UV offset, the slots the blocks take, the coefficients the frame
-// ai: holds), sizes[1 + c] = (first block, first slot, blocks, 0) of code c in CODES' order (0 blocks: a code the format
-// ai: has none of), dims = (blocks, sStride, symbols, c0 + 4 codes), pw the CRC's powers. Dispatch (blocks, 1,
-// ai: symbols): frames x codes of an encode. The pilots (SPEC 7.3): a frame's count is c0 (the encode's first frame's) +
-// ai: its place in the encode, mod 4, the frame symbol r / codes; bit 0 on an even block, bit 1 on an odd.
-// ai: The test stream on the GPU (2026-11-15, SPEC 9.3): a test block's 471 payload bytes are BLAKE3's extended
-// ai: output of its id's five bytes, made in PAINT from the id alone (dims.w's bit 31 set: the host writes the ids, not
-// ai: the payloads; since 2026-11-16 packed in BLOCKS, 8 bytes a block, the id's five then three unread, so nothing but
-// ai: the ids crosses or is written). Output block t (64 bytes) is one compression of the root's only block (the id, its length 5,
+// ai: slots a word; the whitening a bit a frame slot), UV (ro, a frame coefficient's S entry), S (rw, the disc), P
+// ai: (uniform, wgsl/back_ldpc.mjs PARAMS_AT): sizes[0] = (blocks, UV offset, the data slots the blocks take, the
+// ai: coefficients the frame holds, 320 a sub-channel), sizes[1 + c] = (first block, first data slot, blocks, 0) of code
+// ai: c in CODES' order (0 blocks: a code the format has none of), dims = (blocks, sStride, symbols, c0 + 4 codes), pw
+// ai: the CRC's powers. Dispatch (blocks, 1, symbols): frames x codes of an encode. The pilots (SPEC 7.3): a frame's
+// ai: count is c0 (the encode's first frame's) + its place in the encode, mod 4, the frame symbol r / codes; bit 0 on
+// ai: an even sub-channel's count pilot, bit 1 on an odd's.
+// ai: The test stream on the GPU (2026-11-15; the tools', src/xfer.h stream_fill, no part of the format): a test block's
+// ai: 460 payload bytes are BLAKE3's extended output of its id's low five bytes (its source block and symbol), made in
+// ai: PAINT from the id alone (dims.w's bit 31 set: the host writes the ids, not the payloads; since 2026-11-16 packed in
+// ai: BLOCKS, 12 bytes a block, the block's own: the bare id and the 48-bit TOI (src/xfer.h), so nothing but the ids
+// ai: crosses or is written). Output block t (64 bytes) is one compression of the root's only block (the id, its length 5,
 // ai: CHUNK_START | CHUNK_END | ROOT) at counter t, so eight lanes make the eight blocks side by side. B3_PERM is
 // ai: BLAKE3's message permutation; the compression is written out with the message words that are always zero (all
 // ai: but the id's two) left out. b3Js is the same arithmetic in JS, held to the library's stream (src/xfer.h).
@@ -140,7 +143,7 @@ const KNOWN: u32 = ${KNOWN}u;
 const TH: u32 = ${PAINT_THREADS}u;
 const A: f32 = 0.70710678;
 var<workgroup> packw: array<u32, 120>;
-var<workgroup> crcw: atomic<u32>;
+var<workgroup> crcw: array<atomic<u32>, 2>;
 var<workgroup> cw: array<atomic<u32>, ${CW_WORDS}>;
 var<workgroup> scan: array<u32, ${PAINT_THREADS}>;
 var<workgroup> stw: array<u32, 128>;   // ai: a test block's stream, eight BLAKE3 output blocks (B3_WGSL)
@@ -155,6 +158,11 @@ fn dataBit(j: u32) -> u32 {
 }
 fn cwBit(j: u32) -> u32 { return (atomicLoad(&cw[j >> 5u]) >> (j & 31u)) & 1u; }
 fn white(s: u32) -> u32 { return (TAB[TAB[0] + (s >> 5u)] >> (s & 31u)) & 1u; }
+// ai: data coefficient dc's coefficient in the frame: past each sub-channel's count pilot (0) and reference (PB_REF)
+// ai: (src/lizard_phy.c pb_fcoef)
+fn fcoef(dc: u32) -> u32 { let j = dc / ${DCOEF}u; let r = dc - ${DCOEF}u * j; return 320u * j + select(2u + r, 1u + r, r < ${PB_REF - 1}u); }
+// ai: frame coefficient c's QPSK value: its two bits (x, y) XOR the whitening at its frame slots and q
+fn qpsk(c: u32, q: u32) -> vec2f { return vec2f(select(A, -A, (white(2u * c) ^ q) != 0u), select(A, -A, (white(2u * c + 1u) ^ q) != 0u)); }
 ${CRC_SPLIT()}
 @compute @workgroup_size(${PAINT_THREADS})
 fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) i: u32) {
@@ -177,33 +185,34 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) i: u3
   let rowsAt: u32 = TAB[h + 5u];
   let layAt: u32 = TAB[h + 6u];
   let permAt: u32 = TAB[h + 7u];
-  let slots: u32 = TAB[h + 8u];   // ai: the block's slots: its sent bits, then its pilots
-  let nt: u32 = TAB[h + 9u];   // ai: the bits sent, n less the code's np never sent (the 7/8 code's 128 known zeros): the slots the codeword fills
+  let slots: u32 = TAB[h + 8u];   // ai: the block's slots: its sent bits (nt)
+  let nt: u32 = TAB[h + 9u];   // ai: the bits sent, n less the code's np never sent (the 6/7 code's 128 known zeros): the slots the codeword fills
   let cpl: u32 = (m + TH - 1u) / TH;
   let slot0: u32 = tt.y + (b - tt.x) * slots;
-  // ai: this block's bit of its symbol's frame's count: the pilots' flip
-  let pq: u32 = ((((P.dims.w & 3u) + r / max((P.dims.w >> 2u) & 0xffffu, 1u)) & 3u) >> (b & 1u)) & 1u;
-  // ai: The payload from BLOCKS: bytes 0 to 475 in words 0 to 118; its CRC-32C big-endian in word 119 (bytes 476 to 479).
+  // ai: The payload from BLOCKS: bytes 0 to 471 in words 0 to 117; its CRC-64 big-endian in words 118 and 119 (bytes 472
+  // ai: to 479).
   let base: u32 = (r * P.sizes[0].x + b) * 120u;
   if ((P.dims.w >> 31u) != 0u) {
-    // ai: the test stream: the payload made here from the id BLOCKS holds packed (two words a block, its five bytes
-    // ai: first), the block's words the id's then the stream's five bytes on (word w from 2: stream bytes 4 w - 5 to 4 w - 2)
-    let ib: u32 = (r * P.sizes[0].x + b) * 2u;
+    // ai: the test stream: the payload made here from the id BLOCKS holds packed (three words a block, the block's
+    // ai: 12-byte id), the block's words the id's three, then the stream's from word 3 (word w: stream bytes 4 w - 12 to 4 w - 9)
+    let ib: u32 = (r * P.sizes[0].x + b) * 3u;
     let m0: u32 = BLOCKS[ib];
     let m1: u32 = BLOCKS[ib + 1u] & 0xffu;
     if (i < 8u) { b3out(m0, m1, i); }
     workgroupBarrier();
     if (i == 0u) { packw[0] = m0; }
-    if (i == 1u) { packw[1] = m1 | (stw[0] << 8u); }
-    if (i >= 2u && i < CRC_CHUNKS) { packw[i] = (stw[i - 2u] >> 24u) | (stw[i - 1u] << 8u); }
+    if (i == 1u) { packw[1] = BLOCKS[ib + 1u]; }
+    if (i == 2u) { packw[2] = BLOCKS[ib + 2u]; }
+    if (i >= 3u && i < CRC_CHUNKS) { packw[i] = stw[i - 3u]; }
   } else {
     if (i < CRC_CHUNKS) { packw[i] = BLOCKS[base + i]; }
   }
-  if (i == CRC_CHUNKS) { packw[CRC_CHUNKS] = 0u; }
+  if (i == CRC_CHUNKS || i == CRC_CHUNKS + 1u) { packw[i] = 0u; }
   workgroupBarrier();
-  let crc: u32 = crcOf(i);
+  let crc: vec2<u32> = crcOf(i);
   if (i == 0u) {
-    packw[CRC_CHUNKS] = ((crc >> 24u) & 0xffu) | (((crc >> 16u) & 0xffu) << 8u) | (((crc >> 8u) & 0xffu) << 16u) | ((crc & 0xffu) << 24u);
+    packw[CRC_CHUNKS] = ((crc.x >> 24u) & 0xffu) | (((crc.x >> 16u) & 0xffu) << 8u) | (((crc.x >> 8u) & 0xffu) << 16u) | ((crc.x & 0xffu) << 24u);
+    packw[CRC_CHUNKS + 1u] = ((crc.y >> 24u) & 0xffu) | (((crc.y >> 16u) & 0xffu) << 8u) | (((crc.y >> 8u) & 0xffu) << 16u) | ((crc.y & 0xffu) << 24u);
   }
   workgroupBarrier();
   // ai: The systematic part of the codeword, a bit an index, every word of it (the parity's zeros too); then every
@@ -256,28 +265,31 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) i: u3
     }
   }
   workgroupBarrier();
-  // ai: Slots 2 cc and 2 cc + 1 of coefficient cc (every code's nt is even: a pair is inside the sent bits or past them),
-  // ai: one bit map word the pair (each entry a codeword bit, the never-sent ones already skipped: back/bitmap.mjs sentBit); the whitening at the frame's slot.
-  let uvBase: u32 = P.sizes[0].y + slot0 / 2u;
+  // ai: Data slots 2 cc and 2 cc + 1 of the block's data coefficient cc (its slots are its code's nt sent bits, an even
+  // ai: count: the pilots apart from the blocks since 2026-11-21), one bit map word the pair (each entry a codeword bit,
+  // ai: the never-sent ones already skipped: back/bitmap.mjs sentBit), on the frame coefficient fcoef gives, the
+  // ai: whitening at its frame slots.
   let sBase: u32 = r * P.dims.y;
-  for (var cc: u32 = i; cc < slots / 2u; cc = cc + TH) {
-    let i0: u32 = 2u * cc;
-    var b0: u32 = pq;
-    var b1: u32 = pq;
-    if (i0 < nt) {
-      let pe = TAB[permAt + cc];
-      b0 = cwBit(pe & 0xffffu);
-      b1 = cwBit(pe >> 16u);
-    }
-    b0 = b0 ^ white(slot0 + i0);
-    b1 = b1 ^ white(slot0 + i0 + 1u);
-    S[sBase + UV[uvBase + cc]] = vec2f(select(A, -A, b0 != 0u), select(A, -A, b1 != 0u));
+  for (var cc: u32 = i; cc < nt / 2u; cc = cc + TH) {
+    let pe = TAB[permAt + cc];
+    let fc = fcoef(slot0 / 2u + cc);
+    S[sBase + UV[P.sizes[0].y + fc]] = vec2f(select(A, -A, (cwBit(pe & 0xffffu) ^ white(2u * fc)) != 0u), select(A, -A, (cwBit(pe >> 16u) ^ white(2u * fc + 1u)) != 0u));
   }
-  // ai: the padding: coefficients from the slots the blocks take to the frame's last, the whitening alone
+  // ai: the last block's workgroup: the padding, the data coefficients from the slots the blocks take to the frame's
+  // ai: last, the whitening alone; then every sub-channel's pilots (src/lizard_phy.c lizard_encode): its count pilot
+  // ai: (coefficient 0) the whitening XOR bit j & 1 of its frame's count on both axes, its reference (PB_REF) the
+  // ai: whitening alone. The frame's count: c0 (the encode's first frame's) + its place in the encode, mod 4, the
+  // ai: frame the symbol r / codes.
   if (b + 1u == P.sizes[0].x) {
-    for (var cc: u32 = P.sizes[0].z / 2u + i; cc < P.sizes[0].w; cc = cc + TH) {
-      let s: u32 = 2u * cc;
-      S[sBase + UV[P.sizes[0].y + cc]] = vec2f(select(A, -A, white(s) != 0u), select(A, -A, white(s + 1u) != 0u));
+    let subch: u32 = P.sizes[0].w / 320u;
+    for (var cc: u32 = P.sizes[0].z / 2u + i; cc < ${DCOEF}u * subch; cc = cc + TH) {
+      let fc = fcoef(cc);
+      S[sBase + UV[P.sizes[0].y + fc]] = qpsk(fc, 0u);
+    }
+    let count: u32 = ((P.dims.w & 3u) + r / max((P.dims.w >> 2u) & 0xffffu, 1u)) & 3u;
+    for (var j: u32 = i; j < subch; j = j + TH) {
+      S[sBase + UV[P.sizes[0].y + 320u * j]] = qpsk(320u * j, (count >> (j & 1u)) & 1u);
+      S[sBase + UV[P.sizes[0].y + 320u * j + ${PB_REF}u]] = qpsk(320u * j + ${PB_REF}u, 0u);
     }
   }
 }
@@ -401,45 +413,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if (x < P.b.y) { word = word | (pixel(x, y, f${A.arg}) << (8u * b)); }
   }
   FRAME[(P.c.y + f) * P.b.w + y * P.b.z + wx] = word;
-}
-`;
-}
-
-// ai: WORDS (2026-11-15, the animated header, SPEC 5.5; core/tx/gpu_painter.cpp encode's car): after rsh, each code's
-// ai: word cells painted with its own carousel symbol, so a batch of frames shows its symbols in turn. SPANS: three u32 a
-// ai: frame word (4 pixels) the word cells touch, its index within a frame's rows with its code in bit 31, then its four
-// ai: bytes' bit indices (16 bits each, bytes 0 and 1, then 2 and 3; 0xffff a byte kept); WALL: the 255 symbols' words as
-// ai: bits (U.a.w u32 a symbol, bit i the word's cell side * W + cell, src/fmt.c ob_fmt_bit); POS: each frame's codes'
-// ai: positions (U.b.x codes a frame), 255 a code's static word kept (core/tx/sender.cpp draws them); a bit 1 dark (0),
-// ai: 0 light (255), the C's border's levels. One invocation a frame word, so no two write one word.
-export const WORDS_THREADS = 64;
-export function wordsSource() {
-  return /* wgsl */ `
-struct WU { a: vec4u, b: vec4u }
-@group(0) @binding(0) var<storage, read> SPANS: array<u32>;
-@group(0) @binding(1) var<storage, read> WALL: array<u32>;
-@group(0) @binding(2) var<storage, read_write> FRAME: array<u32>;
-@group(0) @binding(3) var<uniform> U: WU;
-@group(0) @binding(4) var<storage, read> POS: array<u32>;
-@compute @workgroup_size(${WORDS_THREADS})
-fn main(@builtin(global_invocation_id) id: vec3u) {
-  let e: u32 = id.x;
-  let f: u32 = id.y;
-  if (e >= U.a.x) { return; }
-  let s: u32 = SPANS[3u * e];
-  let p: u32 = POS[f * U.b.x + (s >> 31u)];
-  if (p >= 255u) { return; }
-  let at: u32 = (U.a.y + f) * U.a.z + (s & 0x7fffffffu);
-  var word: u32 = FRAME[at];
-  for (var k: u32 = 0u; k < 4u; k = k + 1u) {
-    let idx: u32 = (SPANS[3u * e + 1u + (k >> 1u)] >> (16u * (k & 1u))) & 0xffffu;
-    if (idx != 0xffffu) {
-      let bit: u32 = (WALL[p * U.a.w + (idx >> 5u)] >> (idx & 31u)) & 1u;
-      let v: u32 = select(255u, 0u, bit == 1u);
-      word = (word & ~(0xffu << (8u * k))) | (v << (8u * k));
-    }
-  }
-  FRAME[at] = word;
 }
 `;
 }

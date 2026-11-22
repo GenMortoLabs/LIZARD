@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "present_check: window 0x%lx at %d,%d, %d x %d\n", win, rx, ry, wa.width, wa.height);
   }
 
-  lizard::Sender sender(nullptr, 0, "test", "application/octet-stream");
+  lizard::Sender sender(nullptr, 0, "test");
   std::mutex lock;
   std::string why;
   {

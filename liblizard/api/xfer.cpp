@@ -1,6 +1,6 @@
-// ai: Layer 3, the transfer (lizard.h): the sending end (core/tx/xfer_tx.h: the file's chunks, header, manifest and
+// ai: Layer 3, the transfer (lizard.h): the sending end (core/tx/xfer_tx.h: the file's source blocks, header and
 // ai: schedule, or the test stream as the senders make it) and the receiving end with no thread (core/rx/
-// ai: xfer_rx_core.h: the judge, the dedupe, the fountain and the BLAKE3 checks, in a memory or directory store).
+// ai: xfer_rx_core.h: the judge, the dedupe, the fountain and the BLAKE3 checks, in a memory or folder store).
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -19,7 +19,8 @@ extern "C" {
 struct liz_tx {
   std::vector<uint8_t> owned;
   std::unique_ptr<lizard::XferTx> x;   // ai: null for the test stream
-  uint32_t next = 0;
+  uint32_t next = 0;    // ai: the test stream's next bare id
+  uint64_t toi = 1;     // ai: and its TOI (48 bits)
   uint64_t length = 0;
   std::vector<xfer_id_t> ids;
 };
@@ -33,15 +34,16 @@ struct liz_rx {
 
 using namespace liz;
 
-static liz_tx* fileTx(std::vector<uint8_t> owned, const uint8_t* data, size_t length, const char* name, const char* type) {
+static liz_tx* fileTx(std::vector<uint8_t> owned, const uint8_t* data, size_t length, const char* name, int flags) {
   static const uint8_t empty = 0;
   auto t = std::make_unique<liz_tx>();
   t->owned = std::move(owned);
   if (!t->owned.empty()) data = t->owned.data();
   try {
-    t->x = std::make_unique<lizard::XferTx>(length ? data : &empty, length, name ? name : "", type ? type : "");
+    t->x = std::make_unique<lizard::XferTx>(length ? data : &empty, length, name ? name : "", -1, "", std::function<bool()>{}, false,
+                                            uint8_t(flags & LIZ_TX_ZSTD ? XFER_COMP_ZSTD : XFER_COMP_NONE));
   } catch (const std::runtime_error& e) {
-    throw Error(LIZ_E_TOOBIG, e.what());   // ai: XferTx refuses a file only for its size (chunks)
+    throw Error(LIZ_E_TOOBIG, e.what());   // ai: XferTx refuses a file only for its size (source blocks)
   }
   t->length = length;
   return t.release();
@@ -49,16 +51,16 @@ static liz_tx* fileTx(std::vector<uint8_t> owned, const uint8_t* data, size_t le
 
 extern "C" {
 
-LIZ_API liz_tx* liz_tx_new(const uint8_t* data, size_t length, const char* name, const char* type, int flags) {
+LIZ_API liz_tx* liz_tx_new(const uint8_t* data, size_t length, const char* name, int flags) {
   return guardNew<liz_tx>([&] {
     need(data || !length, "the file's bytes");
     std::vector<uint8_t> owned;
     if (flags & LIZ_TX_COPY) owned.assign(data, data + length);
-    return fileTx(std::move(owned), data, length, name, type);
+    return fileTx(std::move(owned), data, length, name, flags);
   });
 }
 
-LIZ_API liz_tx* liz_tx_new_path(const char* path, const char* name, const char* type) {
+LIZ_API liz_tx* liz_tx_new_path(const char* path, const char* name, int flags) {
   return guardNew<liz_tx>([&] {
     need(path, "a path");
     const std::filesystem::path p = std::filesystem::u8path(path);
@@ -68,16 +70,20 @@ LIZ_API liz_tx* liz_tx_new_path(const char* path, const char* name, const char* 
     if (f.bad()) throw Error(LIZ_E_IO, std::string("cannot read ") + path);
     const std::string base = p.filename().u8string();
     const size_t length = owned.size();
-    return fileTx(std::move(owned), nullptr, length, name ? name : base.c_str(), type);
+    return fileTx(std::move(owned), nullptr, length, name ? name : base.c_str(), flags & ~LIZ_TX_COPY);
   });
 }
 
 LIZ_API liz_tx* liz_tx_new_test(uint32_t first) {
   return guardNew<liz_tx>([&] {
     auto t = std::make_unique<liz_tx>();
-    // ai: the senders' rule: a random first id well below the control chunk's, odd
-    if (!first) { std::random_device rd; first = (rd() & 0x3fffffffu) | 1u; }
+    // ai: the senders' rule: a random first id well below the control source block's, odd
+    // ai: and a random TOI, nonzero, as any send's (the format has no test stream: TOI 0 is none)
+    std::random_device rd;
+    if (!first) first = (rd() & 0x3fffffffu) | 1u;
     t->next = first;
+    const xfer_toi_t toi = xfer_toi_t(rd() & 0xffffffu) << 24 | (rd() & 0xffffffu);
+    t->toi = toi ? toi : 1;
     return t.release();
   });
 }
@@ -89,7 +95,7 @@ LIZ_API int liz_tx_next(liz_tx* t, int n, uint8_t* blocks) {
     need(t && blocks && n >= 1, "a sender, at least a block and a place for them");
     t->ids.resize(size_t(n));
     if (t->x) {
-      const std::string f = t->x->fault();   // ai: a worker that failed to make a chunk: the file cannot all go
+      const std::string f = t->x->fault();   // ai: a worker that failed to make a source block: the file cannot all go
       if (!f.empty()) throw Error(LIZ_E_TOOBIG, f);
       t->x->frameIds(t->ids.data(), n);
     }
@@ -98,9 +104,10 @@ LIZ_API int liz_tx_next(liz_tx* t, int n, uint8_t* blocks) {
     for (int i = 0; i < n; i++) {
       uint8_t* o = blocks + size_t(i) * LIZ_BLOCK;
       xfer_id_put(o, t->ids[i]);
+      xfer_toi_put(o, t->x ? t->x->toiFor(t->ids[i]) : t->toi);   // ai: every id under its TOI: the file's, its session header's or the test stream's
       if (t->x) t->x->block(t->ids[i], o + LIZ_ID_BYTES);
       else stream_fill(t->ids[i], o + LIZ_ID_BYTES, LIZ_PAYLOAD);
-      data += xfer_id_chunk(t->ids[i]) != XFER_CONTROL;
+      data += t->x ? t->x->isFileData(t->ids[i]) : 1;
     }
     return data;
   });
@@ -112,7 +119,7 @@ LIZ_API int liz_tx_info_get(const liz_tx* t, liz_tx_info* out) {
     liz_tx_info i{};
     i.test = !t->x;
     if (t->x) {
-      i.length = t->length; i.chunks = t->x->chunks(); i.lap = t->x->lap();
+      i.length = t->length; i.source_blocks = t->x->sourceBlocks(); i.cycle = t->x->cycle();
       std::memcpy(i.root, t->x->root(), sizeof i.root);
     }
     *out = i;
@@ -124,12 +131,12 @@ LIZ_API liz_rx* liz_rx_new(const liz_store* store) {
   return guardNew<liz_rx>([&] {
     auto r = std::make_unique<liz_rx>();
     std::unique_ptr<lizard::Store> s;
-    // ai: a directory's own subfolder, as the app's receiver keeps it: only that folder is emptied
+    // ai: a folder's own subfolder, as the app's receiver keeps it: only that folder is emptied
     if (store && store->dir) s = lizard::fileStore(std::string(store->dir) + "/lizard-xfer");
     else s = lizard::memoryStore(store ? store->max_bytes : 0);
     if (!s->error.empty()) throw Error(LIZ_E_IO, s->error);
     r->core = std::make_unique<lizard::XferRxCore>(std::move(s));
-    r->judge = std::make_unique<lizard::XferJudge>(r->core->rootGen());
+    r->judge = std::make_unique<lizard::XferJudge>();
     return r.release();
   });
 }
@@ -152,13 +159,13 @@ LIZ_API int liz_rx_progress(liz_rx* r, liz_progress* out) {
     const auto& p = r->p;
     liz_progress o{};
     o.header = p.header; o.done = p.done; o.length = p.length; o.bytes_in = p.bytesIn; o.fraction = p.fraction;
-    o.chunks = p.chunks; o.verified = p.verified; o.rejected = p.rejected; o.solve_ms = p.solveMs;
+    o.source_blocks = p.sourceBlocks; o.verified = p.verified; o.rejected = p.rejected; o.solve_ms = p.solveMs;
     *out = o;
     return LIZ_OK;
   });
 }
 
-LIZ_API int liz_rx_chunks(liz_rx* r, uint8_t* per, int cap) {
+LIZ_API int liz_rx_source_blocks(liz_rx* r, uint8_t* per, int cap) {
   return guard([&] {
     need(r && (per || cap <= 0), "a receiver and a place for its chunks");
     r->core->progress(r->p, true);
@@ -176,7 +183,6 @@ LIZ_API const char* liz_rx_meta(liz_rx* r, int which) {
     const auto& p = r->p;
     switch (which) {
       case LIZ_META_NAME: r->meta = p.name; break;
-      case LIZ_META_TYPE: r->meta = p.type; break;
       case LIZ_META_ROOT: r->meta = p.root; break;
       case LIZ_META_PATH: r->meta = p.path; break;
       case LIZ_META_ERROR: r->meta = p.error; break;

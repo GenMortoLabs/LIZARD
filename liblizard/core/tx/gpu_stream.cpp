@@ -21,11 +21,11 @@ namespace lizard {
 
 namespace {
 constexpr uint32_t T = XFER_PAYLOAD, SB = 480;
-// ai: the upload slots: a chunk's symbols each, the workers waiting for one while the recording thread copies
+// ai: the upload slots: a source block's symbols each, the workers waiting for one while the recording thread copies
 constexpr uint32_t SLOTS = 4;
 // ai: TAB's layout (gpu/wgsl/rq_enc.mjs TAB_DEG, TAB_PLANS, TAB_PLAN)
 constexpr uint32_t TAB_DEG = 1024, TAB_PLANS = 1056, TAB_PLAN = 8;
-// ai: the self-test's chunk (K 213 at 471 B) and its ESIs past the first source symbols
+// ai: the self-test's source block (K 218 at 460 B) and its ESIs past the first source symbols
 constexpr size_t SELF_BYTES = 100000;
 std::string mb(uint64_t b) { return std::to_string((b + (1u << 19)) >> 20); }
 std::vector<uint32_t> spirv(const std::string& path) {
@@ -51,7 +51,7 @@ std::vector<uint32_t> tabOf(const std::vector<rq_par_t>& plans) {
   }
   return tab;
 }
-// ai: a solved chunk's symbols at SYM's stride (480 B, the 471 zero padded)
+// ai: a solved source block's symbols at SYM's stride (480 B, the 460 zero padded)
 void spread(const uint8_t* C, uint32_t L, uint8_t* out) {
   for (uint32_t i = 0; i < L; i++) {
     std::memcpy(out + size_t{i} * SB, C + size_t{i} * T, T);
@@ -61,16 +61,17 @@ void spread(const uint8_t* C, uint32_t L, uint8_t* out) {
 }  // namespace
 
 std::unique_ptr<GpuStream> GpuStream::create(wg::Device& d, const std::string& assets, const File& f) {
-  if (!f.chunks || !f.chunkBytes) throw std::runtime_error("no chunks");
+  if (!f.sourceBlocks || !f.sbBytes) throw std::runtime_error("no chunks");
   std::unique_ptr<GpuStream> s(new GpuStream(d));
   s->f_ = f;
-  // ai: each chunk's L from its K (a file has at most two lengths: the full chunks', a short last one's)
+  // ai: each source block's L from its K (a file has at most two lengths: the full source blocks', a short last one's)
   std::map<size_t, uint32_t> planOf;
   std::vector<rq_par_t> plans;
   std::vector<uint32_t> ch;
   uint64_t nsym = 0;
-  for (uint32_t c = 0; c < f.chunks; c++) {
-    const size_t cl = std::min(f.chunkBytes, f.length - size_t{c} * f.chunkBytes);
+  s->total_ = f.sourceBlocks;
+  for (uint32_t c = 0; c < s->total_; c++) {
+    const size_t cl = std::min(f.sbBytes, f.length - size_t{c} * f.sbBytes);
     auto it = planOf.find(cl);
     if (it == planOf.end()) {
       rq_par_t q{};
@@ -108,8 +109,8 @@ std::unique_ptr<GpuStream> GpuStream::create(wg::Device& d, const std::string& a
     return b;
   };
   s->tab_ = up(tabOf(plans), "rq TAB");
-  s->chunks_ = up(ch, "rq CHUNKS");
-  s->par_ = d.createBuffer(16, wg::STORAGE | wg::COPY_DST, "rq PAR", false);
+  s->sourceBlocks_ = up(ch, "rq CHUNKS");
+  s->par_ = d.createBuffer(32, wg::STORAGE | wg::COPY_DST, "rq PAR", false);
   for (uint32_t i = 0; !s->uma_ && i < SLOTS; i++) s->slot_.push_back(d.createBuffer(uint64_t{s->lMax_} * SB, wg::STORAGE | wg::MAP_WRITE, "rq SLOT", false));
   s->slotOf_.assign(s->slot_.size(), -1);
   s->ctlUp_.assign(f.controls, 0);
@@ -126,19 +127,19 @@ void GpuStream::stop() {
   cv_.notify_all();
 }
 
-// ai: Chunk c (a worker's). Where the device shares the system's memory (a phone, an integrated GPU) SYM is host-visible
-// ai: and the worker writes the chunk's symbols straight into it: no copy and no wait (the GPU reads them in the encodes
-// ai: after every chunk was handed over; a host write is visible to a submission after it). On a discrete GPU, its
+// ai: Source block c (a worker's). Where the device shares the system's memory (a phone, an integrated GPU) SYM is host-visible
+// ai: and the worker writes the source block's symbols straight into it: no copy and no wait (the GPU reads them in the encodes
+// ai: after every source block was handed over; a host write is visible to a submission after it). On a discrete GPU, its
 // ai: symbols into a free slot, then copied into SYM on the device's second queue (Device::queue2
 // ai: and pool2: the receiver's camera ingest takes them on its own device, a sender's are free), the copy waited for
 // ai: here and the slot freed: the painting thread never touches the upload, and the copy runs beside the painting on the
 // ai: GPU (where the family has one queue, queue2 is the queue and the copy goes in turn, under its lock as the ingest's
-// ai: does). Same family, so SYM needs no ownership transfer; a data encode comes after every chunk's copy finished (the
+// ai: does). Same family, so SYM needs no ownership transfer; a data encode comes after every source block's copy finished (the
 // ai: transfer names no data block before every sink returned), and wg begins every command buffer with a barrier.
 bool GpuStream::put(uint32_t c, const rq_enc_t* enc) {
   rq_par_t q{};
   const uint8_t* C = rq_enc_intermediate(enc, &q);
-  if (c >= f_.chunks || q.L != len_[c]) throw std::runtime_error("chunk " + std::to_string(c) + " is not the stream's");
+  if (c >= total_ || q.L != len_[c]) throw std::runtime_error("chunk " + std::to_string(c) + " is not the stream's");
   auto& d = dev_;
   std::call_once(symOnce_, [&] { sym_ = d.createBuffer(symBytes_, wg::STORAGE | (uma_ ? wg::MAP_WRITE : wg::COPY_DST), "rq SYM", false); });
   if (!sym_) throw std::runtime_error("no SYM");
@@ -226,12 +227,12 @@ bool GpuStream::put(uint32_t c, const rq_enc_t* enc) {
 
 bool GpuStream::done() {
   std::lock_guard<std::mutex> l(mu_);
-  return onDevice_ == f_.chunks;
+  return onDevice_ == total_;
 }
 
 // ai: The ids of n blocks into IDS, made to hold `room` (at least n) when it must grow; a control block's payload into
-// ai: its symbol the first time it is named (a control block named is final: the header always, a manifest block once
-// ai: its group is made). IDS and its bind group are replaced only to grow, which frees what a submission still in
+// ai: its symbol the first time it is named (a control block named is final: the session header, the one
+// ai: kind since 2026-11-21). IDS and its bind group are replaced only to grow, which frees what a submission still in
 // ai: flight names (its write and its dispatch): the painter's room is the most blocks any of its encodes names, so
 // ai: IDS grows only when the painter is configured again, nothing in flight; host and the self-test wait for theirs.
 // ai: (Until 2026-11-18 IDS grew with the encodes: a larger one after a smaller, the smaller still in flight, crashed
@@ -249,10 +250,16 @@ void GpuStream::ids(const uint8_t* bl, uint32_t n, size_t stride, bool controlsT
   for (uint32_t i = 0; i < n; i++) {
     const uint8_t* p = bl + i * stride;
     const xfer_id_t id = xfer_id_get(p);
-    ip[2 * i] = static_cast<uint32_t>(id);
-    ip[2 * i + 1] = static_cast<uint32_t>(id >> 32);
-    if (!controlsToo || xfer_id_chunk(id) != XFER_CONTROL) continue;
-    const uint32_t s = xfer_id_symbol(id);
+    const xfer_toi_t toi = xfer_toi_get(p);
+    // ai: the id's first two words as BLOCKS writes them (the bare id and the TOI's low 24 bits, bytes 0 to 7); its TOI's
+    // ai: high 24 bits PAR's, the file's (a data block's) and the session's (the session header's): a send's blocks
+    // ai: share the two TOIs
+    const uint64_t w = id | (toi & 0xffffffu) << 40;
+    if (xfer_id_sbn(id) == XFER_CONTROL) toiHi_[1] = uint32_t(toi >> 24); else toiHi_[0] = uint32_t(toi >> 24);
+    ip[2 * i] = static_cast<uint32_t>(w);
+    ip[2 * i + 1] = static_cast<uint32_t>(w >> 32);
+    if (!controlsToo || xfer_id_sbn(id) != XFER_CONTROL) continue;
+    const uint32_t s = xfer_id_esi(id);
     if (s < f_.controls && !ctlUp_[s]) {
       uint8_t sb[SB] = {};
       std::memcpy(sb, p + XFER_ID_BYTES, T);
@@ -263,14 +270,14 @@ void GpuStream::ids(const uint8_t* bl, uint32_t n, size_t stride, bool controlsT
   d.writeBuffer(*ids_, 0, idw_.data(), 8ull * n);
 }
 
-void GpuStream::record(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& sym, const std::shared_ptr<wg::Buffer>& tab, const std::shared_ptr<wg::Buffer>& chunks,
-                       const std::shared_ptr<wg::Buffer>& out, uint32_t n, uint32_t ctl, uint32_t nchunks, uint32_t controls) {
+void GpuStream::record(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& sym, const std::shared_ptr<wg::Buffer>& tab, const std::shared_ptr<wg::Buffer>& sourceBlocks,
+                       const std::shared_ptr<wg::Buffer>& out, uint32_t n, uint32_t ctl, uint32_t nsb, uint32_t controls) {
   if (!group_ || out != lastOut_ || sym != lastSym_) {
-    group_ = dev_.createBindGroup(bgl_, {sym, ids_, tab, chunks, out, par_});
+    group_ = dev_.createBindGroup(bgl_, {sym, ids_, tab, sourceBlocks, out, par_});
     lastOut_ = out;
     lastSym_ = sym;
   }
-  const uint32_t pb[4] = {n, ctl, nchunks, controls};
+  const uint32_t pb[8] = {n, ctl, nsb, controls, toiHi_[0], toiHi_[1], 0, 0};
   dev_.writeBuffer(*par_, 0, pb, sizeof pb);
   enc.setPipeline(*pipe_);
   enc.setBindGroup(*group_);
@@ -280,7 +287,7 @@ void GpuStream::record(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& sym,
 void GpuStream::blocks(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& out, const uint8_t* bl, uint32_t n, size_t stride, uint32_t room) {
   if (!done()) throw std::runtime_error("a data block named before every chunk's symbols were on the device");
   ids(bl, n, stride, true, room);
-  record(enc, sym_, tab_, chunks_, out, n, ctl_, f_.chunks, f_.controls);
+  record(enc, sym_, tab_, sourceBlocks_, out, n, ctl_, total_, f_.controls);
 }
 
 void GpuStream::host(const xfer_id_t* idv, uint32_t n, uint8_t* out) {
@@ -293,13 +300,13 @@ void GpuStream::host(const xfer_id_t* idv, uint32_t n, uint8_t* out) {
   }
   std::vector<uint8_t> bl(size_t{n} * XFER_ID_BYTES);
   for (uint32_t i = 0; i < n; i++) {
-    if (xfer_id_chunk(idv[i]) == XFER_CONTROL) throw std::runtime_error("host() makes data blocks alone");
+    if (xfer_id_sbn(idv[i]) == XFER_CONTROL) throw std::runtime_error("host() makes data blocks alone");
     xfer_id_put(bl.data() + size_t{i} * XFER_ID_BYTES, idv[i]);
   }
   ids(bl.data(), n, XFER_ID_BYTES, false);
   auto e = d.encoder();
   e.beginComputePass();
-  record(e, sym_, tab_, chunks_, out_, n, ctl_, f_.chunks, f_.controls);
+  record(e, sym_, tab_, sourceBlocks_, out_, n, ctl_, total_, f_.controls);
   e.endPass();
   e.copyBufferToBuffer(*out_, 0, *outRd_, 0, uint64_t{SB} * n);
   d.submit(e)->wait();
@@ -347,7 +354,7 @@ std::string GpuStream::selfTest() {
     uint8_t want[T];
     uint32_t bad = 0;
     for (uint32_t i = 0; i < n; i++) {
-      rq_enc_symbol(enc.get(), xfer_id_symbol(esi[i]), want);
+      rq_enc_symbol(enc.get(), xfer_id_esi(esi[i]), want);
       bad += std::memcmp(want, r + size_t{i} * SB + XFER_ID_BYTES, T) != 0 || std::memcmp(bl.data() + size_t{i} * XFER_ID_BYTES, r + size_t{i} * SB, XFER_ID_BYTES) != 0;
     }
     return bad ? "its RaptorQ blocks are not the C's (" + std::to_string(bad) + " of " + std::to_string(n) + ")" : "";

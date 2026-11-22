@@ -18,13 +18,13 @@ LIZ_API void liz_receiver_batch_cap(liz_receiver*, int) { none(); }
 LIZ_API const char* liz_receiver_file(liz_receiver*) { none(); return ""; }
 LIZ_API void liz_receiver_clear(liz_receiver*) { none(); }
 LIZ_API void liz_receiver_camera_closed(liz_receiver*) { none(); }
-LIZ_API liz_sender* liz_sender_new(const uint8_t*, size_t, const char*, const char*, int) { none(); return nullptr; }
+LIZ_API liz_sender* liz_sender_new(const uint8_t*, size_t, const char*, int) { none(); return nullptr; }
 LIZ_API void liz_sender_free(liz_sender*) {}
 LIZ_API int liz_sender_configure(liz_sender*, const liz_format*, int, int, const char*, const char*) { return none(); }
 LIZ_API int liz_sender_geometry(liz_sender*, liz_geometry*) { return none(); }
 LIZ_API int liz_sender_ready(liz_sender*) { return none(); }
 LIZ_API int liz_sender_take(liz_sender*, uint8_t*, int, liz_pixfmt) { return none(); }
-LIZ_API int64_t liz_sender_lap(liz_sender*) { return none(); }
+LIZ_API int64_t liz_sender_cycle(liz_sender*) { return none(); }
 LIZ_API liz_sender* liz_sender_play(const char*) { none(); return nullptr; }
 LIZ_API const char* liz_sender_stream(liz_sender*) { return ""; }
 LIZ_API int liz_lizard_kind(const char*) { return none(); }

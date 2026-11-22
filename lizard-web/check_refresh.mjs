@@ -1,5 +1,5 @@
 // ai: Rate refresh's hold rule (refresh.mjs, as send-worker.mjs runs it), in node, no page and no codec:
-// ai:   1. a made-up profile (7/8 x 3, 3/4 x 2, 2/3 x 2, 1/2 x 1) at 1 and 2 codes, every [1,2,3,4] and [2,3,4,4], 60
+// ai:   1. a made-up profile (6/7 x 3, 3/4 x 2, 2/3 x 2, 1/2 x 1) at 1 and 2 codes, every [1,2,3,4] and [2,3,4,4], 60
 // ai:      frames from seq 0 and from seq 7: the first frame new throughout; then a block held exactly where its rate's
 // ai:      every > 1 and the seq is no multiple of it, a held block the frame before's id at its place, a new one an id
 // ai:      never painted before; the new ids asked equal to the new places (none asked where there are none);
@@ -16,7 +16,7 @@ import { tiersFor, blocksFor, VERSIONS } from "../liblizard/sim/lizard_pick.mjs"
 let failed = 0, passed = 0;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"} ${what}`); if (ok) passed++; else failed++; };
 
-const TIERS = [[6, 3, 4496], [4, 2, 5152], [3, 2, 5760], [2, 1, 7680]], V = 8, RATE = [0, 0, 0, 1, 1, 2, 2, 3];
+const TIERS = [[6, 3, 4480], [4, 2, 5120], [3, 2, 5760], [2, 1, 7680]], V = 8, RATE = [0, 0, 0, 1, 1, 2, 2, 3];
 check(ratesOf(TIERS, V)?.join() === RATE.join(), `the made-up profile's rates ${ratesOf(TIERS, V)?.join()}`);
 
 // ai: one run: frames seq0 .. seq0 + n - 1 in order, new ids from a counter; each frame's ids, new marks and ids asked
@@ -102,7 +102,7 @@ for (const codes of [1, 2]) for (const every of [[1, 2, 3, 4], [2, 3, 4, 4]]) fo
 }
 
 // ai: 5. bounds and the real profiles
-check(everyOf([0, REFRESH_MAX + 7, "3", NaN]).join() === `1,${REFRESH_MAX},3,1` && everyOf([60, 13, 1, 2]).join() === "60,13,1,2" && everyOf(undefined).join() === "1,1,1,1", `everyOf ${everyOf([0, REFRESH_MAX + 7, "3", NaN]).join()}`);
+check(everyOf([0, REFRESH_MAX + 7, "3", NaN]).join() === `1,${REFRESH_MAX},3,1` && everyOf([30, 13, 1, 2]).join() === "30,13,1,2" && everyOf(undefined).join() === "1,1,1,1", `everyOf ${everyOf([0, REFRESH_MAX + 7, "3", NaN]).join()}`);
 {
   let bad = 0, n = 0;
   for (let i = 0; i < VERSIONS.length; i += 5) {
@@ -113,7 +113,7 @@ check(everyOf([0, REFRESH_MAX + 7, "3", NaN]).join() === `1,${REFRESH_MAX},3,1` 
     const want = tiers.map(([rate, k]) => [{ 6: 0, 4: 1, 3: 2, 2: 3 }[rate], k]);
     if (!rates || runs.join() !== want.join() || runs.some((x, k) => k && x[0] <= runs[k - 1][0])) { bad++; console.log(`     LIZARD-${subch}: ${runs.join(" ")} against ${want.join(" ")}`); }
   }
-  check(bad === 0, `ratesFor over ${n} formats from LIZARD-64 to -1024: the tiers' counts in order from 7/8 out (${bad} wrong)`);
+  check(bad === 0, `ratesFor over ${n} formats from LIZARD-64 to -1024: the tiers' counts in order from 6/7 out (${bad} wrong)`);
 }
 
 console.log(`${passed} ok${failed ? `, ${failed} FAILED` : ", all passed"}`);

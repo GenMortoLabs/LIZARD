@@ -9,7 +9,7 @@
 //                                                 _int8.json for an int8 variant); exit 1 on a difference
 //   lizard_gpu_check replay <run> [frames] [variant]   a recording (research/replays/real/<run>.lizard) through the
 //                                                 decoder as the web's replay runs it (batches of the batcher's size,
-//                                                 two in flight, the held word carried in capture order): frames
+//                                                 two in flight, each frame on its own word): frames
 //                                                 found, words, verified blocks, GPU ms a frame
 //   lizard_gpu_check xcheck <run> [frames] [variant]   the replay with every LDPC form of the tree run again on each
 //                                                 batch's own soft values and held to its reference form (the first
@@ -57,16 +57,13 @@
 // ai: Khronos validation layer), LIZ_CACHE=<path> (the pipeline cache file), LIZ_BUDGET=<MB> (the decoder's memory
 // ai: budget; 2048 by default, the web's on the S26). The anchors each frame read (SPEC 6.13): selftest prints them a
 // ai: frame and replay's totals line ends with them; LIZ_PERFRAME=1 (replay): a
-// ai: line a frame as it comes back, "frame <index> found <0|1> ring <r> version <v> held <0|1> blocks <n> anchors <k>
-// ai: word <v> bad <n> r <r> sd <sd> r2 <r2> sd2 <sd2> pblocks <n> anim <0|1> id <i> sym <hex> count <a> <t> <c>" (word:
+// ai: line a frame as it comes back, "frame <index> found <0|1> ring <r> version <v> blocks <n> anchors <k>
+// ai: word <v> bad <n> r <r> sd <sd> r2 <r2> sd2 <sd2> psubch <n> count <a> <t> <c>" (word:
 // ai: the version F8 read, 0 none; count a static word's three counts, 2026-11-19, as lizard_cpu_check's line; bad:
 // ai: verified blocks of a test-stream frame that are not the stream's, the receiver's judge, XferJudge; their sum the
-// ai: "judge:" line; r to pblocks the pilots, FrameOut's, nan where none), then "finder <index> score <s> orient <o>
+// ai: "judge:" line; r to psubch the pilots, FrameOut's, nan where none), then "finder <index> score <s> orient <o>
 // ai: corners <x0 y0 .. x3 y3> depths <d0 .. d3>", the finder's result words 1, 3 and 17 to 28 off the lane.
 // ai: LIZ_PEAKS=<file> (replay): each frame's kept peaks.
-// ai: LIZ_HOLD=0 (replay): no word held from frame to frame. LIZ_HELD=<version or configuration> (replay): the
-// ai: configuration held from the first frame, for frames with animated words (a version its default layout; 0 by
-// ai: default: nothing held until a word reads).
 // ai: LIZ_YIELD_GPU=0|1: receive's ReceiverConfig::yieldGpu (the decoder's queues at the global priority LOW where offered;
 // ai: a receiver's default, 1); the other modes' own device at LOW only with 1, for an A/B against a screen's load.
 #include "front.h"
@@ -152,7 +149,7 @@ static int dump(Ctx& c, std::string v, const std::string& dir) {
   std::vector<Slot*> slots;
   for (auto& f : frames) px.push_back(readAll(c.barcode + "/build/" + ref["source"].get<std::string>() + "/" + f["name"].get<std::string>()));
   for (size_t i = 0; i < px.size(); i++) slots.push_back(fh->enqueueLuma(px[i].data(), W, H, W, i));
-  auto out = fh->finish(fh->run(slots, 0));
+  auto out = fh->finish(fh->run(slots));
   Lane& ln = *fh->lanes[0];
   std::vector<std::pair<std::string, BufP>> bufs = {{"peaks", ln.peaksBuf}, {"counts", ln.countsBuf}, {"readings", ln.readingsBuf}, {"raw", ln.rawBuf}, {"acc", ln.accBuf},
     {"quads", ln.quadsBuf}, {"score", ln.scoreBuf}, {"result", ln.resultBuf}, {"maps", ln.mapsBuf}, {"resid", ln.residBuf}, {"meas", ln.measBuf}};
@@ -185,7 +182,7 @@ static void writeFile(const std::string& path, const void* p, size_t n) {
 // ai: did). job.json:
 // ai: { "dir": the frames' folder, "frames": [{ name, w, h }] as a reference lists them }. The frames go through the
 // ai: decoder as the self-test page ran them (scripts/pages/gpu_selftest.mjs runOnce): batches of the batcher's size,
-// ai: one at a time, the last word read held into the next batch. After each batch, before another runs on its lane,
+// ai: one at a time, each frame on its own word. After each batch, before another runs on its lane,
 // ai: the lane buffers its stages left (liblizard/gpu/probe.mjs's parts, less SCORE's rerun: levels, counts, peaks,
 // ai: readings, acc, cand, quads, score, result, maps, meas, resid, anch, arec; and the back half's V, ITS and
 // ai: BCOUNTS) are written whole, B frame strides each, to <dir>/batch<k>/<name>.bin, each frame as the ring held it to
@@ -213,13 +210,11 @@ static int probe(Ctx& c, const std::string& v, const std::string& jobPath, const
   const json& bk = fh->S->back();
   json out = {{"variant", v}, {"device", c.dev->name}, {"driver", c.dev->driver}, {"precision", fh->S->tree["precision"]},
               {"floatPrecision", fh->S->tree["floatPrecision"]}, {"nets", fh->nets}, {"batches", json::array()}};
-  int held = 0;
-  cpu_hold_t* hold = cpu_hold_new();
   for (size_t k = 0; k < px.size();) {
     const int nb = std::min<int>(std::max(1, fh->size()), (int)(px.size() - k));
     std::vector<Slot*> slots;
     for (int i = 0; i < nb; i++) slots.push_back(fh->enqueueLuma(px[k + i].data(), wh[k + i].first, wh[k + i].second, wh[k + i].first, k + i));
-    auto f = fh->run(slots, held, false, nb);
+    auto f = fh->run(slots, false, nb);
     Lane& ln = *f->lane;
     auto bo = fh->finish(std::move(f));
     const std::string bd = dir + "/batch" + std::to_string(out["batches"].size());
@@ -244,7 +239,6 @@ static int probe(Ctx& c, const std::string& v, const std::string& jobPath, const
       std::sort(ids.begin(), ids.end());
       if (!fo.luma.empty()) writeFile(bd + "/input-" + std::to_string(i) + ".gray", fo.luma.data(), fo.luma.size());
       fr.push_back({{"index", k + i}, {"tag", fo.tag}, {"w", wh[k + i].first}, {"h", wh[k + i].second}, {"empty", fo.empty}, {"kept", !fo.luma.empty()}, {"ids", ids}});
-      if (fo.hasWord) { const int v = cpu_hold_take(hold, fo.word.kind, fo.word.version, fo.word.count, fo.word.id, fo.word.sym); if (v) held = v; }
     }
     out["batches"].push_back({{"dir", "batch" + std::to_string(out["batches"].size())}, {"nb", nb},
       {"shape", {{"B", ln.B}, {"W", ln.W}, {"H", ln.H}, {"gx", ln.gx}, {"gy", ln.gy}, {"cap", fh->cap}, {"levels", levels}}},
@@ -452,7 +446,7 @@ static int ingestCheck(Ctx& c, std::string v, const std::string& run = "") {
     hbs.push_back(hb);
     slots.push_back(fh->enqueueCamera(*ci, hb, x0, y0, S, S, slots.size()));
   }
-  auto out = fh->finish(fh->run(slots, 0));
+  auto out = fh->finish(fh->run(slots));
   int blocks = 0, found = 0;
   for (auto& fo : out.frames) { blocks += (int)fo.records.size(); found += fo.finder.found == 1; }
   int refBlocks = 0;
@@ -505,7 +499,7 @@ static void synthRaw(const uint8_t* px, uint32_t w, uint32_t h, int format, uint
 }
 
 // ai: receive: a recording through the whole receiver (rx/receiver.h) at a camera's pace (fps, 60 by default):
-// ai: the queue, the batches, the held word, the judge, the dedupe and the transfer, the stats printed each second.
+// ai: the queue, the batches, the judge, the dedupe and the transfer, the stats printed each second.
 // ai: layout 2:1: each camera frame is two recorded frames side by side (2W x H), which the receiver cuts in half.
 // ai: A frame's timestamp is its push time on the steady clock, and the receiver's series is asked after every push as
 // ai: the app's phase lock asks it (Receiver::series): the last line but one says how old a frame's row was when it
@@ -729,7 +723,7 @@ static int selftest(Ctx& c, std::string v) {
   fh->plan(W, H);
   std::vector<Slot*> slots;
   for (int i = 0; i < n; i++) slots.push_back(fh->enqueueLuma(px[i].data(), W, H, W, i));
-  auto out = fh->finish(fh->run(slots, 0));
+  auto out = fh->finish(fh->run(slots));
   const double TOLpx = 1, TOLcount = 0.1;
   int bad = 0, blocks = 0, refBlocks = 0;
   std::cout << "frame  found ring  corners(px)  word(v)   version  blocks(ref)  ids shared  raw(ref)" << std::endl;
@@ -748,7 +742,7 @@ static int selftest(Ctx& c, std::string v) {
     const json& Wd = R["word"];
     const bool wordRef = !Wd["word"].is_null();
     if (wordRef != fo.hasWord || (wordRef && Wd["word"]["version"].get<int>() != fo.word.version)) why += " word";
-    if (Wd["version"].get<int>() != fo.version || Wd["n"].get<int>() != fo.n || Wd["held"].get<bool>() != fo.held) why += " version";
+    if (Wd["version"].get<int>() != fo.version || Wd["n"].get<int>() != fo.n) why += " version";
     const int rb = R["back"]["blocks"];
     std::set<int> ids;
     for (auto& x : R["back"]["ids"]) ids.insert(x.get<int>());
@@ -782,25 +776,8 @@ static int selftest(Ctx& c, std::string v) {
 static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool xcheck = false) {
   const int launch = getenv("LIZ_LAUNCH") ? std::max(1, atoi(getenv("LIZ_LAUNCH"))) : 1 << 30;
   const bool perFrame = env("LIZ_PERFRAME") == "1";
-  // ai: LIZ_HOLD=0: nothing held, every frame on its own word (the find arm of the finder's judges, frames of many
-  // ai: formats in one run: scripts/gpu/native/judge.mjs)
-  const bool hold = env("LIZ_HOLD") != "0";
-  // ai: LIZ_HELD=<version>: the held word a run starts from, as a receiver that read it before (the held cases of the
-  // ai: native judges: scripts/exp/gpu_rings.mjs, pilot_check.mjs)
-  // ai: a version alone (to OB_FMT_VERSION_MAX) names its default senders' layout (src/lizard_phy.h lizard_tiers_for); a
-  // ai: larger value is a configuration as it stands (src/fmt.h ob_fmt_held)
-  int held0 = getenv("LIZ_HELD") ? atoi(getenv("LIZ_HELD")) : 0;
-  if (held0 > 0 && held0 <= OB_FMT_VERSION_MAX) {
-    lizard_tier_t tier[LIZARD_TIERS];
-    const int nt = lizard_tiers_for(LIZARD_STEP * held0, tier);
-    ob_fmt_t g{};
-    g.kind = OB_FMT_STATIC; g.version = held0;
-    for (int i = 0; i < nt; i++) { const int r = tier[i].rate; if (r == 6) g.count[0] = tier[i].blocks; if (r == 3) g.count[1] = tier[i].blocks; if (r == 2) g.count[2] = tier[i].blocks; }
-    held0 = ob_fmt_held(&g);
-  }
   auto fh = open(c, v);
   fh->xcheck = xcheck;
-  fh->holdWords = hold;
   std::string why;
   auto rec = openRecording(c.barcode, run, why);
   if (!rec) throw wg::Error(why);
@@ -823,10 +800,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   int rawMaxDiff = 0;
   if (rawFmt) printf("frames as %s at bin %u, %s\n", rawName.c_str(), rawFmt == RAW_FMT_P010 ? 1 : rawBin, rawCpu ? "the CPU's develop pushed as luma" : "developed on the GPU, held to the CPU's develop");
   std::deque<std::unique_ptr<InFlight>> flight;
-  // ai: the held version posted to the first batch (LIZ_HELD's, or 0), then carried on the device (-1), posted again
-  // ai: where an animated word's carousel names a version (front.h run)
-  int post = held0, found = 0, words = 0, heldFrames = 0, next = 0;
-  cpu_hold_t* holdW = cpu_hold_new();   // ai: static words, or the carousel's header (codec.h)
+  int found = 0, words = 0, next = 0;
   long blocks = 0, codewords = 0, iterations = 0;   // ai: the LDPC's codewords run and iterations summed (the back half's COUNTS 3 and 7)
   std::vector<float> pilots, pilots2;   // ai: each frame's pilot readings where read (SPEC 7.3): the even blocks', the odd blocks'
   std::vector<int> anchors;   // ai: the anchors each found frame read
@@ -850,8 +824,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   std::ofstream peaksOut;
   if (!peaksPath.empty()) { peaksOut.open(peaksPath, std::ios::binary | std::ios::trunc); if (!peaksOut) throw wg::Error("cannot write " + peaksPath); }
   // ai: the per-frame line's bad: the receiver's judge of the test stream (a frame of another stream judges none)
-  std::atomic<uint64_t> judgeGen{0};
-  XferJudge judge(judgeGen);
+  XferJudge judge;
   long bad = 0, testFrames = 0;
   auto drain = [&]() {
     Lane* lane = flight.front()->lane;
@@ -891,10 +864,10 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
       const FrameVerdict jv = judge.frame(packed.data(), fo.records.size(), [](const uint8_t*) {});
       bad += jv.bad; testFrames += jv.test;
       if (perFrame) {
-        printf("frame %llu found %d ring %d version %d held %d blocks %zu anchors %d word %d bad %d r %g sd %g r2 %g sd2 %g pblocks %d anim %d id %d sym %02x%02x%02x count %d %d %d\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version, fo.held ? 1 : 0,
+        printf("frame %llu found %d ring %d version %d blocks %zu anchors %d word %d bad %d r %g sd %g r2 %g sd2 %g psubch %d count %d %d %d fps %d delay %d\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version,
                fo.records.size(), fo.anchors, fo.hasWord ? fo.word.version : 0, jv.bad,
-               fo.pilotBlocks ? fo.pilotR : NAN, fo.pilotBlocks ? fo.pilotSd : NAN, fo.pilotBlocks ? fo.pilotR2 : NAN, fo.pilotBlocks ? fo.pilotSd2 : NAN, fo.pilotBlocks,
-               fo.hasWord && fo.word.kind ? 1 : 0, fo.word.id, fo.word.sym[0], fo.word.sym[1], fo.word.sym[2], fo.word.count[0], fo.word.count[1], fo.word.count[2]);
+               fo.pilotSubch ? fo.pilotR : NAN, fo.pilotSubch ? fo.pilotSd : NAN, fo.pilotSubch ? fo.pilotR2 : NAN, fo.pilotSubch ? fo.pilotSd2 : NAN, fo.pilotSubch,
+               fo.word.count[0], fo.word.count[1], fo.word.count[2], fo.word.fps, fo.word.delay);
         // ai: the back half's counts (BCOUNTS, glsl/back_tiers.mjs): codewords the LDPC ran (blocks not declined), their
         // ai: iterations, verified by the CRC (2026-11-08)
         if (fo.backCounts.size() > 7) printf("back %llu ldpc %u its %u verified %u\n", (unsigned long long)fo.tag, fo.backCounts[3], fo.backCounts[7], fo.backCounts[4]);
@@ -918,13 +891,8 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
       found += fo.finder.found == 1;
       blocks += (long)fo.records.size();
       if (fo.backCounts.size() > 7) { codewords += fo.backCounts[3]; iterations += fo.backCounts[7]; }
-      if (fo.hasWord) {
-        words++;
-        const int before = cpu_hold_held(holdW), v = cpu_hold_take(holdW, fo.word.kind, fo.word.version, fo.word.count, fo.word.id, fo.word.sym);
-        if (hold && fo.word.kind != 0 && v && v != before) post = v;
-      }
-      heldFrames += fo.held;
-      if (fo.pilotBlocks) { pilots.push_back(fo.pilotR); pilots2.push_back(fo.pilotR2); }
+      words += fo.hasWord;
+      if (fo.pilotSubch) { pilots.push_back(fo.pilotR); pilots2.push_back(fo.pilotR2); }
     }
     if (out.gpuMs) { gpuMs += *out.gpuMs; gpuFrames += out.carried; }
     for (auto& kv : out.stageMs) {
@@ -958,8 +926,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
         if (!std::isnan(axes[next][0])) s->axis = axisWord(axes[next][0], axes[next][1]);
         slots.push_back(s);
       }
-      flight.push_back(fh->run(slots, hold ? post : 0, env("PROFILE") == "1", rawFmt && !rawCpu ? (int)slots.size() : 0));
-      post = -1;
+      flight.push_back(fh->run(slots, env("PROFILE") == "1", rawFmt && !rawCpu ? (int)slots.size() : 0));
     } else drain();
   }
   const double ms = fh->now() - t0;
@@ -978,7 +945,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
     snprintf(m, sizeof m, "; %ld anchors found, a found frame's median %g", sum, k ? (k % 2 ? anchors[k / 2] : 0.5 * (anchors[k / 2 - 1] + anchors[k / 2])) : 0.0);
     anch = m;
   }
-  printf("%s: %d frames, %d found, %d words, %d held, %ld verified blocks; %.2f ms of GPU a frame, %.0f frames a second end to end (%s, batches of %d)%s\n", run.c_str(), frames, found, words, heldFrames, blocks,
+  printf("%s: %d frames, %d found, %d words, %ld verified blocks; %.2f ms of GPU a frame, %.0f frames a second end to end (%s, batches of %d)%s\n", run.c_str(), frames, found, words, blocks,
          gpuFrames ? gpuMs / gpuFrames : -1, frames / (ms / 1000), v.c_str(), fh->B, anch.c_str());
   printf("ldpc: %ld codewords, %ld iterations (%.2f a codeword)\n", codewords, iterations, codewords ? (double)iterations / codewords : 0.0);
   printf("judge: %ld verified blocks not the test stream's on %ld frames of it (the receiver's judge)\n", bad, testFrames);
@@ -1003,19 +970,17 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
 }
 
 // ai: peaks and blocks: frames from stdin in groups through the decoder as replay runs them (batches of the batcher's
-// ai: size, the lanes in flight, nothing held, as LIZ_HOLD=0), each frame's record written to `out` a group at a time
+// ai: size, the lanes in flight), each frame's record written to `out` a group at a time
 // ai: and flushed with the group's trailer, so a caller feeds frames from memory and reads them back without a recording
 // ai: or a host started a chunk: peaks, its kept peaks (SELECT's list at the batch's end, as LIZ_PEAKS reads it);
 // ai: blocks, what it read (found, the version decoded at, its verified blocks, those the receiver's judge finds not
 // ai: the test stream's)
 static int fromStdin(Ctx& c, const std::string& v, uint32_t W, uint32_t H, int outFd, bool blocks) {
   auto fh = open(c, v);
-  if (blocks) fh->holdWords = false;
   fh->plan(W, H);
   FILE* out = fdopen(outFd, "wb");
   if (!out) throw wg::Error("stdin: the output cannot be opened");
-  std::atomic<uint64_t> judgeGen{0};
-  XferJudge judge(judgeGen);
+  XferJudge judge;
   auto readAll = [](void* p, size_t n) { return fread(p, 1, n, stdin) == n; };
   std::deque<std::unique_ptr<InFlight>> flight;
   std::vector<std::vector<uint8_t>> px;
@@ -1046,6 +1011,17 @@ static int fromStdin(Ctx& c, const std::string& v, uint32_t W, uint32_t H, int o
           const FrameVerdict jv = judge.frame(packed.data(), fo.records.size(), [](const uint8_t*) {});
           const uint32_t rec[5] = {(uint32_t)fo.tag, fo.finder.found == 1 ? 1u : 0u, (uint32_t)std::max(fo.version, 0), (uint32_t)fo.records.size(), (uint32_t)jv.bad};
           fwrite(rec, sizeof rec, 1, out);
+          // ai: LIZ_BLOCKS=1 (as replay's): to stderr, each verified block's LDPC iterations by its index in the frame, x
+          // ai: for one that did not verify, and the back half's counts (codewords run, iterations, verified)
+          if (getenv("LIZ_BLOCKS")) {
+            std::vector<int> its(256, -1);
+            for (const auto& r : fo.records) if (r.block >= 0 && r.block < 256) its[size_t(r.block)] = r.its;
+            std::string line = "blocks " + std::to_string(fo.tag) + ":";
+            const int top = fo.version > 0 ? lizard_blocks_for(fo.version * LIZARD_STEP) : 0;
+            for (int b = 0; b < top; b++) line += " " + (its[size_t(b)] < 0 ? std::string("x") : std::to_string(its[size_t(b)]));
+            if (fo.backCounts.size() > 7) line += " | ldpc " + std::to_string(fo.backCounts[3]) + " its " + std::to_string(fo.backCounts[7]) + " verified " + std::to_string(fo.backCounts[4]);
+            fprintf(stderr, "%s\n", line.c_str());
+          }
           records++;
         }
         return;
@@ -1074,7 +1050,7 @@ static int fromStdin(Ctx& c, const std::string& v, uint32_t W, uint32_t H, int o
           if (!s) throw wg::Error("the ring is full");
           slots.push_back(s);
         }
-        flight.push_back(fh->run(slots, 0, false, 0));
+        flight.push_back(fh->run(slots));
       } else drain();
     }
     const uint32_t tail[2] = {0xFFFFFFFFu, records};

@@ -30,10 +30,9 @@ struct liz_encoder {
 
 struct liz_decoder {
   cpu_dec_t* d = nullptr;
-  cpu_hold_t* hold = cpu_hold_new();   // ai: the carousel the animated words this decoder reads assemble (codec.h)
   int top = 0, bb = 0;
   std::vector<uint8_t> luma, blocks, ok;
-  ~liz_decoder() { cpu_dec_free(d); cpu_hold_free(hold); }
+  ~liz_decoder() { cpu_dec_free(d); }
 };
 
 using namespace liz;
@@ -118,10 +117,10 @@ LIZ_API void liz_decoder_free(liz_decoder* d) { delete d; }
 
 LIZ_API int liz_decoder_max_blocks(const liz_decoder* d) { return guard([&] { need(d, "a decoder"); return d->top; }); }
 
-LIZ_API int liz_decode(liz_decoder* d, const uint8_t* px, int w, int h, int stride, liz_pixfmt fmt, int* held,
+LIZ_API int liz_decode(liz_decoder* d, const uint8_t* px, int w, int h, int stride, liz_pixfmt fmt,
                        uint8_t* verified, liz_decoded* out) {
   return guard([&] {
-    need(d && px && held && verified, "a decoder, an image, the held word and a place for the blocks");
+    need(d && px && verified, "a decoder, an image and a place for the blocks");
     need(w > 0 && h > 0, "an image of at least a pixel");
     const int bpp = bytesPer(fmt);
     need(stride >= w * bpp, "a stride of at least the image's width in bytes");
@@ -139,19 +138,17 @@ LIZ_API int liz_decode(liz_decoder* d, const uint8_t* px, int w, int h, int stri
       img = d->luma.data();
     }
     cpu_frame_t fr{};
-    cpu_dec_frame(d->d, img, w, h, *held, d->blocks.data(), d->ok.data(), &fr);
-    if (fr.word) { const int v = cpu_hold_take(d->hold, fr.kind, fr.version, fr.count, fr.id, fr.sym); if (v) *held = v; }
+    cpu_dec_frame(d->d, img, w, h, d->blocks.data(), d->ok.data(), &fr);
     int k = 0;
     const int total = std::min(fr.total, d->top);
     for (int b = 0; b < total; b++)
       if (d->ok[b]) std::memcpy(verified + size_t(k++) * LIZ_BLOCK, d->blocks.data() + size_t(b) * d->bb, LIZ_BLOCK);
     if (out) {
       liz_decoded o{};
-      o.found = fr.found; o.ring = fr.ring; o.n = fr.n; o.word = fr.word; o.blocks = fr.version; o.fps = cpu_hold_fps(d->hold);
-      o.held_used = fr.held; o.total = fr.total; o.verified = k;
+      o.found = fr.found; o.ring = fr.ring; o.n = fr.n; o.word = fr.word; o.blocks = fr.version;
+      o.total = fr.total; o.verified = k;
       std::memcpy(o.quad, fr.quad, sizeof o.quad);
-      o.pilot_blocks = fr.pilot_blocks;
-      o.animated = fr.word && fr.kind == 1;
+      o.pilot_subch = fr.pilot_subch;
       std::memcpy(o.pilot_r, fr.pilot_r, sizeof o.pilot_r);
       std::memcpy(o.pilot_sd, fr.pilot_sd, sizeof o.pilot_sd);
       *out = o;

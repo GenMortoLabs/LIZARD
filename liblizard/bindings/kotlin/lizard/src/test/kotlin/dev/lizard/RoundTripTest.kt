@@ -46,7 +46,7 @@ class RoundTripTest {
             val p = r.push(c, cw, ch)
             assertEquals(s.geometry.frameBlocks, p.decoded.sumOf { it.count }, "ring $ring, $codes codes")
             assertTrue(p.verdict.test && p.verdict.bad == 0)
-            assertEquals(13, r.decoder.held.value)
+            assertTrue(p.decoded.all { it.word && it.blocksPerSymbol == 13 }, "each frame at its own word's version")
           }
         }
       }
@@ -55,7 +55,7 @@ class RoundTripTest {
 
   @Test fun fileInMemory() {
     val bytes = Random(7).nextBytes(5_000_000)
-    FrameSender(Tx.file(bytes, "k.bin", "application/octet-stream"), Format(30, codes = 2)).use { s ->
+    FrameSender(Tx.file(bytes, "k.bin"), Format(30, codes = 2)).use { s ->
       FrameReceiver(layout = 2).use { r ->
         var frames = 0
         while (r.file == null && frames++ < 400) {

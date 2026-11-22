@@ -51,15 +51,15 @@ export const heapTop = () => (M ? M._ob_heap_top() : 0);
 // holds one byte a pixel and one strip, not four bytes a pixel: 4.4 MB less per decoder at 1080 x 1080.
 const STRIP = 1 << 16;
 let pStrip = 0;
-// ai: The pilots the last decode read (src/lizard_phy.h lizard_pilot): { r, sd, r2, sd2, blocks }, r of the even blocks (bit 0
-// ai: of the painted count: it flips picture to picture) and r2 of the odd (bit 1: every second picture) with their
-// ai: standard errors, or null where none were read or the build predates them (OB_BUILD).
+// ai: The pilots the last decode read (src/lizard_phy.h lizard_pilot): { r, sd, r2, sd2, subch }, r of the even sub-channels
+// ai: (bit 0 of the painted count: it flips picture to picture) and r2 of the odd (bit 1: every second picture) with
+// ai: their standard errors and the sub-channels read, or null where none were read or the build predates them (OB_BUILD).
 let pPilot = 0;
 function pilotOf(get) {
   if (!get) return null;
   if (!pPilot) pPilot = M._malloc(16);
   const k = get(pPilot), o = pPilot >> 2;
-  return k ? { r: M.HEAPF32[o], sd: M.HEAPF32[o + 2], r2: M.HEAPF32[o + 1], sd2: M.HEAPF32[o + 3], blocks: k } : null;
+  return k ? { r: M.HEAPF32[o], sd: M.HEAPF32[o + 2], r2: M.HEAPF32[o + 1], sd2: M.HEAPF32[o + 3], subch: k } : null;
 }
 function lumaOf(rgba, n) {
   pStrip ||= M._malloc(4 * STRIP);
@@ -90,27 +90,6 @@ export function streamMatches(id, bytes) {
   return M._stream_matches_of(id, pMatch, bytes.length) === 1;
 }
 
-// ai: The header carousel (src/fmt.h, SPEC 5.5) through the wasm: the module's one assembly (reset for a new sender;
-// ai: add an animated word's symbol, k back once the header stands; header(k) its 3k bytes), and a sender's symbol of a
-// ai: header made from content.
-// ai: held(): the configuration the assembled header states as one int (src/fmt.h ob_fmt_held: LizardAny's held), 0 where
-// ai: none stands; fps() the display rate it states, 0 where none. symbol(fps, id): the Lizard codec's configuration as a
-// ai: header (src/fmt.h ob_car_content: fps 0 to 65,535 in its two bytes), its symbol id.
-export const carousel = {
-  reset() { M._lizard_car_reset(); },
-  add(id, sym) { return M._lizard_car_add(id, sym[0], sym[1], sym[2]); },
-  header(k) { const p = M._lizard_car_hdr(); return M.HEAPU8.slice(p, p + 3 * k); },
-  held() { return M._lizard_car_held(); },
-  fps() { return M._lizard_car_fps(); },
-  symbol(fps, id) {
-    const p = M._malloc(4);
-    const k = M._lizard_car_symbol(fps, id, p), sym = Array.from(M.HEAPU8.subarray(p, p + 3));
-    M._free(p);
-    if (k < 0) throw new Error(`carousel: rate ${fps} or id ${id} refused`);
-    return { k, sym };
-  },
-};
-
 // ai: A receiver told nothing (src/lizard_phy.h lizard_acquire_ring, src/wasm.c lizard_any_rx): it registers against the
 // ai: rings (src/lizard_phy.h LIZARD_RING), reads the word there, and finishes the frame at the picture the word names, in whichever ring it was
 // ai: painted (any ring may carry any picture). nmax: the largest picture it decodes (sim/phy.mjs BLIND_NMAX). Its
@@ -124,20 +103,19 @@ export class LizardAny {
     this.pBlocks = M._malloc(this.maxBlocks * this.blockBytes); this.pOk = M._malloc(this.maxBlocks);
     this.pImg = 0; this.imgCap = 0;
   }
-  // ai: held: the configuration the caller holds for animated frames (a static word's or an assembled header's `held`,
-  // ai: src/fmt.h ob_fmt_held), 0 for none; a frame whose own word does not read is not decoded. Returns n (blocks decoded), ring (the ring that registered, 0 to 2, or -1),
-  // ai: pictureN (the picture finished, 0 for none), held (whether the held configuration stood in), fmt (the word this
-  // ai: frame read, or null), builds (pictures built since the setup), ok and blocks (as many as the finished version's own codec carries,
-  // ai: its rate profile's blocks), pilot (what the pilots read: { r, sd, r2, sd2, blocks }, or null). rgba: img is a
+  // ai: A frame whose own word does not read is not decoded; nothing carries from frame to frame. Returns n (blocks
+  // ai: decoded), ring (the ring that registered, 0 to 2, or -1), pictureN (the picture finished, 0 for none), fmt (the
+  // ai: word this frame read, or null), builds (pictures built since the setup), ok and blocks (as many as the finished version's own codec carries,
+  // ai: its rate profile's blocks), pilot (what the pilots read: { r, sd, r2, sd2, subch }, or null). rgba: img is a
   // ai: canvas's RGBA, made luma in wasm as Lizard.decode does.
-  decode(img, iw, ih, { gamma = 1, held = 0, rgba = false, axis = null } = {}) {
+  decode(img, iw, ih, { gamma = 1, rgba = false, axis = null } = {}) {
     setAxis(axis);
     let pLuma;
     if (rgba) pLuma = lumaOf(img, iw * ih);
     else { if (img.length > this.imgCap) { if (this.pImg) M._free(this.pImg); this.pImg = M._malloc(img.length); this.imgCap = img.length; } M.HEAPU8.set(img, this.pImg); pLuma = this.pImg; }
-    const n = M._lizard_any_rx(pLuma, iw, ih, gamma, this.pBlocks, this.pOk, held), r = M._ob_last();
+    const n = M._lizard_any_rx(pLuma, iw, ih, gamma, this.pBlocks, this.pOk), r = M._ob_last();
     const T = M._lizard_any_blocks();
-    return { n, ring: M._lizard_any_which(), pictureN: M._lizard_any_n(), held: !!M._lizard_any_held(), builds: M._lizard_any_builds?.() ?? 0, found: M.HEAP32[r >> 2],
+    return { n, ring: M._lizard_any_which(), pictureN: M._lizard_any_n(), builds: M._lizard_any_builds?.() ?? 0, found: M.HEAP32[r >> 2],
       quad: Array.from({ length: 8 }, (_, k) => M.HEAPF32[(r + 8 + 4 * k) >> 2]),
       fmt: Lizard.fmtOf(M._lizard_any_fmt()), ok: M.HEAPU8.slice(this.pOk, this.pOk + T), blocks: M.HEAPU8.slice(this.pBlocks, this.pBlocks + T * this.blockBytes),
       msDetect: M.HEAPF32[(r + 52) >> 2], pilot: pilotOf(M._lizard_any_pilot_get) };
@@ -235,24 +213,22 @@ export class Lizard {
     return M.HEAPF32.slice(this.pDrive >> 2, (this.pDrive >> 2) + this.side * this.side);
   }
   // The word the last decode read out of the symbol's band, or null where it read none. This is all a receiver
-  // that was told nothing goes on: the version and the layout's counts (sim/lizard_pick.mjs layoutOf).
-  // ai: The C's ob_fmt_t (src/fmt.h): a static word's version and counts (kind 0; fps 0, a static word stating no rate),
-  // ai: or an animated word's carousel id and symbol (kind 1, version 0).
+  // that was told nothing goes on: the version and the layout's counts (sim/lizard_pick.mjs layoutOf), and the sender's
+  // clock (fps, 0 a still; delay, its places' largest).
+  // ai: The C's ob_fmt_t (src/fmt.h): the version, the counts, fps and delay.
   static fmtOf(p) {
     if (!p) return null;
-    const i = p >> 2, kind = M.HEAP32[i], version = M.HEAP32[i + 1], count = [M.HEAP32[i + 3], M.HEAP32[i + 4], M.HEAP32[i + 5]];
-    // ai: held: the configuration as one int (src/fmt.h ob_fmt_held), what LizardAny takes for animated frames
-    return { kind, version, fps: M.HEAP32[i + 2], count, id: M.HEAP32[i + 6], sym: [M.HEAPU8[p + 28], M.HEAPU8[p + 29], M.HEAPU8[p + 30]],
-      held: kind === 0 ? (version << 22 | count[0] << 14 | count[1] << 7 | count[2]) : 0 };
+    const i = p >> 2;
+    return { version: M.HEAP32[i], count: [M.HEAP32[i + 1], M.HEAP32[i + 2], M.HEAP32[i + 3]], fps: M.HEAP32[i + 4], delay: M.HEAP32[i + 5] };
   }
-  // ai: The word the next encode paints (src/lizard_phy.h lizard_fmt_word): setWord(0) the static word (the codec's
-  // ai: version and layout); setWord(1, [id, s0, s1, s2]) a carousel symbol.
-  setWord(kind, b = []) { if (M._lizard_fmt_word_set(kind, b[0] ?? 0, b[1] ?? 0, b[2] ?? 0, b[3] ?? 0)) throw new Error(`word kind ${kind} [${b}] refused`); }
-  // ai: The frame's layout the next encode paints (src/lizard_phy.h lizard_layout): [7/8, 2/3, 1/2] blocks, the 3/4
+  // ai: The sender's clock the next encode's word states (src/lizard_phy.h lizard_clock): fps 0 to 240 (0 a still),
+  // ai: delay 1 to 30; 60 and 1 until set.
+  setClock(fps, delay = 1) { if (M._lizard_clock_set(fps, delay)) throw new Error(`clock ${fps}/${delay}: fps 0 to 240, delay 1 to 30`); }
+  // ai: The frame's layout the next encode paints (src/lizard_phy.h lizard_layout): [6/7, 2/3, 1/2] blocks, the 3/4
   // ai: filling the rest; `blocks` then the frame's.
   setLayout([a, t, c]) { if (M._lizard_layout_set(a, t, c)) throw new Error(`layout ${a}/${t}/${c}: no frame of LIZARD-${this.subch}`); this.blocks = M._lizard_blocks(); }
   // ai: The painted picture's count, 0 to 3 (the sender's count of painted pictures mod 4), which the next encode puts
-  // ai: into the blocks' tails, bit 0 on the even blocks and bit 1 on the odd (the pilots, src/lizard_phy.h lizard_parity;
+  // ai: into the count pilots, bit 0 in the even sub-channels and bit 1 in the odd (src/lizard_phy.h lizard_parity;
   // ai: SPEC 7.3). 0 paints what every sender did before the pilots.
   setParity(c) { if (!M._lizard_parity_set || M._lizard_parity_set(c)) throw new Error(`count ${c}: 0 to 3, on a build with the signed pilots`); }
   // Measurement hooks: after measure(true), sent() is the bit pair (+1 / -1 per axis) the last encode put on every
@@ -277,7 +253,7 @@ export class Lizard {
       fmt: Lizard.fmtOf(M._lizard_fmt_rx_ptr()), ok: M.HEAPU8.slice(this.pOk, this.pOk + (this.blocks = M._lizard_blocks())), blocks: M.HEAPU8.slice(this.pBlocks, this.pBlocks + this.blocks * this.blockBytes),
       // mark: the best corner mark the finder saw, x, y and module size (src/ob.h), or null.
       mark: markOf(r), ...msOf(r),
-      // ai: pilot: what the block tails read (src/lizard_phy.h lizard_pilot), { r, sd, r2, sd2, blocks }, or null
+      // ai: pilot: what the pilots read (src/lizard_phy.h lizard_pilot), { r, sd, r2, sd2, subch: the sub-channels read }, or null
       pilot: pilotOf(M._lizard_pilot_get) };
   }
   // The same decode in two halves (src/lizard_phy.h), for a caller that samples somewhere it has to wait for.
@@ -397,7 +373,7 @@ export class Lizard {
     // fault, it just makes every later decode return nothing, which reads exactly like a bad capture.
     M._lizard_ldpc_tables(0, pD, 0);
     const d = M.HEAP32.subarray(pD >> 2, (pD >> 2) + 12);
-    // ai: np the bits never sent (the 7/8 code's last 128 of the data, its known zeros, since 2026-11-01; gpu/back/bitmap.mjs sentBit), nt = n - np the bits a block's slots carry
+    // ai: np the bits never sent (the 6/7 code's last 128 of the data, its known zeros, since 2026-11-01; gpu/back/bitmap.mjs sentBit), nt = n - np the bits a block's slots carry
     const code = { n: d[0], k: d[1], m: d[2], z: d[3], zp: d[4], mb: d[5], kb: d[6], norm: d[7],
       slotsMax: d[8], slotsTotal: d[9], slots: d[10], np: d[11], nt: d[0] - d[11] };
     const pLay = M._malloc(4 * (code.mb + 1 + 2 * code.slots));
@@ -417,7 +393,7 @@ export class Lizard {
     const cells = M._lizard_fmt_soft_out(this.pFmtS);
     return cells ? { cells, q: M.HEAPF32.slice(this.pFmtS >> 2, (this.pFmtS >> 2) + 4 * cells) } : null;
   }
-  // ai: the word the last decode or fmtCheck took ({ version, fps }), or null
+  // ai: the word the last decode or fmtCheck took ({ version, count }), or null
   fmtRx() { return Lizard.fmtOf(M._lizard_fmt_rx_ptr()); }
   // The format word from soft values read on the device, [ok, q0..]: feeds fmtOf and nothing in the decode.
   fmtCheck(q) {

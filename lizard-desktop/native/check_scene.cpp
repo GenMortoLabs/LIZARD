@@ -68,7 +68,7 @@ struct Read {
   liz_decoded d[2]{};
   int regions = 0;
 };
-Read readFrame(liz_decoder* dec, const std::vector<uint8_t>& img, int w, int h, int layout, int& held, std::vector<uint8_t>* keep = nullptr) {
+Read readFrame(liz_decoder* dec, const std::vector<uint8_t>& img, int w, int h, int layout, std::vector<uint8_t>* keep = nullptr) {
   Read r;
   int rect[2][4];
   r.regions = liz_layout_rects(w, h, layout, rect);
@@ -76,7 +76,7 @@ Read readFrame(liz_decoder* dec, const std::vector<uint8_t>& img, int w, int h, 
   uint8_t pay[LIZ_PAYLOAD];
   if (keep) keep->clear();
   for (int k = 0; k < r.regions; k++) {
-    const int n = liz_decode(dec, img.data() + size_t(rect[k][1]) * w + rect[k][0], rect[k][2], rect[k][3], w, LIZ_GREY8, &held, v.data(), &r.d[k]);
+    const int n = liz_decode(dec, img.data() + size_t(rect[k][1]) * w + rect[k][0], rect[k][2], rect[k][3], w, LIZ_GREY8, v.data(), &r.d[k]);
     r.total += r.d[k].total;
     r.found += r.d[k].found;
     if (n <= 0) continue;
@@ -127,13 +127,13 @@ void caseClean(liz_decoder* dec) {
   if (!sc) return;
   std::vector<uint8_t> img(size_t(o.width) * o.height);
   const double pic = 1e9 / s.fps;
-  int held = 0, all = 0, wrong = 0, counts = 0;
+  int all = 0, wrong = 0, counts = 0;
   std::string line;
   for (int i = 0; i < 3; i++) {
     const int64_t k = nextPicture(*sc, 60);
     const int64_t t0 = sc->shownAt(k) + int64_t(pic / 2 - o.exposureMs * 1e6 / 2);
     sc->render(t0, img.data(), o.width);
-    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1, held);
+    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1);
     const bool whole = r.found && r.blocks == r.total && r.total == liz_blocks_for(s.blocks) && r.stream == r.blocks;
     all += whole;
     wrong += r.blocks - r.stream;
@@ -156,8 +156,7 @@ void caseStraddle(liz_decoder* dec) {
   auto sc = make(c, s, d, o);
   if (!sc) return;
   std::vector<uint8_t> img(size_t(o.width) * o.height);
-  int held = 0;
-  // ai: a clean capture first (the held word, and the channel's own reading c0: the resampled picture's distortion
+  // ai: a clean capture first (the channel's own reading c0: the resampled picture's distortion
   // ai: is in m2 too), then windows over the change from picture k - 1 to k, f of the window before it. The pilots'
   // ai: theory (lizard_phy.h lizard_pilot), every sample the same blend: a tail both pictures paint alike reads
   // ai: 1 / sqrt(m2), one they paint opposite (1 - 2f) / sqrt(m2), m2 = 1 - 2f + 2f^2 + 1 / c0^2 - 1 (the data's rms
@@ -168,7 +167,7 @@ void caseStraddle(liz_decoder* dec) {
   for (int i = 0; i < 3; i++) {
     const int64_t k = nextPicture(*sc, 60);
     sc->render(sc->shownAt(k) + int64_t(5e6), img.data(), o.width);
-    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1, held);
+    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1);
     if (r.found) { c0 += std::abs(r.d[0].pilot_r[0]) + std::abs(r.d[0].pilot_r[1]); n0 += 2; }
   }
   c0 = n0 ? c0 / n0 : 1;
@@ -178,14 +177,14 @@ void caseStraddle(liz_decoder* dec) {
     const int64_t k = nextPicture(*sc, 60);
     const int64_t t0 = sc->shownAt(k) - int64_t(f * o.exposureMs * 1e6);
     sc->render(t0, img.data(), o.width);
-    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1, held);
+    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1);
     const double q = std::sqrt(1 - 2 * f + 2 * f * f + 1 / (c0 * c0) - 1), sign0 = (k & 1) ? -1 : 1, sign1 = (k & 2) ? -1 : 1;
     const double want0 = sign0 * (1 - 2 * f) / q, want1 = (k & 1) ? sign1 / q : sign1 * (1 - 2 * f) / q;
     const bool near = r.found && std::abs(r.d[0].pilot_r[0] - want0) < 0.08 && std::abs(r.d[0].pilot_r[1] - want1) < 0.08;
     if (f == 0.5) good = good && r.blocks < r.total / 2 && near;
     else good = good && near;
-    line += fmt("%s %.0f%% of picture %lld before the change to %lld: found %d, word %d, held %d, %d of %d blocks, %s (theory %+.3f, %+.3f)",
-                f == 0.5 ? "" : ";", 100 * f, (long long)(k - 1), (long long)k, r.d[0].found, r.d[0].word, r.d[0].held_used, r.blocks, r.total,
+    line += fmt("%s %.0f%% of picture %lld before the change to %lld: found %d, word %d, %d of %d blocks, %s (theory %+.3f, %+.3f)",
+                f == 0.5 ? "" : ";", 100 * f, (long long)(k - 1), (long long)k, r.d[0].found, r.d[0].word, r.blocks, r.total,
                 pilots(r.d[0]).c_str(), want0, want1);
   }
   const std::string what = fmt("global shutter, %.0f ms over a change (simulated):", o.exposureMs) + line;
@@ -204,7 +203,7 @@ void caseSweep(liz_decoder* dec) {
   if (!sc) return;
   std::vector<uint8_t> img(size_t(o.width) * o.height);
   const double pic = 1e9 / s.fps;
-  int held = 0, best = -1, wrong = 0;
+  int best = -1, wrong = 0;
   const int want = liz_blocks_for(s.blocks);
   say(fmt("the default optics: rolling %.0f ms readout, %.0f ms exposure, blur %.1f px, noise %.3f + %.3f, yaw %.0f tilt %.0f roll %.0f deg, "
           "fill %.2f, share %.2f, scan %.2f, response %.0f ms; size %d in the 128 ring at %d a second on %.0f Hz (simulated)",
@@ -216,7 +215,7 @@ void caseSweep(liz_decoder* dec) {
     const double ph = pic * i / 16;
     const int64_t k = nextPicture(*sc, 60);
     sc->render(sc->shownAt(k) + int64_t(ph), img.data(), o.width);
-    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1, held);
+    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1);
     wrong += r.blocks - r.stream;
     say(fmt("%8.2f  %3d/%-3d %+.3f %+.3f", ph * 1e-6, r.blocks, want, r.d[0].pilot_r[0], r.d[0].pilot_r[1]));
     got[i] = r.blocks;
@@ -247,7 +246,7 @@ void casePair(liz_decoder* dec) {
   auto sc = make(c, s, d, o);
   if (!sc) return;
   std::vector<uint8_t> img(size_t(o.width) * o.height);
-  int held = 0, both = 0, wrong = 0;
+  int both = 0, wrong = 0;
   const int per = liz_blocks_for(s.blocks);
   // ai: the sweep's best phase where it ran, else a third of the picture
   const double ph = bestPhase >= 0 ? bestPhase : 1e9 / s.fps / 3;
@@ -255,7 +254,7 @@ void casePair(liz_decoder* dec) {
   for (int i = 0; i < 2; i++) {
     const int64_t k = nextPicture(*sc, 60);
     sc->render(sc->shownAt(k) + int64_t(ph), img.data(), o.width);
-    const Read r = readFrame(dec, img, int(o.width), int(o.height), 2, held);
+    const Read r = readFrame(dec, img, int(o.width), int(o.height), 2);
     wrong += r.blocks - r.stream;
     const int a = r.d[0].found ? r.d[0].verified : 0, b = r.d[1].found ? r.d[1].verified : 0;
     both += r.regions == 2 && a >= per * 9 / 10 && b >= per * 9 / 10;
@@ -373,7 +372,7 @@ void caseFile(liz_decoder* dec) {
   liz_rx* rx = liz_rx_new(&store);
   std::vector<uint8_t> img(size_t(o.width) * o.height), blocks;
   const double ph = bestPhase >= 0 ? bestPhase : 1e9 / s.fps / 3;
-  int held = 0, captures = 0, read = 0, bad0 = 0;
+  int captures = 0, read = 0, bad0 = 0;
   liz_progress pr{};
   const int64_t began = now(), until = began + 30'000'000'000LL;
   while (!pr.done && now() < until) {
@@ -382,7 +381,7 @@ void caseFile(liz_decoder* dec) {
     const int64_t t0 = sc->shownAt(k) + int64_t(ph);
     sleepTo(t0 + int64_t((o.exposureMs + o.readoutMs) * 1e6));
     sc->render(t0, img.data(), o.width);
-    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1, held, &blocks);
+    const Read r = readFrame(dec, img, int(o.width), int(o.height), 1, &blocks);
     captures++;
     read += r.blocks;
     liz_verdict v{};
@@ -554,8 +553,7 @@ void caseCamera(liz_decoder* dec) {
       worstDb = std::min(worstDb, mse > 0 ? 10 * std::log10(255.0 * 255.0 / mse) : 99.0);
       compared++;
       if (blocksRead < 0) {
-        int held = 0;
-        blocksRead = readFrame(dec, got, int(o.width), int(o.height), 1, held).blocks;
+        blocksRead = readFrame(dec, got, int(o.width), int(o.height), 1).blocks;
       }
     }
     const bool lossy = !std::strcmp(form, "mjpeg");

@@ -55,7 +55,7 @@ const made = (ptr) => {
   return ptr;
 };
 
-export const BLOCK = 476, ID_BYTES = 5, PAYLOAD = 471, MIN_BLOCKS = 4, MAX_BLOCKS = 64, RINGS = 3, RING_DEFAULT = -1, GAP_MODULES = 12;
+export const BLOCK = 472, ID_BYTES = 12, PAYLOAD = 460, MIN_BLOCKS = 4, MAX_BLOCKS = 64, RINGS = 3, RING_DEFAULT = -1, GAP_MODULES = 12;
 const PIXFMT = { grey: 1, rgbx: 2, rgba: 3, bgra: 4 };
 const bpp = (f) => (f === "grey" ? 1 : 4);
 const pixfmt = (f) => {
@@ -85,7 +85,7 @@ export const simd = () => mod()._liz_simd() === 1;
 
 // ---- 1. format arithmetic --------------------------------------------------------------------------------------------
 
-// ai: format: { blocks (4 to 64: LIZARD-64 to -1024, 16 x blocks), ring (0 to 2: the 64, 128 or 256 ring; -1 the default, the 128), fps (1 to 255), codes (1 or 2) }
+// ai: format: { blocks (4 to 64: LIZARD-64 to -1024, 16 x blocks), ring (0 to 2: the 64, 128 or 256 ring; -1 the default, the 128), fps (1 to 240, the word states it), codes (1 or 2) }
 function formatAt(p, { blocks, ring = RING_DEFAULT, fps = 60, codes = 1 }) {
   M.HEAP32.set([blocks, ring, fps, codes], p >> 2);
   return p;
@@ -121,7 +121,7 @@ export class Encoder {
     this.inHeap = new Heap();
     this.outHeap = new Heap();
   }
-  // ai: blocks: frameBlocks x 476 bytes; picture: the frame's count (mod 4, the pilots); out: width x height pixels
+  // ai: blocks: frameBlocks x 472 bytes; picture: the frame's count (mod 4, the pilots); out: width x height pixels
   // ai: of fmt (grey, or four bytes a pixel: an ImageData's data takes "rgba"); made if not given
   paint(blocks, picture, out, fmt = "rgba") {
     const g = this.geometry, size = g.width * g.height * bpp(fmt);
@@ -137,41 +137,34 @@ export class Encoder {
   free() { if (this.h) M._liz_encoder_free(this.h); this.h = 0; this.inHeap.free(); this.outHeap.free(); }
 }
 
-// ai: A decoded frame: its verified blocks (count x 476 bytes), and what the decode found.
+// ai: A decoded frame: its verified blocks (count x 472 bytes), and what the decode found.
 function decodedFrom(p, count, blocks) {
-  const i = M.HEAP32.subarray(p >> 2, (p >> 2) + 9), f = M.HEAPF32;
+  const i = M.HEAP32.subarray(p >> 2, (p >> 2) + 7), f = M.HEAPF32;
   return {
     count, blocks,
-    found: !!i[0], ring: i[1], n: i[2], word: !!i[3], blocksPerSymbol: i[4], fps: i[5], heldUsed: !!i[6], total: i[7],
-    quad: Array.from(f.subarray((p >> 2) + 9, (p >> 2) + 17)),
-    pilot: { blocks: M.HEAP32[(p >> 2) + 17], r: Array.from(f.subarray((p >> 2) + 18, (p >> 2) + 20)), sd: Array.from(f.subarray((p >> 2) + 20, (p >> 2) + 22)) },
-    animated: !!M.HEAP32[(p >> 2) + 22],
+    found: !!i[0], ring: i[1], n: i[2], word: !!i[3], blocksPerSymbol: i[4], total: i[5],
+    quad: Array.from(f.subarray((p >> 2) + 7, (p >> 2) + 15)),
+    pilot: { subch: M.HEAP32[(p >> 2) + 15], r: Array.from(f.subarray((p >> 2) + 16, (p >> 2) + 18)), sd: Array.from(f.subarray((p >> 2) + 18, (p >> 2) + 20)) },
   };
 }
 
 export class Decoder {
-  // ai: nmax: the largest picture decoded (0: every format). held: the held configuration (the last word read's version
-  // ai: and layout as one int, lizard.h liz_decode: version << 22 | the 7/8, 2/3 and 1/2 blocks), the one thing carried
-  // ai: from frame to frame, for animated frames; decoders reading one stream may share it through decode's held option.
+  // ai: nmax: the largest picture decoded (0: every format). Each frame is decoded on its own (lizard.h liz_decode).
   constructor(nmax = 0) {
     mod();
     this.h = made(M._liz_decoder_new(nmax));
     this.maxBlocks = check(M._liz_decoder_max_blocks(this.h));
-    this.held = 0;
     this.img = new Heap();
     this.out = M._malloc(this.maxBlocks * BLOCK + 128);
   }
-  // ai: px: an image (or ImageData), w x h pixels of fmt, rows stride bytes apart. Returns the decoded frame; held
-  // ai: (a { held } object shared by several decoders, else this decoder's own) is updated when the frame's word reads.
-  decode(px, w, h, { fmt = "rgba", stride, held } = {}) {
+  // ai: px: an image (or ImageData), w x h pixels of fmt, rows stride bytes apart. Returns the decoded frame.
+  decode(px, w, h, { fmt = "rgba", stride } = {}) {
     if (px.data) ({ data: px, width: w, height: h } = px);
     stride ??= w * bpp(fmt);
     const size = stride * (h - 1) + w * bpp(fmt), ib = this.img.at(size);
     M.HEAPU8.set(px.subarray ? px.subarray(0, size) : px.slice(0, size), ib);
-    const hp = (this.out + this.maxBlocks * BLOCK + 3) & ~3, rp = hp + 8;   // ai: the held word and the result, 4-aligned
-    M.HEAP32[hp >> 2] = held ? held.held : this.held;
-    const count = check(M._liz_decode(this.h, ib, w, h, stride, pixfmt(fmt), hp, this.out, rp));
-    if (held) held.held = M.HEAP32[hp >> 2]; else this.held = M.HEAP32[hp >> 2];
+    const rp = (this.out + this.maxBlocks * BLOCK + 3) & ~3;   // ai: the result, 4-aligned
+    const count = check(M._liz_decode(this.h, ib, w, h, stride, pixfmt(fmt), this.out, rp));
     return decodedFrom(rp, count, M.HEAPU8.slice(this.out, this.out + count * BLOCK));
   }
   free() { if (this.h) { M._liz_decoder_free(this.h); M._free(this.out); } this.h = 0; this.img.free(); }
@@ -202,15 +195,16 @@ function cString(heap, s) {
 }
 
 export class Tx {
-  // ai: Tx.file(bytes, name, type) or Tx.test(firstId): a file's frames (its bytes copied in), or the test stream's
-  static file(bytes, name = "", type = "") {
+  // ai: Tx.file(bytes, name, zstd) or Tx.test(firstId): a file's frames (its bytes copied in; zstd where they are the
+  // ai: default client's zstd stream, the description saying compression 1), or the test stream's
+  static file(bytes, name = "", zstd = false) {
     mod();
-    const t = Object.create(Tx.prototype), b = new Heap(), nh = new Heap(), th = new Heap();
+    const t = Object.create(Tx.prototype), b = new Heap(), nh = new Heap();
     const p = bytes.length ? b.at(bytes.length) : 0;
     if (bytes.length) M.HEAPU8.set(bytes, p);
     try {
-      t.h = made(M._liz_tx_new(p, bytes.length, cString(nh, name), cString(th, type), 1));
-    } finally { b.free(); nh.free(); th.free(); }
+      t.h = made(M._liz_tx_new(p, bytes.length, cString(nh, name), 1 | (zstd ? 2 : 0)));
+    } finally { b.free(); nh.free(); }
     t.blocks = new Heap();
     return t;
   }
@@ -221,7 +215,7 @@ export class Tx {
     t.blocks = new Heap();
     return t;
   }
-  // ai: the next frame's n blocks (n x 476 bytes)
+  // ai: the next frame's n blocks (n x 472 bytes)
   next(n) {
     const p = this.blocks.at(n * BLOCK);
     check(M._liz_tx_next(this.h, n, p));
@@ -232,7 +226,7 @@ export class Tx {
     const p = scratch.at(56);
     check(M._liz_tx_info_get(this.h, p));
     const root = Array.from(M.HEAPU8.subarray(p + 24, p + 56), (b) => b.toString(16).padStart(2, "0")).join("");
-    return { test: !!M.HEAP32[p >> 2], length: u64(p + 8), chunks: M.HEAPU32[(p + 16) >> 2], lap: M.HEAPU32[(p + 20) >> 2], root };
+    return { test: !!M.HEAP32[p >> 2], length: u64(p + 8), sourceBlocks: M.HEAPU32[(p + 16) >> 2], cycle: M.HEAPU32[(p + 20) >> 2], root };
   }
   free() { if (this.h) M._liz_tx_free(this.h); this.h = 0; this.blocks.free(); }
 }
@@ -261,21 +255,20 @@ export class Rx {
     check(M._liz_rx_progress(this.h, p));
     return {
       header: !!M.HEAP32[p >> 2], done: !!M.HEAP32[(p >> 2) + 1], length: u64(p + 8), bytesIn: u64(p + 16),
-      fraction: M.HEAPF64[(p + 24) >> 3], chunks: M.HEAPU32[(p + 32) >> 2], verified: M.HEAPU32[(p + 36) >> 2],
+      fraction: M.HEAPF64[(p + 24) >> 3], sourceBlocks: M.HEAPU32[(p + 32) >> 2], verified: M.HEAPU32[(p + 36) >> 2],
       rejected: M.HEAPU32[(p + 40) >> 2], solveMs: M.HEAPF64[(p + 48) >> 3],
     };
   }
-  // ai: each chunk: 0 to 99 the share in (a floor until the manifest is in), 255 verified
-  get chunks() {
-    const n = check(M._liz_rx_chunks(this.h, 0, 0)), p = scratch.at(Math.max(1, n));
-    check(M._liz_rx_chunks(this.h, p, n));
+  // ai: each source block: 0 to 99 the share of its source symbols in, 255 verified
+  get sourceBlocks() {
+    const n = check(M._liz_rx_source_blocks(this.h, 0, 0)), p = scratch.at(Math.max(1, n));
+    check(M._liz_rx_source_blocks(this.h, p, n));
     return M.HEAPU8.slice(p, p + n);
   }
   meta(which) { return M.UTF8ToString(M._liz_rx_meta(this.h, which)); }
   get name() { return this.meta(0); }
-  get type() { return this.meta(1); }
-  get root() { return this.meta(2); }
-  get error() { return this.meta(4); }
+  get root() { return this.meta(1); }
+  get error() { return this.meta(3); }
   // ai: the finished file's bytes (a copy), null before it is done
   data() {
     const p = scratch.at(8);
@@ -291,9 +284,9 @@ export class Rx {
 
 // ai: A file (or the test stream) to painted frames: frame() gives the next, in order, its pilots counted.
 export class Sender {
-  // ai: source: { bytes, name, type } or { test: true, firstId }; format as geometry()'s
+  // ai: source: { bytes, name, zstd } or { test: true, firstId }; format as geometry()'s
   constructor(source, format) {
-    this.tx = source.test ? Tx.test(source.firstId ?? 0) : Tx.file(source.bytes, source.name ?? "", source.type ?? "");
+    this.tx = source.test ? Tx.test(source.firstId ?? 0) : Tx.file(source.bytes, source.name ?? "", !!source.zstd);
     this.encoder = new Encoder(format);
     this.picture = 0;
   }
@@ -327,10 +320,10 @@ export class Receiver {
     for (const d of decoded) { all.set(d.blocks, o); o += d.blocks.length; }
     return { decoded, verdict: this.rx.frame(all), progress: this.rx.progress };
   }
-  // ai: { name, type, root, bytes } once the file is whole, else null
+  // ai: { name, root, bytes } once the file is whole, else null
   get file() {
     const bytes = this.rx.data();
-    return bytes && { name: this.rx.name, type: this.rx.type, root: this.rx.root, bytes };
+    return bytes && { name: this.rx.name, root: this.rx.root, bytes };
   }
   clear() { this.rx.clear(); }
   free() { this.decoder.free(); this.rx.free(); }

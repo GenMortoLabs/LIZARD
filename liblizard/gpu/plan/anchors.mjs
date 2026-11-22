@@ -18,9 +18,17 @@ export const anchMin = (k) => Math.min(ANCH_MIN, k * k - 1);
 // ai: the side and as much again, past the 2.5 samples the erase reaches beyond a square in every picture of 160
 // ai: samples up (a = span / 64 modules then; 4, 6, 8 by the ring since 2026-11-09, a margin wider still). Decided in
 // ai: integers, 2 ANCH_FILL times the module coordinate (every side even, so every centre a whole module), in the
-// ai: kernel and here alike. 16 a side, the 256 points the picture's mean was taken over before; 32, 64 and 128 read
-// ai: within 0.02% of it on recorded captures.
-export const ANCH_FILL = 16, ANCH_BAND2 = 3;   // ai: ANCH_BAND2 = 2 ANCH_BAND
+// ai: kernel and here alike. 64 a side since 2026-11-20 (16 before, the 256 points the picture's mean was taken over
+// ai: earlier): the surface is fitted to the picture's data as well as its shading, so its error is the data's spread
+// ai: over the points' count, and the squares' fill carries it to every square alike, the k x k lattice's comb of
+// ai: low frequencies on block 0 (multiples of k in u and v): at 16, on clean painted pictures, the lowest
+// ai: sub-channel 10.9 dB against the C's 14.8 (its fit over every eighth sample, n^2 / 64 of them), block 0 lost on
+// ai: about one picture in 64,000 (the broadcast test); at 64 14.4 dB and none in 192,000; 128 0.2 dB more. On recorded
+// ai: captures, where the camera's noise sits under the fill's error, 16 to 128 read alike (within 0.02%). ANCH_SUMS
+// ai: reads the points in ANCH_GS slices of a frame, side by side (64 a lane in one workgroup cost the S26 0.17 ms a
+// ai: frame at one a launch).
+export const ANCH_FILL = 64, ANCH_BAND2 = 3;   // ai: ANCH_BAND2 = 2 ANCH_BAND
+export const ANCH_GS = 16;   // ai: ANCH_SUMS' slices a frame (ANCH_FILL^2 / (64 ANCH_GS) points a lane: 4)
 // ai: The gain's swing (SPEC 6.10, the C's lizard_finish_ext): SW_T x SW_T tiles of the picture in modules (the picture's
 // ai: size is the word's, after this stage), SW_R rows a tile, on each a run of SW_LAG / SW_T points span / SW_LAG modules
 // ai: apart (eight samples at n 1024) and the pairs of neighbours along it, as the C's runs on its lattice of every eighth

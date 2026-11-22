@@ -113,6 +113,9 @@ class Receiver {
   // ai: Forget one transfer by its root, the one in hand or one parked unfinished (2026-10-22, an app's Delete of an
   // ai: unfinished transfer; xfer_rx.h forget). Done when it returns.
   virtual void forget(const std::string& root) { (void)root; }
+  // ai: The finished transfers' tags let go (xfer_rx.h releaseDone): the same file in the light again received again.
+  // ai: The receive session's, when it stops the camera for a file in (2026-11-20). Done when it returns.
+  virtual void release() {}
   // ai: Whether frames must come with their luma plane (the CPU decoder reads bytes; the GPU's takes the camera's
   // ai: buffer in place where the device has the zero-copy ingest, and luma where it has not): the caller sets its camera
   // ai: up by this.
@@ -124,7 +127,7 @@ class Receiver {
   // ai: until the next stream's first window closes), and the next window opens at the next frame's arrival, as a
   // ai: receiver's first does at its first frame: the first window after a restart is that stream's own, never one
   // ai: over the time off. A frame of the stream before still in the decoder at the close counts in no window (its
-  // ai: blocks go to the transfer and its row to the series as ever). The transfer, the held word, the totals and the
+  // ai: blocks go to the transfer and its row to the series as ever). The transfer, the last word read, the totals and the
   // ai: series stay.
   virtual void cameraClosed() {}
   // ai: Every frame already pushed decoded and delivered (2026-11-09, a file list's next file of another size or crop,
@@ -140,10 +143,8 @@ class Receiver {
   // ai: The transfer's bounds (xfer_rx.h allow: Largest file and its room, 2026-11-15; a transfer refused for them
   // ai: taken afresh at its next header); nothing where the receiver has no transfer (the PC link's)
   void allow(uint64_t limit, double room);
-
- private:
-  // ai: the transfer this receiver feeds, for create's from; null where it has none, and create then gives the new
-  // ai: receiver a transfer of its own
+  // ai: the transfer this receiver feeds, for create's from and a tool that reads it whole (tx_check broadcast: its
+  // ai: progress, drain); null where it has none, and create then gives the new receiver a transfer of its own
   virtual std::shared_ptr<XferRx> transfer() const { return nullptr; }
 };
 

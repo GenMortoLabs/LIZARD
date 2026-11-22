@@ -105,7 +105,6 @@ internal class AndroidReceive(private val a: MainActivity) : ReceiveHost {
             saving = a.placing?.takeIf { it.first == a.root }?.second)
     override val showStats get() = s.stats == "on"
     override val heat get() = heatText(a.heat, a.clocks, r.cameraSlow)
-    override val hint get() = a.hint
     override val note get() = a.note
     override fun clearNote() { a.note = "" }
     override val running get() = on || a.phase == RxPhase.Starting || a.phase == RxPhase.Loading

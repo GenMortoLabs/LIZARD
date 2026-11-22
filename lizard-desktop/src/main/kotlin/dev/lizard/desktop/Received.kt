@@ -1,7 +1,7 @@
 package dev.lizard.desktop
 
 import dev.lizard.Session
-import dev.lizard.tar.TAR_TYPE
+import dev.lizard.tar.isTar
 import dev.lizard.tar.untar
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -31,20 +31,21 @@ import dev.lizard.ui.*
 // ai: then filed from there into the Downloads folder and its take let go (Session.placed): file, into LIZ_DOWNLOADS,
 // ai: else Linux's XDG_DOWNLOAD_DIR from user-dirs.dirs, else ~/Downloads, under a name free there ("name (1).ext"),
 // ai: each file marked as downloaded
-// ai: (mark); a tar (several files or a folder sent as one, Tar.kt) is unpacked there whole into a folder (one folder
+// ai: (mark); a tar (several files or a folder sent as one, Tar.kt; told by its name, isTar: the description carries no
+// ai: media type) is unpacked there whole into a folder (one folder
 // ai: alone at its top is the bundle's, else the tar's name less .tar), one that does not unpack whole filed as the file.
 // ai: What Downloads does not take stays in the app's folder, listed from there, and is filed again later (retry), as is
 // ai: a filing the app's close cut short: a file is never only in a store that lets it go. A take is filed when its file
 // ai: is in Downloads, durable, and listed: its row is written under the list's lock just before the move into place
 // ai: (taken out again where the move fails), and its take let go after, so a filing cut short leaves either the take
 // ai: (filed again) or its row (the take let go at the next pass). The list the app keeps is Native.data/received.json
-// ai: (entries name, path, type, size, root, at, bundle, files), newest first, written durably whole; an entry whose path
+// ai: (entries name, path, size, root, at, bundle, files), newest first, written durably whole; an entry whose path
 // ai: is gone is dropped from it, a list that does not read is never written over (one that does not parse is set aside
 // ai: whole as received.json.bad), and the same root filed again replaces its entry. Every read and write of the list
 // ai: is under one lock, from any thread. Open, Show in folder and Delete hand the file to the desktop: Delete to its
 // ai: trash where java.awt.Desktop has one (Windows, macOS), else the file is deleted.
 object Received {
-    class Entry(val name: String, val path: String, val type: String, val size: Long, val root: String, val at: Long,
+    class Entry(val name: String, val path: String, val size: Long, val root: String, val at: Long,
                 val bundle: Boolean, val files: Int) {
         val file get() = File(path)
     }
@@ -53,7 +54,7 @@ object Received {
     private val json = Json { ignoreUnknownKeys = true }
     private val listFile get() = File(Native.data, "received.json")
     private val home get() = System.getProperty("user.home")
-    // ai: the session's takes (session.h): a folder each, filing.json (name, type, root) and file/<the file>
+    // ai: the session's takes (session.h): a folder each, filing.json (name, root) and file/<the file>
     private val keptDir get() = File(Native.data, "kept")
 
     // ai: where received files go: LIZ_DOWNLOADS (the tests'), else the desktop's own Downloads
@@ -93,7 +94,7 @@ object Received {
         }
         return a.mapNotNull { e ->
             val o = e as? JsonObject ?: return@mapNotNull null
-            Entry(o.str("name"), o.str("path"), o.str("type"), o.num("size").toLong(), o.str("root"), o.num("at").toLong(), o.flag("bundle"), o.num("files").toInt())
+            Entry(o.str("name"), o.str("path"), o.num("size").toLong(), o.str("root"), o.num("at").toLong(), o.flag("bundle"), o.num("files").toInt())
                 .takeIf { it.path.isNotEmpty() }
         }
     }
@@ -108,7 +109,7 @@ object Received {
         Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
     }
 
-    fun asJson(e: Entry) = JsonObject(mapOf("name" to JsonPrimitive(e.name), "path" to JsonPrimitive(e.path), "type" to JsonPrimitive(e.type),
+    fun asJson(e: Entry) = JsonObject(mapOf("name" to JsonPrimitive(e.name), "path" to JsonPrimitive(e.path),
         "size" to JsonPrimitive(e.size), "root" to JsonPrimitive(e.root), "at" to JsonPrimitive(e.at), "bundle" to JsonPrimitive(e.bundle),
         "files" to JsonPrimitive(e.files)))
 
@@ -136,12 +137,13 @@ object Received {
         while (true) { val g = File(dir, "$stem ($k)$ext"); if (!g.exists()) return g; k++ }
     }
 
-    // ai: a take as the session lists it (Session.kept): its folder's id, the file's name, type and root, and the file
-    private class Kept(val id: String, val name: String, val type: String, val root: String, val file: File)
+    // ai: a take as the session lists it (Session.kept): its folder's id, the file's name and root, the file, and packed:
+    // ai: the file the default client's zstd stream of it, which the session did not unpack
+    private class Kept(val id: String, val name: String, val root: String, val file: File, val packed: Boolean)
     private fun kept(): List<Kept> = runCatching {
         json.parseToJsonElement(Session.kept(Native.data.path)).jsonArray.mapNotNull { e ->
             val o = e.jsonObject
-            Kept(o.str("id"), o.str("name"), o.str("type"), o.str("root"), File(o.str("path"))).takeIf { it.id.isNotEmpty() && it.name.isNotEmpty() }
+            Kept(o.str("id"), o.str("name"), o.str("root"), File(o.str("path")), o.flag("packed")).takeIf { it.id.isNotEmpty() && it.name.isNotEmpty() }
         }
     }.getOrDefault(emptyList())
     // ai: the take let go once its file is placed (or deleted with its entry)
@@ -168,16 +170,18 @@ object Received {
         }
         mark(k.file)
         val now = System.currentTimeMillis()
+        // ai: a packed file the session did not unpack filed as the zstd stream it is, under its <name>.zst
+        val came = k.name
         return try {
-            (if (k.type == TAR_TYPE) unpack(k) { folder, files, bytes -> Entry(folder.name, folder.path, k.type, bytes, k.root, now, true, files) } else null)
-                ?: place(k.file, k.root) { Entry(it.name, it.path, k.type, k.file.length(), k.root, now, false, 0) }
+            (if (!k.packed && isTar(k.name)) unpack(k) { folder, files, bytes -> Entry(folder.name, folder.path, bytes, k.root, now, true, files) } else null)
+                ?: place(k.file, k.root, came) { Entry(it.name, it.path, k.file.length(), k.root, now, false, 0) }
             placed(k.id)
             Filed(k.root, k.name, "")
         } catch (e: Exception) {
             val why = whyOf(e)
             System.err.println("received: ${k.name} not filed in ${downloads.path}: $why; kept in ${k.file.path}")
             if (k.file.isFile) synchronized(mu) {
-                if (read().none { it.path == k.file.path }) add(Entry(k.name, k.file.path, k.type, k.file.length(), k.root, now, false, 0))
+                if (read().none { it.path == k.file.path }) add(Entry(came, k.file.path, k.file.length(), k.root, now, false, 0))
             }
             Filed(k.root, k.name, why)
         }
@@ -215,9 +219,9 @@ object Received {
     // ai: filesystem, else a copy into a hidden file there (the one a copy cut short left, replaced), made durable,
     // ai: marked, then renamed to its free name (a name never holds part of a file) and the folder made durable; the
     // ai: source is the take's, let go after. The entry; a throw where Downloads does not take it (the source stays).
-    private fun place(src: File, root: String, entryOf: (File) -> Entry): Entry {
+    private fun place(src: File, root: String, name: String, entryOf: (File) -> Entry): Entry {
         val dir = writable()
-        val dest = free(dir, src.name)
+        val dest = free(dir, name)
         if (moveListed(src, dest, entryOf(dest))) return entryOf(dest)
         // ai: no copy begun that cannot end (0: the room not known)
         val room = dir.usableSpace

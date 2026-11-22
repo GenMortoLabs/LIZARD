@@ -1,5 +1,5 @@
 // ai: XferRx (xfer_rx.h): the receiving end's threaded form, the app's: the judge on the producer's thread, a queue,
-// ai: and the core (xfer_rx_core.h) on a worker thread with files under the store directory, so take never waits on a
+// ai: and the core (xfer_rx_core.h) on a worker thread with files under the store folder, so take never waits on a
 // ai: solve. The chain itself is xfer_rx_core.cpp's.
 #include "xfer_rx.h"
 
@@ -12,12 +12,12 @@
 
 namespace lizard {
 
-// ai: the queue's bound, 31 MB: a 16 MiB chunk's solve and hash are tens of ms, so this is seconds of backlog at any
+// ai: the queue's bound, 31 MB: a 16 MiB source block's solve and hash are tens of ms, so this is seconds of backlog at any
 // ai: format's rate; past it a block is lost (counted), which the fountain covers as any other loss
 static constexpr size_t QUEUE_MAX = 1 << 16;
 
 XferRx::XferRx(const std::string& storeDir, std::function<void(const std::string&)> log) : log_(std::move(log)) {
-  // ai: a solver a physical core, at most SOLVERS_MAX: a transfer's last chunks, which the interleave completes together,
+  // ai: a solver a physical core, at most SOLVERS_MAX: a transfer's last source blocks, which the interleave completes together,
   // ai: solve side by side. Past 4 the solves share DRAM's bandwidth (a 16 MiB solve streams ~36 MB, past a CCD's L3):
   // ai: on the 9950X a 1 GiB file done 1.59 s after its last block with 4, 1.06 s with 16 at 600 MB more and 1.7x the
   // ai: work (2026-11-14), so 4. LIZ_SOLVERS=<n> the lab's count, uncapped (0: each solve on the worker)
@@ -28,8 +28,8 @@ XferRx::XferRx(const std::string& storeDir, std::function<void(const std::string
     { std::lock_guard<std::mutex> lk(mu_); settle_ = true; }
     cv_.notify_one();
   });
-  judge_ = std::make_unique<XferJudge>(rx_->rootGen());
-  rx_->progress(snap_, chunks_);
+  judge_ = std::make_unique<XferJudge>();
+  rx_->progress(snap_, sourceBlocks_);
   worker_ = std::thread([this] { run(); });
 }
 
@@ -67,6 +67,7 @@ void XferRx::run() {
     for (size_t k = 0; k < batch.size(); k++) {
       if (batch[k].kind != 0) {
         if (batch[k].kind == 1) rx_->clearAll();
+        else if (batch[k].kind == 4) rx_->releaseDone();
         else if (batch[k].kind == 3) {
           uint64_t lim;
           double room;
@@ -74,14 +75,14 @@ void XferRx::run() {
           memcpy(&room, batch[k].b.data() + 8, 8);
           rx_->allow(lim, room);
         } else rx_->forget(std::string(reinterpret_cast<const char*>(batch[k].b.data())));
-        { std::lock_guard<std::mutex> lk(pmu_); rx_->progress(snap_, chunks_); }
+        { std::lock_guard<std::mutex> lk(pmu_); rx_->progress(snap_, sourceBlocks_); }
         { std::lock_guard<std::mutex> lk(mu_); clearsDone_++; }
         idle_.notify_all();
         continue;
       }
       rx_->block(batch[k].b.data());
       // ai: a snapshot every 256 blocks, so progress moves through a long backlog, at most every SNAP_MS (2026-11-15: a
-      // ai: snapshot is O(chunks), and a 65,535-chunk file's at every 256 blocks was a worker's second each second)
+      // ai: snapshot is O(source blocks), and a 65,535-source block file's at every 256 blocks was a worker's second each second)
       if ((k & 255) == 255) snapshot(false);
     }
     batch.clear();
@@ -102,7 +103,7 @@ void XferRx::snapshot(bool atEnd) {
   }
   snapAt_ = t;
   std::lock_guard<std::mutex> lk(pmu_);
-  rx_->progress(snap_, chunks_);
+  rx_->progress(snap_, sourceBlocks_);
 }
 
 bool XferRx::take(const uint8_t* b) {
@@ -137,6 +138,12 @@ void XferRx::forget(const std::string& root) {
   std::array<uint8_t, XFER_BLOCK> b{};
   memcpy(b.data(), root.data(), std::min(root.size(), b.size() - 1));
   ask(2, b.data());
+}
+
+void XferRx::releaseDone() {
+  std::lock_guard<std::mutex> lk(prod_);
+  judge_->clear();
+  ask(4, nullptr);
 }
 
 void XferRx::allow(uint64_t limit, double room) {

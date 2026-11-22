@@ -97,6 +97,14 @@ struct Frame {
   uint64_t hold = 0;               // ai: hb's token for release, 0 for a frame nothing holds past the sink's call
 };
 
+// ai: What moves a camera's captures (the phase lock's lever, delayBar ""): a delay of any length (pulses 0: delayOnce),
+// ai: or `pulses` actions of the backend's own (pulse), whatever each moves (the lock learns it by making it); marks:
+// ai: the camera says which capture a delay moved (Capture::delayed), else the timestamps alone show it.
+struct Lever {
+  int pulses = 0;
+  bool marks = true;
+};
+
 // ai: A capture's result as the camera reports it (Android's Camera2), on the camera's own thread: its timestamp (the
 // ai: frames' clock, Frame::ns), whether it was the one delayOnce asked, its frame, exposure and readout skew (ns) and
 // ai: its sensitivity; fresh: the first result of a capture session made anew (a start, the preview's change), whose
@@ -173,7 +181,8 @@ class Camera {
   virtual std::string report() { return "{}"; }
 
   // ai: The phase lock's actuator (Android's Camera2): one frame made longer moves every frame after it. delayBar: ""
-  // ai: where this camera can (manual sensor control applied per frame), else why not (the lock stays off on it).
+  // ai: where this camera can (manual sensor control applied per frame), else why not (the lock stays off on it);
+  // ai: lever: what it can do (a delay of any length and marks, unless it says otherwise).
   // ai: captures: each capture's result and each delayOnce's fate (taken: its frame was captured), on the camera's own
   // ai: thread, from the next start until stop. delayOnce: from that thread, the next frame us microseconds longer
   // ai: (auto-exposure off for that frame alone, at the newest result's exposure and sensitivity); false where it was not
@@ -183,6 +192,9 @@ class Camera {
   virtual std::string delayBar() { return "the camera cannot delay a capture"; }
   virtual void captures(Captures each, Fate fate) { (void)each; (void)fate; }
   virtual bool delayOnce(int64_t us) { (void)us; return false; }
+  virtual Lever lever() { return {}; }
+  // ai: pulse i of the lever's (0 to pulses - 1), from the capture thread; false where it was not asked
+  virtual bool pulse(int i) { (void)i; return false; }
 };
 
 // ai: Every backend's cameras: the system's (UVC; Android's back cameras) first, then GenICam's through Aravis (not on

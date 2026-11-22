@@ -12,7 +12,7 @@ export declare class LizardError extends Error {
   readonly code: number;
 }
 
-export declare const BLOCK: 476, ID_BYTES: 4, PAYLOAD: 472, MIN_BLOCKS: 4, MAX_BLOCKS: 64, RINGS: 3, RING_DEFAULT: -1, GAP_MODULES: 12;
+export declare const BLOCK: 472, ID_BYTES: 12, PAYLOAD: 460, MIN_BLOCKS: 4, MAX_BLOCKS: 64, RINGS: 3, RING_DEFAULT: -1, GAP_MODULES: 12;
 export type PixelFormat = "grey" | "rgbx" | "rgba" | "bgra";
 
 export declare function version(): string;
@@ -25,7 +25,7 @@ export interface Format {
   blocks: number;
   /** 0 to 2 (the 64, 128 or 256 ring), -1 the default (the 128). */
   ring?: number;
-  /** The display rate the symbol's word states, 1 to 255 (default 60). */
+  /** The pictures a second the sender paints, 1 to 240 (default 60), which every frame's word states. */
   fps?: number;
   /** 1, or 2 symbols side by side (default 1). */
   codes?: 1 | 2;
@@ -44,13 +44,13 @@ export declare class Encoder {
   constructor(format: Format);
   readonly format: Required<Format>;
   readonly geometry: Geometry;
-  /** blocks: frameBlocks x 476 bytes; picture: the frame's count (its value mod 4 the pilots). */
+  /** blocks: frameBlocks x 472 bytes; picture: the frame's count (its value mod 4 the pilots). */
   paint<T extends Uint8Array | Uint8ClampedArray = Uint8ClampedArray>(blocks: Uint8Array, picture: number, out?: T, fmt?: PixelFormat): T;
   free(): void;
 }
 
 export interface Decoded {
-  /** Blocks verified, and their bytes (count x 476). */
+  /** Blocks verified, and their bytes (count x 472). */
   count: number;
   blocks: Uint8Array;
   found: boolean;
@@ -63,7 +63,7 @@ export interface Decoded {
   total: number;
   /** Corners in the image: x y x y ..., top left, top right, bottom right, bottom left. */
   quad: number[];
-  pilot: { blocks: number; r: number[]; sd: number[] };
+  pilot: { subch: number; r: number[]; sd: number[] };
 }
 export interface ImageLike { data: Uint8Array | Uint8ClampedArray; width: number; height: number }
 export declare class Decoder {
@@ -82,7 +82,7 @@ export interface TxInfo {
   test: boolean; length: number; chunks: number; lap: number; root: string;
 }
 export declare class Tx {
-  static file(bytes: Uint8Array, name?: string, type?: string): Tx;
+  static file(bytes: Uint8Array, name?: string, zstd?: boolean): Tx;
   static test(firstId?: number): Tx;
   next(n: number): Uint8Array;
   readonly info: TxInfo;
@@ -100,7 +100,6 @@ export declare class Rx {
   readonly progress: Progress;
   readonly chunks: Uint8Array;
   readonly name: string;
-  readonly type: string;
   readonly root: string;
   readonly error: string;
   data(): Uint8Array | null;
@@ -109,7 +108,7 @@ export declare class Rx {
 }
 
 export declare class Sender {
-  constructor(source: { bytes: Uint8Array; name?: string; type?: string } | { test: true; firstId?: number }, format: Format);
+  constructor(source: { bytes: Uint8Array; name?: string; zstd?: boolean } | { test: true; firstId?: number }, format: Format);
   readonly geometry: Geometry;
   readonly info: TxInfo;
   picture: number;
@@ -122,7 +121,7 @@ export declare class Receiver {
   readonly rx: Rx;
   push(px: Uint8Array | Uint8ClampedArray | ImageLike, w?: number, h?: number, options?: { fmt?: PixelFormat; stride?: number }):
     { decoded: Decoded[]; verdict: Verdict; progress: Progress };
-  readonly file: { name: string; type: string; root: string; bytes: Uint8Array } | null;
+  readonly file: { name: string; root: string; bytes: Uint8Array } | null;
   clear(): void;
   free(): void;
 }

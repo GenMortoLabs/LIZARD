@@ -2,7 +2,7 @@ package dev.lizard.desktop
 
 import dev.lizard.pick.Pick
 import dev.lizard.ui.INK_DEFAULT
-import dev.lizard.ui.LAPS_DEFAULT
+import dev.lizard.ui.CYCLES_DEFAULT
 import dev.lizard.ui.EXPORT_GB_DEFAULT
 import dev.lizard.ui.PAPER_DEFAULT
 import kotlinx.serialization.json.JsonElement
@@ -138,8 +138,6 @@ object Prefs {
     var codes: Int get() = int("codes", 1); set(v) { p?.putInt("codes", v) }
     // ai: Rate refresh (2026-11-12): "a,b,c,d", lizard-ui refreshText; "1,1,1,1" unless set
     var refresh: String get() = str("refresh", "1,1,1,1"); set(v) { p?.put("refresh", v) }
-    // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting): frames a symbol, 0 (Off) unless set
-    var carousel: Int get() = int("carousel", 0); set(v) { p?.putInt("carousel", v) }
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): as typed, "" a random one each send
     var seed: String get() = str("seed", ""); set(v) { p?.put("seed", v) }
     // ai: Code's Colours (2026-11-16, lizard-ui Colours): the code's ink and paper, 0xRRGGBB, black and white unless set
@@ -149,7 +147,7 @@ object Prefs {
     // ai: unless set), Display (on unless set)
     var source: String get() = str("source", "files"); set(v) { p?.put("source", v) }
     var export: Boolean get() = bool("export", false); set(v) { p?.putBoolean("export", v) }
-    var laps: Double get() = p?.getDouble("laps", LAPS_DEFAULT) ?: LAPS_DEFAULT; set(v) { p?.putDouble("laps", v) }
+    var cycles: Double get() = p?.getDouble("laps", CYCLES_DEFAULT) ?: CYCLES_DEFAULT; set(v) { p?.putDouble("laps", v) }
     // ai: Hide codes (2026-11-18; Display, kept as "display", before it): off unless set
     var hideCodes: Boolean get() = bool("hideCodes", false); set(v) { p?.putBoolean("hideCodes", v) }
     // ai: Largest file an export takes, GB (lizard-ui EXPORT_GB_DEFAULT unless set; FILE_GB_NONE no limit)

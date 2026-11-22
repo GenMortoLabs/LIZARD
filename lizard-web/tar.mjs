@@ -6,7 +6,6 @@
 // ai: end. The archive is a list of parts a Blob takes by reference: a file's bytes are never copied or read here.
 // ai: Pure and importing nothing (the installed app's rule), so node can check it against GNU tar.
 
-export const TAR_TYPE = "application/x-tar";
 const BLOCK = 512, MAX_OCTAL_11 = 2 ** 33;
 const enc = new TextEncoder();
 const pad = (n) => (BLOCK - (n % BLOCK)) % BLOCK;
@@ -118,7 +117,7 @@ export function bundle(entries) {
   });
   const files = all.filter((e) => !e.dir);
   if (entries.length === 1 && files.length === 1 && !entries[0].path.includes("/"))
-    return { name: entries[0].path, type: files[0].blob.type ?? "", size: files[0].blob.size, files: 1, bundled: false, blob: files[0].blob };
+    return { name: entries[0].path, size: files[0].blob.size, files: 1, bundled: false, blob: files[0].blob };
   const dirs = new Map();
   for (const e of entries) {
     const parts = e.path.split("/").filter(Boolean);
@@ -138,6 +137,6 @@ export function bundle(entries) {
   const ordered = [...dirs.values(), ...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const tops = [...new Set(all.map((e) => e.path.split("/").filter(Boolean)[0]))];
   const name = tops.length === 1 ? fitName(tops[0], ".tar") : fitName(tops[0], ` and ${tops.length - 1} more.tar`);
-  const blob = new Blob(tarParts(ordered), { type: TAR_TYPE });
-  return { name, type: TAR_TYPE, size: blob.size, files: files.length, bundled: true, blob };
+  const blob = new Blob(tarParts(ordered));
+  return { name, size: blob.size, files: files.length, bundled: true, blob };
 }

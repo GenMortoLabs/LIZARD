@@ -38,25 +38,20 @@ static lizard_t *pic_for(lizard_any_t *a, int r, int n, int subch) {
   a->pic_n[slot] = n; a->pic_subch[slot] = subch; a->pic_ring[slot] = r; a->pic_used[slot] = ++a->pic_clock; a->builds++;
   return &a->pic[slot];
 }
-int lizard_any_frame(lizard_any_t *a, const uint8_t *img, int iw, int ih, float gamma, uint8_t *blocks, uint8_t *ok, int held, ob_result_t *res) {
+int lizard_any_frame(lizard_any_t *a, const uint8_t *img, int iw, int ih, float gamma, uint8_t *blocks, uint8_t *ok, ob_result_t *res) {
   const lizard_t *rs[LIZARD_RINGS];
   for (int r = 0; r < LIZARD_RINGS; r++) rs[r] = &a->ring[r];
   int wi;
-  a->which = -1; a->n = 0; a->held = 0; a->last = 0;
+  a->which = -1; a->n = 0; a->last = 0;
   if (!a->ready || !lizard_acquire_ring(rs, LIZARD_RINGS, img, iw, ih, gamma, res, &wi)) return 0;
   a->which = wi;
-  // ai: the word before the frame (2026-11-18): a static word names the frame's version and layout, which it is
-  // ai: finished at; an animated one (a carousel symbol, fmt.h) names none, so the frame is finished at the held
-  // ai: configuration (the caller's: its carousel's header); a frame whose word did not read is not finished. (Until
-  // ai: 2026-11-18 such a frame was finished at the held version; the 18 of 10,887 frames found on the ten real
-  // ai: replays it took then verified no block.)
+  // ai: the word before the frame (2026-11-18): it names the frame's version and layout, which it is finished at; a
+  // ai: frame whose word did not read is not finished. (Until 2026-11-18 such a frame was finished at the last version
+  // ai: read; the 18 of 10,887 frames found on the ten real replays it took then verified no block.)
   const ob_fmt_t *fm = lizard_fmt_rx(&a->ring[wi]);
-  ob_fmt_t cfg;
-  const int own = fm && fm->kind == OB_FMT_STATIC, known = own ? (cfg = *fm, 1) : fm ? ob_fmt_unheld(held, &cfg) : 0;
-  a->held = !own && known;
-  const int n = known ? lizard_n_for(LIZARD_STEP * cfg.version) : 0;
-  lizard_t *pic = n && n <= a->nmax ? pic_for(a, wi, n, LIZARD_STEP * cfg.version) : 0;
-  if (!pic || lizard_layout(pic, cfg.count) || (pic != &a->ring[wi] && !lizard_hand_over(&a->ring[wi], pic))) { lizard_release(&a->ring[wi]); return 0; }
+  const int n = fm ? lizard_n_for(LIZARD_STEP * fm->version) : 0;
+  lizard_t *pic = n && n <= a->nmax ? pic_for(a, wi, n, LIZARD_STEP * fm->version) : 0;
+  if (!pic || lizard_layout(pic, fm->count) || (pic != &a->ring[wi] && !lizard_hand_over(&a->ring[wi], pic))) { lizard_release(&a->ring[wi]); return 0; }
   a->last = pic; a->n = n;
   return lizard_finish(pic, NULL, blocks, ok, res);
 }
@@ -69,5 +64,5 @@ int lizard_any_top(const lizard_any_t *a) {
 const ob_fmt_t *lizard_any_word(const lizard_any_t *a) { return a->which >= 0 ? lizard_fmt_rx(&a->ring[a->which]) : 0; }
 int lizard_any_pilot(const lizard_any_t *a, float r[2], float sd[2]) {
   if (!a->last) { if (r) r[0] = r[1] = 0; if (sd) sd[0] = sd[1] = 0; return 0; }
-  return lizard_pilot(a->last, 0, r, sd);   // ai: the version's own codec: every block it holds
+  return lizard_pilot(a->last, r, sd);   // ai: the version's own codec: every sub-channel it holds
 }

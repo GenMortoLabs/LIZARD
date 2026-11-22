@@ -4,22 +4,22 @@
 import { SLOTS } from "./common.mjs";
 import { LATTICE_MAX } from "./back_transform.mjs";
 import { RING_COUNT } from "./finder.mjs";
-import { wordCode, wordBytes, bytesFor, VERSION_MAX, DATA, gateTable } from "../wordcode.mjs";
+import { wordCode, wordBytes, bytesFor, VERSION_MAX, DATA, gateTable, BEFORE } from "../wordcode.mjs";
 
 export const CON_MIN = 0.08;
 // ai: WMAX: word cells a side at most (the 256 ring; the 128's 64 until 2026-10-10), so a word's 4 WMAX bits fill VECS
-// ai: vec4u (a row of the code); ROWS: the two magics' BASEs and the 32 rows a ring (wordcode.mjs wordCode); MIDS_MAX:
+// ai: vec4u (a row of the code); ROWS: the magic's BASE and the 40 rows a ring (wordcode.mjs wordCode); MIDS_MAX:
 // ai: track pairs a frame (the 256 ring's 512), each invocation taking every 256th.
-export const WMAX = 128, ROWS = 2 + 8 * (DATA - 1), MIDS_MAX = 512;
+export const WMAX = 128, ROWS = 1 + 8 * (DATA - 1), MIDS_MAX = 512;
 export const VECS = (4 * WMAX) / 128;
 // ai: vec4u the pictures' last versions take, four a vec4u.
 const TOPS = Math.ceil(SLOTS / 4);
 // ai: The search's shape (Gauss-Jordan over GF(256) since 2026-11-15, ordered statistics decoding over the code's bit
-// ai: rows before): the word's bytes by reliability (a byte's least |q| of its 8 cells); for each magic (known), the
-// ai: four other data bytes solved from four bytes (RS is MDS, any five bytes give the word): the UNKNOWN most
-// ai: reliable, each swapped for one of the next SWAP, each with its least reliable bit flipped: PER sets a magic, SETS
-// ai: in all, each candidate scored by its correlation with q. NW the u32 of a word at most.
-export const UNKNOWN = DATA - 1, SWAP = 6, PER = 1 + UNKNOWN * SWAP + UNKNOWN, SETS = 2 * PER, TOP = UNKNOWN + SWAP;
+// ai: rows before): the word's bytes by reliability (a byte's least |q| of its 8 cells); the magic known, the five
+// ai: other data bytes solved from five bytes (RS is MDS, any six bytes give the word): the UNKNOWN most reliable,
+// ai: each swapped for one of the next SWAP, each with its least reliable bit flipped: SETS sets, each candidate
+// ai: scored by its correlation with q (two magics, 2 PER sets, until 2026-11-19). NW the u32 of a word at most.
+export const UNKNOWN = DATA - 1, SWAP = 6, PER = 1 + UNKNOWN * SWAP + UNKNOWN, SETS = PER, TOP = UNKNOWN + SWAP;
 export const NW = (4 * WMAX) / 32, BYTES_MAX = (4 * WMAX) / 8;
 if (SETS > 256) throw new Error(`F8 solves ${SETS} sets a lane each: more than 256 lanes`);
 // ai: The gate's table a ring: E[m] for m = 0 to 4 W as u16, two a u32 (m even low), 0xffff where no count passes;
@@ -29,12 +29,14 @@ export const GATE = 4 * Math.ceil((4 * WMAX + 2) / 8);
 // ai: k) VECS), then range (W, 0, 0, 0) a ring, then plan a ring, then tops (the last version of pictures 0 to
 // ai: SLOTS - 1), then gate (GATE u32 a ring), then gf (GF(256)'s exp at bytes 0 to 254 and log at 256 to 511, four a
 // ai: u32: src/rs.c's field, 0x11d), then cols (a ring's BYTES_MAX columns, two u32 a column: byte p of the word is the
-// ai: GF(256) sum of the data bytes 0 to 4 times the column's bytes, byte 0's in the first u32's low byte, bytes 1 to 4's
-// ai: in the second's, low first: wordcode.mjs wordBytes of the unit words).
+// ai: GF(256) sum of the data bytes 0 to 5 times the column's bytes, byte 0's in the first u32's low byte and byte 5's
+// ai: in its second, bytes 1 to 4's in the second u32, low first: wordcode.mjs wordBytes of the unit words), then before
+// ai: (the configurations before each version, wordcode.mjs BEFORE, 65 u32: the index's version).
+export const BEFORE_VECS = Math.ceil(BEFORE.length / 4);
 export const LAYOUT = (() => {
   const range = RING_COUNT * ROWS * VECS, plan = range + RING_COUNT, tops = plan + RING_COUNT, gate = tops + TOPS;
-  const gf = gate + (RING_COUNT * GATE) / 4, cols = gf + 512 / 16;
-  return { code: 0, range, plan, tops, gate, gf, cols, size: cols + (RING_COUNT * BYTES_MAX * 2) / 4 };
+  const gf = gate + (RING_COUNT * GATE) / 4, cols = gf + 512 / 16, before = cols + (RING_COUNT * BYTES_MAX * 2) / 4;
+  return { code: 0, range, plan, tops, gate, gf, cols, before, size: before + BEFORE_VECS };
 })();
 // ai: GF(256) as src/rs.c builds it (alpha 2, 0x11d): exp[i] for i 0 to 254, log[x] for x 1 to 255
 export const GF_EXP = new Uint8Array(256), GF_LOG = new Uint8Array(256);
@@ -57,12 +59,13 @@ export function wordUniform(rings, plans, pictures) {
     if (n > BYTES_MAX) throw new Error(`ring ${r}: a word of ${n} bytes, F8 holds ${BYTES_MAX}`);
     for (let p = 0; p < n; p++) {
       const at = 4 * LAYOUT.cols + 2 * (BYTES_MAX * r + p);
-      u[at] = e[0][p];
+      u[at] = e[0][p] | (e[5][p] << 8);
       u[at + 1] = (e[1][p] | (e[2][p] << 8) | (e[3][p] << 16) | (e[4][p] << 24)) >>> 0;
     }
   });
   for (let i = 0; i < 256; i++) { u[4 * LAYOUT.gf + (i >> 2)] |= GF_EXP[i] << (8 * (i & 3)); u[4 * LAYOUT.gf + 64 + (i >> 2)] |= GF_LOG[i] << (8 * (i & 3)); }
   u.set(pictures.map((p) => p.hi), 4 * LAYOUT.tops);
+  u.set(BEFORE, 4 * LAYOUT.before);
   return u;
 }
 

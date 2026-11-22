@@ -893,9 +893,13 @@ void Encoder::resolveQuerySet(const QuerySet& qs, uint32_t first, uint32_t count
 }
 
 // ai: The head: the new objects' fills and clears, then the queue's writes (vkCmdUpdateBuffer takes 64 KB or less a
-// ai: call), each behind a barrier; ends behind one, so the commands after it see all of it.
+// ai: call), each behind a barrier; ends behind one, so the commands after it see all of it. It starts behind one too
+// ai: (2026-11-22): an upload into a buffer an earlier submission still reads (the sender's border, its word repainted
+// ai: when a Refresh delay moves) waits for those reads.
+static void fullBarrier(VkCommandBuffer cb);
 static bool recordHead(Device& d, VkCommandBuffer cb) {
   if (d.inits.empty() && d.writes.empty()) return false;
+  fullBarrier(cb);
   for (int phase = 0; phase < 2; phase++) {
     bool any = false;
     for (auto& f : d.inits) if (f.phase == phase) { f.f(cb); any = true; }

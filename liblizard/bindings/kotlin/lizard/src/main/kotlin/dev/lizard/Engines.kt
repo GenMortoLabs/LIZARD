@@ -41,7 +41,7 @@ class Receiver(
   }
   val wantsLuma: Boolean get() = Native.receiverWantsLuma(live())
   val stats: String get() = Native.receiverStats(live())
-  // ai: [the held word's version, then 8 doubles a frame decoded since sinceMs]: lizard.h liz_receiver_series
+  // ai: [the last word's configuration (0 none), then 8 doubles a frame decoded since sinceMs]: lizard.h liz_receiver_series
   fun series(sinceMs: Double): DoubleArray = Native.receiverSeries(live(), sinceMs)
   // ai: the most frames a GPU launch takes, 1 to 32 (0: the batcher's size), a launch going as soon as a frame waits:
   // ai: lizard.h liz_receiver_batch_cap
@@ -53,7 +53,7 @@ class Receiver(
 }
 
 // ai: a file's bytes (copied in), or the test stream (bytes null)
-class Sender(bytes: ByteArray? = null, name: String = "", type: String = "") : Handle(Native.senderNew(bytes, name, type), Native::senderFree) {
+class Sender(bytes: ByteArray? = null, name: String = "") : Handle(Native.senderNew(bytes, name), Native::senderFree) {
   var geometry: Geometry? = null
     private set
   // ai: the format to paint (a re-pick keeps the transfer), on painter (auto: the GPU where its first frames are the
@@ -73,7 +73,7 @@ class Sender(bytes: ByteArray? = null, name: String = "", type: String = "") : H
     return Native.senderTakeBuffer(live(), out, stride, fmt.code)
   }
   val stats: String get() = Native.senderStats(live())
-  // ai: Refresh (lizard.h liz_sender_refresh): each code rate's delay, the pictures between its new blocks, 7/8, 3/4, 2/3,
+  // ai: Refresh (lizard.h liz_sender_refresh): each code rate's delay, the pictures between its new blocks, 6/7, 3/4, 2/3,
   // ai: 1/2 in that order, 1 to Lizard.REFRESH_MAX each; kept across configures
   fun refresh(every: IntArray) {
     require(every.size == 4 && every.all { it in 1..Lizard.REFRESH_MAX }) { "four refreshes of 1 to ${Lizard.REFRESH_MAX}" }

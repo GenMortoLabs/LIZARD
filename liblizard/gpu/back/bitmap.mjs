@@ -24,7 +24,7 @@ export function perm(n) {
   return p;
 }
 
-// ai: Sent bit j's codeword bit (lizard_phy.c sent_bit): every bit is sent but a code's last np data bits, the 7/8 code's 128
+// ai: Sent bit j's codeword bit (lizard_phy.c sent_bit): every bit is sent but a code's last np data bits, the 6/7 code's 128
 // ai: zeros past the block (data column 30, known to a decoder), which no slot carries (unsent); np 0 at 3/4, 2/3, 1/2.
 export const sentBit = (code, j) => (j < code.k - code.np ? j : j + code.np);
 export const unsent = (code, j) => j >= code.k - code.np && j < code.k;
@@ -35,11 +35,12 @@ export function inverse(p) {
   return inv;
 }
 
-// CRC-32C (Castagnoli), reflected 0x82F63B78, init and final xor 0xffffffff (src/layout.c ob_crc32c).
-export function crc32c(bytes, len = bytes.length) {
-  let c = 0xffffffff;
-  for (let i = 0; i < len; i++) { c ^= bytes[i]; for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0x82f63b78 & -(c & 1)); }
-  return (c ^ 0xffffffff) >>> 0;
+// The block CRC, CRC-64/LIZARD: 0xE0CB4CBE2D1C3403, reflected 0xC02C38B47D32D307, init and final xor all ones
+// (src/layout.c ob_crc64), as a BigInt.
+export function crc64(bytes, len = bytes.length) {
+  let c = (1n << 64n) - 1n;
+  for (let i = 0; i < len; i++) { c ^= BigInt(bytes[i]); for (let k = 0; k < 8; k++) c = (c >> 1n) ^ (c & 1n ? 0xc02c38b47d32d307n : 0n); }
+  return c ^ ((1n << 64n) - 1n);
 }
 
 // The systematic codeword of one block from the C's own tables (ldpc.c ldpc_encode through the block-row layout
@@ -61,11 +62,11 @@ export function encodeCodeword(code, data) {
   return cw;
 }
 
-// A block's 476 payload bytes (id first) to its k data bits: bytes MSB first, then the CRC-32C MSB first.
+// A block's 472 payload bytes (id first) to its k data bits: bytes MSB first, then the CRC-64 MSB first.
 export function dataBits(payload, k) {
   const bits = new Uint8Array(k), B = payload.length;
   for (let i = 0; i < B * 8; i++) bits[i] = (payload[i >> 3] >> (7 - (i & 7))) & 1;
-  const c = crc32c(payload);
-  for (let i = 0; i < 32; i++) bits[B * 8 + i] = (c >>> (31 - i)) & 1;
+  const c = crc64(payload);
+  for (let i = 0; i < 64; i++) bits[B * 8 + i] = Number((c >> BigInt(63 - i)) & 1n);
   return bits;
 }

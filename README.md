@@ -2,7 +2,7 @@
 
 LIZARD moves files from a screen to a phone camera, one way, with no network between them. The sending screen plays
 a stream of grey pictures; the phone films them and rebuilds the file. From a 1080p monitor to a recent phone it
-carries about 4 MB/s (see [Status](#status)).
+carries about 4 to 5 MB/s (see [Status](#status)).
 
 - **Demo:** [fosslabs.dev](https://fosslabs.dev)
 - **How it works:** [an example on video](https://www.youtube.com/shorts/pjcAtQ7GcVQ)
@@ -41,34 +41,40 @@ Several files or a folder are first packed into one tar archive and sent as that
 received archive into a folder, and the web receiver offers it as the `.tar` it is.
 
 1. **Compress where it helps, then split.** A file that compresses well is first packed as a stream of zstd frames
-   and sent as `<name>.zst`, which the receiving app unpacks (any zstd tool reads it too); compression is the app's,
-   not part of the code. The file is then split into 16 MiB chunks.
-2. **Fountain-code each chunk** (RaptorQ, RFC 6330). The encoder can produce as many 471-byte pieces as needed, and
+   and sent as `<name>.zst`, its description saying so, which the receiving app unpacks; a receiver that does not
+   know it keeps the `.zst`, which any zstd tool reads; compression is the app's, not part of the code. The file is then split into 16 MiB chunks.
+2. **Fountain-code each chunk** (RaptorQ, RFC 6330). The encoder can produce as many 460-byte pieces as needed, and
    any set as large as the chunk rebuilds it, at most a piece or two more, whichever pieces they are. A missed frame costs only time, and nothing
    ever has to go back to the sender.
-3. **Describe the file** in a header block (name, size, BLAKE3 hash) and manifest blocks (each chunk's hash), sent
-   in the same stream as the data.
-4. **Make blocks.** A block is a 5-byte id (which chunk, which piece), 471 bytes of payload and a CRC-32.
+3. **Describe the file** in a session header (a CBOR map of its size, BLAKE3 hash, name and type), sent in the same
+   stream as the data. The receiver hashes each chunk as it rebuilds it and checks the whole file against that hash.
+4. **Make blocks.** A block is a 12-byte id (which file, which chunk, which piece, which sender's session), 460 bytes of
+   payload and a 64-bit CRC (CRC-64/LIZARD, from a BCH code: every error of up to 11 bits is caught).
 5. **Add error correction.** Each block becomes one LDPC codeword. How much protection it gets depends on where it
    will sit in the spectrum:
 
    | where in the spectrum | what it looks like in the picture | survives blur and distance | code rate |
    |---|---|---|---|
-   | lowest frequencies | broad, smooth shading | best | 7/8 (1 bit in 8 is protection) |
+   | lowest frequencies | broad, smooth shading | best | 6/7 (1 bit in 7 is protection) |
    | lower middle | | | 3/4 |
    | upper middle | | | 2/3 |
    | highest frequencies | the finest grain | worst | 1/2 (half the bits are protection) |
 
-   The code rate is the share of the sent bits that is data. About 39% of the frequencies get 7/8, 15% get 2/3,
-   20% get 1/2, and the rest 3/4. The blocks are packed one after another from the lowest frequency, and the few
-   frequencies left at the top carry no data.
+   The code rate is the share of the sent bits that is data. The sender decides how many blocks each code rate gets
+   and states the counts in every frame's format word, so no receiver has to work the layout out. The default
+   senders put about 39% of the picture's slots at 6/7, 15% at 2/3, 20% at 1/2 and the rest at 3/4; a sender may
+   choose another split for its screen and its audience. The blocks are packed one after another from the lowest
+   frequency, and the few frequencies left at the top carry no data.
 6. **Interleave and scramble.** Each codeword's bits are spread over all of its frequencies by a fixed permutation,
    then XORed with a pseudo-random sequence, so that neither a burst of damage nor repetitive data lines up.
 7. **Turn bits into waves.** Each pair of bits picks one of four phases (QPSK) for one frequency, the lowest
-   frequencies first. A few known symbols, the **pilots**, fill each block's spare slots.
+   frequencies first. Two known symbols in every sub-channel, the **pilots**, sit apart from the blocks: a count pilot
+   and a reference pilot.
 8. **Make the picture.** An inverse 2D FFT adds all the waves into one grey image; the rare extremes are clipped, the
    image is scaled onto the screen's pixels, and the anchors are painted over it.
-9. **Add the border and show the frame**, typically 60 pictures a second on a steady schedule.
+9. **Add the border and show the frame**, typically 60 pictures a second on a steady schedule. Each code rate's
+   block places can be set to take a new block only every few pictures, so a slower camera still sees them unchanged
+   ([Tuning a sender](#tuning-a-sender)).
 
 ## Receiving, step by step
 
@@ -79,8 +85,10 @@ received archive into a folder, and the web receiver offers it as the `.tar` it 
 3. **Register (deskew).** Work out exactly where every point of the code falls in the camera image, allowing for
    perspective, lens distortion and the display's own scaling, to about a tenth of a module. The border gives the
    outline; the anchors give the lens's bend inside it.
-4. **Read the format word.** It gives the version, and from that where every block lies and which code rate it uses.
-   If a frame's word cannot be read, the last word that was read is used.
+4. **Read the format word.** It states the version (so the picture's size), how many blocks each code rate has and
+   the sender's clock (its pictures a second and its slowest block place's delay), as one index under a CRC-5,
+   Reed-Solomon and a magic byte; where every block lies follows from that. A frame whose own word cannot be read is
+   not decoded.
 5. **Sample and transform.** Read the picture at the sender's sample positions, erase the anchors, and take a 2D
    FFT, back to frequencies. Remove the screen's uneven brightness, and use the pilots to correct any offset of a fraction of a
    sample that registration left behind.
@@ -95,6 +103,27 @@ received archive into a folder, and the web receiver offers it as the `.tar` it 
    of the next picture leaked into each capture, and the app delays one camera frame now and then to keep its
    captures in the middle of each picture (the algebra is
    [below](#the-pilots-and-the-phase-lock-in-algebra)).
+
+## Tuning a sender
+
+A receiver collects whatever blocks verify, from any frames, and drops repeats by their id, so a sender can schedule
+its frames for its audience without telling any receiver.
+
+- **Refresh.** The frame rate is the clock, and each code rate's block places take a new block only every n pictures
+  (1 to 65,535; Send › Refresh in the apps and the web page, a delay each code rate; the pilots are apart from the
+  blocks, so every place's delay is free). A camera
+  too slow for the screen, whose every capture spans two or more pictures, still reads the places that held still. In
+  simulation (a physical model of the S26's camera, a sender at 60 pictures a second), a 30 a second camera with a
+  33 ms exposure read nothing when every place changed every picture, and 260 to 370 blocks a second (120 to 175
+  KB/s) when the 2/3 and 1/2 places held for 2 or 4 pictures. Delays of 1, 1, 2 and 4 (6/7, 3/4, 2/3, 1/2) left no
+  dead phase for any camera tried, at about 90% of the full rate on a 60 a second phone: a kiosk that has to serve
+  every phone can layer its places this way, and one for recent phones sends every place fresh.
+- **The split.** How many blocks each code rate gets is the sender's choice, stated in each frame's word: more at
+  6/7 for a short distance and a steady camera, more at 1/2 for a far or shaky one.
+- **Stream files.** A sender can paint its frames ahead into a `.lizard` stream file (Send › Control › Export, with
+  the laps of the file it holds and a size limit; Hide codes stops showing the frames while it exports) and play that
+  file later (Send › Control › Source › Stream), so a weak kiosk computer only shows frames it already has. Any
+  receiver's Upload decodes a stream file as frames, and `lizard_receive unpack` writes them as images.
 
 ## A phone as a PC's camera
 
@@ -155,6 +184,9 @@ times, camera axes, the crop) and its statistics. Any ZIP tool lists and tests o
 - **Looking inside.** `lizard_receive unpack <file.lizard> <folder>` writes the frames as raw `NNNN.gray` files with
   `meta.json`, and `lizard_receive pack <folder> <file.lizard>` makes a `.lizard` of such a folder.
 
+A stream file ([Tuning a sender](#tuning-a-sender)) is the same container holding a sender's frames, its ZIP comment
+saying which of the two a file is.
+
 ## The pilots and the phase lock, in algebra
 
 **The problem.** The screen shows a new picture every $`T_d`$ (16.67 ms at 60 Hz), and the camera starts a capture
@@ -165,34 +197,38 @@ fewer blocks. The pilots let the receiver measure $`a`$ and $`b`$ on every captu
 timing to keep both near zero.
 
 **What the sender paints.** The sender counts its pictures modulo 4, $`c = 0, 1, 2, 3, 0, \dots`$, with low bit $`c_0`$
-and high bit $`c_1`$. The spare slots at the end of each block hold known symbols $`s_i = \pm 1`$, which the sender
-flips (multiplies by $`-1`$) when the block's bit is 1: bit $`c_0`$ in the even-numbered blocks, bit $`c_1`$ in the odd
-ones. So the even blocks' pilots flip on every picture, and the odd blocks' on every second picture:
+and high bit $`c_1`$. In every sub-channel $`j`$ two frequencies hold known symbols instead of data: frequency 0 a count
+pilot, which the sender flips (multiplies by $`-1`$) when the sub-channel's bit is 1, bit $`c_0`$ in the even-numbered
+sub-channels and bit $`c_1`$ in the odd ones, and frequency 160 a reference pilot, the same in every picture. So the even
+sub-channels' count pilots flip on every picture, and the odd ones' on every second picture:
 
 | picture $`c`$ | 0 | 1 | 2 | 3 |
 |---|---|---|---|---|
-| $`c_0`$, even blocks | 0 | 1 | 0 | 1 |
-| $`c_1`$, odd blocks | 0 | 0 | 1 | 1 |
+| $`c_0`$, even sub-channels | 0 | 1 | 0 | 1 |
+| $`c_1`$, odd sub-channels | 0 | 0 | 1 | 1 |
 
-**What a capture reads.** For each block $`b`$, the receiver correlates the received values $`y_i`$ of its $`T`$ spare
-slots with the known symbols, scaled by the block's own signal level ($`m_2`$ is the mean power of the sub-channel the
-slots sit in):
+No block carries a pilot, so a block held from one picture to the next (Refresh) never touches them.
+
+**What a capture reads.** For each sub-channel $`j`$, the receiver correlates the received count pilot and reference with
+their known symbols, $`p_j`$ and $`q_j`$, and divides the count pilots by the references of every sub-channel, so the
+signal's level cancels (the even and odd sub-channels interleave over the same frequencies, half of them each):
 
 ```math
-r_b = \frac{1}{T} \sum_{i=1}^{T} \frac{s_i \, y_i}{\sqrt{m_2 / 2}}
+r = \frac{\sum_{j \text{ even}} p_j}{\tfrac{1}{2} \sum_j q_j}
+\qquad
+r_2 = \frac{\sum_{j \text{ odd}} p_j}{\tfrac{1}{2} \sum_j q_j}
 ```
 
-The mean over the even blocks is $`r`$, over the odd blocks $`r_2`$. A capture of a single picture reads $`r = \pm K`$ and
-$`r_2 = \pm K`$, where $`K = \sqrt{S / (S + N)}`$ is just under 1 at a good signal-to-noise ratio, and the two signs give
-the count of the picture it holds:
+A capture of a single picture reads $`r = \pm K`$ and $`r_2 = \pm K`$, where $`K`$ is 1 where the two pilots see the same
+channel (the receiver fits it anyway), and the two signs give the count of the picture it holds:
 
 ```math
 \hat c = [\, r < 0 \,] + 2 \, [\, r_2 < 0 \,]
 ```
 
 **What a blended capture reads.** Suppose a capture of picture $`c`$ also holds a share $`a`$ of picture $`c - 1`$ and a
-share $`b`$ of picture $`c + 1`$. A neighbour whose bit differs contributes flipped symbols, which cancel part of the
-correlation:
+share $`b`$ of picture $`c + 1`$. A neighbour whose bit differs contributes flipped count pilots, which cancel part of the
+correlation, while the references add up whole:
 
 ```math
 |r| = K \, (1 - 2a - 2b)
@@ -221,7 +257,8 @@ second of captures by weighted least squares. For each capture and each bit $`\b
 Here $`d^-_\beta`$ is 1 when bit $`\beta`$ of this capture's count differs from the previous capture's count, and
 $`d^+_\beta`$ the same against the next capture. The counts are read from the neighbouring captures' own signs, so a
 picture the screen showed twice (no bit differs) or skipped is accounted for as it happened, not assumed. Each
-reading is weighted by $`1/\sigma^2`$, its standard error from the spread of $`r_b`$ over the blocks.
+reading is weighted by $`1/\sigma^2`$, its standard error from the sub-channels' spread about it (the residuals
+$`p_j - r \, q_j`$, by the delta method).
 
 **The correction.** A capture that starts too early holds some of the previous picture ($`a > b`$); one that starts
 too late holds some of the next ($`b > a`$). The error is $`e = a - b`$, with standard error
@@ -273,6 +310,11 @@ grows with its frequency), which is turned back before decoding.
   while every cell was sharp and nothing past that point; LIZARD keeps reading, with fewer blocks.
 - **Code rate by frequency.** The lower frequencies arrive cleaner than the higher ones, so they carry more data and
   less protection, and the higher ones the reverse.
+- **The sender decides; the word states integers.** Each frame's word gives its version and how many blocks each
+  code rate has, as broadcast signalling states each stream's blocks: no receiver repeats a sender's choice to find
+  the layout, so every implementation reads the same one, and a sender can change its split without any receiver
+  changing. The word carries only what decoding needs. Its magic byte has one value in use and a second reserved, which
+  today's receivers refuse, so a later version can add a second kind of word without moving this one.
 - **Soft-decision LDPC.** The decoder uses how sure it is of each bit, not just its value, which lets the same parity
   correct far more errors.
 - **One large code with many blocks**, rather than many small codes side by side: each small code would need its own
@@ -298,23 +340,23 @@ grows with its frequency), which is turned back before decoding.
 | picture | the grey square inside the border | data area |
 | coefficient | one 2D spatial frequency of the picture, carrying two bits as one of four phases | subcarrier carrying a QPSK symbol |
 | sub-channel | 320 consecutive coefficients, ordered from coarse to fine | group of subcarriers |
-| block | 476 bytes (a 5-byte id and 471 of payload) plus a CRC-32, sent as one LDPC codeword over 2,248 to 3,840 consecutive frequencies by its code rate | codeword, packet |
+| block | 472 bytes (a 12-byte id and 460 of payload) plus a 64-bit CRC, sent as one LDPC codeword over 2,248 to 3,840 consecutive frequencies by its code rate | codeword, packet |
 | code rate | the share of the sent bits that is data | code rate |
 | rate profile | which code rate each block gets, by its frequencies | unequal error protection |
-| version | how much a frame holds: a code with k sub-channels (64 to 1024, in steps of 16) is version k / 16; 592 sub-channels hold 71 blocks, about 33.5 KB | QR version (capacity) |
+| version | how much a frame holds: a code with k sub-channels (64 to 1,072, in steps of 16) is version k / 16; 592 sub-channels hold 71 blocks at the default split, about 33.4 KB | QR version (capacity) |
 | ring, LIZARD-64, -128, -256 | the border's size, and the code's name: 64, 128 or 256 band cells a side, LIZARD-128 by default. It does not depend on the version: any ring can carry any picture. A larger ring gives the picture more of the screen but asks for a steadier camera | none (a QR code's size follows its version) |
-| format word | the short Reed-Solomon-coded header in the border, naming the version and the frame rate | format information |
+| format word | the short Reed-Solomon-coded header in the border: the frame's version and its block counts | format information |
 | timing track | the known pattern in the border's band | timing pattern |
 | corner mark | the square at each corner of the border | finder pattern |
 | guard | the picture's edges wrapped round it | cyclic prefix |
-| pilots | known symbols in each block's spare slots, flipped by the picture's count | pilot symbols |
+| pilots | two known symbols in every sub-channel, apart from the blocks: a count pilot flipped by the picture's count and a reference | pilot symbols |
 | bit map, whitening | the fixed permutation and the scrambling of a codeword's bits | interleaver, scrambler |
 | registration | working out where each point of the code falls in the camera image | deskewing, geometric correction |
 | soft values | how confident the receiver is of each bit | log-likelihood ratios (LLRs) |
 | chunk | a 16 MiB piece of the file, with its own fountain and hash | |
 | fountain | an erasure code that rebuilds a chunk from any set of pieces slightly larger than it | fountain (rateless) code |
-| header, manifest | the blocks that describe the file and each chunk | |
-| held word | the last format word read, used for a frame whose own word cannot be read | |
+| session header | the one block that describes the file: its size, hash, name and type | |
+| refresh delay | how many pictures a block place keeps its block before taking a new one | |
 | 2:1 | two codes side by side, read as the two halves of each camera frame | |
 | test stream | frames of known content, used for measuring | |
 
@@ -341,8 +383,8 @@ The format is not frozen: a sender and a receiver need the same release.
 ## The pipelines
 
 The technical detail behind the two step-by-step lists above. Two decoders read the format, one on the CPU and one
-on the GPU, and each sender paints on either. Every frame is decoded on its own. The one thing a receiver carries
-between frames is the last format word it read: a frame whose own word is unreadable is decoded at that held word.
+on the GPU, and each sender paints on either. Every frame is decoded on its own, at the layout its own word states;
+nothing carries from one frame to the next, and a frame whose own word cannot be read is not decoded.
 
 ### Receiving on the CPU (`liblizard/src/`)
 
@@ -355,18 +397,18 @@ decoder), and natively in the Android and desktop apps on a pool of threads (NEO
 2. **Register.** A homography from the quad, then every border node refined by correlation against the border as
    painted. The anchors are found through that map, and where 12 or more hold, the lens is fitted again with them
    inside the border.
-3. **Read the word** in the ring that registered, and take the picture size, blocks and rates it names.
+3. **Read the word** in the ring that registered, and take the picture size and each code rate's blocks it states.
 4. **Sample and transform.** The n x n picture is sampled through the registration and detrended, then goes through
    a 2D FFT (radix 2, with radix-3 and radix-5 stages for the sizes that are not powers of two).
 5. **Decode.** Align the grid from the pilots, make soft values for each block's sub-channels, skip blocks too weak to
-   try, run layered min-sum LDPC, and check the CRC-32.
+   try, run layered min-sum LDPC, and check the CRC.
 
 ### Receiving on the GPU (`liblizard/gpu/`)
 
 Designed from the format for the GPU, not ported from the C. Its kernels are written in GLSL; its setup (the kernels'
 sizes, tables and nets) is built by its JavaScript host in `liblizard/gpu/`, and the kernels are compiled to SPIR-V by
 glslang and run by a C++ Vulkan host (`liblizard/core/`) in the Android and desktop apps; in the Android app it takes
-camera frames with no copy. The web receiver does not run it: it decodes with the C. Frames go in batches: one
+camera frames with no copy. The web receiver decodes with the C alone. Frames go in batches: one
 batch is one submission and one readback. The nets and kernels run in int8 where a device supports it, else f16, else
 f32.
 
@@ -381,15 +423,14 @@ f32.
    - The format word is read.
 2. **Back half: decode, per picture size.** Sample the picture and take its 2D DFT on the device, align the grid
    from the pilots, and make soft values for each code rate's blocks. Then run layered min-sum LDPC, one dispatch per
-   code, each stopping a hopeless codeword early by a small trained net, and check the CRC-32.
+   code, each stopping a hopeless codeword early by a small trained net, and check the CRC.
 
 Both decoders count a block only when every parity check holds and its CRC passes.
 
 ### Sending
 
-A sender turns a file (packed first where that helps) into each frame's blocks: chunks, the fountain, the header and
-the manifest. It then
-paints each frame:
+A sender turns a file (packed first where that helps) into each frame's blocks: chunks, the fountain and the session
+header. It then paints each frame:
 - Encode each block with LDPC and spread its bits over its slots, with whitening and pilots.
 - Place them as QPSK on the picture's coefficients and take the inverse transform.
 - Clip to grey and resample onto whole pixels per module.
@@ -402,29 +443,32 @@ either painter decodes the same; the GPU's picture is within a grey level of the
 
 ## Status
 
-A beta since 0.1 (0.0.1 and the builds before it were alphas), and the format may still change ([Roadmap](#roadmap)). Measured on one phone (Samsung S26 Ultra)
-and the author's 1080p office monitors, by hand:
+A beta since 0.1 (0.0.1 and the builds before it were alphas); the format may still change until 1.0
+([Roadmap](#roadmap)). Measured by hand on a Samsung S26 Ultra and office monitors:
 
 | receiver | rate |
 |---|---|
-| Android app, two codes side by side (2:1 crop) | 4.1 MB/s median and 4.5 max over 27 s (logged 2026-10-27): two codes of 664 sub-channels, 81 blocks each, in LIZARD-256 at 60 pictures a second (the test stream), about 4.6 MB/s offered |
+| Android app, two codes side by side (2:1), 1080p capture, on a tripod | 4.4 to 4.8 MB/s second by second over 6 s (2026-11-18): two codes of 736 sub-channels at 60 pictures a second from the desktop app, the GPU decoder, 115 to 126 of about 120 captures a second clean |
+| the same, hand-held | 4.3 MB/s median (2026-11-01): two codes of 672 sub-channels in LIZARD-256 |
+| Android app, 2:1, 4K capture (3840 x 2160) | 6.2 MB/s median over 24 s (2026-11-07): two codes of 1,024 sub-channels in LIZARD-256 |
+| desktop app, the Surface Pro 9's own camera | about 1 MB/s (reported, not logged): 2:1, the sender at 15 pictures a second |
+| desktop app, a 2013 Logitech C930e webcam (a worst case: MJPEG, its focus set by hand) | 75 to 127 KB/s median (2026-11-16, logged) |
 
-No current figure exists for one code alone (1:1), nor for the web receiver, which decodes with the C, on a phone.
+No current figure exists for one code alone (1:1), nor for the web receiver on a phone. The runs above predate the
+current format word; what their blocks carry has not changed.
 
 Once the Android app's phase lock holds, the rate stays. What moves it from there is the camera and the screen, not
 the decoder: the app asks the camera for its picture with no sharpening, noise reduction or other enhancement (each is
 a filter over the code), and the sending screen has to show every picture once, at a steady rate. The receiving
 camera matters most: phone cameras through a native app work best, browser cameras on laptops and webcams poorly.
 
-Everything was built and measured on Linux x86-64. The desktop app also runs on Windows and on macOS (Apple
-Silicon, through MoltenVK); there its sender has been checked only on virtual machines (Windows on a software Vulkan
-driver, macOS on a build service's machine), each screenshot of it read back by the decoder, which says it sends but
-not how steadily it paces on real hardware. The desktop app's receiver (UVC cameras through V4L2, Media Foundation or
-AVFoundation) is checked against fake camera devices and a simulated camera filming a simulated screen; with a real
-camera it has run once, a 2013 USB webcam (a Logitech C930e on Linux) reading 90 to 120 kB/s (reported, not logged),
-which no phase lock helps: a webcam cannot delay a single frame (Settings' Phase lock is greyed for one), so a sender
-for one paints at most half the webcam's rate, and a webcam capturing at twice the screen's rate or more reads every
-picture.
+Built and measured mostly on Linux x86-64; the desktop app has also run on Windows hardware. On macOS (Apple Silicon,
+through MoltenVK) it is built and checked on a build service's machine, not yet on a real Mac. The desktop app's
+receiver (UVC cameras through V4L2, Media Foundation or AVFoundation) is checked against fake camera devices and a
+simulated camera filming a simulated screen, and has read the real cameras above. A webcam cannot delay a single frame,
+so no phase lock helps one (Settings' Phase lock is greyed for it): a sender for one paints at most half the webcam's
+rate, or holds its places for several pictures ([Tuning a sender](#tuning-a-sender)), and a webcam capturing at twice
+the screen's rate or more reads every picture.
 It also takes a phone as its camera ([A phone as a PC's camera](#a-phone-as-a-pcs-camera)): the phone sends its
 camera's crop as `.lizard` frames over a USB tether or, as an Android Open Accessory, over the cable alone. The
 accessory has run over a USB 2 cable on Linux (the link steady at 41 to 42 MB/s); the tether and the accessory on
@@ -438,21 +482,57 @@ Install USB driver binds.
 
 ## Roadmap
 
-In 0.2.4 and 0.3.0:
+Released in 0.2.4 and 0.3.0:
 
 - **zstd out of the transfer** (0.2.4). A chunk's fountain carries the chunk's own bytes, so every block count follows
   from the file's length, and the manifest carries the chunks' hashes alone.
 - **RaptorQ as the fountain** (0.3.0). RFC 6330's code, one source block a chunk, in place of Wirehair: it decodes
   from the chunk's own count of pieces or a piece or two more, with no rare long wait, and the header no longer
-  carries a seed. A file compressed before it enters LIZARD leaves the code and the transfer
-  untouched. The error correction (the LDPC codes, the fountain) and the transfer's layouts stay sealed into the format.
+  carries a seed. A file compressed before it enters LIZARD leaves the code and the transfer untouched. The error
+  correction (the LDPC codes, the fountain) and the transfer's layouts stay sealed into the format.
 - **A 40-bit block id** (0.3.0): 16 bits of chunk and RaptorQ's whole 24-bit piece number, for one byte of every block. A
   chunk's pieces repeat only once a receiver has missed 99.8% of them (86% before), two senders of one file seldom
   send the same pieces, and a file may reach 1 TiB. The format carries no version number before 1.0.
-- **The format word's extensions** (0.3.0). The word is RS(n, 5) with two magic bytes. A static word names the
-  version, the frame rate and two extension bytes (0 and 0 today). An animated word carries one symbol of a longer
-  header, an extension's parameters: the header is three Reed-Solomon codewords over 255 positions, any k of them
-  rebuild it, and its CRC-32C is the check. The desktop and Android apps send it from Send's Header setting.
+- **The format word's two kinds** (0.3.0). The word became RS(n, 5) with two magic bytes: a static word (then the
+  version, the frame rate and two extension bytes) and an animated word carrying one piece of a longer header, three
+  Reed-Solomon codewords over 255 positions, any enough of which rebuild it, checked by its CRC-32C.
+
+On main since 0.3.0, for the next release (its senders and receivers read none of 0.3.0's words):
+
+- **Each frame's word states its layout.** A static word is the version (6 bits: versions 4 to 67, up to 1,072
+  sub-channels), the 6/7 block count (8 bits), the 2/3 and 1/2 counts (7 bits each) and a CRC-4 of them; the 3/4
+  blocks fill the rest. The sender chooses the counts and every receiver reads and checks them. A frame whose word
+  cannot be read is not decoded.
+- **One kind of word, and no extension of the picture.** The animated word and its header carousel (0.3.0) are out:
+  every frame carries the static word (magic 0x4C) and is decoded at it alone, with nothing held from frame to frame.
+  Its magic, 0xB3, is no longer reserved: a format that changes the picture is another format with a magic of its
+  own, which a LIZARD receiver refuses, and what extends LIZARD goes in the session header. The display rate, which
+  only the animated header stated, is in the light no longer, and the senders' Header setting went with it.
+- **Every block names its file.** The block id is 96 bits, three 32-bit words: 16 bits of chunk, the 24-bit piece
+  number, a 48-bit object number taken from the file's own content, and a reserved byte (460 bytes of payload, 471 in
+  0.3.0). A receiver files each block under its object number, so blocks seen before their header wait for it, two
+  senders in view stay apart, and the same file shown by two screens is one transfer. Past 1 TiB a file goes as parts,
+  each its own transfer.
+- **One session header per send.** A send's one plain block carries its description as one CBOR map (RFC 8949): its
+  one file's name, length, BLAKE3 root, chunk size and compression, keys in any order (no media type: the name's
+  extension says it, and a name past 255 bytes loses part of its stem, never its extension); an unknown negative key
+  is skipped and an unknown positive one makes a receiver set the file aside (RFC 9581's rule); at most 309 of its 460
+  bytes, read from that one block. Each send is one file, several files one tar. Nothing is reserved: anything more,
+  several files in one send among it, comes as keys of its own.
+- **A 64-bit CRC on every block.** CRC-64/LIZARD, from a BCH code of length 4,095 bits (CRC-32C in 0.3.0): every
+  error of up to 11 bits, every odd number of errors and every burst of up to 64 bits is caught, so a block wrong past
+  its check is out of reach even when every decode is wrong.
+- **The file checked at its root.** The receiver hashes each chunk as it rebuilds it, in any order (BLAKE3's tree),
+  and checks the file against its root at the end; a file that fails is collected again. No list of the chunks'
+  hashes is sent, so the session header is the one control block, about one block in 190.
+- **The web receiver decodes with the C.** Its WebGPU decoder (0.3.0) is out: the page decodes on a pool of
+  WebAssembly workers, as it did wherever WebGPU was missing, and the installed web app is about 4 MB smaller. The
+  Android and desktop apps keep the GPU decoder; the web sender keeps its WebGPU encoder.
+- **Senders tuned per deployment:** Refresh's delays, stream files and the split ([Tuning a sender](#tuning-a-sender));
+  the native senders make the fountain's pieces on the GPU, and the desktop sender can scale its picture with
+  Lanczos-3.
+
+Before 1.0: the version 1 test vectors; then the format freezes.
 
 Compression, encryption and signing are not part of LIZARD, as they are not part of QR: the apps and the web page pack
 a file that compresses as zstd frames before it enters, and an application that carries files over it may add its own.

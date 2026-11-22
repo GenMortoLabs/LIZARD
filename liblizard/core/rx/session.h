@@ -187,9 +187,9 @@ class Session {
   // ai: devices to look (seconds on some systems). camerasStamp: camera.h listStamp, nothing opened.
   static std::string cameras();
   static std::string camerasStamp();
-  // ai: The takes in dataDir's kept/ whose file is whole, oldest first: [{id, name, type, root, path, at (ms)}], and
-  // ai: packed {name, type} where the file at path is one the default client packed (keepPacked's, or one that did not
-  // ai: unpack): the file it holds, for the app to unpack as it files it (pack.h Unpacker).
+  // ai: The takes in dataDir's kept/ whose file is whole, oldest first: [{id, name, root, path, at (ms), packed}],
+  // ai: packed true where the file at path, named name (<name>.zst), is the default client's zstd stream (keepPacked's,
+  // ai: or one that did not unpack), for the app to unpack as it files it under name less its .zst (pack.h Unpacker).
   static std::string kept(const std::string& dataDir);
   // ai: A take placed by the app (or let go with its entry): its folder deleted. False with why.
   static bool placed(const std::string& dataDir, const std::string& id, std::string& why);

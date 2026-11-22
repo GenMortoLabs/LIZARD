@@ -37,14 +37,13 @@ struct CpuFrameOut {
   double at = 0, ms = 0;          // ai: when the frame was offered, and the decode's wall ms
   bool found = false;             // ai: the finder registered a symbol
   int ring = -1, n = 0;           // ai: the ring, and the picture the frame was finished at (0: not finished)
-  bool held = false;              // ai: the held word stood in for the frame's own
   bool hasWord = false;
-  int version = 0;                // ai: the frame's own word (codec.h cpu_frame_t: kind 0 static, 1 animated)
-  int kind = 0, id = 0, count[3] = {0, 0, 0};   // ai: a static word's 7/8, 2/3 and 1/2 blocks, or an animated one's id
-  uint8_t sym[3] = {0, 0, 0};
+  int version = 0;                // ai: the frame's own word (codec.h cpu_frame_t): its version and its 6/7, 2/3 and 1/2 blocks
+  int count[3] = {0, 0, 0};
+  int fps = 0, delay = 0;          // ai: the sender's clock its word states (src/fmt.h), 0 where none
   float quad[8] = {};             // ai: the symbol's corners in the crop, TL TR BR BL
-  int pilotBlocks = 0;            // ai: the pilots (codec.h pilot_*): the blocks read (0 none), r and its standard
-  float pilotR = 0, pilotSd = 0, pilotR2 = 0, pilotSd2 = 0;   // ai: error over the even blocks, then over the odd
+  int pilotSubch = 0;             // ai: the pilots (codec.h pilot_*): the sub-channels read (0 none), r and its standard
+  float pilotR = 0, pilotSd = 0, pilotR2 = 0, pilotSd2 = 0;   // ai: error over the even sub-channels, then over the odd
   int blockBytes = 0;
   std::vector<uint8_t> blocks;    // ai: the verified blocks, blockBytes each
 };
@@ -62,9 +61,9 @@ class CpuPool {
   CpuPool& operator=(const CpuPool&) = delete;
   // ai: A frame's crop (w x h at (x, y) of a plane whose rows are `stride` bytes apart) to an idle worker, copied
   // ai: before the call returns; false when every worker is busy (the frame is lost and the caller counts it).
-  // ai: held: the version of the last word read, 0 none. ax, ay: where the camera's optical axis falls in the crop
-  // ai: (NaN: its centre), the C's lens model's (codec.h cpu_dec_set_axis).
-  bool offer(const uint8_t* plane, uint32_t stride, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint64_t tag, int held, double at, float ax = NAN, float ay = NAN);
+  // ai: ax, ay: where the camera's optical axis falls in the crop (NaN: its centre), the C's lens model's (codec.h
+  // ai: cpu_dec_set_axis).
+  bool offer(const uint8_t* plane, uint32_t stride, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint64_t tag, double at, float ax = NAN, float ay = NAN);
   // ai: The policy's two hooks, the receiver's to call: a frame was lost to busy workers (repeatShare: the share of
   // ai: the last second's decoded frames that carried nothing new); a second passed with busySkips frames lost.
   void lost(double repeatShare);

@@ -27,17 +27,19 @@ export function ruleContents(rt, nets = []) {
   L.netAt = sizes.map((_, c) => L.NET + sizes.slice(0, c).reduce((a, b) => a + b, 0));
   rt.codes.forEach((code, c) => {
     // ai: codeword bit j's slot: the bit map over the nt sent bits (bitmap.mjs sentBit), 0xffff (no slot) for a bit never
-    // ai: sent (the 7/8 code's known zeros, which the LDPC takes as known from KNOWN whatever INV says)
+    // ai: sent (the 6/7 code's known zeros, which the LDPC takes as known from KNOWN whatever INV says)
     const inv = inverse(perm(code.nt));
     for (let j = 0; j < code.n; j++) tab[L.inv[c] + (j >> 1)] |= (unsent(code, j) ? 0xffff : inv[j < code.k - code.np ? j : j - code.np]) << (16 * (j & 1));
   });
   const w = whiten(WHITE_SLOTS);
   for (let i = 0; i < WHITE_SLOTS; i++) if (w[i]) tab[L.WHITE + (i >> 5)] |= 1 << (i & 31);
   nets.forEach((w, c) => { if (w) tab.set(w, L.netAt[c]); });
-  // ai: n here is the sent length (the codeword's slots; the tail, the pilots, follows it), slots a block's (CODES'),
-  // ai: tail its pilots' coefficients ((slots - nt) / 2: 8 at 7/8, 16 at 3/4, none at 2/3 and 1/2), the bar at the sent
-  // ai: rate k / nt
-  const consts = rt.codes.map((code, c) => ({ n: code.nt, k: code.k, slots: CODES[c].slots, tail: (CODES[c].slots - code.nt) / 2, bar: Math.fround(Math.fround(0.2 * code.k) / code.nt) }));
+  // ai: n here is the sent length (the codeword's slots), slots a block's (CODES': the same since the pilots left the
+  // ai: blocks, 2026-11-21), the bar at the sent rate k / nt
+  const consts = rt.codes.map((code, c) => {
+    if (CODES[c].slots !== code.nt) throw new Error(`the ${CODES[c].name} code sends ${code.nt} bits, its block ${CODES[c].slots} slots: a tail the rule stage does not read`);
+    return { n: code.nt, k: code.k, slots: CODES[c].slots, bar: Math.fround(Math.fround(0.2 * code.k) / code.nt) };
+  });
   return { L, tab, consts };
 }
 
@@ -90,7 +92,8 @@ export class RuleStage {
       ...shapes.map((sh, c) => computePipeline(device, { code: ldpcCode(sh, c), layout: pl(st.ldpcBgl), label: `tldpc ${CODES[c].name}` })),
     ]);
     st.ldpcAlts = await Promise.all(alts.map((set) => Promise.all(set.map((sh, c) => computePipeline(device, { code: ldpcCode(sh, c), layout: pl(st.ldpcBgl), label: `tldpc ${CODES[c].name} ${sh.form}` })))));
-    st.bytes = { EP: 8 * bh.B * bh.dims.subchMax };
+    // ai: EP: a sub-channel's estimate and its two pilots' values (tsoft), a vec4
+    st.bytes = { EP: 16 * bh.B * bh.dims.subchMax };
     bh.log(`rate profile (LDPC ${LDPC_FORMS.join(", ")}): ${shapes.map((sh, c) => `${CODES[c].name} n ${sh.n} z ${sh.z}, ${sh.threads} lanes, ${tierWgBytes(sh, nets[c])} B, the learned stop ${nets[c].hidden} x ${nets[c].hidden}`).join("; ")}; TAB ${(tab.byteLength / 1024).toFixed(0)} KB`);
     return st;
   }

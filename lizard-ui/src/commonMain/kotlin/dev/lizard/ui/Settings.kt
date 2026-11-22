@@ -23,7 +23,7 @@ class Choice<T>(val title: String, val value: T, val options: List<Pair<T, Strin
                 val enabledFor: (T) -> Boolean = { true }, val onOpen: () -> Unit = {}, val choose: (T) -> Unit) : Setting
 
 // ai: a choice among a few as chips under its title (Chips: Send's FPS, Ring, Codes, GPU acceleration (Encoder until
-// ai: 2026-11-16), VSync, Payload; Receive's GPU acceleration (Decoder until 2026-11-16) and the phone's Decode on, Crop (1:1, 2:1; named Codes, 1 and 2, from 2026-11-09 to 11-13), Format, Phase lock, Frame rate, Save replays; Show statistics on both; the desktop's Exclusive
+// ai: 2026-11-16), VSync, Test stream (Developer Tools' Payload until 2026-11-19); Receive's GPU acceleration (Decoder until 2026-11-16) and the phone's Decode on, Crop (1:1, 2:1; named Codes, 1 and 2, from 2026-11-09 to 11-13), Format, Phase lock, Frame rate, Save replays; Show statistics on both; the desktop's Exclusive
 // ai: fullscreen; the phone's Resolution and Compression); `enabledFor` greys a choice the device does not offer
 class ChipChoice<T>(val title: String, val value: T, val options: List<Pair<T, String>>, val enabled: Boolean = true,
                     val enabledFor: (T) -> Boolean = { true }, val choose: (T) -> Unit) : Setting
@@ -72,22 +72,24 @@ val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvPerformance 
 val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendControl to "Control", FoldKey.SendPerformance to "Performance")
 
 // ai: Send's Control fold (2026-11-18, both apps; named Stream that day before; the mockups
-// ai: research/build/ui-proposal-2026-11-18-streams): Source, Files (what is picked, painted as it goes) or Stream (a stream file played: frames
+// ai: research/build/ui-proposal-2026-11-18-streams): Test stream, Off or On (2026-11-19; Developer Tools' Payload, File
+// ai: or Test stream, before): On sends the test stream whatever else the fold says, every other row greyed at its
+// ai: value; Source, Files (what is picked, painted as it goes) or Stream (a stream file played: frames
 // ai: painted ahead, sender.h play); Export, Off or On (Start writes the frames into a stream file too: Laps of the
-// ai: file's blocks, 1 to 5 in halves, 2.5 by default, its value the laps and the file's size where known; Display, On
+// ai: file's blocks, 1 to 5 in halves, 2.5 by default, its value the cycles and the file's size where known; Display, On
 // ai: or Off: Off shows nothing, the painter running as fast as it goes and the run ending with the file). Export greyed
-// ai: while a stream plays or for the test stream (a stream is painted already; the test stream has no lap), Laps and
+// ai: while a stream plays or for the test stream (a stream is painted already; the test stream has no cycle), Laps and
 // ai: Display while Export is off, the whole fold while a run goes (its settings are the run's).
-const val LAPS_MIN = 1.0
-const val LAPS_MAX = 5.0
-const val LAPS_DEFAULT = 2.5
-fun lapsOf(v: Double): Double = (Math.round(v.coerceIn(LAPS_MIN, LAPS_MAX) * 2) / 2.0)
-fun lapsText(v: Double): String = if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(java.util.Locale.ROOT, "%.1f", v)
+const val CYCLES_MIN = 1.0
+const val CYCLES_MAX = 5.0
+const val CYCLES_DEFAULT = 2.5
+fun cyclesOf(v: Double): Double = (Math.round(v.coerceIn(CYCLES_MIN, CYCLES_MAX) * 2) / 2.0)
+fun cyclesText(v: Double): String = if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(java.util.Locale.ROOT, "%.1f", v)
 
 // ai: Maximum size (2026-11-18; named Largest file for an hour before): the
 // ai: biggest file an export takes, by its own size as picked (before the default client's compression), Receive's
 // ai: slider and stops (fileLimitSetting); an export of a larger one refused at Start ("File too large: 5 GB, over
-// ai: the 1 GB limit"). EXPORT_GB_DEFAULT 1 GB: a stream holds about 90 bytes a byte of file at 2.5 laps.
+// ai: the 1 GB limit"). EXPORT_GB_DEFAULT 1 GB: a stream holds about 90 bytes a byte of file at 2.5 cycles.
 const val EXPORT_GB_DEFAULT = 1
 fun exportTooLarge(fileBytes: Long, gb: Int): String? =
     if (gb != FILE_GB_NONE && fileBytes > fileLimitBytes(gb)) "File too large: ${dev.lizard.readout.Readout.bytes(fileBytes)}, over the ${fileGbText(gb)} limit" else null
@@ -96,17 +98,19 @@ fun exportTooLarge(fileBytes: Long, gb: Int): String? =
 // ai: shows nothing, the painter running as fast as it goes; Off (the default) the frames shown are the frames written.
 // ai: Greyed with Export off; live while an export runs (the sender's exportShow), every other setting of the fold
 // ai: greyed then.
-fun controlSettings(source: String, export: Boolean, laps: Double, size: String, limitGb: Int, hideCodes: Boolean, canExport: Boolean, running: Boolean,
-                   chooseSource: (String) -> Unit, chooseExport: (Boolean) -> Unit, chooseLaps: (Double) -> Unit, chooseLimit: (Int) -> Unit,
-                   chooseHideCodes: (Boolean) -> Unit): List<Setting> {
+fun controlSettings(test: Boolean, source: String, export: Boolean, cycles: Double, size: String, limitGb: Int, hideCodes: Boolean, canExport: Boolean,
+                   running: Boolean, chooseTest: (Boolean) -> Unit, chooseSource: (String) -> Unit, chooseExport: (Boolean) -> Unit,
+                   chooseCycles: (Double) -> Unit, chooseLimit: (Int) -> Unit, chooseHideCodes: (Boolean) -> Unit): List<Setting> {
     val files = source != "stream"
-    val out = listOf(
-        ChipChoice("Source", source, listOf("files" to "Files", "stream" to "Stream")) { chooseSource(it) },
+    val rest = listOf(
+        greyedUnless(!test, ChipChoice("Source", source, listOf("files" to "Files", "stream" to "Stream")) { chooseSource(it) }),
         greyedUnless(files && canExport, ChipChoice("Export", export, listOf(false to "Off", true to "On")) { chooseExport(it) }),
-        greyedUnless(files && canExport && export, Slide("Laps", lapsText(laps) + if (size.isNotEmpty()) " \u00b7 $size" else "", laps.toFloat(),
-            LAPS_MIN.toFloat()..LAPS_MAX.toFloat(), ((LAPS_MAX - LAPS_MIN) * 2).toInt() - 1) { v -> val l = lapsOf(v.toDouble()); if (l != laps) chooseLaps(l) }),
+        greyedUnless(files && canExport && export, Slide("Laps", cyclesText(cycles) + if (size.isNotEmpty()) " \u00b7 $size" else "", cycles.toFloat(),
+            CYCLES_MIN.toFloat()..CYCLES_MAX.toFloat(), ((CYCLES_MAX - CYCLES_MIN) * 2).toInt() - 1) { v -> val l = cyclesOf(v.toDouble()); if (l != cycles) chooseCycles(l) }),
         greyedUnless(files && canExport && export, fileLimitSetting(limitGb, "Maximum size") { chooseLimit(it) }))
+    // ai: canExport is false for the test stream, so Export, Laps, Maximum size and Hide codes grey with it
     val hide = greyedUnless(files && canExport && export, ChipChoice("Hide codes", hideCodes, listOf(false to "Off", true to "On")) { chooseHideCodes(it) })
+    val out = listOf(ChipChoice("Test stream", test, listOf(false to "Off", true to "On")) { chooseTest(it) }) + rest
     return (if (running) greyed(out) else out) + hide
 }
 
@@ -144,7 +148,7 @@ fun replaySizeText(mb: Int): String = if (mb < 1024) "$mb MB"
     else "${mb / 1024}" + when (mb % 1024) { 256 -> ".25"; 512 -> ".5"; 768 -> ".75"; else -> "" } + " GB"
 
 // ai: Send's Seed (Developer Tools, both apps, 2026-11-14): a file's schedule drawn from it (lizard.h liz_sender_seed:
-// ai: each chunk's first symbol, each round's order of the chunks, each frame's shuffle), so a send can be repeated;
+// ai: each source block's first symbol, each round's order of the source blocks, each frame's shuffle), so a send can be repeated;
 // ai: empty, a random one each send. Kept as typed: seedText takes what is a seed or empty and refuses the rest (null);
 // ai: seedOf reads it, an unsigned 32-bit value carried in an Int, null for none.
 fun seedSetting(text: String, choose: (String) -> Unit): Setting = Typed("Seed", text, "Random") { t -> seedText(t)?.let(choose) }
@@ -153,7 +157,7 @@ fun seedOf(text: String): Int? = text.trim().toUIntOrNull()?.toInt()
 
 // ai: Receive's Largest file (2026-11-15, both apps, the Files fold; session.h fileLimit): a transfer whose file is over it is
 // ai: refused at its header, the camera stopped, the popup saying so. GB of 10^9 bytes, as the apps' figures; the stops a
-// ai: slider's, FILE_GB_NONE (0) the last, "No limit" (the format's own, 65,535 chunks of 16 MiB); 50 GB by default.
+// ai: slider's, FILE_GB_NONE (0) the last, "No limit" (the format's own, 65,535 source blocks of 16 MiB); 50 GB by default.
 const val FILE_GB_NONE = 0
 const val FILE_GB_DEFAULT = 50
 val FILE_GB_STOPS = listOf(1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, FILE_GB_NONE)
@@ -179,20 +183,19 @@ fun replayBytes(mb: Int): Long = replayMb(mb).toLong() shl 20
 
 // ai: Send's Refresh (2026-11-17; Rate refresh of 2026-11-12 before, a slider a code rate, 1 to 4): FPS sets the clock,
 // ai: and each group's delay is the pictures between its blocks' new ids, a whole number 1 (every picture, the default) to
-// ai: REFRESH_MAX (liblizard/core/tx/sender.h Sender::setRefresh), so a group's rate is FPS over a whole number. Three
-// ai: groups from the picture's inside out (REFRESH_GROUPS): 7/8 and 3/4 tied, the two rates that carry the pilots, so
-// ai: the phase lock reads them alike; then 2/3, then 1/2. A slider a group in the Refresh fold under FPS, each value
-// ai: applied as it moves (the sender takes it from its next frame, no configure); kept as the sender's four,
-// ai: "a,b,c,d" (refreshText, refreshOf; a kept 3/4 of its own read as its 7/8), as the sender's stats carry them.
-const val REFRESH_MAX = 60
-val REFRESH_GROUPS = listOf("7/8 + 3/4" to listOf(0, 1), "2/3" to listOf(2), "1/2" to listOf(3))
+// ai: REFRESH_MAX (liblizard/core/tx/sender.h Sender::setRefresh), so a group's rate is FPS over a whole number. A group a
+// ai: code rate from the picture's inside out (REFRESH_GROUPS): 6/7, 3/4, 2/3, 1/2, each its own delay (2026-11-22: the
+// ai: pilots apart from the blocks, so no rate carries them; 6/7 and 3/4 tied on one slider from 2026-11-17, their tails
+// ai: the phase lock's). A slider a group in the Refresh fold under FPS, each value applied as it moves (the sender takes
+// ai: it from its next frame, no configure); kept as the sender's four, "a,b,c,d" (refreshText, refreshOf), as the
+// ai: sender's stats carry them.
+const val REFRESH_MAX = 30   // ai: the library's (liblizard/include/lizard.h LIZ_REFRESH_MAX), the word's largest delay
+val REFRESH_GROUPS = listOf("6/7" to listOf(0), "3/4" to listOf(1), "2/3" to listOf(2), "1/2" to listOf(3))
 
-// ai: a kept text to the four delays: a missing or unreadable one 1, each held to 1..REFRESH_MAX, the 3/4 the 7/8's
+// ai: a kept text to the four delays: a missing or unreadable one 1, each held to 1..REFRESH_MAX
 fun refreshOf(text: String?): IntArray {
     val v = text?.split(',')?.map { it.trim().toIntOrNull() }
-    val every = IntArray(4) { r -> (v?.getOrNull(r) ?: 1).coerceIn(1, REFRESH_MAX) }
-    every[1] = every[0]
-    return every
+    return IntArray(4) { r -> (v?.getOrNull(r) ?: 1).coerceIn(1, REFRESH_MAX) }
 }
 
 fun refreshText(every: IntArray): String = every.joinToString(",")
@@ -204,17 +207,6 @@ fun rateRefreshSettings(every: IntArray, choose: (rates: List<Int>, value: Int) 
         Slide(title, "$v", v.toFloat(), 1f..REFRESH_MAX.toFloat(), REFRESH_MAX - 2) { x ->
             val n = x.roundToInt().coerceIn(1, REFRESH_MAX); if (n != v) choose(rates, n) }
     }
-
-// ai: Send's Header, the animated header (2026-11-15, titled Animated header in Experimental until that afternoon; the
-// ai: Refresh fold after Rate refresh; liblizard/core/tx/sender.h
-// ai: Sender::setCarousel, SPEC 5.5): Off (0, the static word, the default) or the frames each carousel symbol of the
-// ai: format's own header is shown, 1 to CAROUSEL_MAX; each move handed to the sender at once (its next frame made; the
-// ai: GPU paints each code's symbol over its word cells, gpu/wgsl/send.mjs WORDS, the CPU where it cannot)
-const val CAROUSEL_MAX = 30
-
-fun carouselSetting(frames: Int, choose: (Int) -> Unit): Setting =
-    Slide("Header", if (frames == 0) "Off" else if (frames == 1) "1 frame" else "$frames frames", frames.toFloat(),
-        0f..CAROUSEL_MAX.toFloat(), CAROUSEL_MAX - 1) { x -> val n = x.roundToInt().coerceIn(0, CAROUSEL_MAX); if (n != frames) choose(n) }
 
 // ai: Receive's Focus (2026-11-16, both apps' Camera fold, after Zoom; the camera's "focus" control, the session's set
 // ai: and cameras.json): Auto first, the camera's own autofocus and the default (the session turns it on at each open

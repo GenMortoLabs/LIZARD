@@ -9,7 +9,6 @@ import dev.lizard.readout.Readout
 import dev.lizard.tar.Bundle
 import dev.lizard.tar.Stoppable
 import dev.lizard.tar.Stopped
-import dev.lizard.tar.TAR_TYPE
 import dev.lizard.tar.TarEntry
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -187,7 +186,7 @@ class SendState(val full: FullScreen) {
         return true
     }
     var fileSize by mutableStateOf(0L)
-    // ai: The transfer made at Start (2026-11-01; at the pick and again at each stop from 2026-10-19, every chunk
+    // ai: The transfer made at Start (2026-11-01; at the pick and again at each stop from 2026-10-19, every source block
     // ai: compressed for picks never sent): the bundle's tar written and the file packed where that pays (txCreate,
     // ai: liblizard/core/tx/pack.h) on a thread of its own, the line "Preparing" meanwhile. compressed: the bytes the transfer
     // ai: carries (the packed file's, else the file's), 0 until a run makes it, kept through the run and after it until
@@ -211,7 +210,7 @@ class SendState(val full: FullScreen) {
     var source by mutableStateOf(if (Prefs.source == "stream") "stream" else "files")
     var stream by mutableStateOf<StreamPick?>(null)
     var export by mutableStateOf(Prefs.export)
-    var laps by mutableStateOf(lapsOf(Prefs.laps))
+    var cycles by mutableStateOf(cyclesOf(Prefs.cycles))
     var hideCodes by mutableStateOf(Prefs.hideCodes)
     var exportLimit by mutableStateOf(fileGb(Prefs.exportLimit))
     var exportNow by mutableStateOf<JsonObject?>(null)
@@ -219,7 +218,6 @@ class SendState(val full: FullScreen) {
     private var runPlay = false     // ai: the run plays `stream`
     private var runExport = false   // ai: the run exports
     private var runDisplay = true   // ai: the run shows its frames
-    private var madeType = ""       // ai: the made transfer's type, as its header carries it (an export's meta.json)
     // ai: the painter the sender runs on now, "gpu" or "cpu" ("" before a send): the Encoder chip auto marks (2026-10-05)
     val painterNow: String get() = sender?.str("painter") ?: ""
     // ai: a version 4 to 64 (16 sub-channels a step, Pick.STEP), Pick.VERSION_DEFAULT unless chosen; no auto since
@@ -240,13 +238,9 @@ class SendState(val full: FullScreen) {
     var ring by mutableStateOf(Prefs.ring.let { if (it in Pick.RINGS.indices) it else -1 })
     var codes by mutableStateOf(if (Prefs.codes == 2) 2 else 1)
     // ai: Refresh (2026-11-17, lizard-ui rateRefreshSettings; Rate refresh of 2026-11-12 before): each code rate's delay,
-    // ai: its blocks new every n-th picture, 7/8, 3/4 (tied to the 7/8), 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender
+    // ai: its blocks new every n-th picture, 6/7, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender
     // ai: as it is made and at each change (refreshNow), kept
     var refresh by mutableStateOf(refreshOf(Prefs.refresh))
-    // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting; Sender::setCarousel): frames each symbol of
-    // ai: the format's own header carousel is shown, 0 the static word; handed to each sender made and at each change,
-    // ai: which re-picks (the sender configures again)
-    var carousel by mutableStateOf(Prefs.carousel.coerceIn(0, CAROUSEL_MAX))
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): a file's schedule drawn from it at each Start (txSeed,
     // ai: before the first frame), so a send can be repeated; "" a random one each send; kept
     var seed by mutableStateOf(Prefs.seed)
@@ -296,10 +290,13 @@ class SendState(val full: FullScreen) {
     // ai: the code area's colour at its left edge (the column's margin beside it takes it, SendHost.codeFill; the canvas's
     // ai: X background): the soft fill under the test stream's note, white under the file upload, the code's paper round
     // ai: the presenter's code (it clears to the paper) and round a paused run's still
-    val codeFill: Color get() = if (canvas.shown || stamp != null) colourOfRgb(paper) else if (test && source != "stream") Soft else Bg
+    val codeFill: Color get() = if (canvas.shown || stamp != null) colourOfRgb(paper) else if (test) Soft else Bg
     val sending get() = phase == Phase.On || phase == Phase.Preparing
-    val canStart get() = loadError.isEmpty() && !sending && (if (source == "stream") stream != null else (test || (choice != null && !reading)))
-    // ai: Export offered: files painted as they go (a stream is painted already), not the test stream (it has no lap)
+    // ai: a stream file is what plays: Source Stream with the test stream off (Control's Test stream, 2026-11-19, sends
+    // ai: the test stream whatever Source says)
+    val playing get() = source == "stream" && !test
+    val canStart get() = loadError.isEmpty() && !sending && (if (playing) stream != null else (test || (choice != null && !reading)))
+    // ai: Export offered: files painted as they go (a stream is painted already), not the test stream (it has no cycle)
     val canExport get() = source != "stream" && !test
     // ai: the run exports with no screen: the code area blank, no presenter, no Pause
     val blind get() = sending && runExport && !runDisplay
@@ -309,7 +306,7 @@ class SendState(val full: FullScreen) {
     private val edge get() = edgeShare
     // ai: the light the presenter keeps past the frame at each edge, a share of its height (presenter.h PresentOptions::edge)
     val edgeShare get() = Room.edgeShare(fmt?.span ?: Pick.span(ringIndex), margin).toFloat()
-    // ai: what the code offers at most, KB/s: codes x blocks a frame x 471 B x the pictures a second it can show, the
+    // ai: what the code offers at most, KB/s: codes x blocks a frame x 460 B x the pictures a second it can show, the
     // ai: asked rate or the measured refresh where lower, so a limit outside the sender shows in the figure
     // ai: (2026-10-04), x the share of blocks new in a frame (freshShare); null before a configure
     val capacityKBs: Double? get() {
@@ -423,8 +420,6 @@ class SendState(val full: FullScreen) {
         val one = if (b.single == null) null else singleFile
         val tar = if (one != null) null else File(Native.cache, "send-${ProcessHandle.current().pid()}-$my.tar")
         val path = one?.path ?: tar!!.path
-        val type = if (one == null) TAR_TYPE else runCatching { Files.probeContentType(one.toPath()) }.getOrNull() ?: ""
-        madeType = type
         thread(name = "lizard-send-make", isDaemon = true) {
             val wrote = if (tar == null) null else runCatching {
                 tar.parentFile.mkdirs(); tar.deleteOnExit()
@@ -436,7 +431,7 @@ class SendState(val full: FullScreen) {
             val live = wrote == null && my == making
             val packDir = File(Native.cache, "send-pack")
             if (live) packDir.apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-            val hnd = if (!live) 0L else Native.txCreate(path, b.name, type, packDir.path, ep)
+            val hnd = if (!live) 0L else Native.txCreate(path, b.name, packDir.path, ep)
             val err = if (wrote != null) "Files unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
             val sent = if (hnd != 0L) Native.txBytes(hnd) else 0L
             EventQueue.invokeLater {
@@ -459,7 +454,7 @@ class SendState(val full: FullScreen) {
     // ai: Start (the column's, the rail's play, the hook's); no tip before it since 2026-11-03
     fun start() {
         if (!canStart) return
-        runPlay = source == "stream"
+        runPlay = playing
         runExport = !runPlay && export && !test
         runDisplay = !runExport || !hideCodes
         exportNow = null; exportFile = null
@@ -489,7 +484,7 @@ class SendState(val full: FullScreen) {
         val my = ++gen
         val sd = if (runTest) null else seedOf(seed)
         thread(name = "lizard-send-prep", isDaemon = true) {
-            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "", -1L)
+            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", -1L)
             if (hnd != 0L && sd != null) Native.txSeed(hnd, sd)   // ai: before the first frame, which the configure makes
             val err = if (hnd == 0L) Native.txError() else ""
             // ai: the GPU painter's device and pipelines made here, off the UI thread that configures
@@ -526,7 +521,7 @@ class SendState(val full: FullScreen) {
     // ai: Source (lizard-ui controlSettings): a run stops first, as a pick does
     fun chooseSource(v: String) { if (sending) stop(); source = if (v == "stream") "stream" else "files"; Prefs.source = source; exportNow = null }
     fun chooseExport(on: Boolean) { export = on; Prefs.export = on; exportNow = null }
-    fun chooseLaps(v: Double) { laps = lapsOf(v); Prefs.laps = laps }
+    fun chooseCycles(v: Double) { cycles = cyclesOf(v); Prefs.cycles = cycles }
     // ai: Hide codes (lizard-ui controlSettings): kept, and mid-export the screen turned off or on at once (txExportShow:
     // ai: the sender's intake switched, the export going on): off, the presenter stopped first and the canvas out; on,
     // ai: the sender switched first, then the presenter begun as at a Start
@@ -558,6 +553,7 @@ class SendState(val full: FullScreen) {
         if (phase is Phase.Error) phase = Phase.Idle
         stream = StreamPick(f, m)
         source = "stream"; Prefs.source = source
+        if (test) chooseTest(false)
         exportNow = null
     }
     fun clearStream() { if (sending) stop(); stream = null }
@@ -574,7 +570,7 @@ class SendState(val full: FullScreen) {
         val bytes = if (compressed > 0) compressed else choice?.size ?: 0L
         val subch = Pick.STEP * blocks
         val side = runCatching { Native.frameSide(subch, Pick.span(ringIndex)) }.getOrDefault(0)
-        val est = SendRows.exportEstimate(laps, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
+        val est = SendRows.exportEstimate(cycles, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
         return if (est > 0) Readout.bytes(est) else ""
     }
 
@@ -698,17 +694,11 @@ class SendState(val full: FullScreen) {
         Prefs.refresh = refreshText(refresh)
         if (h != preparing) refreshNow()
     }
-    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel); Native.txColours(h, ink, paper) } }
+    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txColours(h, ink, paper) } }
     // ai: the code's colours, applied at once (the next frame shown; the sender's atomics, so even while it prepares)
     fun chooseColours(i: Int, p: Int) {
         ink = i and 0xFFFFFF; paper = p and 0xFFFFFF; Prefs.ink = ink; Prefs.paper = paper
         if (h != 0L) Native.txColours(h, ink, paper)
-    }
-    // ai: the animated header, applied at once as Rate refresh is (the sender's next frame; no configure)
-    fun chooseCarousel(v: Int) {
-        if (carousel == v) return
-        carousel = v.coerceIn(0, CAROUSEL_MAX); Prefs.carousel = carousel
-        if (h != preparing) refreshNow()
     }
     fun commitFps() {
         if (phase != Phase.On) return
@@ -784,7 +774,7 @@ class SendState(val full: FullScreen) {
         if (runExport && exportFile == null) {
             val dir = Received.downloads.apply { mkdirs() }
             val out = Received.free(dir, (File(runName).nameWithoutExtension.ifEmpty { runName }.ifEmpty { "LIZARD" }) + ".lizard")
-            val e = Native.txExport(h, out.path, laps, runDisplay, 0, runName, madeType, blocks, ringIndex, fps, codes, codes * sentBlocks)
+            val e = Native.txExport(h, out.path, cycles, runDisplay, 0, runName, blocks, ringIndex, fps, codes, codes * sentBlocks)
             if (e.isNotEmpty()) { fail("Export failed: $e"); return false }
             exportFile = out
             exportNow = parse(Native.txExportState(h))
@@ -824,13 +814,13 @@ class SendState(val full: FullScreen) {
         val sd = sender
         // ai: a stream's file is the one it carries (its meta.json's)
         if (runPlay) stream?.meta?.let { m ->
-            return SendRows.details(m.name, m.test, phase == Phase.Preparing, m.length, 0, 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("lap") ?: 0.0, stats)
+            return SendRows.details(m.name, m.test, phase == Phase.Preparing, m.length, 0, 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("cycle") ?: 0.0, stats)
         }
         return SendRows.details(runName, runTest, phase == Phase.Preparing, fileSize, compressed,
-            choice?.takeIf { it.single == null }?.files ?: 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("lap") ?: 0.0, stats)
+            choice?.takeIf { it.single == null }?.files ?: 1, speedKBs, sd?.num("pass") ?: 0.0, sd?.num("cycle") ?: 0.0, stats)
     }
     // ai: the rate the pictures actually presented carry (the presenter's fresh pictures a second x codes x blocks a frame
-    // ai: x 471 B, so a limit outside the sender shows in it; 2026-10-04; x the share of blocks new in a frame, Rate
+    // ai: x 460 B, so a limit outside the sender shows in it; 2026-10-04; x the share of blocks new in a frame, Rate
     // ai: refresh's repeats none, 2026-11-12), 0 while paused or before the first present
     private val speedKBs: Double get() {
         if (phase != Phase.On || paused) return 0.0
@@ -848,9 +838,9 @@ class SendState(val full: FullScreen) {
         val b = sentBlocks
         val l = mutableListOf<String>()
         l += "LIZARD-${f.subch} ($b blocks${if (tiers.isNotEmpty()) ": $tiers" else ""}), picture ${sd.num("n").toInt()} samples in the ${f.span / 2}-cell ring"
-        if (!runTest) l += "file $fileSize B${if (compressed in 1 until fileSize) ", $compressed B packed (zstd)" else ""}: ${sd.num("chunks").toInt()} chunk${if (sd.num("chunks").toInt() == 1) "" else "s"}, " +
-            "${sd.num("lap").toInt()} data blocks a pass, BLAKE3 ${sd.str("root").take(16)}..., seed ${sd.num("seed").toLong()}" +
-            (sd.num("pass").let { p -> if (p >= 1) "\npass ${floor(p).toInt()}" + (sd.num("offeredKBs").let { k -> if (k > 0 && sd.num("lap") > 0) ", ${Fmt.f1(sd.num("lap") / (k * 1000 / Pick.PAYLOAD))} s a pass" else "" }) else "" })
+        if (!runTest) l += "file $fileSize B${if (compressed in 1 until fileSize) ", $compressed B packed (zstd)" else ""}: ${sd.num("sourceBlocks").toInt()} chunk${if (sd.num("sourceBlocks").toInt() == 1) "" else "s"}, " +
+            "${sd.num("cycle").toInt()} data blocks a pass, BLAKE3 ${sd.str("root").take(16)}..., seed ${sd.num("seed").toLong()}" +
+            (sd.num("pass").let { p -> if (p >= 1) "\npass ${floor(p).toInt()}" + (sd.num("offeredKBs").let { k -> if (k > 0 && sd.num("cycle") > 0) ", ${Fmt.f1(sd.num("cycle") / (k * 1000 / Pick.PAYLOAD))} s a pass" else "" }) else "" })
         l += "frame ${sd.num("width").toInt()} x ${sd.num("side").toInt()} px" + (if (f.codes > 1) ", ${f.codes} side by side $spacing modules apart" else "") + ", margin $margin modules" +
             (pr?.let { " on a ${it.str("surface").replace("x", " x ")} px surface" } ?: "")
         l += "${if (f.codes > 1) "${f.codes} x " else ""}$b x ${Pick.PAYLOAD} B = ${f.codes * b * Pick.PAYLOAD} B per frame"

@@ -134,7 +134,7 @@ async function shareIn(request) {
   for (const old of await cache.keys()) await cache.delete(old);
   let i = 0;
   for (const f of files) {
-    const headers = { "content-type": f.type || "application/octet-stream", "x-name": encodeURIComponent(f.name || "file"), "x-modified": String(f.lastModified ?? Date.now()) };
+    const headers = { "x-name": encodeURIComponent(f.name || "file"), "x-modified": String(f.lastModified ?? Date.now()) };
     await cache.put(new Request(`${SW_SCOPE}share/${i++}`), new Response(f, { headers }));
   }
   return Response.redirect(`${SW_SCOPE}send.html?shared`, 303);

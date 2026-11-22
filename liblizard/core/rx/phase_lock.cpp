@@ -1,14 +1,15 @@
-// ai: The camera's phase against the display (2026-09-30; in C++ since 2026-10-31, liblizard/kotlin/PhaseLock.kt
-// ai: decision for decision: tools/phase_lock_check.cpp holds the two to the same trace).
+// ai: The camera's phase against the display (2026-09-30; in C++ since 2026-10-31, the lock alone since 2026-11-16:
+// ai: tools/phase_lock_check.cpp replays a trace of its calls).
 // ai: A capture that holds a change of the painted frame is two symbols and reads little, and whether captures hold
 // ai: one depends on where they start in the display's refresh. A camera and a display each keep their own clock, so
 // ai: that place slides: the S26's frame is 16.650 ms, 1.1 ms a second against a 60.00 Hz display, every phase in
 // ai: 16 s. One frame made longer moves every frame after it (the host's delay). That is the only lever: a delay of x
 // ai: moves the phase x later, and a delay of a whole period less x moves it x earlier (a capture skipped).
 // ai:
-// ai: Track holds by the pilots (research/SPEC.md 7.3, signed). The sender paints its count of pictures mod 4 into the
-// ai: block tails, bit 0 on the even blocks and bit 1 on the odd, and a capture reads r (the even blocks) and r2 (the
-// ai: odd): their signs the count of the picture it mostly holds, and their sizes what it holds of the pictures either
+// ai: Track holds by the pilots (research/SPEC.md 7.3, signed). The sender paints its count of pictures mod 4 into every
+// ai: sub-channel's count pilot, bit 0 in the even sub-channels and bit 1 in the odd, read against each sub-channel's
+// ai: reference pilot, and a capture reads r (the even sub-channels) and r2 (the odd): their signs the count of the
+// ai: picture it mostly holds, and their sizes what it holds of the pictures either
 // ai: side, each neighbour lowering the reading whose bit it does not share. Every frame of the format carries both
 // ai: readings, and a frame without them is no evidence. So the hold needs no search and no sweep:
 // ai:   the hold begins where the camera is (`here`), on the first frames;
@@ -50,7 +51,15 @@
 // ai:   The view's (the gain and its fit, a flat top's width, the code's row) and the hold's place: afresh at a
 // ai:     reopen, and the place where the camera's frame changes; a flat top's width measured again once the hold has
 // ai:     stood clear of its edges for LONG_NS, and the gain bounded by a step that crossed the top.
-// ai: A delay lands where the timestamps show it (an interval longer than the camera's frame by over half of it).
+// ai: The lever (`Lever`, the host's): a delay of any length, asked as long as the move (a period less where the
+// ai: capture is late), or pulses: actions of the camera's own whose moves nothing promises (UVC: one capture exposed
+// ai: longer, which moves every capture after it by a size of its own, captures late, over more than one interval).
+// ai: Each pulse's move is what the timestamps showed it do (`finish`: its newest SHOTS, their median, to within their
+// ai: spread), and the pulse a move asks is the one whose way there comes nearest (`plan`: up to SEQ of them, mod the
+// ai: period); one not yet made is made to learn it. Nothing of it is certain: a pulse is what it did lately.
+// ai: A delay lands where the timestamps show it (an interval longer than the camera's frame by over half of it; a
+// ai: pulse's, longer than the plain intervals' spread allows, BREAK of it, and whole once one is plain again), at the
+// ai: capture the camera marks, or where it marks none (or its marks stopped coming) the first after the ask.
 // ai: What became of the request the host says (`delayFate`: the camera took it, or it never will: refused, failed
 // ai: before its frame, its sequence aborted), so a delay the camera did not take is known, not waited for. One the
 // ai: camera took whose interval has not shown is given up once its mark is further behind than the camera's own
@@ -59,9 +68,10 @@
 // ai: time the camera is known to have reached, so a backlog after a stall of the host's thread gives up nothing on
 // ai: its way) gives it up: Camera2 promises one or the other for every request, so only a host that breaks that
 // ai: leaves one there.
-// ai: The arithmetic is the JVM's, so the two decide alike to the bit: Math.round (ties toward positive infinity),
+// ai: The arithmetic is the JVM's (from its port from Kotlin, so a trace recorded before decides alike to the bit):
+// ai: Math.round (ties toward positive infinity),
 // ai: Math.max and Math.min (NaN and signed zeros), a double's conversions to integers (truncated, NaN 0, saturated),
-// ai: the sums in the Kotlin's order, and fdlibm's hypot as the JVM has it.
+// ai: the sums in its order, and fdlibm's hypot as the JVM has it.
 #include "phase_lock.h"
 
 #include <algorithm>
@@ -271,10 +281,29 @@ void PhaseLock::reopened() {
   longPrev = false;
   askT = 0;
   lands.clear();
+  pulseOut = -1;
+  askN = 0;
+  landing = false;
+  jitter = 0;
+  quiet = 0;
+  sawLong = false;
+  for (auto& q : shots) q.clear();
+  std::fill(misses.begin(), misses.end(), 0);
   hold();
 }
 
+void PhaseLock::lever(const Lever& l) {
+  lev = l;
+  lev.pulses = std::max(0, lev.pulses);
+  shots.assign((size_t)lev.pulses, {});
+  misses.assign((size_t)lev.pulses, 0);
+  missT.assign((size_t)lev.pulses, 0);
+  owed = 0;
+  landing = false;
+}
+
 void PhaseLock::hold() {
+  chase = false;
   row = ROW;
   settle = 0;
   line_ = -1;
@@ -300,34 +329,51 @@ void PhaseLock::hold() {
   state_.reset();
 }
 
-int64_t PhaseLock::onCapture(int64_t tsNs, bool delayed, int64_t skewNs) {
-  if (tsNs == 0) return 0;
+PhaseLock::Ask PhaseLock::onCapture(int64_t tsNs, bool delayed, int64_t skewNs) {
+  if (tsNs == 0) return {};
   if (now == 0) {
     first = tsNs;
     settle = tsNs - 1;
   }
   const int64_t dt = now != 0 ? tsNs - now : 0;
-  const bool plain = dt > 0 && !delayed && !wasDelayed;
-  // ai: the camera's frame is the median of the newest RECENT_NS of intervals, and it is that only once the session
+  // ai: (an interval a delay out may have made longer, unmarked, is no plain one)
+  const bool plain = dt > 0 && !delayed && !wasDelayed && !((owed != 0 || landing) && frame != 0 && dt - frame > breakNs());
+  // ai: the camera's frame is the mean of the newest LONG_NS of intervals near the newest RECENT_NS's median, and it is that only once the session
   // ai: has run that long (a session's first intervals are often irregular, and a median of one is the one, a dropped
   // ai: frame among them): until then a session that kept the clocks takes their period for it and nothing is taken
   // ai: from it; a cold start, with nothing kept, begins from what is in and is put right then
   const bool known = tsNs - first >= RECENT_NS;
   if (plain) {
     plains.push_back({tsNs, dt});
-    while (plains.front()[0] < tsNs - RECENT_NS) plains.pop_front();
+    while (plains.front()[0] < tsNs - LONG_NS) plains.pop_front();
+    // ai: the newest RECENT_NS's intervals: their median says which intervals are this frame's (a camera that changes
+    // ai: its frame shows it within RECENT_NS) and their spread the timestamps' jitter
     std::vector<int64_t> d;
-    d.reserve(plains.size());
-    for (const auto& p : plains) d.push_back(p[1]);
+    for (const auto& p : plains)
+      if (p[0] >= tsNs - RECENT_NS) d.push_back(p[1]);
     std::sort(d.begin(), d.end());
-    frame = !known && base != 0 ? jround(period()) : d[(d.size() - 1) / 2];
+    const int64_t mid = d[(d.size() - 1) / 2];
+    // ai: the frame: the mean of the newest LONG_NS's intervals within a quarter of that median (a camera whose
+    // ai: timestamps are coarse, UVC's 4 ms steps, has a median of one of its steps, 32 ms for a 33.24 ms frame, and a
+    // ai: second's mean known to a step over its count, 0.13 ms: the span's mean is its frame; a frame lost or
+    // ai: stretched, or another frame's intervals, lie outside the band)
+    int64_t sum = 0, cnt = 0;
+    for (const auto& p : plains)
+      if (std::llabs(p[1] - mid) <= mid / 4) {
+        sum += p[1];
+        cnt++;
+      }
+    frame = !known && base != 0 ? jround(period()) : cnt > 0 ? jround((double)sum / (double)cnt) : mid;
+    for (auto& x : d) x = x > mid ? x - mid : mid - x;
+    std::sort(d.begin(), d.end());
+    jitter = jround(1.4826 * (double)d[(d.size() - 1) / 2]);
   }
   wasDelayed = delayed;
   now = tsNs;
   skew = std::max<int64_t>(0, skewNs);
   landed(tsNs, dt, delayed);
   if (plain && base != 0 && known) steps();
-  if (mode_ == Mode::Off) return 0;
+  if (mode_ == Mode::Off) return {};
   return track(tsNs, delayed);
 }
 
@@ -356,30 +402,56 @@ void PhaseLock::steps() {
   if (line_ >= 0) here();
 }
 
-// ai: The delay out, whatever the mode: landed at the first interval longer than the camera's frame by over half the
-// ai: delay, from the capture before its marked frame on (a camera that applies the longer frame captures after the
-// ai: mark lands it there; on the S26 at the mark): only frames after it are the move's. Given up (the header says
-// ai: when), and the camera asked onto the line afresh (a pair of readings across it counts what the captures' places
-// ai: show it did, nothing if it never landed).
+// ai: The delay out, whatever the mode. A delay lands at the first interval longer than the camera's frame by over
+// ai: half of it, a pulse at the first longer than the plain intervals' spread allows (breakNs) and is whole once an
+// ai: interval is plain again (its move the long intervals' excess, `finish`); where the camera marks the capture a
+// ai: delay moved, from the capture before its mark on (a camera that applies the longer frame captures after the mark
+// ai: lands it there; on the S26 at the mark: a long interval before it is a frame lost), else from the ask on. Only
+// ai: frames after it are the move's. Given up (the header says when), and the camera asked onto the line afresh (a
+// ai: pair of readings across it counts what the captures' places show it did, nothing if it never landed).
 void PhaseLock::landed(int64_t ts, int64_t dt, bool delayed) {
-  if (owed == 0) return;
-  const bool lng = dt - frame > owed / 2;
+  if (owed == 0 && !landing) return;
+  askN++;
+  if (landing) {
+    if (dt - frame > breakNs()) {
+      got += dt - frame;
+      spanN++;
+    } else {
+      finish(ts);
+    }
+    return;
+  }
+  const bool lng = dt - frame > (pulseOut < 0 ? owed / 2 : breakNs());
   const bool was = longPrev;
   longPrev = lng;
   if (delayed) {
     flagged = true;
     flagAt = 0;
   }
-  if (flagged && (lng || (delayed && was))) {
-    owed = 0;
-    lands.push_back({ts, ts - askT, (int64_t)flagAt});
+  if (lng && !flagged) sawLong = true;
+  const bool marks = lev.marks && quiet < 2;
+  if ((flagged || !marks) && (lng || (delayed && was))) {
+    if (flagged) quiet = 0;
+    lands.push_back({ts, ts - askT, (int64_t)flagAt, (int64_t)askN});
     while (lands.front()[0] < ts - LONG_NS) lands.pop_front();
+    owed = 0;
+    if (pulseOut >= 0) {
+      landing = true;
+      got = lng ? dt - frame : 0;
+      spanN = lng ? 1 : 0;
+      latN = askN;
+      return;
+    }
     if (moving) {
       moving = false;
       settle = ts;
     }
     return;
   }
+  // ai: given up: a marked delay once its mark is further behind than the newest landings' marks were; one a camera
+  // ai: that marks nothing asked (or whose marks stopped: two asks running given up unmarked though a long interval
+  // ai: came, until a mark comes again), once twice as many captures and two have passed as the newest landings took; else
+  // ai: once the camera's clock is LOST frames past the ask
   bool lost;
   if (flagged) {
     int most = LOST;
@@ -389,6 +461,10 @@ void PhaseLock::landed(int64_t ts, int64_t dt, bool delayed) {
       most = (int)m;
     }
     lost = ++flagAt > most + 1;
+  } else if (!marks && !lands.empty()) {
+    int64_t m = lands.front()[3];
+    for (const auto& l : lands) m = std::max(m, l[3]);
+    lost = askN > 2 * m + 2;
   } else {
     lost = ts - askT > LOST * frame;
   }
@@ -401,8 +477,97 @@ void PhaseLock::landed(int64_t ts, int64_t dt, bool delayed) {
   }
 }
 
+// ai: A pulse's landing whole: its move kept with its pulse's newest shots, its misses forgiven; the frames from here
+// ai: on the hold's (the captures it stretched may hold any mix of pictures)
+void PhaseLock::finish(int64_t ts) {
+  landing = false;
+  if (pulseOut >= 0 && (size_t)pulseOut < shots.size()) {
+    auto& q = shots[(size_t)pulseOut];
+    q.push_back({got, latN, spanN, ts});
+    while ((int)q.size() > SHOTS) q.pop_front();
+    misses[(size_t)pulseOut] = 0;
+    if (debug)
+      say(fmt("phase: DEBUG pulse %d moved the captures %.3f ms over %d intervals, %d captures after its ask", pulseOut, got / 1e6, spanN, latN));
+  }
+  if (!chase) moving = false;
+  settle = ts;
+}
+
+// ai: The pulse that moves the captures w nearer (ns later, mod the period). Each pulse moves them by the median of
+// ai: its newest shots, to within the larger of their spread and the timestamps'; of every way up to SEQ pulses add
+// ai: up, the one whose distance left plus their spreads is least, where that is less than w (a move that may not help
+// ai: costs the captures it stretches); of its pulses, the one that alone comes nearest. Where none helps, a pulse not
+// ai: yet shot, to learn it. A pulse that missed MISSES times running rests for LONG_NS. -1: none.
+int PhaseLock::plan(int64_t w) const {
+  const double P = period();
+  auto wrap = [P](double x) {
+    x = std::fmod(x, P);
+    if (x > P / 2) x -= P;
+    else if (x <= -P / 2) x += P;
+    return x;
+  };
+  const int n = lev.pulses;
+  std::vector<double> mv((size_t)n, 0.0), sd((size_t)n, 0.0);
+  std::vector<bool> use((size_t)n, false);
+  int fresh = -1;
+  for (int i = 0; i < n; i++) {
+    if (misses[(size_t)i] >= MISSES && now - missT[(size_t)i] < LONG_NS) continue;
+    const auto& q = shots[(size_t)i];
+    if (q.empty()) {
+      if (fresh < 0) fresh = i;
+      continue;
+    }
+    std::vector<double> v;
+    for (const Shot& x : q) v.push_back((double)x.ns);
+    const double m = median(v);
+    for (double& x : v) x = std::fabs(x - m);
+    mv[(size_t)i] = wrap(m);
+    sd[(size_t)i] = jmax(jmax((double)BAND_NS, 1.4826 * median(v)), 2.0 * (double)jitter);
+    use[(size_t)i] = true;
+  }
+  double best = std::fabs((double)w);
+  int pick = -1;
+  std::vector<int> c((size_t)n, 0);
+  // ai: every count of each pulse, SEQ in all at most
+  std::function<void(int, int)> walk = [&](int i, int left) {
+    if (i == n) {
+      int k = 0;
+      double sum = 0, spread = 0;
+      for (int j = 0; j < n; j++) {
+        k += c[(size_t)j];
+        sum += c[(size_t)j] * mv[(size_t)j];
+        spread += c[(size_t)j] * sd[(size_t)j];
+      }
+      if (k == 0) return;
+      const double score = std::fabs(wrap((double)w - sum)) + spread;
+      if (score < best) {
+        best = score;
+        double near = INFINITY;
+        for (int j = 0; j < n; j++)
+          if (c[(size_t)j] > 0 && std::fabs(wrap((double)w - mv[(size_t)j])) < near) {
+            near = std::fabs(wrap((double)w - mv[(size_t)j]));
+            pick = j;
+          }
+      }
+      return;
+    }
+    for (int k = 0; k <= (use[(size_t)i] ? left : 0); k++) {
+      c[(size_t)i] = k;
+      walk(i + 1, left - k);
+    }
+    c[(size_t)i] = 0;
+  };
+  walk(0, SEQ);
+  return pick >= 0 ? pick : fresh;
+}
+
 void PhaseLock::giveUp() {
   owed = 0;
+  if (!flagged && sawLong) quiet++;
+  if (pulseOut >= 0 && (size_t)pulseOut < misses.size()) {
+    misses[(size_t)pulseOut]++;
+    missT[(size_t)pulseOut] = now;
+  }
   if (moving) {
     moving = false;
     move = true;
@@ -410,7 +575,7 @@ void PhaseLock::giveUp() {
 }
 
 void PhaseLock::delayFate(bool taken) {
-  if (owed == 0) return;
+  if (owed == 0) return;   // ai: (a pulse landing has no fate left to hear)
   if (taken) {
     flagged = true;
     flagAt = 0;
@@ -519,45 +684,66 @@ PhaseLock::Frame PhaseLock::merged(const std::vector<Frame>& g, size_t from, siz
   return f;
 }
 
-// ai: A capture (track): the delay to ask, us. Where a capture sat comes from its own timestamp and its code's row,
-// ai: never from what was asked of the camera, so a delay that lands late, short or not at all costs nothing but time.
-int64_t PhaseLock::track(int64_t ts, bool delayed) {
-  if (base == 0 || line_ < 0) return 0;
+// ai: A capture (track): what to ask of the camera. Where a capture sat comes from its own timestamp and its code's
+// ai: row, never from what was asked of the camera, so a delay that lands late, short or not at all, or a pulse that
+// ai: moves less or more than it did before, costs nothing but time.
+PhaseLock::Ask PhaseLock::track(int64_t ts, bool delayed) {
+  if (base == 0 || line_ < 0) return {};
   // ai: its code's read time, and the line's point nearest it
   const int64_t rt = ts + jround((double)skew * row);
   const int64_t k = jround((double)(rt - line_) / period());
   if (k != 0) line_ += jround((double)k * period());
   placed[ts] = {ts - line_, skew};
   while (placed.begin()->first < ts - LONG_NS) placed.erase(placed.begin());
-  // ai: nothing is asked on a delayed frame's own timestamp, nor while a delay is out
-  if (owed > 0 || delayed) return 0;
-  int64_t ns = 0;
+  // ai: nothing is asked on a delayed frame's own timestamp, nor while a delay is out or a pulse still landing
+  if (owed > 0 || landing || delayed) return {};
   // ai: early: delayed onto the line as soon as it is a band early (a move's, at once). Late (a camera slower than the
-  // ai: display, a line moved earlier, a code moved down the picture): a period less what it is late, a capture skipped
+  // ai: display, a line moved earlier, a code moved down the picture): a period less what it is late, a capture
+  // ai: skipped. A camera of pulses: the pulse its plan says, where one comes nearer.
   const int64_t early = line_ - rt;
   const int64_t far = move ? jround(refresh() / 256) : TOOTH_NS;
-  if (early >= std::min(far, BAND_NS)) {
+  int64_t ns = 0;
+  int p = -1;
+  if (lev.pulses > 0) {
+    // ai: a pulse costs the captures it stretches, so a camera of pulses follows the line only where the pilots moved
+    // ai: it (a capture holding a neighbour, a deep mix), and from there for as long as a plan comes nearer
+    if (move) chase = true;
+    if (chase && (early >= std::min(far, BAND_NS) || early <= -far)) p = plan(early);
+    if (p < 0 && chase) {
+      chase = false;
+      moving = false;
+      settle = ts;
+    }
+  } else if (early >= std::min(far, BAND_NS)) {
     ns = early;
   } else if (early <= -far) {
     ns = jround(period()) + early;
   }
+  const bool asks = ns > 0 || p >= 0;
   if (move) {
-    if (ns != 0) {
+    if (asks) {
       moving = true;
     } else {
       settle = ts;
     }
     move = false;
   }
-  if (ns <= 0) return 0;
-  owed = ns;
+  if (p >= 0) moving = true;
+  if (!asks) return {};
+  owed = p >= 0 ? std::max<int64_t>(BAND_NS, std::llabs(early)) : ns;
+  pulseOut = p;
+  askN = 0;
   flagged = false;
   flagAt = 0;
   longPrev = false;
+  sawLong = false;
   askT = std::max(ts, seen);
   delays++;
   delaysAll++;
-  return std::max<int64_t>(1, ns / 1000);
+  Ask a;
+  a.pulse = p;
+  a.us = p >= 0 ? 0 : std::max<int64_t>(1, ns / 1000);
+  return a;
 }
 
 // ai: The hold begun where the camera is: the line through the newest capture's read time, so the camera is on it and
@@ -599,6 +785,12 @@ void PhaseLock::here() {
 // ai: count after]: K what a capture of one picture reads, a and b the shares of the pictures before and after. Least
 // ai: squares over both readings of every frame, each by its own error, for K, K a and K b. None: too few frames, or
 // ai: frames that do not tell the three apart (a sender whose count does not change: no bit ever differs).
+// ai: r taken to r2's scale first (2026-11-22): a camera stream whose processing lifts a pilot that flips every picture
+// ai: (bit 0, r) above one that flips every second (bit 1, r2) reads |r| past |r2| where no mix could (a mix lowers r by
+// ai: both shares, r2 by one); one K for both took the excess as negative shares (the S26's YUV_420_888 at small codes:
+// ai: -8 to -14%). Bit 0 differs on both sides in every frame, so its own K is not told apart from a + b at a steady
+// ai: phase; where captures are cleanest a and b are near 0 and each reading is its own K: the ratio of the two readings'
+// ai: top tenths over the window, never below 1 (a mix cannot lift a reading), r over it.
 std::optional<PhaseLock::Leak> PhaseLock::leaks(int64_t from, int64_t to) const {
   const std::deque<Frame>& fs = window;
   const double t = period();
@@ -609,6 +801,21 @@ std::optional<PhaseLock::Leak> PhaseLock::leaks(int64_t from, int64_t to) const 
   int xn = 0;
   auto sure = [](const Frame& f) { return std::fabs(f.r) >= R_FLASH && std::fabs(f.r2) >= R_FLASH; };
   auto count = [](const Frame& f) { return (f.r < 0 ? 1 : 0) | (f.r2 < 0 ? 2 : 0); };
+  double rho = 1.0;
+  {
+    std::vector<double> a0, a1;
+    for (const Frame& f : fs)
+      if (sure(f)) {
+        a0.push_back(std::fabs(f.r));
+        a1.push_back(std::fabs(f.r2));
+      }
+    if ((int)a0.size() >= L_NEED) {
+      std::sort(a0.begin(), a0.end(), jless);
+      std::sort(a1.begin(), a1.end(), jless);
+      const size_t top = a0.size() * 9 / 10;
+      if (a1[top] > 0) rho = jmax(1.0, a0[top] / a1[top]);
+    }
+  }
   for (size_t i = 1; i + 1 < fs.size(); i++) {
     const Frame& f = fs[i];
     const Frame& p = fs[i - 1];
@@ -617,8 +824,8 @@ std::optional<PhaseLock::Leak> PhaseLock::leaks(int64_t from, int64_t to) const 
       continue;
     const int c = count(f), before = count(p) ^ c, after = count(q) ^ c;
     for (int bit = 0; bit <= 1; bit++) {
-      const double y = std::fabs(bit == 0 ? f.r : f.r2);
-      double e = bit == 0 ? f.rSd : f.r2Sd;
+      const double y = std::fabs(bit == 0 ? f.r / rho : f.r2);
+      double e = bit == 0 ? f.rSd / rho : f.r2Sd;
       if (std::isnan(e)) e = R_NOISE_MIN;
       const double sd = jmax(R_NOISE_MIN, e);
       const double w = 1 / (sd * sd);
@@ -821,7 +1028,7 @@ void PhaseLock::held() {
   if (decSide >= 0) {
     const std::optional<Leak> near = leaks(fs[from].ts - 1);   // ai: (the newest frame has no frame after it yet: L_NEED read)
     if (near) {
-      const int nSide = (near->a > jmax(LEAK, Z * near->sa) ? 1 : 0) | (near->b > jmax(LEAK, Z * near->sb) ? 2 : 0);
+      const int nSide = (near->a > jmax(LEAK_BEFORE, Z * near->sa) ? 1 : 0) | (near->b > jmax(LEAK_AFTER, Z_AFTER * near->sb) ? 2 : 0);
       if (nSide != decSide && jmax(std::fabs(near->a - decA), std::fabs(near->b - decB)) * gain * 1e6 >= CROSS_NS) {
         est = near;
         fresh = true;
@@ -880,10 +1087,11 @@ void PhaseLock::held() {
   }
   const double e = est->a - est->b;
   const double se = jhypot(est->sa, est->sb);
-  // ai: a neighbour is in the frames where its share is Z of its errors and LEAK at least (under that it costs no
-  // ai: block, and at a top that is nearly flat both shares hover about nothing)
-  const bool sigA = est->a > jmax(LEAK, Z * est->sa);
-  const bool sigB = est->b > jmax(LEAK, Z * est->sb);
+  // ai: a neighbour is in the frames where its share is its side's least (LEAK_BEFORE, LEAK_AFTER: under that it
+  // ai: costs no block, and at a top that is nearly flat both shares hover about nothing) and clears its errors (Z
+  // ai: before, Z_AFTER after)
+  const bool sigA = est->a > jmax(LEAK_BEFORE, Z * est->sa);
+  const bool sigB = est->b > jmax(LEAK_AFTER, Z_AFTER * est->sb);
   // ai: readings of frames that overlap say one thing twice: a reading counts once its frames are a RECENT on from
   // ai: the last one's (or a move has been made since, which starts the frames afresh)
   if (!fresh && prevT != 0 && prevHop == 0.0 && est->t - prevT < RECENT_NS) return;
@@ -1039,6 +1247,11 @@ std::optional<std::string> PhaseLock::line(int64_t tsNs) {
     int64_t most = lands.front()[2];
     for (const auto& l : lands) most = std::max(most, l[2]);
     land = fmt("%.0f ms, %lld captures after the mark", landMs(), (long long)most);
+  }
+  for (size_t i = 0; i < shots.size(); i++) {
+    std::vector<double> v;
+    for (const Shot& x : shots[i]) v.push_back((double)x.ns);
+    land += v.empty() ? fmt("; pulse %zu not yet made", i) : fmt("; pulse %zu moving %.2f ms", i, median(v) / 1e6);
   }
   return fmt("phase: track%s, %s, the pace %.0f us a second (to %s), %.1f blocks a frame, %d delays%s; the refresh %s ms, %d a frame of %.3f ms, "
              "delays landing in %s, the code at row %.2f",

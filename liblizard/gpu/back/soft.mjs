@@ -1,8 +1,9 @@
 // The soft values' tables, which the rate profile's stage (tiers.mjs) decodes through: the UV table a size
 // (transform.mjs discLayout) with each coefficient's (u, v) behind it, the per-size params (glsl/back_tiers.mjs
-// PARAMS), and the sizes of a lane's L (int8 slot order, 4 a u32, lStride words a frame), BLK (a block: bitcast f32
-// estimate, u32 declined) and PILOT, which the native host makes. Every stride comes from dims.mjs derived().
+// PARAMS), and the sizes of a lane's L (int8 data-slot order, 4 a u32, lStride words a frame), BLK (a block: bitcast f32
+// estimate, u32 declined) and PILOT (a frame's pilot readings, then its shift), which the native host makes. Every stride comes from dims.mjs derived().
 import { derived } from "./dims.mjs";
+import { PILOT_READ } from "../plan/back_tiers.mjs";
 
 const U = globalThis.GPUBufferUsage;   // undefined under node
 
@@ -32,7 +33,7 @@ export async function build(device, { B, sizes, tables }) {
     device.queue.writeBuffer(buf, 0, u32);
     params[s] = buf;
   }
-  // ai: PILOT: a block's pilots, blocksMax a frame, then a frame's shift, two each (talign)
-  const bytes = { L: 4 * B * lStride, BLK: 8 * B * blocksMax, PILOT: 4 * B * blocksMax + 8 * B };
+  // ai: PILOT: a frame's readings, PILOT_READ each (tblocks), then a frame's shift, two each (talign)
+  const bytes = { L: 4 * B * lStride, BLK: 8 * B * blocksMax, PILOT: 4 * PILOT_READ * B + 8 * B };
   return { B, sizes, served, dims, sStride, lStride, subchMax, blocksMax, bytes, uvBuf, uvOff, uvTotal, params };
 }

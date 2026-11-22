@@ -49,10 +49,10 @@ internal object Native {
   @JvmStatic external fun decoderNew(nmax: Int): Long
   @JvmStatic external fun decoderFree(h: Long)
   @JvmStatic external fun decoderMaxBlocks(h: Long): Int
-  @JvmStatic external fun decode(h: Long, px: ByteArray, offset: Int, w: Int, hh: Int, stride: Int, fmt: Int, held: IntArray, verified: ByteArray, ints: IntArray, floats: FloatArray): Int
-  @JvmStatic external fun decodeBuffer(h: Long, px: ByteBuffer, offset: Int, w: Int, hh: Int, stride: Int, fmt: Int, held: IntArray, verified: ByteArray, ints: IntArray, floats: FloatArray): Int
-  @JvmStatic external fun txNew(bytes: ByteArray, name: String?, type: String?): Long
-  @JvmStatic external fun txNewPath(path: String, name: String?, type: String?): Long
+  @JvmStatic external fun decode(h: Long, px: ByteArray, offset: Int, w: Int, hh: Int, stride: Int, fmt: Int, verified: ByteArray, ints: IntArray, floats: FloatArray): Int
+  @JvmStatic external fun decodeBuffer(h: Long, px: ByteBuffer, offset: Int, w: Int, hh: Int, stride: Int, fmt: Int, verified: ByteArray, ints: IntArray, floats: FloatArray): Int
+  @JvmStatic external fun txNew(bytes: ByteArray, name: String?): Long
+  @JvmStatic external fun txNewPath(path: String, name: String?): Long
   @JvmStatic external fun txNewTest(first: Int): Long
   @JvmStatic external fun txFree(h: Long)
   @JvmStatic external fun txNext(h: Long, n: Int, out: ByteArray): Int
@@ -61,7 +61,7 @@ internal object Native {
   @JvmStatic external fun rxFree(h: Long)
   @JvmStatic external fun rxFrame(h: Long, blocks: ByteArray, count: Int, out: IntArray)
   @JvmStatic external fun rxProgress(h: Long, ints: IntArray, longs: LongArray, doubles: DoubleArray)
-  @JvmStatic external fun rxChunks(h: Long): ByteArray
+  @JvmStatic external fun rxSourceBlocks(h: Long): ByteArray
   @JvmStatic external fun rxMeta(h: Long, which: Int): String
   @JvmStatic external fun rxData(h: Long): ByteArray?
   @JvmStatic external fun rxClear(h: Long)
@@ -77,7 +77,7 @@ internal object Native {
   @JvmStatic external fun receiverFile(h: Long): String
   @JvmStatic external fun receiverClear(h: Long)
   @JvmStatic external fun receiverCameraClosed(h: Long)
-  @JvmStatic external fun senderNew(bytes: ByteArray?, name: String?, type: String?): Long
+  @JvmStatic external fun senderNew(bytes: ByteArray?, name: String?): Long
   @JvmStatic external fun senderFree(h: Long)
   @JvmStatic external fun senderConfigure(h: Long, blocks: Int, ring: Int, fps: Int, codes: Int, painter: Int, threads: Int, assets: String?, device: String?)
   @JvmStatic external fun senderReady(h: Long): Boolean

@@ -1,7 +1,9 @@
 // The anchors (SPEC 6.13) in GLSL: ANCH_FIND (a workgroup of 128 an (anchor, frame): the ring's squares found by
 // normalised correlation from integral images, coarse then fine, through REFIT's homography and the sides' curves),
-// ANCH_FIT (the mesh's knots, a missing one the mean of its found neighbours; the squares' fill, the least-squares
-// shading surface outside them; the picture's gain from the signal's swing, SPEC 6.10; the record pass 1 reads), and
+// ANCH_SUMS (the squares' fill's sums over the picture's points outside them, a slice of the points a workgroup, so
+// the fit's ANCH_FILL^2 reads run side by side; 2026-11-20), ANCH_FIT (the mesh's knots, a missing one the mean of its
+// found neighbours; the squares' fill, the least-squares shading surface outside them, from ANCH_SUMS' slices; the
+// picture's gain from the signal's swing, SPEC 6.10; the record pass 1 reads), and
 // anchRefitSource: ANCH_REFIT (the lens about the axis over the border and the anchors, robust over the border, the
 // sides' curves of what it leaves) and ANCH_PREDICT (the fit over the anchors alone, the border's places for its
 // second search). Their constants and the uniform's layout: ../plan/anchors.mjs.
@@ -13,7 +15,7 @@ import { COONS } from "./sample.mjs";
 import { LATTICE_MAX, ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF, ANCH_GAIN } from "../plan/back_transform.mjs";
 import { RING_COUNT } from "../plan/finder.mjs";
 import { NODES_MAX, RESID, WMIN, LENS_P } from "../plan/register.mjs";
-import { ANCH_TS, ANCH_PEAK, ANCH_KNOT_ROUNDS, ANCH_FILL, ANCH_BAND2, SW_T, SW_R, SW_LAG, SW_MIN, SW_BINS } from "../plan/anchors.mjs";
+import { ANCH_TS, ANCH_PEAK, ANCH_KNOT_ROUNDS, ANCH_FILL, ANCH_BAND2, ANCH_GS, SW_T, SW_R, SW_LAG, SW_MIN, SW_BINS } from "../plan/anchors.mjs";
 import { lensNode, lensAccumulate, lensModel, lensNormalSolve, SIDE_FITS, SIDE_DECL, gaussJordan } from "./register.mjs";
 
 const RR = ANCH_TS, TC = ANCH_TS / 2, RC = RR / 2, WC = TC + 2 * RC, W1C = WC + 1, OC = 2 * RC + 1;
@@ -222,12 +224,103 @@ void main() {
 }
 `;
 
+// ai: the fill's points (plan/anchors.mjs ANCH_FILL): whether point p of an axis lies within the band of one of the
+// ai: ring's S anchors' centres, in integers of 2 ANCH_FILL times a module (an anchor's centre, the margin, the span and
+// ai: a are whole); and where a frame's slices of the fill's sums lie in anch: past every frame's anchors, frame f's
+// ai: 2 ANCH_GS vec4f the (f + 1)-th such run back from the buffer's end (a lane's anch holds (ANCH_K + 2 ANCH_GS) B,
+// ai: so the anchors' indexing and the batch size stay out of it)
+const FILL = /* glsl */ `
+bool fillBand(uint r, int p, int sp, int mg, int aa, uint S) {
+  bool hit = false;
+  for (uint i = 1u; i <= S; i++) {
+    int d = ${2 * ANCH_FILL} * (f2i(knot(r, i)) - mg) - sp * (2 * p + 1);
+    hit = hit || abs(d) <= ${ANCH_BAND2 * ANCH_FILL} * aa;
+  }
+  return hit;
+}
+uint fillSums(uint f) { return uint(anch.length()) - ${2 * ANCH_GS}u * (f + 1u); }
+`;
+// ai: ANCH_SUMS (2026-11-20): the squares' fill's six sums (the surface's basis 1, u, u^2, w, w^2, u w times the picture
+// ai: at each of the ANCH_FILL x ANCH_FILL points in no square), a workgroup an (ANCH_GS-th of the points, frame): each
+// ai: lane FILL_PER points of its slice, reduced in workgroup memory, the slice's sums written as two vec4f where
+// ai: fillSums puts them; ANCH_FIT adds the slices. On ANCH_FIND's layout and group (anch read and written). Its reads
+// ai: through the final map, after ANCH_REFIT: what ANCH_FIT's own loop read until then, one workgroup a frame 64
+// ai: points a lane (0.17 ms of the S26's one-frame launch at ANCH_FILL 64).
+const FILL_PER = (ANCH_FILL * ANCH_FILL) / (64 * ANCH_GS);
+if (!Number.isInteger(FILL_PER) || FILL_PER < 1) throw new Error(`ANCH_FILL ${ANCH_FILL}^2 points in ${ANCH_GS} slices of 64 lanes`);
+export const ANCH_SUMS = VERSION + SAMPLERLESS + HEAD + /* glsl */ `
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 7, std430) buffer Anch { vec4 anch[]; };
+` + FILL + /* glsl */ `
+shared float red[${6 * 64}];
+void main() {
+  uint li = gl_LocalInvocationIndex;
+  uint g = gl_WorkGroupID.x;
+  uint f = gl_WorkGroupID.y;
+  Frame F = frames[f];
+  uvec4 pick = sel[f];
+  if (F.valid == 0u || pick.y == 0u) { return; }
+  uint rgi = pick.x;
+  uint S = gridOf(rgi);
+  vec4 geo = A.k[3u * rgi + 2u];
+  float span = geo.z;
+  float margin = geo.w;
+  float M[16] = maps[f];
+  Lens lz = lensOf(f);
+  uvec4 at = LT.at[rgi];
+  int sp = f2i(span);
+  int mg = f2i(margin);
+  int aa = f2i(geo.y);
+  float s0 = 0.0;
+  float s1 = 0.0;
+  float s2 = 0.0;
+  float s3 = 0.0;
+  float s4 = 0.0;
+  float s5 = 0.0;
+  for (uint j = 0u; j < ${FILL_PER}u; j++) {
+    uint p = g * ${64 * FILL_PER}u + j * 64u + li;
+    int px = int(p % ${ANCH_FILL}u);
+    int py = int(p / ${ANCH_FILL}u);
+    if (fillBand(rgi, px, sp, mg, aa, S) && fillBand(rgi, py, sp, mg, aa, S)) { continue; }
+    float ux = float(2 * px + 1 - ${ANCH_FILL}) / ${lit(ANCH_FILL)};
+    float uy = float(2 * py + 1 - ${ANCH_FILL}) / ${lit(ANCH_FILL)};
+    vec2 m = vec2(margin + 0.5 * span * (ux + 1.0), margin + 0.5 * span * (uy + 1.0));
+    float v = bilin0(f, mapAt(f, M, lz, at.x, at.y, m), int(F.w), int(F.h));
+    s0 += v;
+    s1 += ux * v;
+    s2 += ux * ux * v;
+    s3 += uy * v;
+    s4 += uy * uy * v;
+    s5 += ux * uy * v;
+  }
+  red[li] = s0;
+  red[64u + li] = s1;
+  red[128u + li] = s2;
+  red[192u + li] = s3;
+  red[256u + li] = s4;
+  red[320u + li] = s5;
+  barrier();
+  if (li < 6u) {
+    float s = 0.0;
+    for (uint q = 0u; q < 64u; q++) { s += red[64u * li + q]; }
+    red[64u * li] = s;
+  }
+  barrier();
+  if (li == 0u) {
+    uint o = fillSums(f) + 2u * g;
+    anch[o] = vec4(red[0], red[64], red[128], red[192]);
+    anch[o + 1u] = vec4(red[256], red[320], 0.0, 0.0);
+  }
+}
+`;
+
 export const ANCH_FIT = VERSION + SAMPLERLESS + NULL_INIT + ATOMICS + HEAD + /* glsl */ `
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 struct Result { float r[32]; };
 layout(set = 0, binding = 7, std430) readonly buffer Anch { vec4 anch[]; };
 layout(set = 0, binding = 8, std430) buffer Arec { vec4 arec[]; };
 layout(set = 0, binding = 9, std430) buffer Results { Result result[]; };
+` + FILL + /* glsl */ `
 const uint NK = ${ANCH_K}u;
 const uint SIDE = ${ANCH_SIDE}u;
 shared vec2 kv[${ANCH_K}];
@@ -264,17 +357,6 @@ vec3 around(uint q, uint S) {
   if (j > 0u && kn[q - SIDE] == 1u) { s += kv[q - SIDE]; c += 1.0; }
   if (j + 1u < S && kn[q + SIDE] == 1u) { s += kv[q + SIDE]; c += 1.0; }
   return vec3(s, c);
-}
-// ai: the fill's points (plan/anchors.mjs ANCH_FILL): whether point p of an axis lies within the band of one of the
-// ai: ring's S anchors' centres, in integers of 2 ANCH_FILL times a module (an anchor's centre, the margin, the span and
-// ai: a are whole)
-bool fillBand(uint r, int p, int sp, int mg, int aa, uint S) {
-  bool hit = false;
-  for (uint i = 1u; i <= S; i++) {
-    int d = ${2 * ANCH_FILL} * (f2i(knot(r, i)) - mg) - sp * (2 * p + 1);
-    hit = hit || abs(d) <= ${ANCH_BAND2 * ANCH_FILL} * aa;
-  }
-  return hit;
 }
 void main() {
   uvec3 wg = gl_WorkGroupID;
@@ -323,42 +405,14 @@ void main() {
   float M[16] = maps[f];
   Lens lz = lensOf(f);
   uvec4 at = LT.at[rgi];
-  // ai: the squares' fill (SPEC 6.13; plan/anchors.mjs ANCH_FILL): the shading's least-squares surface over the
-  // ai: picture's points in no square, its normal matrix's inverse the ring's (A.g, the C's hole_inv)
-  int sp = f2i(span);
-  int mg = f2i(margin);
   int aa = f2i(geo.y);
-  float s0 = 0.0;
-  float s1 = 0.0;
-  float s2 = 0.0;
-  float s3 = 0.0;
-  float s4 = 0.0;
-  float s5 = 0.0;
-  for (uint p = li; p < ${ANCH_FILL * ANCH_FILL}u; p += 64u) {
-    int px = int(p % ${ANCH_FILL}u);
-    int py = int(p / ${ANCH_FILL}u);
-    if (fillBand(rgi, px, sp, mg, aa, S) && fillBand(rgi, py, sp, mg, aa, S)) { continue; }
-    float ux = float(2 * px + 1 - ${ANCH_FILL}) / ${lit(ANCH_FILL)};
-    float uy = float(2 * py + 1 - ${ANCH_FILL}) / ${lit(ANCH_FILL)};
-    vec2 m = vec2(margin + 0.5 * span * (ux + 1.0), margin + 0.5 * span * (uy + 1.0));
-    float v = bilin0(f, mapAt(f, M, lz, at.x, at.y, m), int(F.w), int(F.h));
-    s0 += v;
-    s1 += ux * v;
-    s2 += ux * ux * v;
-    s3 += uy * v;
-    s4 += uy * uy * v;
-    s5 += ux * uy * v;
-  }
-  red[li] = s0;
-  red[64u + li] = s1;
-  red[128u + li] = s2;
-  red[192u + li] = s3;
-  red[256u + li] = s4;
-  red[320u + li] = s5;
-  barrier();
+  // ai: the squares' fill (SPEC 6.13; plan/anchors.mjs ANCH_FILL): the shading's least-squares surface over the
+  // ai: picture's points in no square, its normal matrix's inverse the ring's (A.g, the C's hole_inv); its six sums
+  // ai: ANCH_SUMS' slices added (a lane a sum)
   if (li < 6u) {
+    uint o = fillSums(f) + (li >> 2u);
     float s = 0.0;
-    for (uint q = 0u; q < 64u; q++) { s += red[64u * li + q]; }
+    for (uint g = 0u; g < ${ANCH_GS}u; g++) { s += anch[o + 2u * g][li & 3u]; }
     red[64u * li] = s;
   }
   barrier();

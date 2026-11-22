@@ -1,19 +1,20 @@
 // ai: The phase lock (rx/phase_lock.h) replayed from a trace of its host's calls, every decision and every field of its
-// ai: state written out per call, so the lock can be held to another implementation fed the same trace (the Kotlin
-// ai: PhaseLock.kt it was ported from) or to an earlier run of its own. The trace: one call a line, tokens apart by
-// ai: one space, `#` lines skipped:
+// ai: state written out per call, so a change to the lock can be held to an earlier run of its own on the same trace.
+// ai: The trace: one call a line, tokens apart by one space, `#` lines skipped:
 // ai:   mode track | mode off                 set
 // ai:   reopen                                reopened
+// ai:   lever <pulses> <marks 0|1>            lever (the host's: before the next reopen; Lever's default until one)
 // ai:   capture <ts ns> <delayed 0|1> <skew ns> [<us>]   onCapture (a trailing us: the recording lock's own answer,
 // ai:                                         not read)
 // ai:   fate <taken 0|1>                      delayFate
-// ai:   series <count> <v>...                 Receiver::series's vector (the held version, 8 values a frame), through
+// ai:   series <count> <v>...                 Receiver::series's vector (the last word's configuration, 8 values a frame), through
 // ai:                                         framesOf to onWindow
 // ai:   window <version> <n> (<ts> <blocks> <found> <r> <rSd> <r2> <r2Sd> <row>) x n   onWindow with frames as given
 // ai:   line <ts ns>                          line
 // ai: Doubles as Java writes and reads them (NaN, Infinity). The output, a line or more a call, its index i first:
 // ai:   i Y <text>                            each log line the call said, in order
-// ai:   i E <kind> <answer>                   capture: the us returned; line: its text, or null; the rest: -
+// ai:   i E <kind> <answer>                   capture: the us of a delay asked (0 none), p<i> a pulse; line: its text,
+// ai:                                         or null; the rest: -
 // ai:   i S <state>                           state(), where it changed: null, or arm, what (spaces as _), a, b, k,
 // ai:                                         se, n, gain, pace, stood, edge, flatMs, delays, refreshMs, multiple,
 // ai:                                         frameMs, landMs, row
@@ -45,7 +46,7 @@
 
 namespace lizard {
 
-// ai: every field of the lock, in the Kotlin runner's order (PhaseLockCheck.kt), as the I line
+// ai: every field of the lock, as the I line
 struct PhaseLockProbe {
   static std::string hex(double x) {
     if (std::isnan(x)) return "nan";
@@ -124,6 +125,15 @@ struct PhaseLockProbe {
     B("edgeClean", p.edgeClean);
     L("flatHalf", p.flatHalf);
     B("stood", p.stood);
+    o << "lever=" << p.lev.pulses << ',' << (p.lev.marks ? 1 : 0) << ' ';
+    L("pulseOut", p.pulseOut);
+    L("askN", p.askN);
+    B("landing", p.landing);
+    L("got", p.got);
+    L("jitter", p.jitter);
+    L("quiet", p.quiet);
+    for (size_t i = 0; i < p.shots.size(); i++)
+      o << "shots" << i << '=' << p.shots[i].size() << ',' << (p.shots[i].empty() ? 0 : p.shots[i].back().ns) << ',' << p.misses[i] << ' ';
     std::string s = o.str();
     if (!s.empty()) s.pop_back();
     return s;
@@ -133,6 +143,9 @@ struct PhaseLockProbe {
 }  // namespace lizard
 
 using lizard::PhaseLock;
+
+// ai: an ask as the output writes it: the us of a delay (0 none), p<i> a pulse
+static std::string askText(const PhaseLock::Ask& a) { return a.pulse >= 0 ? "p" + std::to_string(a.pulse) : std::to_string(a.us); }
 using lizard::PhaseLockProbe;
 
 static uint64_t fnv(const std::string& s) {
@@ -186,7 +199,7 @@ static int hostRun(std::istream& in, std::ostream& out, const std::string& trace
   double fed = -1.0;                         // ai: the newest ms the trace's feed handed over
   bool apart = false;
   std::string why;
-  int64_t asked = 0;   // ai: the delay the host asked of the camera at the capture just given
+  std::string asked = "0";   // ai: what the host asked of the camera at the capture just given
   lizard::PhaseLockHost h(
       [](const std::string&) {},
       [&](double since) -> std::vector<double> {
@@ -200,11 +213,12 @@ static int hostRun(std::istream& in, std::ostream& out, const std::string& trace
         if (a.size() > 1) fed = a[1 + 8 * ((a.size() - 1) / 8 - 1)];
         return a;
       },
-      [&](int64_t us) {
-        asked = us;
+      [&](const PhaseLock::Ask& a) {
+        asked = askText(a);
         return true;
       });
-  h.opened("");
+  PhaseLock::Lever lever;
+  h.opened("", lever);
   std::string lastState = "null";
   std::string l;
   while (std::getline(in, l)) {
@@ -215,13 +229,16 @@ static int hostRun(std::istream& in, std::ostream& out, const std::string& trace
       std::vector<double> a(n);
       for (size_t j = 0; j < n && 2 + j < t.size(); j++) a[j] = num(t[2 + j]);
       answers.push_back(a);
+    } else if (t[0] == "lever" && t.size() >= 3) {
+      lever.pulses = (int)lng(t[1]);
+      lever.marks = t[2] == "1";
     } else if (t[0] == "reopen") {
-      h.opened("");
+      h.opened("", lever);
       fed = -1.0;
     } else if (t[0] == "fate") {
       h.fate(t[1] == "1");
     } else if (t[0] == "capture") {
-      asked = 0;
+      asked = "0";
       h.captured(lng(t[1]), t[2] == "1");
       if (!answers.empty() && !apart) {
         apart = true;
@@ -302,11 +319,17 @@ int main(int argc, char** argv) {
     if (k == "mode") {
       need(2);
       p.set(t[1] == "track" ? PhaseLock::Mode::Track : PhaseLock::Mode::Off);
+    } else if (k == "lever") {
+      need(3);
+      PhaseLock::Lever lv;
+      lv.pulses = (int)lng(t[1]);
+      lv.marks = t[2] == "1";
+      p.lever(lv);
     } else if (k == "reopen") {
       p.reopened();
     } else if (k == "capture") {
       need(4);
-      answer = std::to_string(p.onCapture(lng(t[1]), t[2] == "1", lng(t[3])));
+      answer = askText(p.onCapture(lng(t[1]), t[2] == "1", lng(t[3])));
     } else if (k == "fate") {
       need(2);
       p.delayFate(t[1] == "1");

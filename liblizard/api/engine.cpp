@@ -23,7 +23,8 @@ struct liz_receiver {
 
 struct liz_sender {
   std::vector<uint8_t> owned;
-  std::string name, type;   // ai: the file's, as liz_sender_new took them (an export's meta.json)
+  std::string name;   // ai: the file's, as liz_sender_new took it, and its compression (an export's meta.json)
+  int compression = 0;
   std::unique_ptr<lizard::Sender> s;
   liz_format fmt{};
   liz_geometry g{};
@@ -121,15 +122,16 @@ LIZ_API const char* liz_receiver_file(liz_receiver* r) {
 LIZ_API void liz_receiver_clear(liz_receiver* r) { guard([&] { need(r, "a receiver"); r->r->clear(); return LIZ_OK; }); }
 LIZ_API void liz_receiver_camera_closed(liz_receiver* r) { guard([&] { need(r, "a receiver"); r->r->cameraClosed(); return LIZ_OK; }); }
 
-LIZ_API liz_sender* liz_sender_new(const uint8_t* data, size_t length, const char* name, const char* type, int flags) {
+LIZ_API liz_sender* liz_sender_new(const uint8_t* data, size_t length, const char* name, int flags) {
   return guardNew<liz_sender>([&] {
     auto s = std::make_unique<liz_sender>();
     static const uint8_t empty = 0;
     if (data && (flags & LIZ_TX_COPY)) { s->owned.assign(data, data + length); data = s->owned.data(); }
     if (data && !length) data = &empty;
     try {
-      s->s = std::make_unique<lizard::Sender>(data, data ? length : 0, name ? name : "", type ? type : "");
-      s->name = name ? name : ""; s->type = type ? type : "";
+      s->compression = data && (flags & LIZ_TX_ZSTD) ? XFER_COMP_ZSTD : XFER_COMP_NONE;
+      s->s = std::make_unique<lizard::Sender>(data, data ? length : 0, name ? name : "", uint8_t(s->compression));
+      s->name = name ? name : "";
     } catch (const std::runtime_error& e) {
       throw Error(LIZ_E_TOOBIG, e.what());
     }
@@ -147,7 +149,7 @@ LIZ_API liz_sender* liz_sender_play(const char* path) {
     s->s = lizard::Sender::play(path, why);
     if (!s->s) throw Error(why.find("does not read") != std::string::npos || why.find("open ") == 0 ? LIZ_E_IO : LIZ_E_FORMAT, why);
     const lizard::StreamPlay* p = s->s->playing();
-    s->name = p->name; s->type = p->type;
+    s->name = p->name; s->compression = p->compression;
     return s.release();
   });
 }
@@ -234,9 +236,9 @@ LIZ_API int liz_sender_seed(liz_sender* s, uint32_t seed) {
   });
 }
 
-LIZ_API int64_t liz_sender_lap(liz_sender* s) {
+LIZ_API int64_t liz_sender_cycle(liz_sender* s) {
   int64_t r = 0;
-  guard([&] { need(s, "a sender"); r = s->s->xfer() ? int64_t(s->s->xfer()->lapWhenMade()) : 0; return LIZ_OK; });
+  guard([&] { need(s, "a sender"); r = s->s->xfer() ? int64_t(s->s->xfer()->cycleWhenMade()) : 0; return LIZ_OK; });
   return r;
 }
 
@@ -247,7 +249,7 @@ LIZ_API int liz_sender_export(liz_sender* s, const char* path, int frames, int l
     if (level > 0) packing.level = level;
     if (!s->g.width) throw Error(LIZ_E_STATE, "not configured");
     lizard::StreamInfo info;
-    info.name = s->name; info.type = s->type;
+    info.name = s->name; info.compression = s->compression;
     info.blocks = s->fmt.blocks; info.ring = s->fmt.ring; info.fps = s->fmt.fps; info.codes = s->fmt.codes; info.frameBlocks = s->g.frame_blocks;
     bool stopped = false;
     std::string why;

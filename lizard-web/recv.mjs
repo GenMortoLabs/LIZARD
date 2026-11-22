@@ -6,7 +6,7 @@
 // What is shared between workers lives here: the set of block ids already seen (two workers often
 // decode two captures of the same display frame) and, through one fountain worker, the file.
 // ai: The pool's workers run the C in wasm (recv-worker.mjs): the page decodes on the CPU alone (its WebGPU decoder went
-// ai: 2026-10-25; the Android and desktop apps run the GPU decoder natively).
+// ai: 2026-10-25 and, back from 2026-11-06, again 2026-11-22; the Android and desktop apps run the GPU decoder natively).
 // ai: The whole receiver is blind (2026-09-26): the decoder is told nothing, each frame is read at the picture
 // ai: size and version its own word names, its blocks judged from the light (a test frame is known by its blocks'
 // ai: bytes), nothing carries between frames beyond a batch, and a file comes from the light's header. Nothing is fetched
@@ -28,7 +28,7 @@ import { logPost } from "./devlog.mjs";
 import { R_RING, SPAN, MODULES, N_FOR, NAME, PICTURE_SIZES, subchOf } from "../liblizard/sim/lizard_pick.mjs";
 import { isControlId, PAYLOAD, fractionDone } from "../liblizard/sim/xfer.mjs";
 import { remember, persist, restoreSaved, bytes, rate, left, registerApp, collapser, sideResizer, slider, nameParts, details, warnings, icon, chips, greyOut } from "./ui.mjs";
-import { open as openKept, list as listKept, watch as watchLibrary } from "./library.mjs";
+import { open as openKept, list as listKept, watch as watchLibrary, typeOf } from "./library.mjs";
 const $ = (id) => document.getElementById(id), video = $("v"), shot = $("shot"), sctx = shot.getContext("2d", { willReadFrequently: true });
 // ai: The folds (Camera, Decoder, Developer Tools; one Settings fold, recv:dev, until 2026-11-12; the Developer panel
 // ai: until 2026-10-01) open as they were left, each its own, kept as recv:<id>, a phone session
@@ -77,43 +77,6 @@ const UA = (() => {
 // camera frame, and the pool's behaviour when it is full depends on which.
 const VFC = typeof HTMLVideoElement !== "undefined" && !!HTMLVideoElement.prototype.requestVideoFrameCallback;
 const pool = [], fountain = new Worker(new URL("./fountain-worker.mjs", import.meta.url), { type: "module" });
-// ai: The GPU decoder (Decoder GPU, or auto where WebGPU makes it: recv-gpu-worker.mjs, the WebGPU host): one worker that
-// ai: takes up to `cap` frames at once (its ring) and batches them itself. While it starts the C pool decodes; once it
-// ai: is up (`up`: ready once) it is the page's one decoder and the pool is let go; a failure (no WebGPU, the device
-// ai: lost) hands the page back to the pool, the reason kept (gpuWhy) until the setting changes.
-let gpu = null, gpuWhy = "";
-function startGpu() {
-  const w = new Worker(new URL("./recv-gpu-worker.mjs", import.meta.url), { type: "module" });
-  gpu = { gpu: true, w, ready: false, up: false, frames: true, out: 0, cap: 0, adapter: "" };
-  w.onmessage = ({ data: m }) => { onGpu(m); fileRoom(); };
-  w.onerror = (e) => { e.preventDefault?.(); gpuFail(`the GPU worker: ${e.message ?? "failed to start"}`); };
-  if (config) w.postMessage({ type: "config", config });
-  showDecoder();
-}
-function stopGpu() { gpu?.w.terminate(); gpu = null; }
-function gpuFail(why) {
-  console.warn(`GPU decoder: ${why}; the C decodes`);
-  stopGpu(); gpuWhy = why;
-  resize(); showDecoder();
-}
-function onGpu(m) {
-  if (!gpu) return;
-  if (m.type === "ready") {
-    if (m.version !== config?.version) return;
-    Object.assign(gpu, { ready: true, up: true, cap: m.take, adapter: m.adapter ?? "" });
-    resize(); showDecoder();
-    return;
-  }
-  if (m.type === "error") { if (m.fatal) return gpuFail(m.message); workerErrs++; lastErr = m.message; }
-  if (m.tag !== undefined) gpu.out = Math.max(0, gpu.out - 1);
-  if (m.type !== "result") return;
-  if (m.noFrames) { poolVfOff = `off since the GPU worker could not read a VideoFrame: ${m.noFrames}`; cur.skipped++; trackTags.delete(m.tag); return; }
-  if (m.vf) vfFormat = m.vf;
-  take(m);
-}
-// ai: The Decoder menu's auto entry named after what runs (the apps': the GPU until it is known not to)
-function showDecoder() { $("dec").querySelector('option[value="auto"]').textContent = gpu || ($("dec").value !== "cpu" && !gpuWhy) ? "On" : "Off"; }
-const decodersUp = () => (gpu?.up ? [gpu] : pool);
 // ai: config: what the decoders are told, always set (lizardConfig): nothing but the picture sizes to build.
 let config = null, track = null, file = "", next = 0, busySkips = 0;
 // ai: Files played as the camera (2026-11-07, the apps' File; a list since 2026-11-09, the apps' ReceiveUpload): the
@@ -125,7 +88,7 @@ let config = null, track = null, file = "", next = 0, busySkips = 0;
 let picks = [], queue = null, media = null;
 const sourceOn = () => !!(track || media), fileChosen = () => $("cam").value === "file";
 let photoCaps = {}, levels = null;   // what the camera says it can be told, and the grey range it actually delivers
-// The last format word read out of a symbol (src/fmt.h): the version, and the rate the sender means to paint at.
+// The last format word read out of a symbol (src/fmt.h): the version and the layout's counts.
 // ai: LIZARD's decoders read everything from the light; this is what the light last said of the format, as shown
 // ai: and recorded. It moves only when two results in a row that read a word agree on the new one (bandSeen is the
 // ai: last word read), so a stray wrong word (a random frame passes the word check at 6.0e-7 a read, SPEC 5.4) is never
@@ -133,7 +96,7 @@ let photoCaps = {}, levels = null;   // what the camera says it can be told, and
 let band = null, bandSeen = null;
 // ai: What the light says: LIZARD's word.
 function showCfg() {
-  const light = !band ? "no format word read yet" : `${NAME(subchOf(band.version))}, ${band.fps ? `${band.fps} fps` : "no rate"} from the band`;
+  const light = !band ? "no format word read yet" : `${NAME(subchOf(band.version))} from the band`;
   $("cfg").textContent = `light: ${light}`;
 }
 // ai: An error's popup (#errDlg, send.mjs showErr's twin): what happened the title, what it touched the body, a body
@@ -195,7 +158,7 @@ function showState() {
   const speedNow = () => { const k = recentKBs(); return k > 0 ? nb(rate(k)) : ""; };
   // ai: nothing while the camera starts or no decoder has answered (the preview's cover says "Getting ready"), and an error
   // ai: is the preview's to say (2026-11-06, the apps' Receive.kt: errorOf, Readout.line)
-  // ai: every chunk in hand, the last solves under way (2026-11-14, the apps' Readout.line): the head's spinner in the
+  // ai: every source block in hand, the last solves under way (2026-11-14, the apps' Readout.line): the head's spinner in the
   // ai: percentage's place, the meter full, Decoding in Time left's place, no speed; the camera on or stopped (the
   // ai: fountain worker goes on with the blocks it was handed)
   // ai: and once done, until the page offers the file (the worker's file message): Saving in Decoding's row
@@ -205,10 +168,10 @@ function showState() {
   else if (decoding) {
     frac = 1;
     d = { name: h.name || "a file", spin: true, frac, rows: [["Received", nb(bytes(xferNow.bytesIn ?? h.length))], ["Size", nb(bytes(h.length))],
-      xferNow.done ? ["Saving", ""] : ["Decoding", `${xferNow.verified} of ${h.chunks}`], ["Speed", ""]] };
+      xferNow.done ? ["Saving", ""] : ["Decoding", `${xferNow.verified} of ${h.sourceBlocks}`], ["Speed", ""]] };
   } else if (on && h && !offered) {
     frac = fractionDone(xferNow);
-    // ai: the transfer's bytes in (each chunk's blocks in hand to its length); the speed the last second's new bytes
+    // ai: the transfer's bytes in (each source block's blocks in hand to its length); the speed the last second's new bytes
     // ai: (recentKBs)
     const now = recentKBs(), got = xferNow.bytesIn ?? frac * h.length;
     d = { name: h.name || "a file", end: `${Math.floor(100 * frac)}%`, frac, rows: [["Received", nb(bytes(got))], ["Size", nb(bytes(h.length))],
@@ -275,8 +238,8 @@ function showState() {
   $("railRate").innerHTML = v ? `${v}<small>${u}</small>` : "";
   $("railRate").hidden = !!ui.received && !testing;   // ai: the check takes its square, except while the test stream is read
   const coming = on && h && !offered && !testing && frac != null;   // ai: the receiving line's own fraction, none under an error
-  // ai: decoding (2026-11-14): a spinner over the chunks verified of all, in the percentage's square
-  $("railPct").innerHTML = decoding && d ? `<span class="spin"></span><small>${xferNow.verified}/${h.chunks}</small>` : coming ? `${Math.floor(100 * frac)}<small>%</small>` : "";
+  // ai: decoding (2026-11-14): a spinner over the source blocks verified of all, in the percentage's square
+  $("railPct").innerHTML = decoding && d ? `<span class="spin"></span><small>${xferNow.verified}/${h.sourceBlocks}</small>` : coming ? `${Math.floor(100 * frac)}<small>%</small>` : "";
   $("railPct").hidden = !(coming || (decoding && d));
   $("railDone").hidden = !ui.received || testing;
 }
@@ -412,7 +375,6 @@ function spawn() { pool.push(newWorker({ deaths: 0, wait: STUCK_WAIT })); }
 // In auto the size is the allocator's to choose, so this only holds it inside the ceiling: a menu
 // that drops the ceiling must still bring the pool down. Growing is busy()'s job and shrinking the tick's.
 function resize() {
-  if (gpu?.up) { while (pool.length) kill(pool.pop()); return; }
   const want = !FIXED ? Math.min(pool.length, limit()) : limit();
   while (pool.length > want) kill(pool.pop());   // a frame in flight there is lost, which the counters show as one not processed
   while (pool.length < want) spawn();
@@ -441,8 +403,8 @@ function showCamera() {
 // ai: TAP_EMPTY_MAX.
 let tap = null, poolVfOff = "", vfNote = "", vfFormat = "", tapNone = 0;
 function vfWhyNot(slot = null) {
-  if (!decodersUp().some((c) => c.ready)) return "no worker ready";
-  if (slot ? !slot.frames : !decodersUp().some((c) => c.ready && c.frames)) return "the workers take no VideoFrame";
+  if (!pool.some((c) => c.ready)) return "no worker ready";
+  if (slot ? !slot.frames : !pool.some((c) => c.ready && c.frames)) return "the workers take no VideoFrame";
   if (poolVfOff) return poolVfOff;
   if (typeof VideoFrame !== "function") return "no VideoFrame on this page";
   return "";
@@ -504,12 +466,12 @@ const previewNow = () => (!vfWhyNot() ? "video" : "shot");
 // ai: stays through a stop and a newer transfer. On disk the file is also kept in the received files (lizard-web/library.mjs),
 // ai: listed on Home. `file`, the readout's line, is what lizard-web/check_rates.mjs reads.
 let fileUrl = "", fileOut = null;
-function showFile(name, data, how = "checksum ok", type = "", sent = 0) {
+function showFile(name, data, how = "checksum ok", sent = 0) {
   const seconds = (performance.now() - tFirst) / 1000, blob = data instanceof Blob ? data : new Blob([data]), n = blob.size;
   file = `${name}: ${n} B in ${seconds.toFixed(2)} s (${(n / seconds / 1000).toFixed(1)} KB/s), complete, ${how}`;
   $("file").textContent = file;
   if (fileUrl) URL.revokeObjectURL(fileUrl);
-  fileOut = new File([blob], name, { type: type || blob.type });
+  fileOut = new File([blob], name, { type: typeOf(name) });
   const save = $("save");
   save.href = fileUrl = URL.createObjectURL(fileOut); save.download = name;
   let shares = false;
@@ -519,8 +481,11 @@ function showFile(name, data, how = "checksum ok", type = "", sent = 0) {
   ui.err = "";   // ai: a fountain error is not fatal (fountain-worker.mjs goes on), so a file can still finish after one
   // ai: The camera off once the file is in (2026-10-01):
   // ai: nothing is left to read, and the phone cools. Once a file (the fountain offers it once), so Start after
-  // ai: it reads on.
+  // ai: it reads on. Then its transfer's tags let go (2026-11-20, sim/xfer.mjs releaseDone; the apps' receive session
+  // ai: the same), the page's dedupe with them: the same file in the light at a later Start is received again.
   if (sourceOn()) { second(); stopCamera(); }
+  seenIds = new Set(); seenOld = new Set();
+  fountain.postMessage({ type: "release" });
   showState();
   if (SAVE_POST) logPost(`/api/file?name=${encodeURIComponent(name)}`, blob);
 }
@@ -541,8 +506,8 @@ watchLibrary(async () => {
 });
 $("open").onclick = () => { if (fileUrl) window.open(fileUrl, "_blank"); };
 $("share").onclick = () => { if (fileOut) navigator.share({ files: [fileOut], title: fileOut.name }).catch(() => {}); };
-// A chunked transfer as it goes (lizard-web/fountain-worker.mjs): where the header came from, each chunk's share of its blocks,
-// and what the worker holds. xferStats rides in the stats, per chunk left out.
+// A chunked transfer as it goes (lizard-web/fountain-worker.mjs): where the header came from, each source block's share of its blocks,
+// and what the worker holds. xferStats rides in the stats, per source block left out.
 // ai: xferNow: the last such message whole, per included, for the state line and its meter (showState).
 let xferStats = null, xferNow = null;
 const MB = (b) => (b / 1048576).toFixed(1);
@@ -554,10 +519,10 @@ function showXfer(m) {
   const whence = !m.header ? (m.lightSeen ? "a header was read from the light and refused" : "waiting for the header, none read from the light yet") : "header read from the light";
   const h = m.header, lines = [`file: ${whence}`];
   if (h) {
-    // A glyph a chunk: # verified, + decoded and waiting for the manifest, 0 to 9 tenths of its blocks in hand.
+    // A glyph a source block: # verified, 0 to 9 tenths of its blocks in hand.
     const glyphs = per.length <= 256 ? Array.from(per, (v) => (v === 255 ? "#" : v === 254 ? "+" : String(Math.floor(v / 10)))).join("") : "";
-    lines.push(`${h.name || "(no name)"}, ${h.length} B, ${h.chunks} chunk${h.chunks === 1 ? "" : "s"} of 2^${h.log2}, BLAKE3 ${h.root.slice(0, 16)}...`,
-      `verified ${m.verified} of ${h.chunks}${m.manifest ? `, manifest ${m.manifestHave} of ${m.manifest}${m.listOk ? ", checked against the root" : ""}` : ""}${m.rejected ? `, ${m.rejected} chunk decode${m.rejected > 1 ? "s" : ""} REJECTED and collected again` : ""}${m.manifestRejected ? `, manifest refused ${m.manifestRejected}x` : ""}`);
+    lines.push(`${h.name || "(no name)"}, ${h.length} B, ${h.sourceBlocks} chunk${h.sourceBlocks === 1 ? "" : "s"} of 2^${h.log2}, BLAKE3 ${h.root.slice(0, 16)}...`,
+      `verified ${m.verified} of ${h.sourceBlocks}${m.rejected ? `, ${m.rejected} chunk decode${m.rejected > 1 ? "s" : ""} REJECTED and collected again` : ""}`);
     if (glyphs) lines.push(glyphs);
   }
   lines.push(`held: blocks ${m.store === "opfs" ? "on disk (OPFS)" : `in memory, ${MB(m.mem.storeBytes)} MB${m.storeWhy ? ` (no OPFS: ${m.storeWhy})` : ""}`}; heap ${MB(m.mem.codecHeap)} MB`);
@@ -568,14 +533,15 @@ async function offerXfer(m) {
   // ai: lib: kept in the received files (fountain-worker.mjs fileAway); opfs: left in the scratch folder (no keeping)
   if (m.lib) data = await openKept(m.lib);
   else if (m.opfs) { let d = await navigator.storage.getDirectory(); for (const p of m.opfs.slice(0, -1)) d = await d.getDirectoryHandle(p); data = await (await d.getFileHandle(m.opfs.at(-1))).getFile(); }
-  showFile(m.name || "received.bin", data, `every chunk verified, BLAKE3 ${m.root}`, m.mediaType, m.sent ?? 0);
+  showFile(m.name || "received.bin", data, `every chunk verified, BLAKE3 ${m.root}`, m.sent ?? 0);
 }
-// ai: A header with another root is another transfer, whose ids repeat the last one's (chunk and symbol count from 0):
+// ai: A header with another root is another transfer, whose ids repeat the last one's (source block and symbol count from 0):
 // ai: the page's set of ids goes, and the file line and its clock with it. The first header keeps what came before it.
 let xferRoot = "";
 fountain.onmessage = ({ data: m }) => {
   if (m.type === "xfer" && m.header?.root && m.header.root !== xferRoot) {
-    if (xferRoot) { seenIds = new Set(); seenOld = new Set(); file = ""; tFirst = 0; avgAt = 0; }
+    // ai: the dedupe kept: an id names its file by its tag (src/xfer.h, 2026-11-19; cleared here until then)
+    if (xferRoot) { file = ""; tFirst = 0; avgAt = 0; }
     xferRoot = m.header.root;
   }
   if (m.type === "xfer") showXfer(m);
@@ -609,14 +575,15 @@ function take(m) {
   // ai: A LIZARD frame's blocks new to the page go to the fountain, but not a test frame's (m.test): the light says they
   // ai: are the test stream's, so no transfer is theirs.
   if (m.ids) {
-    // New to the transfer, not just to that worker. A control block (a transfer's header or manifest, sim/xfer.mjs) is
-    // passed on each time and is not new data: its id is every transfer's, and only its bytes say which one it is.
+    // New to the transfer, not just to that worker. A control block (a transfer's header, sim/xfer.mjs) is
+    // passed on each time and is not new data: its id is every transfer's, and only its bytes say which one it is. A
+    // data block is new by its object's TOI and its id (two files in view share ids, never a TOI but 1 in 2^48).
     const keep = [];
-    m.ids.forEach((id, k) => { if (isControlId(id)) keep.push(k); else if (!seenHas(id)) { seenAdd(id); keep.push(k); news++; } });
+    m.ids.forEach((id, k) => { const key = `${m.tois?.[k] ?? 0}.${id}`; if (isControlId(id)) keep.push(k); else if (!seenHas(key)) { seenAdd(key); keep.push(k); news++; } });
     if (m.bytes && keep.length && !m.test) {
       const all = new Uint8Array(m.bytes), bytes = new Uint8Array(B * keep.length);
       keep.forEach((k, j) => bytes.set(all.subarray(k * B, (k + 1) * B), j * B));
-      fountain.postMessage({ type: "blocks", ids: keep.map((k) => m.ids[k]), bytes: bytes.buffer }, [bytes.buffer]);
+      fountain.postMessage({ type: "blocks", ids: keep.map((k) => m.ids[k]), tois: keep.map((k) => m.tois?.[k] ?? 0), bytes: bytes.buffer }, [bytes.buffer]);
     }
   }
   // A capture of a display frame that is already in is work done for nothing: it is a repeat, not a decode.
@@ -628,11 +595,10 @@ function take(m) {
   if (m.heap > heapTop) heapTop = m.heap;
   if (m.prof) for (const k in m.prof) cur.prof[k] = (cur.prof[k] ?? 0) + m.prof[k];
   if (m.levels) levels = m.levels;
-  // ai: The band: the only place a receiver learns the sender's format and rate.
-  // ai: a static word alone (src/fmt.h): an animated word, a carousel symbol, names no format of its own
-  if (m.fmt && !m.fmt.kind) {
+  // ai: The band: the only place a receiver learns the sender's format.
+  if (m.fmt) {
     ui.bandAt = performance.now();
-    const same = (a, b) => a?.version === b?.version && a?.fps === b?.fps && a?.ring === b?.ring;
+    const same = (a, b) => a?.version === b?.version && a?.count?.join() === b?.count?.join() && a?.ring === b?.ring;
     if (!same(m.fmt, band) && same(m.fmt, bandSeen)) { band = m.fmt; showCfg(); showState(); }
     bandSeen = m.fmt;
   }
@@ -682,7 +648,6 @@ function setConfig(c, newTransfer) {
   if (newTransfer) { band = null; forgetTransfer(); }
   cur = fresh(); buckets = [];
   for (const slot of pool) { slot.ready = false; slot.busy = false; slot.w.postMessage({ type: "config", config: c }); }
-  if (gpu) { gpu.ready = false; gpu.w.postMessage({ type: "config", config: c }); }
   resize();
   showCfg();
 }
@@ -758,13 +723,12 @@ function second() {
     msDraw: perGrab(w.draw), msRead: perGrab(w.read),
     // ai: Which decoder ran: the CPU pool, always (the field the apps' rows carry too), and the run's totals with the
     // ai: page's clock in s.
-    decoder: gpu?.up ? "gpu" : "cpu", gpuWhy, totals: { ...totals, sizes: { ...totals.sizes }, t: performance.now() / 1000 },
+    decoder: "cpu", totals: { ...totals, sizes: { ...totals.sizes }, t: performance.now() / 1000 },
     // LIZARD's data is in grey LEVELS, so a squeezed or clipped range loses signal at every frequency at once.
     // 41% of full range with 13% of the picture pinned at 255 is what a badly overexposed run looked like, against
     // 64% and 87% for runs that read well, so this is worth having on screen while the phone is still in hand.
-    // ai: Read through the lens: bandFps is all a receiver knows of the sender's rate, and the stats row carries it so a
-    // ai: run can be checked against the sender's line.
-    bandVersion: band?.version ?? 0, bandFps: band?.fps ?? 0,
+    // ai: Read through the lens: the stats row carries the band's version so a run can be checked against the sender's line.
+    bandVersion: band?.version ?? 0,
     rateAsked: $("fps").value, rateNote, srcCrop, photoCaps, greyRange: levels?.range ?? 0, greyClipHi: levels?.hi ?? 0, greyClipLo: levels?.lo ?? 0, greyMedian: levels?.mid ?? 0,
     // ai: Frames handed to the pool's workers as VideoFrames in the window, and by the canvas grab; the page's ms for each
     // ai: (the whole callback); where the VideoFrames came from (the page's track processor or the <video>); the pixel
@@ -784,14 +748,10 @@ function second() {
   stats.verdict = why?.text ?? null;
   // ai: The flags, each worded once: on its line of the readout below, and with the verdict on #why.
   const clipping = levels && stats.greyRange < 0.5 * 255 ? "TOO LITTLE RANGE: the picture is clipping, not the code's fault" : "";
-  // What the band said, next to what the camera is managing. A camera below the stated display rate cannot see
-  // every frame whatever else is right, and that is worth saying while the phone is still in hand.
-  const slow = band?.fps && stats.capturedFps < band.fps - 1 ? `CAMERA BELOW THE DISPLAY RATE at ${stats.capturedFps.toFixed(0)} fps: some frames are never seen` : "";
-  const bandLine = band
-    ? `band: ${NAME(subchOf(band.version))}${band.fps ? `, ${band.fps} fps stated` : ", no rate stated"}${slow ? `  ${slow}` : ""}`
-    : "band: no format word read yet";
+  // What the band said: the format (a word states no display rate, src/fmt.h).
+  const bandLine = band ? `band: ${NAME(subchOf(band.version))}` : "band: no format word read yet";
   const num = (v) => (typeof v === "number" ? v.toFixed(1) : "?");
-  const decLine = gpu?.up ? `decoder: the GPU (WebGPU, ${gpu.adapter || "an adapter"}), ${gpu.out} of ${gpu.cap} frames out, ${stats.vfSent ? "frames as VideoFrames" : "frames by the grab"}` : `${gpuWhy ? `decoder: the C (the GPU: ${gpuWhy}); ` : ""}workers ${stats.workersReady} ready of ${stats.workers}, at most ${stats.workersMax}, ${stats.vfSent ? `frames as VideoFrames (from the ${stats.vfSource}${stats.vfFormat ? `, ${stats.vfFormat}` : ""}, copied to luma in the worker)${stats.lumaSent ? `, ${stats.lumaSent} by the grab` : ""}` : `frames by the grab${stats.vfNote ? ` (${stats.vfNote})` : ""}`}`;
+  const decLine = `workers ${stats.workersReady} ready of ${stats.workers}, at most ${stats.workersMax}, ${stats.vfSent ? `frames as VideoFrames (from the ${stats.vfSource}${stats.vfFormat ? `, ${stats.vfFormat}` : ""}, copied to luma in the worker)${stats.lumaSent ? `, ${stats.lumaSent} by the grab` : ""}` : `frames by the grab${stats.vfNote ? ` (${stats.vfNote})` : ""}`}`;
   const cropLine = `crop drawn ${drawMode === "rect" ? "with a source rect" : "whole and clipped: this browser's source rect disagreed with the whole frame"}, checked on ${cropCheck.checked} frames, ${cropCheck.differ} differed`;
   const grabPart = stats.vfSent && !stats.lumaSent ? "grab: none (VideoFrames)" : `canvas grab ${stats.msGrab.toFixed(1)} (draw ${stats.msDraw.toFixed(1)}, read ${stats.msRead.toFixed(1)})`;
   const bestPart = best.grab < Infinity ? ` (best this run at ${pool.length} worker${pool.length > 1 ? "s" : ""}: ${best.grab.toFixed(1)} + ${bestMs < Infinity ? bestMs.toFixed(1) : "-"})` : "";
@@ -819,21 +779,16 @@ function second() {
   ].filter(Boolean).join("\n");
   // ai: The lab line (#lab, in Developer Tools; the numbers line until 2026-10-01): the last second's rate, the registered
   // ai: share and the format's name while its word is live. The Android app's Developer Tools shows the same line.
-  const live = band && recent(ui.bandAt), named = live ? `, ${NAME(subchOf(band.version))}${band.fps ? ` at ${nb(`${band.fps} fps`)}` : ""}` : "";
+  const live = band && recent(ui.bandAt), named = live ? `, ${NAME(subchOf(band.version))}` : "";
   ui.lab = live || w.found ? `${nb(`${Math.round(stats.goodputKBs)} KB/s`)}, ${Math.round(100 * stats.foundShare)}% registered${named}` : "no code yet";
   // ai: The hints (#why) in plain words, one a line (2026-10-01): the verdict's and the flags' lab wording stays in #out
   // ai: and the stats row. With no code seen, "not registered" only repeats "Looking for a code", so the verdict waits for
   // ai: one, unless no frame reaches a decoder.
   const lead = why && (live || w.found || (stats.processedFps ?? 0) < 0.5) ? plainVerdict(why.text) : "";
-  // ai: A browser's camera is one no phase lock holds, as the apps' cameras without it (lizard-ui State.kt hintOf, the
-  // ai: same rule): its captures fall anywhere in the display's refresh, so it reads a sender at most half its rate, each
-  // ai: picture then held for two captures, one of them whole. Its rate (the one agreed at the camera's open, else the
-  // ai: one measured) under twice the word's names the most the sender should paint, said while the word is live:
-  // ai: as a hint, advice and not a fault (the grey info icon, ui.mjs warnings' "hint"): "Sender at 24 fps",
-  // ai: "recommended 15" (2026-11-11; a fixed 24, "Too fast for a browser", a warning, before). Decoding never depends on
-  // ai: it. "Washed out" a warning's label (2026-11-07; sentences before).
-  const camFps = camRate || stats.capturedFps || 0;
-  ui.why = [lead && [lead, ""], clipping && ["Washed out", ""], live && !media && camFps > 0 && camFps < 2 * band.fps && Math.floor(camFps / 2) >= 1 && [`Sender at ${band.fps}\u00a0fps`, `recommended ${Math.floor(camFps / 2)}`, "hint"]].filter(Boolean);   // ai: a file's every frame is read: no rate is too fast
+  // ai: "Washed out" a warning's label (2026-11-07; sentences before). The hint "Sender at N fps, recommended M" (from
+  // ai: 2026-11-11) went 2026-11-19 with the animated header; the word states the sender's rate again since 2026-11-22
+  // ai: (fps and the largest Refresh delay, src/fmt.h), no hint shown from it yet.
+  ui.why = [lead && [lead, ""], clipping && ["Washed out", ""]].filter(Boolean);
   showState();
   // ai: The frame path's diagnostics go to the console (read over adb DevTools) and the stats row, not the page, which
   // ai: keeps what a user aims and judges by (2026-09-25).
@@ -1036,15 +991,13 @@ function onFrame(now, meta) {
 }
 
 // ai: room(): a frame would go now (freeSlot's test, without taking the slot)
-const room = () => (gpu?.up ? gpu.ready && gpu.out < gpu.cap : pool.some((c) => c.ready && !c.busy));
+const room = () => pool.some((c) => c.ready && !c.busy);
 // Round robin over the idle workers, so none goes cold and captures of one display frame spread out.
 function freeSlot() {
-  if (gpu?.up) return config && gpu.ready && gpu.out < gpu.cap ? gpu : null;
   for (let k = 0; config && k < pool.length; k++) { const c = pool[(next + k) % pool.length]; if (c.ready && !c.busy) { next = (next + k + 1) % pool.length; return c; } }
   return null;
 }
 function send(slot, msg, transfer) {
-  if (slot.gpu) { slot.out++; cur.sent++; slot.w.postMessage(msg, transfer); return; }
   slot.busy = true;
   slot.sentAt = performance.now();   // the watchdog above needs to know how long it has been out
   cur.sent++;
@@ -1066,7 +1019,6 @@ function busy() {
   grow();
 }
 function grow() {
-  if (gpu?.up) return;
   busySkips++;
   if (policy.lost({ allReady: !booting(), size: pool.length, ceiling: limit(), repeatShare })) spawn();
 }
@@ -1083,7 +1035,6 @@ function stopCamera() {
   wake?.release().catch(() => {}); wake = null;
   while (pool.length > 1 && !FIXED) kill(pool.pop());
   for (const slot of pool) slot.busy = false;
-  if (gpu) gpu.out = 0;
   cur = fresh(); buckets = []; policy.reset();
   shot.width = shot.height = 0; cropCheck.key = ""; trackBox = null; trackTags.clear();   // nothing of the last session left on screen, and the next one tests its source rect again
   $("out").textContent = "camera off";
@@ -1245,7 +1196,7 @@ function fileRoom() {
     send(slot, { type: "frame", luma: m.luma, w: m.w, h: m.h, tag, delay: DELAY, prof: PROF }, [m.luma]);
   } else if (run.ready && run.grew !== run.ready) { run.grew = run.ready; grow(); }
   if (!run.asked && !run.ready && !run.ended) { run.asked = true; mediaW.postMessage({ type: "next", id: run.id, ...run.rect }); }
-  if (run.ended && !run.ready && (gpu?.up ? gpu.out === 0 : !pool.some((c) => c.busy))) {
+  if (run.ended && !run.ready && !pool.some((c) => c.busy)) {
     run.ended = false;
     // ai: the queue's next file, else the run's end (its last file's)
     const q = queue;
@@ -1389,12 +1340,6 @@ $("go").onclick = () => (sourceOn() ? stopCamera() : fileChosen() || limitSeen()
 $("railCam").onclick = () => $("go").onclick();
 // A new resolution, rate or camera needs a new stream.
 // ai: Not in the middle of a start, which would be stopped under itself: the choice then takes effect at the next start.
-// ai: Decoder: CPU lets the GPU worker go and the pool decodes; GPU (or auto) starts it again, a failure before forgotten
-$("dec").onchange = () => {
-  if ($("dec").value === "cpu") { stopGpu(); resize(); }
-  else { gpuWhy = ""; if (!gpu) startGpu(); }
-  showDecoder();
-};
 const restart = () => { showRates(); if (sourceOn() && !ui.starting) { stopCamera(); start(); } };
 $("res").onchange = $("fps").onchange = restart;
 // ai: Camera: a camera, or File (2026-11-09: it stays chosen, a camera running stopped, and its files are picked in the
@@ -1482,7 +1427,7 @@ document.addEventListener("visibilitychange", async () => { if (track && documen
 // Controls can be preset from the URL: recv.html?workers=4&res=1280x720&auto
 // ai: The folds' menus as the user last left them (localStorage, since 2026-09-29);
 // ai: the URL's presets after, so a scripted run still gets what it names. The camera's menu fills later (listCameras).
-for (const el of document.querySelectorAll(".settings select:not(#cam):not(#lock)")) persist(el, `recv:${el.id}`);
+for (const el of document.querySelectorAll(".settings select:not(#cam):not(#lock):not(#dec)")) persist(el, `recv:${el.id}`);
 // ai: Show statistics (Developer Tools, the apps'): on, the green line once a file is in and the lab line and readouts
 $("stats").addEventListener("change", () => { document.body.classList.toggle("stats", $("stats").value === "1"); showState(); });
 document.body.classList.toggle("stats", $("stats").value === "1");
@@ -1492,8 +1437,6 @@ for (const [k, v] of new URLSearchParams(location.search)) if ($(k) && "value" i
 setConfig(lizardConfig(), true);
 showCrop();
 showCamera();
-if ($("dec").value !== "cpu") startGpu();
-showDecoder();
-resize();   // ai: the pool's first worker (the GPU decoder's cover while it starts)
+resize();   // ai: the pool's first worker
 showState();
 if (new URLSearchParams(location.search).has("auto")) $("go").onclick();

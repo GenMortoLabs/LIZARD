@@ -44,7 +44,6 @@ struct Sender {
   int fps = 60;             // ai: pictures a second, the rate the word states
   int codes = 1;            // ai: 1, or 2 side by side
   std::string file;         // ai: "" the test stream, else this file's transfer
-  std::string type;         // ai: the file's media type as its header carries it ("" none; application/x-tar a bundle)
   uint32_t firstId = 0;     // ai: the test stream's first id (0 random)
 };
 
@@ -79,7 +78,7 @@ struct Optics {
 };
 
 // ai: The space-separated key=value form the test hooks take (LIZ_CAMERA_SIM, cam_check, sim/fake_v4l2's devices):
-// ai: blocks, ring (its cells a side: 64, 128 or 256, or auto), fps, codes, file, type, id; hz, ppm, phase, scan,
+// ai: blocks, ring (its cells a side: 64, 128 or 256, or auto), fps, codes, file, id; hz, ppm, phase, scan,
 // ai: response, sw, sh, share, surround, repeat; w, h, fill, yaw, tilt, roll, blur, exposure, shutter (rolling|global),
 // ai: readout, gain, black, noise (read), shot, gamma, seed. False with why for a key it does not know or a value out
 // ai: of range; keys it does not name are left as they were.

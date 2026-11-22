@@ -1,13 +1,13 @@
-// The format's LDPC base matrices, one a rate of the rate profile (lizard_phy.h lizard_tiers_for: 7/8, 3/4, 2/3 and 1/2), every
-// code at circulant size z = 128 (a 128-lane workgroup a block row on a GPU) and its own base-graph width: 7/8 5 block
+// The format's LDPC base matrices, one a rate of the rate profile (lizard_phy.h lizard_tiers_for: 6/7, 3/4, 2/3 and 1/2), every
+// code at circulant size z = 128 (a 128-lane workgroup a block row on a GPU) and its own base-graph width: 6/7 5 block
 // rows by 31 data columns, the last never sent (np = 1: the 128 zeros past the block, codeword bits 3840 to 3967, known to
 // a decoder; a block's 4480 slots carry bits 0 to 3839 and 3968 to 4607, the first data column sent since 2026-11-01, where
 // it was never sent before; ldpc.h np, nt), 3/4 10 by 30, 2/3 15 by 30, 1/2 30 by 30. Each holds the
-// block's 476 B and its CRC-32C (3840 bits) in its k (3840, and 3968 at 7/8, whose last 128 data bits are zeros a
+// block's 472 B and its CRC-64 (3840 bits) in its k (3840, and 3968 at 6/7, whose last 128 data bits are zeros a
 // decoder is told). Each entry is a circulant's shift, -1 where the base graph has no edge; the staircase is not in it, being
 // the same for every code (ldpc.c). These ARE the format's codes (ldpc_init builds the rate's from here).
 // Made on 2026-10-31 by scripts/exp/ldpc_opt.py generate(z, mb, kb, degrees(kb, heavy), seed, np), which regenerates
-// them exactly: at z = 128, 7/8 (mb 5, kb 31, heavy 1x5 and 4x5, seed 1, np 1), 3/4 (10, 30, 6x10, seed 2), 2/3 (15,
+// them exactly: at z = 128, 6/7 (mb 5, kb 31, heavy 1x5 and 4x5, seed 1, np 1), 3/4 (10, 30, 6x10, seed 2), 2/3 (15,
 // 30, 7x11, seed 1), 1/2 (30, 30, 12x8, seed 1); columns in order, each edge into the lightest block row, every shift of
 // 0 to z - 1 scored on exact 4- and 6-cycle counts through the base matrix with the staircase's circulants, the heavy
 // columns the profiles of the codes before them scaled to these widths, the other data columns degree 3. Their 10%
@@ -19,9 +19,9 @@
 
 enum { LDPC_BASE_Z = 128 };
 
-// The 7/8 code: z = 128, 5 block rows by 31 data columns (0 to 4 of degree 5, the rest 3; column 30, the known zeros, never sent), n = 36 z = 4608 of which 35 z = 4480 are sent.
-enum { LDPC_BASE78_RATE = 6, LDPC_BASE78_MB = 5, LDPC_BASE78_KB = 31, LDPC_BASE78_NP = 1 };
-static const short LDPC_BASE78[LDPC_BASE78_MB][LDPC_BASE78_KB] = {
+// The 6/7 code: z = 128, 5 block rows by 31 data columns (0 to 4 of degree 5, the rest 3; column 30, the known zeros, never sent), n = 36 z = 4608 of which 35 z = 4480 are sent.
+enum { LDPC_BASE67_RATE = 6, LDPC_BASE67_MB = 5, LDPC_BASE67_KB = 31, LDPC_BASE67_NP = 1 };
+static const short LDPC_BASE67[LDPC_BASE67_MB][LDPC_BASE67_KB] = {
   {  18,  83,   3,  51,  98,  -1,  59, 124,  43,  -1,  -1,   7,  91,  -1,  15,  -1,  65, 108,  -1,  60, 102,  29,  -1, 102,  -1,  83,  -1, 121,  -1,  57,  72 },
   {  31, 111,  59,  16,  25,  -1,  37,  56,  -1, 108,  -1,  42, 110,  -1,  63,  -1,  24,  24,  -1,  45,  -1, 106,  88,  -1,  97,  -1, 111, 113,  -1,  66,  92 },
   {  65,  35,  43, 126,  34,  14,  -1,  20,  59,  -1,   5,  -1,  -1, 107,  96,  82,  -1,  25,  25,  -1,  -1, 120,  -1, 123, 114, 114,  47,  -1,  60,  -1,  -1 },
@@ -102,7 +102,7 @@ static const short LDPC_BASE12[LDPC_BASE12_MB][LDPC_BASE12_KB] = {
 // The tables by rate, for ldpc_init: the format's four codes. np: data columns never sent.
 typedef struct { int z, rate, mb, kb, np; const short *shift; } ldpc_base_t;
 static const ldpc_base_t LDPC_BASES[] = {
-  { LDPC_BASE_Z, LDPC_BASE78_RATE, LDPC_BASE78_MB, LDPC_BASE78_KB, LDPC_BASE78_NP, &LDPC_BASE78[0][0] },
+  { LDPC_BASE_Z, LDPC_BASE67_RATE, LDPC_BASE67_MB, LDPC_BASE67_KB, LDPC_BASE67_NP, &LDPC_BASE67[0][0] },
   { LDPC_BASE_Z, LDPC_BASE34_RATE, LDPC_BASE34_MB, LDPC_BASE34_KB, LDPC_BASE34_NP, &LDPC_BASE34[0][0] },
   { LDPC_BASE_Z, LDPC_BASE23_RATE, LDPC_BASE23_MB, LDPC_BASE23_KB, LDPC_BASE23_NP, &LDPC_BASE23[0][0] },
   { LDPC_BASE_Z, LDPC_BASE12_RATE, LDPC_BASE12_MB, LDPC_BASE12_KB, LDPC_BASE12_NP, &LDPC_BASE12[0][0] },

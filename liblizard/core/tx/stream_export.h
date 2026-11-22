@@ -13,16 +13,17 @@ namespace lizard {
 
 class Sender;
 
-// ai: what meta.json says of the stream beyond what the sender knows: the file's name and type as the sender was
-// ai: made with them, the format as the caller names it (blocks, ring, fps, codes) and its blocks a frame
+// ai: what meta.json says of the stream beyond what the sender knows: the file's name and compression as the sender
+// ai: was made with them, the format as the caller names it (blocks, ring, fps, codes) and its blocks a frame
 struct StreamInfo {
-  std::string name, type;
+  std::string name;
+  int compression = 0;
   int blocks = 0, ring = 0, fps = 0, codes = 1, frameBlocks = 0;
 };
 
 // ai: The sender's frames as a stream file at path (Sender::exportStart with no screen: from the first frame made once
-// ai: the file's lap is known, `frames` of them, made odd, or 0: 2.5 laps), every frame packed on the machine's cores
-// ai: as `packing` says. progress(done, frames) as frames are written (frames 0 until the lap is known): false stops the
+// ai: the file's cycle is known, `frames` of them, made odd, or 0: 2.5 cycles), every frame packed on the machine's cores
+// ai: as `packing` says. progress(done, frames) as frames are written (frames 0 until the cycle is known): false stops the
 // ai: export (the .part removed). Returns the frames written, or -1 with why. Blocks: not on a UI thread.
 int64_t exportStream(Sender& s, const StreamInfo& info, const std::string& path, int frames, const std::function<bool(int, int)>& progress,
                      std::string& why, const lizfile::Packing& packing = {});

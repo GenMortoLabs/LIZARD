@@ -24,13 +24,14 @@ import dev.lizard.ui.*
 // ai: list (the items and what goes on stderr as "list: <name> | ... | <choice>, <n> files, <bytes> B", "reading" while the pick is walked); a change stops the run, as
 // ai: the app's does, until a start; each logged on stderr as "step <s>: <action>" when it is taken. Each second's
 // ai: presenter stats go to stderr as "present: {...}"; steps fold=<FoldKey>, shot=<path.png>, source=files|stream,
-// ai: export=0|1, hide=0|1 (2026-11-18; hide mid-export switches the screen at once). Stream (2026-11-18): stream=<path>
-// ai: (Source Stream, the stream file played), export=0|1, laps=<1 to 5>, hide=0|1 (Export, Laps, Hide codes; with hide=1 the run is waited
+// ai: export=0|1, hide=0|1 (2026-11-18; hide mid-export switches the screen at once), test=0|1 (Control's Test stream, not
+// ai: saved; 2026-11-19). Stream (2026-11-18): stream=<path>
+// ai: (Source Stream, the stream file played), export=0|1, cycles=<1 to 5>, hide=0|1 (Export, Laps, Hide codes; with hide=1 the run is waited
 // ai: on to its end, at most START_SECS + secs, and the line is {"export": {...}}); the last line's "export" the run's
 // ai: export state (null none).
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {
     companion object {
-        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh", "carousel", "colours", "scaling",
+        private val KEYS = setOf("secs", "codes", "enc", "blocks", "fps", "vsync", "size", "spacing", "margin", "ring", "full", "file", "steps", "refresh", "colours", "scaling",
             "stream", "export", "laps", "hide")
         // ai: how long the presenter may take to start (the canvas shown, the GPU painter made) before the check fails
         private const val START_SECS = 60.0
@@ -85,14 +86,12 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         int("spacing", Room.SPACING_MIN..Room.SPACING_MAX)?.let { s.spacing = it }
         int("margin", Pick.QUIET..Room.MARGIN_MAX)?.let { s.margin = it }
         kv["ring"]?.let { v -> s.ring = if (v == "auto") -1 else Pick.RINGS.indexOf(v.toIntOrNull() ?: 0).takeIf { it >= 0 } ?: fail("LIZ_SENDER_TEST: ring=$v") }
-        // ai: Refresh's delays (2026-11-17; Rate refresh 2026-11-12): four values 1 to REFRESH_MAX, 7/8 to 1/2, as the setting
-        // ai: keeps them ("4,4,4,1"; the 3/4 taken as the 7/8's, the two tied)
+        // ai: Refresh's delays (2026-11-17; Rate refresh 2026-11-12): four values 1 to REFRESH_MAX, 6/7 to 1/2, as the setting
+        // ai: keeps them ("4,4,4,1")
         kv["refresh"]?.let { v ->
             if (v.split(',').let { e -> e.size != 4 || e.any { it.trim().toIntOrNull() !in 1..dev.lizard.ui.REFRESH_MAX } }) fail("LIZ_SENDER_TEST: refresh=$v")
             s.refresh = dev.lizard.ui.refreshOf(v)
         }
-        // ai: Refresh's Header, the animated header (2026-11-15): frames a carousel symbol, 0 to CAROUSEL_MAX (0 the static word)
-        int("carousel", 0..dev.lizard.ui.CAROUSEL_MAX)?.let { s.carousel = it }
         // ai: Code's Colours (2026-11-16): <ink>/<paper>, each RRGGBB (a step's commas are the steps'), not saved
         kv["scaling"]?.let { v -> if (v in SendState.SCALINGS) s.scaling = v else fail("LIZ_SENDER_TEST: scaling=$v is not bilinear, lanczos or none") }
         kv["colours"]?.let { v -> colours(v)?.let { (i, p) -> s.ink = i; s.paper = p } ?: fail("LIZ_SENDER_TEST: colours=$v is not <ink>/<paper>") }
@@ -103,7 +102,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             (s.phase as? SendState.Phase.Error)?.let { fail(it.why) }
         }
         int("export", 0..1)?.let { s.export = it == 1 }
-        kv["laps"]?.let { v -> s.laps = dev.lizard.ui.lapsOf(v.toDoubleOrNull() ?: fail("LIZ_SENDER_TEST: laps=$v")) }
+        kv["laps"]?.let { v -> s.cycles = dev.lizard.ui.cyclesOf(v.toDoubleOrNull() ?: fail("LIZ_SENDER_TEST: laps=$v")) }
         int("hide", 0..1)?.let { s.hideCodes = it == 1 }
     }
 
@@ -205,6 +204,7 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
                 javax.imageio.ImageIO.write(java.awt.Robot().createScreenCapture(java.awt.Rectangle(at.x, at.y, f.width, f.height)), "png", java.io.File(v))
             } ?: fail("LIZ_SENDER_TEST: step $act: no window")
             "source" -> s.chooseSource(v)
+            "test" -> { s.test = n(0..1) == 1 }
             "export" -> s.chooseExport(n(0..1) == 1)
             "hide" -> s.chooseHideCodes(n(0..1) == 1)
             "rail" -> s.toggleRail()

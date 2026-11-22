@@ -28,7 +28,7 @@ static int send(const char *assets, const char *painter, const char *device) {
   uint8_t *data = malloc(bytes);
   uint64_t s = 0x9e3779b97f4a7c15ull;
   for (size_t i = 0; i < bytes; i++) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; data[i] = (uint8_t)(s >> 32); }
-  liz_sender *snd = liz_sender_new(data, bytes, "engine.bin", "", 0);
+  liz_sender *snd = liz_sender_new(data, bytes, "engine.bin", 0);
   liz_format f = {30, LIZ_RING_DEFAULT, 60, 2};
   /* ai: the schedule's seed taken before the first frame (refused after it, below) */
   if (!snd || liz_sender_seed(snd, 12345u) != LIZ_OK) { printf("FAIL seed: %s\n", liz_last_error()); return 1; }
@@ -46,7 +46,7 @@ static int send(const char *assets, const char *painter, const char *device) {
     printf("FAIL refresh: %s\n", liz_last_error()); return 1;
   }
   free(each);
-  /* ai: the block places: the first a 7/8 block at slot 0, the places packed in order, every one inside the format */
+  /* ai: the block places: the first a 6/7 block at slot 0, the places packed in order, every one inside the format */
   liz_block_place p0, pl;
   if (liz_block_place_of(f.blocks, 0, &p0) != LIZ_OK || p0.rate != 0 || p0.first_slot != 0 || p0.first_subch != 0 ||
       liz_block_place_of(f.blocks, places - 1, &pl) != LIZ_OK || pl.rate != 3 || pl.last_subch >= 16 * f.blocks ||
@@ -56,7 +56,7 @@ static int send(const char *assets, const char *painter, const char *device) {
   liz_decoder *d = liz_decoder_new(0);
   liz_rx *rx = liz_rx_new(NULL);
   uint8_t *frame = malloc((size_t)g.width * g.height), *verified = malloc((size_t)liz_decoder_max_blocks(d) * 2 * LIZ_BLOCK);
-  int held = 0, frames = 0, missed = 0;
+  int frames = 0, missed = 0;
   liz_progress p = {0};
   const double t0 = now_ms();
   while (!p.done && frames < 400) {
@@ -64,7 +64,7 @@ static int send(const char *assets, const char *painter, const char *device) {
     frames++;
     int total = 0;
     for (int k = 0; k < 2; k++) {   /* ai: each code read where it is painted, with no surround: the paint itself */
-      const int got = liz_decode(d, frame + k * (g.side + g.gap), g.side, g.side, g.width, LIZ_GREY8, &held,
+      const int got = liz_decode(d, frame + k * (g.side + g.gap), g.side, g.side, g.width, LIZ_GREY8,
                                  verified + (size_t)total * LIZ_BLOCK, NULL);
       if (got > 0) total += got;
     }

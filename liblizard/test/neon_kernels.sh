@@ -1,6 +1,6 @@
 #!/bin/bash
 # ai: arm64's own kernels on a phone: ldpc_neon.c (the LDPC against the scalar loop and the 128-bit kernel), fft_dec.c
-# ai: (the decoder's transform against the definition), crc_check.c (the CRC instructions against the bit loop),
+# ai: (the decoder's transform against the definition), crc_check.c (the CRC-64 by PMULL folding against the bit loop),
 # ai: mesh_neon.c (the registration mesh, built with its NEON forms and with the scalar twins: each its own hash, the
 # ai: NEON reads within their bound of sample()),
 # ai: finder_neon.c (binarize, shrink2 and the corner marks' scan, likewise; the column walks against the byte loop), built
@@ -16,7 +16,7 @@ mkdir -p "$out"
 F="-O3 -ffp-contract=off -DNDEBUG -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -I$here/../src"
 $CC $F -o "$out/ldpc_neon" "$here/ldpc_neon.c" -lm
 $CC $F -o "$out/fft_dec" "$here/fft_dec.c" -lm
-$CC $F -o "$out/crc_check" "$here/crc_check.c" "$here/../src/layout.c" "$here/../src/fmt.c" "$here/../src/rs.c" -lm
+$CC $F -o "$out/crc_check" "$here/crc_check.c" "$here/../src/layout.c" "$here/../src/fmt.c" "$here/../src/rs.c" "$here/../src/ldpc.c" -lm
 S=$here/../src; codec="$S/layout.c $S/fmt.c $S/rs.c $S/ldpc.c $S/fft.c $S/lizard_phy.c $S/any.c"
 $CC $F -o "$out/mesh_neon" "$here/mesh_neon.c" $codec -lm
 $CC $F -DOB_SCALAR -o "$out/mesh_scalar" "$here/mesh_neon.c" $codec -lm

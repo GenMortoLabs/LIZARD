@@ -1,8 +1,8 @@
 # liblizard
 
 The LIZARD code as a library: a luminance-only animated barcode that carries a file from a screen to a camera. A
-frame is a grey picture whose FFT coefficients carry blocks of 476 bytes (a 5-byte id and 471 of payload, CRC-checked),
-each LDPC-coded at a rate that follows the frequency (7/8 inside, then 3/4 and 2/3, 1/2 outside), inside a border
+frame is a grey picture whose FFT coefficients carry blocks of 472 bytes (a 12-byte id naming the file, the chunk, the piece and the sender's session, and 460 of payload, CRC-checked),
+each LDPC-coded at a rate that follows the frequency (6/7 inside, then 3/4 and 2/3, 1/2 outside), inside a border
 that says what is inside; a file goes as a fountain-coded transfer verified by its BLAKE3 root.
 
 One C API (`include/lizard.h`), three bindings over it:
@@ -28,16 +28,16 @@ reference the engine's C++ lock (`core/rx/phase_lock`) is held to; neither app c
 ## Layers
 
 1. **Format arithmetic.** A format is its size (4 to 64: LIZARD-64 to -1024, 16 x the size; a symbol of it carries
-   `liz_blocks_for` blocks, the rate profile's count), a ring (the border: 64, 128 or 256 cells, the 128 by default), the display
-   rate its word states, and one code or two side by side.
+   `liz_blocks_for` blocks, the rate profile's count), a ring (the border: 64, 128 or 256 cells, the 128 by default), the
+   pictures a second the sender paints (1 to 240, which every frame's word states with its slowest block place's
+   Refresh delay, 1 to 30), and one code or two side by side.
    `liz_geometry_of` gives what it paints; `liz_room_for` and `liz_pick` the room a symbol needs on a display and the
    most blocks that fit a room.
 2. **The per-frame codec**, on the CPU (NEON on arm64, SSE4.1 on x86-64 with AVX2 and AVX-512 forms of the LDPC chosen
    at run time, WebAssembly SIMD in the wasm build, scalar elsewhere and in the wasm MVP build).
    `liz_encoder_paint`: a frame's blocks to its picture, grey or four bytes a pixel, the frame's count for the pilots.
    `liz_decode`: a captured image, or one region of it (`liz_layout_rects`: the centre square, or the two halves of a
-   2:1 region), to its verified blocks; the caller keeps the held word (the last static word read, or the version of the header the decoder's
-   carousel of animated words assembled), the one thing carried from frame to frame.
+   2:1 region), to its verified blocks, at the layout its own word states; nothing carries from frame to frame.
 3. **The transfer.** `liz_tx`: a file (or the test stream) to each frame's blocks. `liz_rx`: a frame's verified blocks
    in, the file out once every chunk is verified against the root, in memory or under a directory.
 4. **The engines** (native builds): `liz_receiver` decodes camera frames on its own threads (the GPU decoder through

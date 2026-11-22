@@ -15,7 +15,6 @@ import android.provider.OpenableColumns
 import dev.lizard.tar.Bundle
 import dev.lizard.tar.Stoppable
 import dev.lizard.tar.Stopped
-import dev.lizard.tar.TAR_TYPE
 import dev.lizard.tar.TarEntry
 import android.util.Log
 import android.view.Choreographer
@@ -62,7 +61,7 @@ import androidx.compose.ui.unit.DpSize
 // ai: FPS (60 unless set; until 2026-10-02 "Receiving with" named it, the app 60, a browser 24); frames go onto a
 // ai: SurfaceView at that pace (a Choreographer callback each vsync posting the next painted frame when one is due; the
 // ai: surface asks the display for that rate, the switch always made), the screen kept on, at the Brightness set (the phone's own unless moved), its
-// ai: bars hidden. The test stream is Developer Tools' (Payload). Vsync-locked since 2026-10-02: on
+// ai: bars hidden. The test stream is Control's (Test stream; Developer Tools' Payload until 2026-11-19). Vsync-locked since 2026-10-02: on
 // ai: Android 13 and up each frame is due by its frame timeline's expected presentation time and posted for that vsync
 // ai: (jni.cpp GpuRing, Ring), not into the window's queue at whatever refresh it is latched for; below 13, and for the
 // ai: rest of a send where the device or the surface refuses that present (toWindowQueue), the window's queue.
@@ -73,9 +72,9 @@ class SendState(private val a: MainActivity) {
                      // ai: the GPU ring's tally over the last second (2026-10-07, jni.cpp txPostStats): posted, held by
                      // ai: vsyncs, late, behind, buffers filled of the ring's
                      val gpuRing: Boolean = false, val posted: Long = 0, val held: String = "", val late: Long = 0, val behind: Long = 0, val filled: Int = 0, val slots: Int = 0,
-                     // ai: the blocks a code carries (2026-10-07); lap: a pass's data blocks (Pass time, 2026-11-07);
+                     // ai: the blocks a code carries (2026-10-07); cycle: a pass's data blocks (Pass time, 2026-11-07);
                      // ai: fresh: the share of a frame's blocks new in each frame under Rate refresh (2026-11-12)
-                     val blocks: Int = 0, val lap: Double = 0.0, val fresh: Double = 1.0,
+                     val blocks: Int = 0, val cycle: Double = 0.0, val fresh: Double = 1.0,
                      val seed: Long = -1)   // ai: the file's schedule's seed (2026-11-14), -1 none (the test stream)
 
     private val prefs = a.getSharedPreferences("lizard", Context.MODE_PRIVATE)
@@ -86,9 +85,8 @@ class SendState(private val a: MainActivity) {
     var reading by mutableStateOf(false)
     var name by mutableStateOf("")
     var size by mutableStateOf(0L)
-    var type by mutableStateOf("")
     val ready get() = choice != null && !reading
-    // ai: The transfer made at Start (2026-11-01; at the pick and again at each stop from 2026-10-19, every chunk
+    // ai: The transfer made at Start (2026-11-01; at the pick and again at each stop from 2026-10-19, every source block
     // ai: compressed for picks never sent): the file copied (or the bundle's tar written) into the cache and packed where
     // ai: that pays (txCreate, liblizard/core/tx/pack.h) on a thread of its own, the line "Preparing" meanwhile.
     // ai: compressed: the bytes the transfer carries (the packed file's, else the file's), 0 until a run makes it, kept
@@ -100,7 +98,10 @@ class SendState(private val a: MainActivity) {
     @Volatile private var making = 0      // ai: the make under way's number: a newer make or pick orphans it (its copy's write reads it)
     private var makingNow = false
     private var startWhenMade = false     // ai: Start pressed while the transfer was being made
-    var test by mutableStateOf(false)
+    // ai: Control's Test stream (2026-11-19, kept as "sendTest"; Developer Tools' Payload before, off at every start): on,
+    // ai: the test stream goes whatever Source says; a pick or a stream opened turns it off
+    var test by mutableStateOf(prefs.getBoolean("sendTest", false))
+    fun chooseTest(on: Boolean) { test = on; prefs.edit().putBoolean("sendTest", on).apply() }
     // ai: Send's Control fold (2026-11-18, lizard-ui controlSettings, the desktop's alike): Source, files (the picks, painted
     // ai: as they go) or stream (a stream file played: its document chosen in the code's box or opened with LIZARD from
     // ai: another app, MainActivity.handle, read in place through /proc/self/fd, never copied); Export (Start writes the
@@ -114,7 +115,7 @@ class SendState(private val a: MainActivity) {
     var source by mutableStateOf(if (prefs.getString("sendSource", "files") == "stream") "stream" else "files")
     var stream by mutableStateOf<StreamPick?>(null)
     var export by mutableStateOf(prefs.getBoolean("sendExport", false))
-    var laps by mutableStateOf(lapsOf(prefs.getFloat("sendLaps", LAPS_DEFAULT.toFloat()).toDouble()))
+    var cycles by mutableStateOf(cyclesOf(prefs.getFloat("sendLaps", CYCLES_DEFAULT.toFloat()).toDouble()))
     var hideCodes by mutableStateOf(prefs.getBoolean("sendHideCodes", false))
     // ai: Largest file an export takes, GB ("sendExportLimit"; lizard-ui EXPORT_GB_DEFAULT unless set)
     var exportLimit by mutableStateOf(fileGb(prefs.getInt("sendExportLimit", EXPORT_GB_DEFAULT)))
@@ -129,11 +130,13 @@ class SendState(private val a: MainActivity) {
     // ai: the run exports with no screen: no surface, nothing posted, its state polled (exportPoll)
     val blind get() = sendingNow && runExport && !runDisplay
     val canExport get() = source != "stream" && !test
+    // ai: a stream file is what plays: Source Stream with the test stream off
+    val playing get() = source == "stream" && !test
     // ai: the stream the box is shaped for and a run plays: Source Stream's
-    private val playMeta get() = if (source == "stream") stream?.meta else null
+    private val playMeta get() = if (playing) stream?.meta else null
     fun chooseSource(v: String) { if (sendingNow) stop(); source = if (v == "stream") "stream" else "files"; prefs.edit().putString("sendSource", source).apply(); exportNow = null }
     fun chooseExport(on: Boolean) { export = on; prefs.edit().putBoolean("sendExport", on).apply(); exportNow = null }
-    fun chooseLaps(v: Double) { laps = lapsOf(v); prefs.edit().putFloat("sendLaps", laps.toFloat()).apply() }
+    fun chooseCycles(v: Double) { cycles = cyclesOf(v); prefs.edit().putFloat("sendLaps", cycles.toFloat()).apply() }
     // ai: Hide codes (lizard-ui controlSettings): kept ("sendHideCodes"), and mid-export the screen turned off or on at once
     // ai: (txExportShow: the sender's intake switched, the export going on): off, the posting stopped first, the screen's
     // ai: bars back and its state polled; on, the sender switched first, then the posting begun as at a Start
@@ -177,6 +180,7 @@ class SendState(private val a: MainActivity) {
         stream?.pfd?.close()
         stream = StreamPick(u, nameOf(u), runCatching { pfd.statSize }.getOrDefault(0L), pfd, meta)
         source = "stream"; prefs.edit().putString("sendSource", source).apply()
+        if (test) chooseTest(false)
         exportNow = null
         return true
     }
@@ -196,7 +200,7 @@ class SendState(private val a: MainActivity) {
         val bytes = if (compressed > 0) compressed else size
         val subch = Pick.STEP * blocks
         val side = runCatching { Native.frameSide(subch, Pick.span(ringIndex)) }.getOrDefault(0)
-        val est = SendRows.exportEstimate(laps, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
+        val est = SendRows.exportEstimate(cycles, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
         return if (est > 0) Readout.bytes(est) else ""
     }
     // ai: The format's size (2026-10-02), the web sender's slider (send.html #blocks): a version 4 to 64 (16
@@ -237,14 +241,10 @@ class SendState(private val a: MainActivity) {
     // ai: surface (CodeBox), as the desktop's presenter keeps it round the frame.
     var margin by mutableStateOf(prefs.getInt("sendMargin", MARGIN_DEFAULT).coerceIn(Pick.QUIET, MARGIN_MAX))
     // ai: Refresh (2026-11-17, the desktop's; lizard-ui rateRefreshSettings; Rate refresh of 2026-11-12 before): each code
-    // ai: rate's delay, its blocks new every n-th picture, 7/8, 3/4 (tied to the 7/8), 2/3, 1/2, 1 to REFRESH_MAX; handed
+    // ai: rate's delay, its blocks new every n-th picture, 6/7, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed
     // ai: to the sender as it is made and at each change, kept
     // ai: (sendRates, "a,b,c,d"; sendRefresh until 2026-11-16, the Refresh fold's key too, unread since)
     var refresh by mutableStateOf(refreshOf(prefs.getString("sendRates", null)))
-    // ai: Refresh's Header, the animated header (2026-11-15, lizard-ui carouselSetting; Sender::setCarousel): frames each symbol of
-    // ai: the format's own header carousel is shown, 0 the static word ("sendCarousel"); handed to the sender with Rate
-    // ai: refresh and at each change, which configures again
-    var carousel by mutableStateOf(prefs.getInt("sendCarousel", 0).coerceIn(0, CAROUSEL_MAX))
     // ai: Developer Tools' Seed (2026-11-14, lizard-ui seedSetting): a file's schedule drawn from it at each Start (txSeed,
     // ai: before the first frame), so a send can be repeated; "" a random one each send; kept (sendSeed)
     var seed by mutableStateOf(prefs.getString("sendSeed", null) ?: "")
@@ -327,7 +327,7 @@ class SendState(private val a: MainActivity) {
     // ai: a pick's reads, its tiles shown meanwhile: one cancelled is left out; one that fails drops the pick and says why
     private fun add(picks: List<Pair<Walking, (Walking) -> Item?>>) {
         if (phase == Phase.On || phase == Phase.Preparing) stop()
-        test = false
+        if (test) chooseTest(false)
         if (phase is Phase.Error) phase = Phase.Idle
         val ws = picks.map { it.first }
         walking.addAll(ws); readingNow()
@@ -354,9 +354,8 @@ class SendState(private val a: MainActivity) {
         if (phase == Phase.On || phase == Phase.Preparing) stop()
         dropMade()
         if (phase is Phase.Error) phase = Phase.Idle
-        choice = null; name = ""; size = 0; type = ""; compressed = 0
+        choice = null; name = ""; size = 0; compressed = 0
         val list = items.toList()
-        typeOf.keys.retainAll(list.flatMap { it.entries }.toSet())
         val my = ++bundling
         if (list.isEmpty()) { bundled = my; madeFrom = emptySet(); readingNow(); return }
         readingNow()
@@ -365,12 +364,11 @@ class SendState(private val a: MainActivity) {
             a.runOnUiThread {
                 if (my != bundling) return@runOnUiThread
                 bundled = my; readingNow(); madeFrom = list.mapTo(HashSet()) { it.key }
-                got.onSuccess { b -> choice = b; name = b.name; size = b.size; type = b.single?.let { typeOf[it] } ?: TAR_TYPE }
+                got.onSuccess { b -> choice = b; name = b.name; size = b.size }
                     .onFailure { phase = Phase.Error("Not sendable: ${it.message}") }
             }
         }
     }
-    private val typeOf = HashMap<TarEntry, String>()   // ai: a single file's own media type, the header's
     // ai: A document's name, size and time; a provider that says no size is read through once to count it (a tar
     // ai: header needs the exact size before the bytes), stopped where w (the read's) is cancelled.
     private fun fileEntry(u: Uri, w: Walking? = null): TarEntry {
@@ -388,7 +386,7 @@ class SendState(private val a: MainActivity) {
             while (true) { if (w?.cancelled == true) throw Stopped(); val k = i.read(b); if (k < 0) break; n += k }
             n
         }
-        return TarEntry(plainName(nm), sz, t) { cr.openInputStream(u) ?: throw java.io.IOException("$nm could not be opened") }.also { typeOf[it] = cr.getType(u) ?: "" }
+        return TarEntry(plainName(nm), sz, t) { cr.openInputStream(u) ?: throw java.io.IOException("$nm could not be opened") }
     }
     // ai: A folder chosen through the system's tree picker, walked by DocumentsContract's child queries: its folders
     // ai: (an empty one too) and files under its own name. 64 levels at most, so a provider's loop cannot run on. Its
@@ -444,7 +442,7 @@ class SendState(private val a: MainActivity) {
         if (phase == Phase.On) a.window.let { w -> w.attributes = w.attributes.apply { screenBrightness = brightnessOverride } }
     }
     fun pause(p: Boolean) { if (phase == Phase.On) paused = p }
-    // ai: what the code offers at most, KB/s: blocks a frame x 471 B x pictures a second x the share of blocks new in a
+    // ai: what the code offers at most, KB/s: blocks a frame x 460 B x pictures a second x the share of blocks new in a
     // ai: frame (Rate refresh's repeats none: the stats' fresh, 1 before them); null before the first configure
     val capacityKBs get() = if (picked > 0) codes * (if (stats.blocks > 0) stats.blocks else Native.blocksFor(picked)) * Pick.PAYLOAD.toDouble() * rate * stats.fresh / 1000 else null
     fun choosePainter(p: String) { painter = p; prefs.edit().putString("sendPainter", p).apply(); if (phase == Phase.On) reconfigure() }
@@ -460,13 +458,7 @@ class SendState(private val a: MainActivity) {
         prefs.edit().putString("sendRates", refreshText(refresh)).apply()
         refreshNow()
     }
-    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txCarousel(h, carousel); Native.txColours(h, ink, paper) } }
-    // ai: the animated header, applied at once as Rate refresh is (the sender's next frame; no configure)
-    fun chooseCarousel(v: Int) {
-        if (carousel == v) return
-        carousel = v.coerceIn(0, CAROUSEL_MAX); prefs.edit().putInt("sendCarousel", carousel).apply()
-        refreshNow()
-    }
+    private fun refreshNow() { if (h != 0L) { Native.txRefresh(h, refresh[0], refresh[1], refresh[2], refresh[3]); Native.txColours(h, ink, paper) } }
     // ai: one code's room in the view, px: the box's height, or its width's share where that is less
     private fun roomOf() = min((vw / frameAspect).toInt(), vh)   // ai: the surface holds the frame alone
     // ai: the column's edge let go (2026-10-05): configured again for the box it left
@@ -484,7 +476,7 @@ class SendState(private val a: MainActivity) {
         val my = making
         val ep = Native.txCancelMakes()
         makingNow = true
-        val nm = name; val ty = type
+        val nm = name
         val keep = runFile?.name
         thread(name = "lizard-send-make") {
             val dir = File(a.cacheDir, "send").apply { mkdirs() }
@@ -496,7 +488,7 @@ class SendState(private val a: MainActivity) {
                 else Stoppable(f.outputStream()) { my == making }.buffered(1 shl 20).use { o -> b.write(o) }
                 null
             } catch (e: Exception) { e }
-            val hnd = if (wrote != null || my != making) 0L else Native.txCreate(f.path, nm, ty, dir.path, ep)
+            val hnd = if (wrote != null || my != making) 0L else Native.txCreate(f.path, nm, dir.path, ep)
             val err = if (wrote != null) "File unreadable: ${wrote.message}" else if (hnd == 0L) "Not sendable: ${Native.txError()}" else ""
             val sent = if (hnd != 0L) Native.txBytes(hnd) else 0L
             a.runOnUiThread {
@@ -518,7 +510,7 @@ class SendState(private val a: MainActivity) {
 
     fun start() {
         if (phase == Phase.Preparing || phase == Phase.On) return
-        runPlay = source == "stream"
+        runPlay = playing
         runExport = !runPlay && export && !test
         runDisplay = !runExport || !hideCodes
         exportNow = null; exportFile = null; exportFolder = ""
@@ -547,7 +539,7 @@ class SendState(private val a: MainActivity) {
         val my = making
         val sd = if (test) null else seedOf(seed)
         thread(name = "lizard-send-prep") {
-            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", "", -1L)
+            val hnd = if (pre != 0L) pre else Native.txCreate("", "", "", -1L)
             if (hnd != 0L && sd != null) Native.txSeed(hnd, sd)   // ai: before the first frame, which the configure makes
             val err = if (hnd == 0L) Native.txError() else ""
             // ai: the GPU painter's device and pipelines made here, off the main thread that configures
@@ -647,7 +639,7 @@ class SendState(private val a: MainActivity) {
         if (runExport && exportFile == null) {
             val dir = File(a.cacheDir, "export").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
             val out = File(dir, (name.substringBeforeLast('.').ifEmpty { name }.ifEmpty { "LIZARD" }) + ".lizard")
-            val e = Native.txExport(h, out.path, laps, runDisplay, 0, name, type, blocks, ringIndex, fps, codes, codes * Native.blocksFor(subch))
+            val e = Native.txExport(h, out.path, cycles, runDisplay, 0, name, blocks, ringIndex, fps, codes, codes * Native.blocksFor(subch))
             if (e.isNotEmpty()) { phase = Phase.Error("Export failed: $e"); stop(); return }
             exportFile = out
             exportNow = runCatching { JSONObject(Native.txExportState(h)) }.getOrNull()
@@ -737,7 +729,7 @@ class SendState(private val a: MainActivity) {
             stats = Stats(j.optString("label"), j.optDouble("shownFps"), j.optDouble("offeredKBs"), j.optDouble("paintMs"), j.optDouble("pass", 0.0),
                 j.optString("painter"), j.optString("gpuWhy"),
                 p?.optBoolean("gpu") ?: false, p?.optLong("posted") ?: 0, held, p?.optLong("late") ?: 0, p?.optLong("behind") ?: 0, p?.optInt("filled") ?: 0, p?.optInt("slots") ?: 0,
-                j.optInt("blocks", 0), j.optDouble("lap", 0.0), j.optDouble("fresh", 1.0).takeIf { it > 0 } ?: 1.0, j.optLong("seed", -1))
+                j.optInt("blocks", 0), j.optDouble("cycle", 0.0), j.optDouble("fresh", 1.0).takeIf { it > 0 } ?: 1.0, j.optLong("seed", -1))
             if (p?.optBoolean("gpu") == true) Log.i(TAG, "send: posted ${stats.posted}, held {${held}}, late ${stats.late}, behind ${stats.behind}, ${stats.filled} of ${stats.slots} buffers filled, ${j.optInt("ahead")} of ${j.optInt("depth")} frames painted ahead")
             if (j.optString("error").isNotEmpty()) phase = Phase.Error(j.optString("error"))
         }
@@ -804,7 +796,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val on get() = s.phase == SendState.Phase.On
     override val busy get() = on || s.phase == SendState.Phase.Preparing
     override val paused get() = s.paused
-    override val canStart get() = s.phase != SendState.Phase.Preparing && (if (s.source == "stream") s.stream != null else (s.test || s.ready))
+    override val canStart get() = s.phase != SendState.Phase.Preparing && (if (s.playing) s.stream != null else (s.test || s.ready))
     override fun start() = s.start()
     override fun stop() = s.stop()
     override fun pause(on: Boolean) = s.pause(on)
@@ -818,11 +810,11 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
         val preparing = s.phase == SendState.Phase.Preparing
         if (!preparing && !on) return null
         // ai: a stream's file is the one it carries (its meta.json's), its rate the sender's
-        val st = s.stream?.meta?.takeIf { s.source == "stream" }
-        if (st != null) return SendRows.details(st.name, st.test, preparing, st.length, 0, 1, if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.lap,
+        val st = s.stream?.meta?.takeIf { s.playing }
+        if (st != null) return SendRows.details(st.name, st.test, preparing, st.length, 0, 1, if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.cycle,
             a.settings.stats == "on")
         return SendRows.details(s.name, s.test, preparing, s.size, s.compressed, s.choice?.takeIf { it.single == null }?.files ?: 1,
-            if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.lap, a.settings.stats == "on")
+            if (on && !s.paused) s.stats.offeredKBs else 0.0, s.stats.pass, s.stats.cycle, a.settings.stats == "on")
     }
     override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: ""
     override fun clearError() { if (s.phase is SendState.Phase.Error) s.phase = SendState.Phase.Idle }
@@ -834,8 +826,8 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     override val settings: Map<FoldKey, List<Setting>> get() {
         // ai: what a stream fixes (Source Stream: its format and rate, greyed at its own; lizard-ui greyed) and what an
         // ai: export holds while it runs (the format: a configure ends it)
-        val sm = if (s.source == "stream") s.stream?.meta else null
-        val streamed = s.source == "stream"
+        val sm = if (s.playing) s.stream?.meta else null
+        val streamed = s.playing
         val held = streamed || (s.exportDetails != null && busy)
         val vBlocks = sm?.blocks ?: s.blocks
         val vCodes = sm?.codes ?: s.codes
@@ -860,17 +852,16 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once (a stream's too)
             Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui
-        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting); a stream's greyed
+        // ai: rateRefreshSettings); a stream's greyed
         FoldKey.SendRefresh to (listOf(
             if (s.vsyncOn) ChipChoice("FPS", vFps, (Pick.FPS + vFps).distinct().map { it to "$it" }) { s.chooseRate(it) }
             else Slide("FPS", "$vFps", vFps.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
-            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
-            carouselSetting(s.carousel) { s.chooseCarousel(it) }).map { if (held) greyed(it) else it },
+            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) }).map { if (held) greyed(it) else it },
         // ai: Control (2026-11-18; Stream that day until renamed; lizard-ui controlSettings)
-        FoldKey.SendControl to controlSettings(s.source, s.export, s.laps, if (s.export && s.canExport) s.exportSize else "", s.exportLimit, s.hideCodes, s.canExport, busy,
-            { s.chooseSource(it) }, { s.chooseExport(it) }, { s.chooseLaps(it) }, { s.chooseExportLimit(it) }, { s.chooseHideCodes(it) }),
+        FoldKey.SendControl to controlSettings(s.test, s.source, s.export, s.cycles, if (s.export && s.canExport) s.exportSize else "", s.exportLimit, s.hideCodes, s.canExport, busy,
+            { s.chooseTest(it) }, { s.chooseSource(it) }, { s.chooseExport(it) }, { s.chooseCycles(it) }, { s.chooseExportLimit(it) }, { s.chooseHideCodes(it) }),
         FoldKey.SendPerformance to listOf(
-            // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's chunks either way, the
+            // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's source blocks either way, the
             // ai: GPU paints and makes each frame's blocks where it is on): with nothing chosen the setting stays auto and the
             // ai: painter running is the chip marked; a choice takes it outright; greyed Off for a stream, which paints
             // ai: nothing (its frames unpacked on the CPU)
@@ -879,14 +870,13 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             ChipChoice("VSync", s.vsyncOn, listOf(true to "On", false to "Off")) { s.chooseVsync(it) }))
     }
     private var marginDrag by mutableStateOf<Int?>(null)
-    // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15); the fold drawn only where
+    // ai: lab arms a user may try: none today (the animated header, Header, in Refresh from 2026-11-15 to 11-19); the fold drawn only where
     // ai: it holds a setting
     override val experimental: List<Setting> get() = emptyList()
     // ai: Show statistics, Receive's setting (Settings.stats), one switch for both screens (2026-11-07)
     private val stats get() = a.settings.stats == "on"
     override val tools: List<Setting> get() = listOf(
         ChipChoice("Show statistics", a.settings.stats, listOf("on" to "On", "off" to "Off")) { a.change(a.settings.copy(stats = it)) },
-        ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = s.phase != SendState.Phase.On && s.phase != SendState.Phase.Preparing) { s.test = it },
         seedSetting(s.seed) { s.chooseSeed(it) })
     override val readout get() = sendLab(s).takeIf { it.isNotEmpty() }?.let { Code(it) }
     // ai: While a send runs the code is the whole screen (2026-10-26): the code alone, the bars hidden (SendState.screenFor);
@@ -913,9 +903,9 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
     }
     override val rootModifier: Modifier = Modifier
 
-    // ai: whether the code's box holds the file upload: no picture shown yet and a file the payload. A pick being read
+    // ai: whether the code's box holds the file upload (or Source Stream's file): no picture shown yet and the test stream off. A pick being read
     // ai: shows there as its tile (CodeArea)
-    private fun uploading() = !(sending() && s.shown) && (!s.test || s.source == "stream")
+    private fun uploading() = !(sending() && s.shown) && !s.test
     private fun sending() = s.phase == SendState.Phase.On || s.phase == SendState.Phase.Preparing
 
     // ai: The code's box: while sending the code itself, painted into a SurfaceView the box's size (SendState.holder), the
@@ -931,7 +921,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             if (s.blind) { CodesHiddenNote(); return@BoxWithConstraints }
             if (sending) AndroidView({ ctx -> SurfaceView(ctx).apply { holder.addCallback(s.holder) } }, Modifier.fillMaxSize().padding(maxHeight * s.edgeShare.toFloat()))
             // ai: Source Stream (2026-11-18): the stream file chosen (one document), its size on its line (its format the greyed Code's)
-            if (s.source == "stream") {
+            if (s.playing) {
                 val st = s.stream
                 if (uploading()) Upload(listOf(Act("File", icon = Icons.file) { a.pickStream() }),
                     listOfNotNull(st?.let { UploadItem("stream", it.name, Readout.bytes(it.size), false) }),

@@ -1,6 +1,7 @@
 /* ai: liblizard: the LIZARD code as a library (2026-10-03): the C (NEON on arm64) and the GPU through Vulkan behind one
  * ai: portable API, with no UI. A luminance-only animated barcode: a frame is a grey picture whose FFT
- * ai: coefficients carry blocks of 476 bytes (a 5-byte little-endian id and 471 of payload, CRC-checked), inside a
+ * ai: coefficients carry blocks of 472 bytes (a 12-byte id: the file's TOI over its source block and symbol, 64 bits
+ * ai: little-endian, then its session's TSI; and 460 of payload, each block under a CRC-64), inside a
  * ai: border that says what is inside; a file goes as a fountain-coded transfer verified by its BLAKE3 root.
  * ai:
  * ai: Layers, each usable alone:
@@ -60,9 +61,10 @@ enum {
 };
 
 enum {
-  LIZ_BLOCK = 476,         /* ai: a block: the id and the payload */
-  LIZ_ID_BYTES = 5,        /* ai: the id, 40 bits little-endian */
-  LIZ_PAYLOAD = 471,
+  LIZ_BLOCK = 472,         /* ai: a block: the id and the payload (the codec adds its CRC-64, 8 bytes) */
+  LIZ_ID_BYTES = 12,       /* ai: the id, 96 bits: 64 little-endian (the file's 24-bit TOI, its 16-bit source block, a 24-bit
+                            * ai: symbol), the session's 24-bit TSI, a reserved byte (0) (since 2026-11-20; 64 bits before) */
+  LIZ_PAYLOAD = 460,
   LIZ_MIN_BLOCKS = 4,      /* ai: the smallest format's size (LIZARD-64, seven blocks a symbol) */
   LIZ_MAX_BLOCKS = 64,     /* ai: the largest format's size (LIZARD-1024; its symbol carries liz_blocks_for(64)) */
   LIZ_RINGS = 3,           /* ai: the borders: rings of 64, 128 or 256 cells a side */
@@ -81,10 +83,11 @@ typedef enum {
 /* ---- 1. format arithmetic ---------------------------------------------------------------------------------------- */
 
 /* ai: blocks: the format's size, 4 to 64 (LIZARD-64 to LIZARD-1024: the number is 16 x blocks), the version its word
- * ai: names; a symbol of it carries liz_blocks_for(blocks) blocks, the code's rate following the frequency (7/8 on its
+ * ai: names; a symbol of it carries liz_blocks_for(blocks) blocks, the code's rate following the frequency (6/7 on its
  * ai: lowest frequencies, then 3/4 and 2/3, 1/2 on its highest: 48 at LIZARD-432); ring: 0 to LIZ_RINGS - 1 (the 64,
  * ai: 128 and 256 rings) or LIZ_RING_DEFAULT;
- * ai: fps: 1 to 255, the display rate the sender paints at (its animated header states it; a static word states none);
+ * ai: fps: 1 to 240, the pictures a second the sender paints, which every frame's word states with its places' largest
+ * ai: Refresh delay (src/fmt.h);
  * ai: codes: 1, or 2 symbols side by side (one format, one
  * ai: word, the frame's blocks split between them, the first code the first ones). */
 typedef struct {
@@ -107,9 +110,9 @@ LIZ_API int liz_geometry_of(const liz_format *format, liz_geometry *out);
 LIZ_API double liz_room_for(int blocks, int ring);
 /* ai: The blocks a symbol of a format's size (blocks, 2 to 64) carries: the format's rate profile's count; 0 outside. */
 LIZ_API int liz_blocks_for(int blocks);
-/* ai: Where block b (0 to liz_blocks_for(blocks) - 1) of a symbol of a format's size lies: its code rate (0 7/8, 1 3/4,
- * ai: 2 2/3, 3 1/2; the 7/8 and 3/4 blocks carry the pilots), its first slot and its slots (640 slots a sub-channel,
- * ai: the lowest frequencies first, the blocks packed from slot 0 inner rates first), and the first and last
+/* ai: Where block b (0 to liz_blocks_for(blocks) - 1) of a symbol of a format's size lies: its code rate (0 6/7, 1 3/4,
+ * ai: 2 2/3, 3 1/2), its first data slot and its slots (636 data slots a sub-channel, its other two coefficients the
+ * ai: pilots; the lowest frequencies first, the blocks packed from data slot 0 inner rates first), and the first and last
  * ai: sub-channel it spans. A block changes whole or not at all (one codeword), so a schedule is a block's, not a
  * ai: sub-channel's. */
 typedef struct {
@@ -145,30 +148,20 @@ typedef struct {
   int n;              /* ai: the picture it was finished at; 0 not finished */
   int word;           /* ai: the frame's own word read */
   int blocks;         /* ai: the size of the format it was decoded at, its version (0 none) */
-  int fps;            /* ai: the display rate the last header the decoder assembled states (0 none: a static word
-                         ai: states none) */
-  int held_used;      /* ai: decoded at the held configuration, its own word animated */
   int total;          /* ai: the blocks the symbol carries */
   int verified;       /* ai: the blocks verified */
   float quad[8];      /* ai: its corners in the image, x y x y ..., top left, top right, bottom right, bottom left */
-  int pilot_blocks;   /* ai: blocks the pilots were read over (0 none) */
-  float pilot_r[2];   /* ai: the pilots' readings over the even blocks and the odd: their signs the picture's count;
-                         ai: NaN where no block's pilots were read (pilot_blocks 0); every format has blocks of both
-                         ai: parities, so a frame read reads both */
+  int pilot_subch;    /* ai: the sub-channels the pilots were read over (0 none) */
+  float pilot_r[2];   /* ai: the pilots' readings, the even sub-channels' count pilots over the references and the
+                         ai: odd's: their signs the picture's count; NaN where none was read (pilot_subch 0) */
   float pilot_sd[2];  /* ai: their standard errors (NaN with its reading) */
-  int animated;       /* ai: the word read is animated, a carousel symbol (no configuration of its own: the frame was
-                         ai: decoded at the held one; blocks 0) */
 } liz_decoded;
 
 /* ai: One captured frame (or one region of it: px at the region's first pixel, w x h, rows stride bytes apart): its
- * ai: verified blocks packed into verified (liz_decoder_max_blocks x LIZ_BLOCK bytes), their count returned. held: the
- * ai: caller's, the configuration the last word read states (a static word's version and layout, or the header the
- * ai: animated words this decoder has read assemble: one int, version << 22 | the 7/8 blocks (8 bits), the 2/3 and the 1/2
- * ai: (7 bits each);
- * ai: 0 none), shared by every decoder reading one stream, updated whenever one is read. A frame is decoded at its own
- * ai: static word; one whose word is animated at the held configuration (none held: not decoded); one whose word does
- * ai: not read, not at all (the word before the frame). Every frame is otherwise decoded on its own. out may be NULL. */
-LIZ_API int liz_decode(liz_decoder *d, const uint8_t *px, int w, int h, int stride, liz_pixfmt fmt, int *held,
+ * ai: verified blocks packed into verified (liz_decoder_max_blocks x LIZ_BLOCK bytes), their count returned. A frame is
+ * ai: decoded at its own word's version and layout; one whose word does not read, not at all (the word before the
+ * ai: frame). Every frame is decoded on its own: nothing carries from one to the next. out may be NULL. */
+LIZ_API int liz_decode(liz_decoder *d, const uint8_t *px, int w, int h, int stride, liz_pixfmt fmt,
                        uint8_t *verified, liz_decoded *out);
 
 /* ai: Where a camera frame's symbols are looked for: layout 1, the centre square; 2, the centre region twice as long as
@@ -176,43 +169,48 @@ LIZ_API int liz_decode(liz_decoder *d, const uint8_t *px, int w, int h, int stri
  * ai: how many (1 or 2). */
 LIZ_API int liz_layout_rects(int w, int h, int layout, int rect[2][4]);
 
-/* ai: the test stream's payload for an id (BLAKE3 of its five bytes): a receiver judges a frame of it by its bytes */
+/* ai: the test stream's payload for an id (BLAKE3 of its low five bytes, the source block and symbol; the TOI no part):
+ * ai: the reference tools' test stream, no part of the format; a receiver that knows it judges a frame of it by its bytes */
 LIZ_API void liz_stream_fill(uint64_t id, uint8_t payload[LIZ_PAYLOAD]);
 
 /* ---- 3. the transfer --------------------------------------------------------------------------------------------- */
 
 typedef struct liz_tx liz_tx;
-enum { LIZ_TX_COPY = 1 };  /* ai: liz_tx_new copies the bytes; without it they must outlive the liz_tx */
-/* ai: A file: its bytes, its name and media type as its header carries them (a name cut to 255 bytes, a type kept
- * ai: where it is printable ASCII of at most 158). Returns once the file is hashed; its chunks are made by threads of
- * ai: its own behind it, the first frames carrying the header and the manifest alone until every chunk is made
- * ai: (natively), so every chunk starts the schedule level. */
-LIZ_API liz_tx *liz_tx_new(const uint8_t *data, size_t length, const char *name, const char *type, int flags);
-/* ai: A file read from a path (into memory); name NULL takes the path's last part. */
-LIZ_API liz_tx *liz_tx_new_path(const char *path, const char *name, const char *type);
-/* ai: The test stream from first_id (0: a random one): each block the stream's payload for its id. */
+/* ai: LIZ_TX_COPY: liz_tx_new copies the bytes (without it they must outlive the liz_tx); LIZ_TX_ZSTD: the bytes are
+ * ai: the default client's zstd stream (core/tx/pack.h), the description saying compression 1 (src/xfer.h) */
+enum { LIZ_TX_COPY = 1, LIZ_TX_ZSTD = 2 };
+/* ai: A file: its bytes and its name as its header carries it (a name past 255 bytes cut in its stem, its extension
+ * ai: kept: src/xfer.h xfer_name_cut). Returns once the file is hashed; its source blocks are made by threads of
+ * ai: its own behind it, the first frames carrying the header alone until every source block is made (natively), so every
+ * ai: source block starts the schedule level. Its tag (the file's TOI) is the sender's, drawn from its seed. */
+LIZ_API liz_tx *liz_tx_new(const uint8_t *data, size_t length, const char *name, int flags);
+/* ai: A file read from a path (into memory); name NULL takes the path's last part; flags LIZ_TX_ZSTD as above. */
+LIZ_API liz_tx *liz_tx_new_path(const char *path, const char *name, int flags);
+/* ai: The test stream from first_id (0: a random one), under a random TOI of its own as any send's: each block the
+ * ai: stream's payload for its id. */
 LIZ_API liz_tx *liz_tx_new_test(uint32_t first_id);
 LIZ_API void liz_tx_free(liz_tx *t);
 /* ai: The next frame's n blocks (n x LIZ_BLOCK bytes): a frame asked for twice is two frames. Returns how many of
- * ai: them carry the file's data (the others its header and manifest); LIZ_E_TOOBIG where a chunk could not be made. */
+ * ai: them carry the file's data (the others its header); LIZ_E_TOOBIG where a source block could
+ * ai: not be made. */
 LIZ_API int liz_tx_next(liz_tx *t, int n, uint8_t *blocks);
 
 typedef struct {
   int test;              /* ai: the test stream */
   uint64_t length;       /* ai: the file's bytes */
-  uint32_t chunks;       /* ai: its chunks (16 MiB each, xfer_chunk_log2_for; a file to 256 GiB) */
-  uint32_t lap;          /* ai: data blocks a lap of the schedule (0 until every chunk is made, behind liz_tx_new) */
+  uint32_t source_blocks;       /* ai: its source blocks (16 MiB each, xfer_sb_log2_for; a file to 256 GiB) */
+  uint32_t cycle;          /* ai: data blocks a cycle of the schedule (0 until every source block is made, behind liz_tx_new) */
   uint8_t root[32];      /* ai: BLAKE3 of the file (b3sum's) */
 } liz_tx_info;
 LIZ_API int liz_tx_info_get(const liz_tx *t, liz_tx_info *out);
 
 typedef struct liz_rx liz_rx;
 /* ai: Where a receiver keeps what it holds: dir NULL, in memory, one transfer at a time; else files under dir, a folder
- * ai: a transfer, the finished file at a path under it. A directory store keeps an unfinished transfer when another
- * ai: file's header arrives, and across receivers on the same directory: its own header read again resumes it from the
- * ai: blocks already held. Opening the directory keeps those transfers and removes anything else under it. max_bytes
+ * ai: a transfer, the finished file at a path under it. A folder store keeps an unfinished transfer when another
+ * ai: file's header arrives, and across receivers on the same folder: its own header read again resumes it from the
+ * ai: blocks already held. Opening the folder keeps those transfers and removes anything else under it. max_bytes
  * ai: (memory only, 0 no cap) bounds the stored blocks and the file together, which peak near twice the file's size
- * ai: (its bytes and every chunk's blocks before it solves); a chunk's fountain decoder, about 24 MB at 16 MiB, is
+ * ai: (its bytes and every source block's blocks before it solves); a source block's fountain decoder, about 24 MB at 16 MiB, is
  * ai: outside it. A store that cannot hold a transfer (over the cap, a write refused, a disk
  * ai: full) ends it: never done, its reason in LIZ_META_ERROR, until a new file's header begins afresh. */
 typedef struct {
@@ -222,31 +220,31 @@ typedef struct {
 LIZ_API liz_rx *liz_rx_new(const liz_store *store);
 LIZ_API void liz_rx_free(liz_rx *r);
 
-/* ai: What a frame's verified blocks came to. seen: blocks taken (the header's and manifest's in, repeats in); bad:
+/* ai: What a frame's verified blocks came to. seen: blocks taken (the header's in, repeats in); bad:
  * ai: a test frame's blocks that are not the stream's; judged: a test frame's data blocks; fresh: data blocks new to
  * ai: this receiver; test: the frame was the test stream's (none of its blocks go to a file). */
 typedef struct {
   int seen, bad, judged, fresh, test;
 } liz_verdict;
 /* ai: One frame's verified blocks, as liz_decode packed them (of both of a frame's regions, one call each or one
- * ai: together). A chunk completed by them is solved and checked inside the call (tens of ms for 16 MiB). */
+ * ai: together). A source block completed by them is solved and checked inside the call (tens of ms for 16 MiB). */
 LIZ_API int liz_rx_frame(liz_rx *r, const uint8_t *verified, int count, liz_verdict *out);
 
 typedef struct {
   int header;            /* ai: the file's header read */
   int done;              /* ai: the file whole and verified by its root, and kept whole by the store */
   uint64_t length;       /* ai: its bytes */
-  uint64_t bytes_in;     /* ai: how many are in: a verified chunk's all, another's blocks in hand to its length */
+  uint64_t bytes_in;     /* ai: how many are in: a verified source block's all, another's blocks in hand to its length */
   double fraction;       /* ai: bytes_in over length */
-  uint32_t chunks, verified, rejected;
+  uint32_t source_blocks, verified, rejected;
   double solve_ms;       /* ai: the fountain's and the hash's time so far */
 } liz_progress;
 LIZ_API int liz_rx_progress(liz_rx *r, liz_progress *out);
-/* ai: each chunk's state into per (at most cap): 0 to 99 the share in (a floor until the manifest is in), 255
- * ai: verified; returns the chunks */
-LIZ_API int liz_rx_chunks(liz_rx *r, uint8_t *per, int cap);
-enum { LIZ_META_NAME = 0, LIZ_META_TYPE = 1, LIZ_META_ROOT = 2, LIZ_META_PATH = 3, LIZ_META_ERROR = 4 };
-/* ai: the header's name and type, the root as hex, the finished file's path (a directory store's), the store's failure
+/* ai: each source block's state into per (at most cap): 0 to 99 the share in, 255
+ * ai: verified; returns the source blocks */
+LIZ_API int liz_rx_source_blocks(liz_rx *r, uint8_t *per, int cap);
+enum { LIZ_META_NAME = 0, LIZ_META_ROOT = 1, LIZ_META_PATH = 2, LIZ_META_ERROR = 3 };
+/* ai: the header's name, the root as hex, the finished file's path (a folder store's), the store's failure
  * ai: in this transfer (the reason it ended); "" where there is none */
 LIZ_API const char *liz_rx_meta(liz_rx *r, int which);
 /* ai: The finished file's bytes in a memory store (valid until the next call on r); LIZ_E_STATE before it is done. */
@@ -257,7 +255,7 @@ LIZ_API void liz_rx_clear(liz_rx *r);
 /* ---- 4. engines: threads, the GPU (Vulkan) where a device runs it, else the CPU; native builds only --------------- */
 /* ai: What the native apps run: a receiver decoding camera frames on its own threads (the GPU decoder in batches, or
  * ai: the C on a pool of workers) into a transfer, and a sender painting frames ahead on its own threads (the GPU's
- * ai: encoder, or the C on several). The GPU paths read their kernels and nets from an assets directory (share/lizard
+ * ai: encoder, or the C on several). The GPU paths read their kernels and nets from an assets folder (share/lizard
  * ai: as installed); without one, or with no Vulkan device that runs them, the CPU does the work, and the receiver's
  * ai: LIZ_DECODER_AUTO decodes on the CPU on a software Vulkan device too (Vulkan's CPU type: lavapipe, SwiftShader),
  * ai: where LIZ_DECODER_GPU still runs. A wasm build has no engines (LIZ_E_UNSUPPORTED). Their stats are JSON, the
@@ -294,7 +292,7 @@ LIZ_API int liz_receiver_push_hardware_buffer(liz_receiver *r, void *ahardwarebu
 LIZ_API int liz_receiver_wants_luma(liz_receiver *r);
 LIZ_API const char *liz_receiver_stats(liz_receiver *r);
 /* ai: The frames decoded since since_ms (on the camera's clock), 8 doubles each into out (at most cap doubles), after
- * ai: the held word's version: ms, verified blocks, new blocks, found, the pilots' r and its error over the even blocks,
+ * ai: the last word read's configuration (version << 22 | its counts, 0 none; a statistic, no frame decoded by it): ms, verified blocks, new blocks, found, the pilots' r and its error over the even blocks,
  * ai: then over the odd (NaN none); returns the doubles written. For a camera's phase lock. */
 LIZ_API int liz_receiver_series(liz_receiver *r, double since_ms, double *out, int cap);
 /* ai: the most frames a GPU launch takes, 1 to 32 (0: the batcher's size); a launch goes as soon as a frame waits */
@@ -309,8 +307,9 @@ LIZ_API void liz_receiver_camera_closed(liz_receiver *r);
 
 enum { LIZ_PAINTER_CPU = 0, LIZ_PAINTER_GPU = 1, LIZ_PAINTER_AUTO = 2 };
 typedef struct liz_sender liz_sender;
-/* ai: A file (data NULL: the test stream), its bytes copied with LIZ_TX_COPY, else alive as long as the sender. */
-LIZ_API liz_sender *liz_sender_new(const uint8_t *data, size_t length, const char *name, const char *type, int flags);
+/* ai: A file (data NULL: the test stream), its bytes copied with LIZ_TX_COPY, else alive as long as the sender;
+ * ai: LIZ_TX_ZSTD where they are the default client's zstd stream. */
+LIZ_API liz_sender *liz_sender_new(const uint8_t *data, size_t length, const char *name, int flags);
 LIZ_API void liz_sender_free(liz_sender *s);
 /* ai: The format to paint (a re-pick keeps the transfer), on painter (LIZ_PAINTER_*: auto takes the GPU where its first
  * ai: frames are the C's), threads CPU painters, the GPU's assets and device as the receiver's. */
@@ -325,32 +324,32 @@ LIZ_API const char *liz_sender_stats(liz_sender *s);
 /* ai: Refresh: each block place of a symbol takes a new block every `every` pictures, its delay, a whole number 1 to
  * ai: LIZ_REFRESH_MAX (1, the default, every picture), so its rate is the format's fps over a whole number: picture k
  * ai: (the sender's count) shows a new block there where k is a multiple of it, the picture before's block again
- * ai: otherwise. The pilots stay each picture's count, so a receiver and its phase lock read every picture as ever: no
- * ai: format change, a repeated block one a receiver has. From the next frame made. A client ties the two pilot rates
- * ai: (7/8 and 3/4) to one delay. */
-enum { LIZ_REFRESH_MAX = 65535 };
-/* ai: per code rate r (0 7/8, 1 3/4, 2 2/3, 3 1/2; liz_block_place's rate): every block of the rate; kept across
+ * ai: otherwise. The pilots are apart from the blocks and stay each picture's count, so a receiver and its phase lock read
+ * ai: every picture as ever, whatever each place's delay: no format change, a repeated block one a receiver has. From the
+ * ai: next frame made. */
+enum { LIZ_REFRESH_MAX = 30 };
+/* ai: per code rate r (0 6/7, 1 3/4, 2 2/3, 3 1/2; liz_block_place's rate): every block of the rate; kept across
  * ai: configures */
 LIZ_API int liz_sender_refresh(liz_sender *s, const int every[4]);
 /* ai: per block place b of the configured format's symbol, n = liz_blocks_for(the format's blocks), every code alike
  * ai: (LIZ_E_ARG for another count); a configure to a format of another block count ends it, each place its rate's again */
 LIZ_API int liz_sender_refresh_blocks(liz_sender *s, const int *every, int n);
-/* ai: A file's schedule drawn from seed in place of the random one liz_sender_new draws (each chunk's first symbol, each
- * ai: round's order of the chunks, each frame's shuffle), so a run can be repeated: before the first frame is made
+/* ai: A file's schedule drawn from seed in place of the random one liz_sender_new draws (each source block's first symbol, each
+ * ai: round's order of the source blocks, each frame's shuffle), so a run can be repeated: before the first frame is made
  * ai: (LIZ_E_STATE after, and for the test stream). The seed in use is the stats' "seed". */
 LIZ_API int liz_sender_seed(liz_sender *s, uint32_t seed);
-/* ai: The transfer's data blocks a lap of its schedule (each of the file's blocks once), 0 until every chunk is made
- * ai: (and for the test stream): what sizes an export (frames = laps x lap / the format's blocks a frame). The chunks
- * ai: are made once the sender is configured: an export configures, waits for the lap, then configures again (the
- * ai: frames painted ahead meanwhile, the header and manifest alone, dropped), so its first frame carries data. */
-LIZ_API int64_t liz_sender_lap(liz_sender *s);
+/* ai: The transfer's data blocks a cycle of its schedule (each of the file's blocks once), 0 until every source block is made
+ * ai: (and for the test stream): what sizes an export (frames = cycles x cycle / the format's blocks a frame). The source blocks
+ * ai: are made once the sender is configured: an export configures, waits for the cycle, then configures again (the
+ * ai: frames painted ahead meanwhile, the header alone, dropped), so its first frame carries data. */
+LIZ_API int64_t liz_sender_cycle(liz_sender *s);
 /* ai: A stream file (a .lizard whose ZIP comment is "LIZARD stream 1", 2026-11-18): the configured sender's next frames,
  * ai: `frames` of them as liz_sender_take gives them (grey, in order), written to path (through path.part, renamed at the
  * ai: end), with a meta.json a player shows them by (kind "stream"; fps, layout, the format; the file's name, type,
- * ai: length, chunks and BLAKE3 root; the colours; the seed; w, h, frames, sizes as a replay's). A player shows the
+ * ai: length, source blocks and BLAKE3 root; the colours; the seed; w, h, frames, sizes as a replay's). A player shows the
  * ai: frames in turn at fps and loops, painting nothing; any receiver's Upload decodes the file as frames.
- * ai: The frames from the first one made once every chunk is (frames made before carry the header alone), `frames` of
- * ai: them (0: 2.5 laps of the file's blocks; the test stream needs a count), made odd; each packed by zstd at `level`
+ * ai: The frames from the first one made once every source block is (frames made before carry the header alone), `frames` of
+ * ai: them (0: 2.5 cycles of the file's blocks; the test stream needs a count), made odd; each packed by zstd at `level`
  * ai: (0: 1; every frame of the file the same, meta.json's "zstd") on the machine's cores, or where the CPU paints, by
  * ai: each painter as it paints. progress(user, done, frames) as frames are written (NULL none): 0 from it stops the
  * ai: export (the .part removed, LIZ_E_STATE). Blocks until done (not on a UI thread); the sender makes its frames for
@@ -360,7 +359,7 @@ LIZ_API int liz_sender_export(liz_sender *s, const char *path, int frames, int l
  * ai: nothing (LIZ_E_FORMAT where path is a replay or its frames are not its format's). liz_sender_configure takes its
  * ai: format from the stream (format may be NULL; painter and threads: its frames unpacked on that many CPU threads into
  * ai: the frame ring); take, ready, geometry and stats as a painting sender's (the stats' "stream", "pictures",
- * ai: "picture", "lap", "pass"). Seed, refresh and the carousel change nothing: the frames are painted already. */
+ * ai: "picture", "cycle", "pass"). Seed and refresh change nothing: the frames are painted already. */
 LIZ_API liz_sender *liz_sender_play(const char *path);
 /* ai: a played stream's meta.json (its format, fps, layout, pictures, file), "" for a painting sender */
 LIZ_API const char *liz_sender_stream(liz_sender *s);
@@ -469,8 +468,8 @@ LIZ_API size_t liz_link_state(char *json, size_t cap);
 LIZ_API int liz_usb_accessory(int fd);
 
 /* ai: The data folder with or without a session: the verified files taken into kept/ and not yet placed, oldest first
- * ai: ([{id, name, type, root, path, at}], and packed {name, type}, the file it holds, where path is a packed file:
- * ai: keep_packed's, or one that did not unpack); one placed by the app (its kept/<id> deleted); the unfinished transfers,
+ * ai: ([{id, name, root, path, at, packed}], packed true where path is the default client's zstd stream, name its
+ * ai: <name>.zst, for the app to unpack as it files it under name less the .zst: keep_packed's, or one that did not unpack); one placed by the app (its kept/<id> deleted); the unfinished transfers,
  * ai: newest first ([{id, name, length, fraction, root, at}]); one deleted (LIZ_E_STATE while a session holds the folder:
  * ai: liz_session_forget then; a session of this process being freed is waited for, up to 10 s). */
 LIZ_API size_t liz_kept(const char *data_dir, char *json, size_t cap);

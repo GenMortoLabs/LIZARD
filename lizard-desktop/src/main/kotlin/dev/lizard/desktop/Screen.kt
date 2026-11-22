@@ -71,8 +71,8 @@ class DesktopSend(private val app: App) : SendHost {
     override val settings: Map<FoldKey, List<Setting>> get() {
         // ai: what a stream fixes (Source Stream: its format and rate, greyed at its own; lizard-ui greyed) and what an
         // ai: export holds while it runs (the format: a configure ends it)
-        val sm = if (s.source == "stream") s.stream?.meta else null
-        val streamed = s.source == "stream"
+        val sm = if (s.playing) s.stream?.meta else null
+        val streamed = s.playing
         val held = streamed || s.exportDetails != null && s.sending
         val vBlocks = sm?.blocks ?: s.blocks
         val vRing = sm?.ring ?: (if (s.ring == -1) Pick.RING_DEFAULT else s.ring)
@@ -97,17 +97,16 @@ class DesktopSend(private val app: App) : SendHost {
             // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once (a stream's too)
             Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui
-        // ai: rateRefreshSettings), then Header, the animated header (lizard-ui carouselSetting); a stream's greyed
+        // ai: rateRefreshSettings); a stream's greyed
         FoldKey.SendRefresh to (listOf(
             if (s.vsync) ChipChoice("FPS", vFps, (Pick.FPS + vFps).distinct().map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
             else Slide("FPS", "$vFps", vFps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
-            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) } +
-            carouselSetting(s.carousel) { s.chooseCarousel(it) }).map { if (held) greyed(it) else it },
+            rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) }).map { if (held) greyed(it) else it },
         // ai: Control (2026-11-18; Stream that day until renamed; lizard-ui controlSettings)
-        FoldKey.SendControl to controlSettings(s.source, s.export, s.laps, if (s.export && s.canExport) s.exportSize else "", s.exportLimit, s.hideCodes, s.canExport, s.sending,
-            { s.chooseSource(it) }, { s.chooseExport(it) }, { s.chooseLaps(it) }, { s.chooseExportLimit(it) }, { s.chooseHideCodes(it) }),
+        FoldKey.SendControl to controlSettings(s.test, s.source, s.export, s.cycles, if (s.export && s.canExport) s.exportSize else "", s.exportLimit, s.hideCodes, s.canExport, s.sending,
+            { s.chooseTest(it) }, { s.chooseSource(it) }, { s.chooseExport(it) }, { s.chooseCycles(it) }, { s.chooseExportLimit(it) }, { s.chooseHideCodes(it) }),
         FoldKey.SendPerformance to listOf(
-            // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's chunks either way, the
+            // ai: GPU acceleration (2026-11-16; Encoder, GPU and CPU, before: the CPU prepares a file's source blocks either way, the
             // ai: GPU paints and makes each frame's blocks where it is on): with neither chosen the encoder is auto's and the
             // ai: painter running is the chip marked (On before a first send); a choice takes that one outright; greyed
             // ai: Off for a stream, which paints nothing (its frames unpacked on the CPU)
@@ -117,14 +116,13 @@ class DesktopSend(private val app: App) : SendHost {
             // ai: Scaling (2026-11-17): the blit's linear filter, Lanczos-3, or the picture's own pixels (SendState.chooseScaling)
             ChipChoice("Scaling", s.scaling, listOf("bilinear" to "Bilinear", "lanczos" to "Lanczos", "none" to "None")) { s.chooseScaling(it) }))
     }
-    // ai: lab arms a user may try: none today (the animated header, Header, in Refresh since 2026-11-15; Exclusive fullscreen, the
+    // ai: lab arms a user may try: none today (the animated header, Header, in Refresh from 2026-11-15 to 11-19; Exclusive fullscreen, the
     // ai: one before, deleted 2026-11-13); the fold drawn only where it holds a setting
     override val experimental: List<Setting> get() = emptyList()
     // ai: Show statistics, Receive's setting (ReceiveState.showStats, Prefs.Rx.stats), one switch for both screens (2026-11-07)
     private val stats get() = app.recv.showStats
     override val tools: List<Setting> get() = listOf(
         ChipChoice("Show statistics", app.recv.showStats, listOf(true to "On", false to "Off")) { app.recv.chooseStats(it) },
-        ChipChoice("Payload", s.test, listOf(false to "File", true to "Test stream"), enabled = !s.sending) { s.chooseTest(it) },
         seedSetting(s.seed) { s.chooseSeed(it) })
     override val readout get() = s.readout.takeIf { it.isNotEmpty() }?.let { Code(it, 12) }
     // ai: full screen: the code alone (2026-10-23, as the web's and the app's; FullScreen.kt, Receive's too since
@@ -166,7 +164,7 @@ class DesktopSend(private val app: App) : SendHost {
             if (s.canvas.shown) SwingPanel(background = s.codeFill, factory = { s.canvas }, modifier = Modifier.fillMaxSize())
             else if (stamp != null) Stamped(stamp, s.size / 100f, s.edgeShare, s.paper, fit = s.scaling != "none")
             else if (s.blind) CodesHiddenNote()   // ai: an export with its codes hidden: the line in their place
-            else if (s.source == "stream") {
+            else if (s.playing) {
                 // ai: Source Stream (2026-11-18): the stream file chosen (one .lizard), its size on its line (its format the greyed Code's)
                 val st = s.stream
                 Upload(listOf(Act("File", icon = Icons.file) { s.chooseStream() }),

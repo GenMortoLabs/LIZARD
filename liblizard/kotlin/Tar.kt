@@ -17,7 +17,9 @@ import java.io.OutputStream
 // ai: their own entries (typeflag 5, so an empty folder survives), files mode 644 and folders 755, owner 0, the
 // ai: archive ended by two zero blocks. GNU tar, bsdtar and Python's tarfile read it.
 
-const val TAR_TYPE = "application/x-tar"
+// ai: a bundle (several files or a folder sent as one tar, Bundle's <name>.tar) told by its name: the description carries
+// ai: no media type, so a received file is unpacked as a tar where its name ends .tar
+fun isTar(name: String) = name.endsWith(".tar", ignoreCase = true)
 private const val BLOCK = 512
 private val ZEROS = ByteArray(2 * BLOCK)
 

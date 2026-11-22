@@ -79,10 +79,10 @@ if(EMSCRIPTEN)
       _liz_pick _liz_blocks_for _liz_block_place_of _liz_encoder_new _liz_encoder_free _liz_encoder_geometry _liz_encoder_paint _liz_decoder_new
       _liz_decoder_free _liz_decoder_max_blocks _liz_decode _liz_layout_rects _liz_tx_new
       _liz_tx_new_test _liz_tx_free _liz_tx_next _liz_tx_info_get _liz_rx_new _liz_rx_free _liz_rx_frame
-      _liz_rx_progress _liz_rx_chunks _liz_rx_meta _liz_rx_data _liz_rx_clear
-      _lizard_setup _lizard_setup_tiers _lizard_any_setup _lizard_any_rx _lizard_any_held _lizard_any_max_blocks _lizard_any_which
+      _liz_rx_progress _liz_rx_source_blocks _liz_rx_meta _liz_rx_data _liz_rx_clear
+      _lizard_setup _lizard_setup_tiers _lizard_any_setup _lizard_any_rx _lizard_any_max_blocks _lizard_any_which
       _lizard_any_n _lizard_any_blocks _lizard_any_fmt _lizard_any_builds _lizard_bitmap_get _lizard_subch
-      _lizard_blocks _lizard_blocks_max _lizard_layout_set _lizard_side _lizard_cell _lizard_quiet _lizard_fmt_rx_ptr _lizard_fmt_word_set _lizard_car_reset _lizard_car_add _lizard_car_hdr _lizard_car_held _lizard_car_fps _lizard_car_symbol _lizard_parity_set
+      _lizard_blocks _lizard_blocks_max _lizard_layout_set _lizard_clock_set _lizard_side _lizard_cell _lizard_quiet _lizard_fmt_rx_ptr _lizard_parity_set
       _lizard_pilot_get _lizard_any_pilot_get _lizard_align_get _lizard_tx _lizard_tx_rgba _lizard_rs_geom _lizard_rx _lizard_dbg
       _lizard_dbg_sym _lizard_dbg_coef _lizard_blk_its _lizard_blk_est _ob_heap_top
       _ob_last _ob_prof _ob_prof_reset _ob_luma_strip _ob_test_binarize _ob_test_sample _ob_test_marks
@@ -90,9 +90,10 @@ if(EMSCRIPTEN)
       _ob_test_finder_out _lizard_rx_acquire _lizard_rx_acquire_quad _lizard_rx_finish _lizard_shape _lizard_pos_ptr
       _lizard_tables_out _lizard_rx_ldpc _lizard_block_runs _lizard_ldpc_tables _lizard_tiers_for _lizard_set_axis
       _lizard_anchors_found _lizard_anchor_geom_get _lizard_fmt_check_out _lizard_fmt_soft_out _lizard_grid_out _ob_test_crc_hash
-      _ob_test_crc_gate_out _ob_dbg_hash _stream_fill_of _stream_matches_of _xfer_layout _xfer_id_of _xfer_kind_of _xfer_hdr_write _xfer_hdr_parse
-      _xfer_mf_parse _xfer_chunk_ok _xfer_manifest_blocks _xfer_manifest_write _xfer_manifest_check _xfer_root
-      _xfer_chunk_cv _xfer_b3_hash _xfer_b3_sub _xfer_log2_for _xfer_same_file_of
+      _ob_test_crc_gate_out _ob_dbg_hash _stream_fill_of _stream_matches_of _xfer_layout _xfer_id_of _xfer_kind_of _xfer_session_write_of _xfer_session_read _xfer_desc_parse
+      _xfer_sb_ok _xfer_root_check _xfer_root
+      _xfer_sb_cv _xfer_b3_hash _xfer_b3_sub _xfer_sb_log2_of _xfer_same_file_of
+      _xfer_desc_write_of _xfer_name_cut_of _xfer_toi_of_wasm
       _lizard_zstd_bound _lizard_zstd_compress _lizard_zstd_decompress _lizard_zstd_frame_content _lizard_zstd_frame_bytes
       _rq_symbols _rq_enc_new _rq_enc_symbol _rq_enc_free _rq_dec_new _rq_dec_add _rq_dec_count _rq_dec_recover _rq_dec_free
       _malloc _free)

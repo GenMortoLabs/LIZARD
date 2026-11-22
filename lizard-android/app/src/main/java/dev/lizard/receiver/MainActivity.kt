@@ -122,7 +122,6 @@ class MainActivity : ComponentActivity() {
     // ai: the rows that open, open or not, kept by key (the web's send:dev, send:logs, recv:dev, recv:logs)
     internal val folds = mutableStateMapOf<String, Boolean>()
     internal var autoRan by mutableStateOf("")             // ai: what auto last decoded on, GPU or CPU (the Decoder menu's value under auto)
-    internal var hint by mutableStateOf<Warn?>(null)       // ai: the one hint while the camera reads (ReceiveState.hint)
     // ai: The phone's USB and the PC link (2026-10-27): while a cable is in (USB_STATE's connected, while this activity
     // ai: runs) the core's PC link is up (the session's link: the listener, the beacon, the accessory's sessions),
     // ai: answering a PC whatever the decoder; a cable out for UNPLUG_MS lets it go (the drop as the PC switches the
@@ -430,7 +429,7 @@ class MainActivity : ComponentActivity() {
     internal fun toggle(k: String) { val v = !isOpen(k); folds[k] = v; prefs.edit().putBoolean(k, v).apply() }
 
     // ai: The received files' actions: a file through its own URI (MediaStore's in Downloads, the FileProvider's for one
-    // ai: Downloads did not take), as the header's media type. A bundle's (2026-10-16): Open lists its files (the Files
+    // ai: Downloads did not take), by its extension's type. A bundle's (2026-10-16): Open lists its files (the Files
     // ai: screen), Share hands them all over at once, Save makes its folder again where the user picks; a file in it
     // ai: opens and shares as one alone, by its extension's type.
     internal fun open(e: Received.Entry) { if (e.bundle) openBundle(e) else openUri(received.uriOf(e.uri.ifEmpty { e.local }), e.mime) }
@@ -699,7 +698,6 @@ class MainActivity : ComponentActivity() {
                 // ai: the unfinished transfers on Home, once a second (a transfer in hand writes its meta.json as it goes)
                 if (tick % 4 == 0 && screen == Screen.Home) refreshPartials()
                 replaysAsked()
-                hint = receive.hint(j)
                 tick++
                 delay(250)
             }

@@ -163,7 +163,7 @@ std::string localHeaderOf(const std::string& name, uint32_t n, uint32_t c) {
 // ai: before: an entry that starts past 4 GB names its offset in a ZIP64 extra field of its central record, and an
 // ai: archive of more than 65,534 entries or whose directory starts or ends past 4 GB ends with the ZIP64 end record and
 // ai: its locator before the classic end, whose fields then read 0xffff and 0xffffffff. An entry is under 4 GB (a frame,
-// ai: meta.json), so a local header's sizes are its own. A stream of a large file (2.5 laps: about 9 GB and 9,000
+// ai: meta.json), so a local header's sizes are its own. A stream of a large file (2.5 cycles: about 9 GB and 9,000
 // ai: entries at 2:1 for 100 MB) and a long Save replay need it.
 class ZipOut {
  public:
@@ -363,7 +363,7 @@ int64_t Writer::finish(const std::string& meta, const std::string& stats, std::s
 
 bool writePng(const std::string& path, const uint8_t* px, uint32_t w, uint32_t h, uint32_t stride, std::string& why) {
   // ai: signature, IHDR (8-bit grey), IDAT (a zlib stream of stored deflate blocks: each row a filter byte 0 and its
-  // ai: bytes; Adler-32 at the end), IEND; each chunk's CRC-32 ZIP's (the same polynomial)
+  // ai: bytes; Adler-32 at the end), IEND; each source block's CRC-32 ZIP's (the same polynomial)
   std::string png("\x89PNG\r\n\x1a\n", 8);
   auto be32 = [](std::string& b, uint32_t v) { b += char(v >> 24); b += char((v >> 16) & 0xff); b += char((v >> 8) & 0xff); b += char(v & 0xff); };
   auto chunk = [&](const char* type, const std::string& data) {

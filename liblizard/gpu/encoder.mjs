@@ -5,10 +5,10 @@
 // ai:
 // ai: The kernels, one compute pass an encode of up to `sub` frames, a symbol a workgroup z (frames x codes, the codes
 // ai: of a frame side by side):
-// ai:   paint: a block a workgroup (wgsl/send.mjs paintSource, 2026-10-07): CRC-32C, its code's systematic codeword
+// ai:   paint: a block a workgroup (wgsl/send.mjs paintSource, 2026-10-07): the CRC-64, its code's systematic codeword
 // ai:     (every code of the format's rate profile, src/lizard_phy.h lizard_tiers_for; the codes' tables in TAB, sendTab,
 // ai:     from the wasm's codec), the bit map and whitening, the pilots, QPSK onto the disc; the test stream's payloads
-// ai:     made there from their ids (BLAKE3 of the id, SPEC 9.3: encode's test, 2026-11-15), so its blocks come as ids;
+// ai:     made there from their ids (BLAKE3 of the id, src/xfer.h stream_fill: encode's test, 2026-11-15), so its blocks come as ids;
 // ai:   irows, ipic: the decoder's own butterflies as the inverse transforms (wgsl/inverse.mjs): the inverse along x,
 // ai:     turn_pack's packing and the inverse along y, clipped to 0..1 in f32, left quad-major for whole-line stores;
 // ai:   tpose: the picture row-major again (wgsl/send.mjs);
@@ -56,10 +56,10 @@ import { crcPowers, PAYLOAD } from "./back/ref_ldpc.mjs";
 import { clipLimit } from "./back/paint.mjs";
 import { computePipeline } from "./pipeline.mjs";
 import { init as initOb, Lizard, streamBlock } from "../sim/ob.mjs";
-import { ID_BYTES } from "../sim/xfer.mjs";
+import { ID_BYTES, idGet } from "../sim/xfer.mjs";
 import { STEP, versionOf } from "../sim/lizard_pick.mjs";
 
-// ai: A block's 476 bytes in BLOCKS, 119 words of the 120 a block (wgsl/send.mjs paintSource; the 120th the paint's CRC word).
+// ai: A block's 472 bytes in BLOCKS, 118 words of the 120 a block (wgsl/send.mjs paintSource; the last two the paint's CRC words).
 const BLOCK_BYTES = 480;
 
 // ai: The paint's TAB (wgsl/send.mjs paintSource) from the codec's codes (back/codes.mjs ruleTables: { codes }, the
@@ -78,7 +78,8 @@ export function sendTab({ codes }) {
   tab[0] = WHITE;
   codes.forEach((c, q) => {
     const a = at[q];
-    if (c.nt % 2 || CODES[q].slots < c.nt || c.n / 32 > 240) throw new Error(`the ${CODES[q].name} code's n ${c.n} (${c.nt} sent) does not fit the paint`);
+    // ai: a block's slots its code's sent bits alone (the pilots apart from the blocks since 2026-11-21: no tail to paint)
+    if (c.nt % 2 || CODES[q].slots !== c.nt || c.n / 32 > 240) throw new Error(`the ${CODES[q].name} code's n ${c.n} (${c.nt} sent, its block ${CODES[q].slots} slots) does not fit the paint`);
     tab.set([c.n, c.k, c.m, c.z, c.mb, a.rows, a.lay, a.pm, CODES[q].slots, c.nt], 16 + 16 * q);
     for (let r = 0; r <= c.mb; r++) tab[a.rows + r] = c.lay[r];
     for (let e = 0; e < c.slots; e++) tab[a.lay + e] = c.lay[c.mb + 1 + 2 * e] | (c.lay[c.mb + 2 + 2 * e] << 16);
@@ -183,7 +184,7 @@ export class GpuEncoder {
   // ai: A configuration: the format's tables, the border and the resampler from the C, every buffer a batch needs.
   // ai: spec as the page's (n, subch, span); codes symbols a frame, side by side.
   configure(opts) { return this.serial(() => this.configureNow(opts)); }
-  async configureNow({ spec, codes = 1, gap = GAP_MODULES }) {
+  async configureNow({ spec, codes = 1, gap = GAP_MODULES, clock = [60, 1] }) {
     const { n, subch, span = 0 } = spec;
     const alive = () => { if (this.dead) throw new Unavailable("the encoder was destroyed"); };
     await initOb();
@@ -201,6 +202,7 @@ export class GpuEncoder {
     if (!this.TAB) { const tab = sendTab(rt); this.TAB = this.device.createBuffer({ size: tab.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); this.device.queue.writeBuffer(this.TAB, 0, tab); }
     const [tb] = await transformTables([{ n, subch }]);
     const fc = new Lizard(n, subch, 1, { span });
+    fc.setClock(...clock);   // ai: the sender's clock the border's word states (src/fmt.h): fps, the places' largest delay
     let c = null;
     try {
       alive();
@@ -241,6 +243,7 @@ export class GpuEncoder {
       }
     } catch (e) { fc.free(); throw e; }
     c.lizard = codec.lizard = fc;
+    c.clock = [...clock];
     this.cfg = c;
     this.cfgs.add(c);
     this.paintBorder(c);
@@ -325,8 +328,19 @@ export class GpuEncoder {
     for (const F of c.FRAME) for (let f = 0; f < c.batch; f++) c.presentGroups.push(group("present", [{ buffer: F, offset: 4 * c.FS * f, size: 4 * c.words }, c.PG]));
   }
 
+  // ai: The sender's clock the latest configuration's word states (fps 0 to 240, delay 1 to 30: src/lizard_phy.h
+  // ai: lizard_clock): its border painted again where it moved, the queue's next write (its encodes after it).
+  setClock(fps, delay) {
+    return this.serial(async () => {
+      const c = this.cfg;
+      if (!c || c.lizard !== codec.lizard || (c.clock[0] === fps && c.clock[1] === delay)) return;
+      c.lizard.setClock(fps, delay);
+      c.clock = [fps, delay];
+      this.paintBorder(c);
+    });
+  }
   // ai: The C's paint of configuration c's symbol, its grey bytes (every pixel outside the square is read from them): at
-  // ai: configure. Only while c's Lizard is the wasm's codec.
+  // ai: configure and at a clock moved (setClock). Only while c's Lizard is the wasm's codec.
   paintBorder(c) {
     if (!c.lizard || c.lizard !== codec.lizard) throw new Error(`${c.label}: its codec is no longer the wasm's`);
     const { rgba } = c.lizard.encodeRGBA(new Uint8Array(c.V * c.B)), grey = new Uint8Array(4 * Math.ceil((c.W * c.W) / 4));
@@ -335,7 +349,7 @@ export class GpuEncoder {
   }
 
   // ai: count frames (1 to c.sub) into frames f0 .. f0 + count - 1 of half h (0 or 1), one submission: each frame codes x
-  // ai: V blocks of 476 bytes, each block its id then its payload (sim/phy.mjs frameBlocks), frame after frame. The
+  // ai: V blocks of 472 bytes, each block its id then its payload (sim/phy.mjs frameBlocks), frame after frame. The
   // ai: frame offset goes in G before the submission, in queue order. parity: the first frame's count (the sender's
   // ai: count of painted pictures mod 4; each frame after it one more), which the pilots carry (SPEC 7.3). test: the
   // ai: blocks are the test stream's, each read for its id alone and its payload made by PAINT (BLAKE3 of the id, SPEC
@@ -344,9 +358,9 @@ export class GpuEncoder {
   encode(h, f0, blocks, count, c = this.cfg, parity = 0, test = false) {
     const d = this.device, per = c.codes * c.V, R = count * c.codes;
     if (count < 1 || count > c.sub || f0 + count > c.batch || blocks.length !== count * per * c.B) throw new Error(`an encode is 1 to ${c.sub} frames of ${per} blocks of ${c.B} B within a half of ${c.batch}, got ${count} frames from ${f0} in ${blocks.length} B`);
-    // ai: under test each block's first 8 bytes alone, packed (PAINT reads the id's two words there), else the blocks at
+    // ai: under test each block's first ID_BYTES (12) alone, packed (PAINT reads the id's three words there), else the blocks at
     // ai: BLOCK_BYTES
-    const at = test ? 8 : BLOCK_BYTES, take = test ? 8 : c.B;
+    const at = test ? ID_BYTES : BLOCK_BYTES, take = test ? ID_BYTES : c.B;
     for (let i = 0; i < count * per; i++) c.staging.set(blocks.subarray(i * c.B, i * c.B + take), i * at);
     d.queue.writeBuffer(c.BLOCKS, 0, c.staging, 0, count * per * at);
     d.queue.writeBuffer(c.GU, 36, new Uint32Array([f0]));
@@ -464,9 +478,7 @@ export class GpuEncoder {
     // ai: the C's blocks: under test each payload its id's stream
     const full = test ? Uint8Array.from(blocks) : blocks;
     if (test) for (let o = 0; o + c.B <= full.length; o += c.B) {
-      let id = 0;
-      for (let i = ID_BYTES - 1; i >= 0; i--) id = id * 256 + full[o + i];
-      full.set(streamBlock(id, c.B - ID_BYTES), o + ID_BYTES);
+      full.set(streamBlock(idGet(full, o), c.B - ID_BYTES), o + ID_BYTES);   // ai: the bare id's stream (its tag aside)
     }
     let borderDiff = 0, squareMax = 0, squareDiff = 0;
     const got = new Uint8Array(count * c.FW * c.W);

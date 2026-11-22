@@ -67,9 +67,9 @@ std::string streamMeta(Sender& s, const StreamInfo& info, int frames) {
                   ",\"frames\":" + std::to_string(entries) + ",\"pictures\":" + std::to_string(frames) + ",\"gap\":" + std::to_string(gap) +
                   ",\"layout\":\"" + (two ? "2:1" : "1:1") + "\",\"fps\":" + std::to_string(info.fps) +
                   ",\"format\":{\"blocks\":" + std::to_string(info.blocks) + ",\"ring\":" + std::to_string(info.ring) + ",\"codes\":" + std::to_string(info.codes) +
-                  ",\"frame_blocks\":" + std::to_string(info.frameBlocks) + "},\"file\":{\"name\":" + jstr(info.name) + ",\"type\":" + jstr(info.type) +
-                  ",\"length\":" + std::to_string(x ? x->length() : 0) + ",\"chunks\":" + std::to_string(x ? x->chunks() : 0) +
-                  ",\"lap\":" + std::to_string(x ? x->lap() : 0) + ",\"root\":\"" + root + "\"},\"test\":" + (x ? "false" : "true") +
+                  ",\"frame_blocks\":" + std::to_string(info.frameBlocks) + "},\"file\":{\"name\":" + jstr(info.name) + ",\"compression\":" + std::to_string(info.compression) +
+                  ",\"length\":" + std::to_string(x ? x->length() : 0) + ",\"sourceBlocks\":" + std::to_string(x ? x->sourceBlocks() : 0) +
+                  ",\"cycle\":" + std::to_string(x ? x->cycle() : 0) + ",\"root\":\"" + root + "\"},\"test\":" + (x ? "false" : "true") +
                   ",\"colours\":{\"ink\":" + std::to_string(s.ink()) + ",\"paper\":" + std::to_string(s.paper()) + "},\"seed\":" + seed +
                   ",\"painter\":\"" + s.painter() + "\",\"sizes\":[";
   for (int i = 0; i < entries; i++) m += std::string(i ? "," : "") + "[" + std::to_string(ew) + "," + std::to_string(H) + "]";

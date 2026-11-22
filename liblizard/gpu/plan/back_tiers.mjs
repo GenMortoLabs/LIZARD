@@ -1,21 +1,28 @@
 // ai: The rate profile's stage's constants, TAB's layout and each code's shape (glsl/back_tiers.mjs talign, tsoft, tblocks,
 // ai: tldpc; ../back/tiers.mjs builds it), which the sender's paint (../wgsl/send.mjs, ../encoder.mjs) shares: CODES, KNOWN, NC.
 import { VERSION_MAX } from "../wordcode.mjs";
-import { STEP } from "../../sim/lizard_pick.mjs";
+import { STEP, SUB_SLOTS } from "../../sim/lizard_pick.mjs";
 
+// ai: The pilots apart from the blocks (2026-11-21, src/lizard_phy.c): in every sub-channel coefficient 0 is the count
+// ai: pilot (both axes the whitening XOR bit j & 1 of the painted count, j the sub-channel) and coefficient PB_REF the
+// ai: reference pilot (the whitening alone); the blocks pack over the other DCOEF coefficients in order (fcoefOf: data
+// ai: coefficient dc's coefficient in the frame, src/lizard_phy.c pb_fcoef), SUB_SLOTS data slots a sub-channel. The
+// ai: whitening stays by the frame's slot (WHITE_SLOTS), a data coefficient taking its frame coefficient's.
 // ai: The grid's shift by the pilots (2026-10-01; the format paints the pilots whatever the phone, so a decoder may
 // ai: steer by them; src/lizard_phy.c pilot_align, the same fit). A grid (dx, dy) samples off turns coefficient (u, v) by
-// ai: 2 pi (u dx + v dy) / n. `talign` (one workgroup a frame, a thread a block, before the soft values in their pass
-// ai: and on their bind groups) reads every 7/8 and 3/4 block's 8 or 16 pilot coefficients (its tail, its last slots),
-// ai: each against its known symbol with the block's sign from its own pilots' sum, fits zi = k zr (u dx + v dy) by
-// ai: least squares twice (the second about the first's answer), and keeps the shift wherever the fit stands (8 pilots
-// ai: or more, its matrix invertible; the significance test ALIGN_CHI 13.8 went 2026-11-07, as the C's), else 0, 0. It
-// ai: goes to the end of PILOT: PILOT[B blocksMax + 2 f] and the next.
+// ai: 2 pi (u dx + v dy) / n. `talign` (one workgroup a frame, TIER_BLOCKS lanes over its sub-channels, before the soft
+// ai: values in their pass and on their bind groups) reads every sub-channel's two pilots (each its sign cancels: every
+// ai: term the fit sums is a product of two of its parts), fits zi = k zr (u dx + v dy) by least squares twice (the
+// ai: second about the first's answer), and keeps the shift wherever the fit stands (8 pilots or more, its matrix
+// ai: invertible; the significance test ALIGN_CHI 13.8 went 2026-11-07, as the C's), else 0, 0; each pilot unweighted,
+// ai: where the C weights it by 1 / N of its sub-channel (the moments before the fit, a pass of its own, not built). It
+// ai: goes to PILOT's end: PILOT[PILOT_READ B + 2 f] and the next; before it, PILOT_READ floats a frame, its readings
+// ai: (tblocks: r, its standard error, r2, its standard error; src/lizard_phy.c lizard_pilot).
 // ai: The soft stage turns every coefficient back by it as it gathers (a turn leaves |y|, so the moments and the
 // ai: estimate read as before). UV's second half (from P.ucOff) is each coefficient's (u, v), u in the high 16 bits
 // ai: (signed), v in the low.
 
-// ai: blocks a frame at most (talign's and tblocks' lanes): the most a word may state, 149 at version 67 (127 7/8 blocks
+// ai: blocks a frame at most (talign's and tblocks' lanes): the most a word may state, 149 at version 67 (127 6/7 blocks
 // ai: and 22 3/4 ones; sim/lizard_pick.mjs blocksMaxFor), rounded up to whole 32-lane sets; 128 before 2026-11-18
 export const TIER_BLOCKS = 160;
 // ai: the versions a word names (../wordcode.mjs VERSION_MAX)
@@ -23,10 +30,15 @@ export const VERSIONS = VERSION_MAX;
 // ai: the 8-sub-channel chunks a version takes (16 sub-channels, sim/lizard_pick.mjs STEP): the soft stage's workgroups
 // ai: are a chunk each, and the gate's rows table (gpu/back/transform.mjs rowsOfVersion) counts chunks.
 export const CHUNKS = STEP / 8;
-export const KNOWN = 3840;        // ai: (476 + 4) x 8: the bits a block's payload and CRC fill, the k of the 3/4, 2/3 and 1/2 codes; past them
-                                  // ai: the 7/8 code's data bits are zeros
-// ai: the whitening a slot over the ladder's largest frame (16 VERSION_MAX sub-channels of 640 slots: 1072 since
-// ai: 2026-11-18, 1024 before)
+export const PB_REF = 160;
+export const DCOEF = SUB_SLOTS / 2;   // ai: a sub-channel's data coefficients (318)
+export { SUB_SLOTS };
+export const VERSION_SLOTS = STEP * SUB_SLOTS;   // ai: a version's data slots (10,176; src/fmt.c ob_fmt_layout)
+export const PILOT_READ = 4;
+export const KNOWN = 3840;        // ai: (472 + 8) x 8: the bits a block's payload and CRC fill, the k of the 3/4, 2/3 and 1/2 codes; past them
+                                  // ai: the 6/7 code's data bits are zeros
+// ai: the whitening a slot over the ladder's largest frame (16 VERSION_MAX sub-channels of 640 frame slots, the pilots'
+// ai: four among them: 1072 since 2026-11-18, 1024 before)
 export const WHITE_SLOTS = STEP * VERSION_MAX * 640;
 // ai: The LDPC kernel's forms (2026-10-08, the decoder's speed; research STATUS "The LDPC's speed"), all counting the
 // ai: violated checks after each iteration from a bitmap of the posteriors' signs, 32 checks of a row at a time
@@ -46,10 +58,12 @@ export const WHITE_SLOTS = STEP * VERSION_MAX * 640;
 // ai: (2026-10-31).
 export const LDPC_FORMS = ["reg", "reg+i32", "reg+i16"];
 // ai: the codes, in order: src/lizard_phy.c lizard_tiers_for's four rates (ldpc.h index, slots a block: the code's
-// ai: sent bits and its pilots, src/lizard_phy.c lizard_block_slots). Every block's slots are a multiple of 16, so every
-// ai: block's first slot is too (the blocks are packed from the frame's first slot, the remainder padded).
-export const CODES = [{ rate: 6, slots: 4496, name: "7/8" }, { rate: 4, slots: 5152, name: "3/4" }, { rate: 3, slots: 5760, name: "2/3" }, { rate: 2, slots: 7680, name: "1/2" }];
-// ai: 2/3 among the codes since 2026-10-07, in the format's profile since 2026-10-08 (four rates, 7/8, 3/4, 2/3, 1/2).
+// ai: sent bits, src/lizard_phy.c lizard_block_slots; since 2026-11-21 the pilots apart from the blocks, two
+// ai: coefficients a sub-channel, so a block has no tail: 4496, 5152, 5792 and 7712 with it). Every block's slots are a
+// ai: multiple of 16, so every block's first data slot is too (the blocks are packed from the frame's first data slot,
+// ai: the remainder padded).
+export const CODES = [{ rate: 6, slots: 4480, name: "6/7" }, { rate: 4, slots: 5120, name: "3/4" }, { rate: 3, slots: 5760, name: "2/3" }, { rate: 2, slots: 7680, name: "1/2" }];
+// ai: 2/3 among the codes since 2026-10-07, in the format's profile since 2026-10-08 (four rates, 6/7, 3/4, 2/3, 1/2).
 // ai: A frame's blocks of each are its word's (../glsl/common.mjs CFG; TAB's TT table, a row a version, until 2026-11-18).
 export const NC = CODES.length;
 
@@ -78,11 +92,14 @@ export function tierShape(code, form = LDPC_FORMS[0]) {
   return { n, k, z, mb, ns, slots, threads: Math.max(128, 32 * Math.ceil(z / 32)), one: ns <= 12, rowv: Math.ceil((mb + 1) / 4), pairv: Math.ceil(slots / 4), form,
     wide: parts.includes("i32") && 4 * n + 4 * packWords(n) + 12 + 4 * (6 + 2 * 64) <= 32768, narrow: parts.includes("i16") };
 }
-// ai: packw's words: the 120 of a block's data for the CRC, and between iterations the posteriors' signs (N bits and a
+// ai: packw's words: the 120 of a block's data (118 the payload's, 2 its CRC-64's) for the CRC, and between iterations the posteriors' signs (N bits and a
 // ai: word past them, which get32 may read).
 const packWords = (n) => Math.max(120, Math.ceil(n / 32) + 1);
 // ai: Workgroup bytes a code's kernel declares (32 KB is the floor every phone we know offers).
 // ai: ("reg+i16"'s int16_t array, 2 ceil(n / 2) of them, is "reg"'s bytes)
-export const tierWgBytes = (sh, net) => (sh.wide ? 4 * sh.n : 4 * Math.ceil(sh.n / 2)) + 4 * packWords(sh.n) + 16 + 4 * (6 + 2 * net.hidden);
+export const tierWgBytes = (sh, net) => (sh.wide ? 4 * sh.n : 4 * Math.ceil(sh.n / 2)) + 4 * packWords(sh.n) + 20 + 4 * (6 + 2 * net.hidden);
 
-export const tierUniformWords = (sh) => 4 + 4 * sh.rowv + 4 * sh.pairv + 120;
+// ai: the CRC-64's split powers in a code's uniform: 118 chunks' and the init term's, two words each, to whole vec4s
+// ai: (../back/ref_ldpc.mjs crcPowers; ../wgsl/back_ldpc.mjs PW_VECS, held to it)
+export const PW_WORDS = 240;
+export const tierUniformWords = (sh) => 4 + 4 * sh.rowv + 4 * sh.pairv + PW_WORDS;

@@ -138,8 +138,8 @@ target_include_directories(xfer_check SYSTEM PRIVATE ${TP})
 target_link_libraries(xfer_check PRIVATE lizard_xfer)
 endif()
 
-# ai: The camera's phase lock (rx/phase_lock.h, 2026-10-31: liblizard/kotlin/PhaseLock.kt in C++), depending on
-# ai: nothing, for a receive session whose camera can delay one capture; phase_lock_check replays a trace of its calls
+# ai: The camera's phase lock (rx/phase_lock.h, 2026-10-31), depending on nothing, for a receive session whose camera
+# ai: can move its captures; phase_lock_check replays a trace of its calls
 add_library(lizard_phase STATIC rx/phase_lock.cpp)
 target_include_directories(lizard_phase PUBLIC rx)
 if(NOT EMSCRIPTEN)
@@ -201,7 +201,7 @@ target_link_libraries(lizard_tx PUBLIC lizard_xfer lizard_codec wg lizard_sys li
 
 add_executable(tx_check tools/tx_check.cpp)
 target_include_directories(tx_check SYSTEM PRIVATE ${TP})
-target_link_libraries(tx_check PRIVATE lizard_tx lizard_xfer lizard_codec lizard_replay)
+target_link_libraries(tx_check PRIVATE lizard_tx lizard_xfer lizard_codec lizard_replay lizard_rx)
 
 # ai: zstd_check (2026-11-18, tools/zstd_check.cpp): the GPU's packing of stream frames (tx/gpu_zstd.h) held to its CPU
 # ai: twin byte for byte and to libzstd's decoding, and timed against libzstd at a level

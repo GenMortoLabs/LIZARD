@@ -7,8 +7,8 @@
 // ai:      unmoved by them (a resize re-picks
 // ai:      mid-stream), #c inside <main>; #tx's first line names the version (the lab line #lab did until 2026-10-02), the
 // ai:      numbers line (#nums) the speed;
-// ai:      the defaults LIZARD-480 at 60; the folds and their controls in order, no group headings; Refresh's three delay
-// ai:      sliders after FPS (7/8 + 3/4 one), at 1, one kept over a reload and drawn before the first paint; Fullscreen, then
+// ai:      the defaults LIZARD-480 at 60; the folds and their controls in order, no group headings; Refresh's four delay
+// ai:      sliders after FPS (6/7, 3/4, 2/3, 1/2), at 1, one kept over a reload and drawn before the first paint; Fullscreen, then
 // ai:      its end clearing body.full.
 // ai:   1. The receiver on Chrome's fake camera, its folds (Camera, Decoder) in order, closed then open: #v visible and above 100 x 100 px with
 // ai:      more than 10 frame callbacks a second; at the phone sizes #go and #view on screen with no scrolling.
@@ -151,7 +151,7 @@ const SIZES = [
     if (k === 0) check(idle.dev.every((o) => !o), `send ${z.name}: every settings fold closed on a fresh profile (${idle.dev.join()})`);
     if (k === 0) {
       const at = await evaluate(s, FOLDS_AT);
-      check(at === "foldCode Code: blocks subch ring codes size spacing margin pickHex ink paper | foldRefresh Refresh: fps refresh78 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload seed", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
+      check(at === "foldCode Code: blocks subch ring codes size spacing margin pickHex ink paper | foldRefresh Refresh: fps refresh67 refresh34 refresh23 refresh12 | foldPerf Performance: enc | logs Developer Tools: stats payload seed", `send ${z.name}: the folds and their controls in order, no group heading (${at})`);
     }
     check(idle.state === "" && idle.dt === null && idle.hint && idle.go && idle.buttons.join() === "Start,Fullscreen", `send ${z.name}: idle, no state line or block, the File and Folder tiles and the empty card ("0 items", Clear dimmed) shown, buttons ${idle.buttons.join(" and ")}, Start ${idle.go ? "disabled" : "ENABLED"}`);
     // ai: Home in the bar in portrait, in the rail's last square in landscape, where the bar has the collapser (2026-10-05);
@@ -213,32 +213,32 @@ const SIZES = [
       const labels = `[window.__firstBlocks, document.getElementById("blocksOut").textContent, document.getElementById("blocksTitle").textContent,
         [...document.getElementById("ring").options].map((o) => o.value + ":" + o.text).join(" "), [...document.getElementById("codes").options].map((o) => o.text).join(" ")].join(" / ")`;
       await navigate(s, SEND);
-      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "27.3 KB"`, 10000, "the density label").catch(() => {});
+      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "26.7 KB"`, 10000, "the density label").catch(() => {});
       const off = await evaluate(s, labels);
-      check(off === "27.3 KB / 27.3 KB / Density / 256:Thin 128:Medium 64:Thick / 1 2", `send ${z.name}: Show statistics off, the labels before the first paint and after the codec, LIZARD-480 (${off})`);
+      check(off === "26.7 KB / 26.7 KB / Density / 256:Thin 128:Medium 64:Thick / 1 2", `send ${z.name}: Show statistics off, the labels before the first paint and after the codec, LIZARD-480 (${off})`);
       await evaluate(s, `localStorage.setItem("recv:stats", "1")`);
       await navigate(s, SEND);
-      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "58, 27.3 KB"`, 10000, "the blocks label").catch(() => {});
+      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "58, 26.7 KB"`, 10000, "the blocks label").catch(() => {});
       const on = await evaluate(s, labels + ` + " / " + document.getElementById("stats").value`);
-      check(on === "58, 27.3 KB / 58, 27.3 KB / Blocks / 64:64 128:128 256:256 / 1 2 / 1", `send ${z.name}: Show statistics on (the receiver's key), the labels before the first paint and after the codec (${on})`);
+      check(on === "58, 26.7 KB / 58, 26.7 KB / Blocks / 64:64 128:128 256:256 / 1 2 / 1", `send ${z.name}: Show statistics on (the receiver's key), the labels before the first paint and after the codec (${on})`);
       const ringWas = await evaluate(s, `document.getElementById("ring").value`);   // ai: the kept ring (remembered above leaves one)
       await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "0"; e.dispatchEvent(new Event("change")); })()`);
       const back = await evaluate(s, `[localStorage.getItem("recv:stats"), document.getElementById("blocksTitle").textContent, document.getElementById("blocksOut").textContent, document.getElementById("ring").value].join(" / ")`);
-      check(back === `0 / Density / 27.3 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
-      // ai: Refresh's delays (2026-11-17, refresh.mjs; Rate refresh 2026-11-12): three sliders 1 to 60 in Refresh after
-      // ai: FPS (7/8 + 3/4 one, 2/3, 1/2), 1 each by default; one moved to 13 kept over a reload (send:refresh78), its
+      check(back === `0 / Density / 26.7 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
+      // ai: Refresh's delays (2026-11-17, refresh.mjs; Rate refresh 2026-11-12): four sliders 1 to 60 in Refresh after
+      // ai: FPS (6/7, 3/4, 2/3, 1/2; 6/7 and 3/4 one until 2026-11-22), 1 each by default; one moved to 13 kept over a reload (send:refresh67), its
       // ai: label 13 before the first paint (the inline script's) and after the codec; set back to 1 for the steps after
-      const REF = `["refresh78", "refresh23", "refresh12"].map((id) => { const e = document.getElementById(id), o = document.getElementById(id + "Out"); return e ? [e.closest("details")?.id, e.type, e.min, e.max, e.value, o?.textContent].join(":") : "none"; }).join(" ")`;
+      const REF = `["refresh67", "refresh34", "refresh23", "refresh12"].map((id) => { const e = document.getElementById(id), o = document.getElementById(id + "Out"); return e ? [e.closest("details")?.id, e.type, e.min, e.max, e.value, o?.textContent].join(":") : "none"; }).join(" ")`;
       const refAt = await evaluate(s, REF);
-      check(refAt === ["78", "23", "12"].map(() => "foldRefresh:range:1:60:1:1").join(" "), `send ${z.name}: Refresh's delays in Refresh, three sliders 1 to 60 at 1 (${refAt})`);
-      await evaluate(s, `(() => { const e = document.getElementById("refresh78"); e.value = "13"; e.dispatchEvent(new Event("change")); })()`);
-      await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstRefresh = document.getElementById("refresh78Out")?.textContent ?? null; });` });
+      check(refAt === ["67", "34", "23", "12"].map(() => "foldRefresh:range:1:60:1:1").join(" "), `send ${z.name}: Refresh's delays in Refresh, four sliders 1 to 60 at 1 (${refAt})`);
+      await evaluate(s, `(() => { const e = document.getElementById("refresh67"); e.value = "13"; e.dispatchEvent(new Event("change")); })()`);
+      await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstRefresh = document.getElementById("refresh67Out")?.textContent ?? null; });` });
       await navigate(s, SEND);
       await until(s, `typeof window.__firstRefresh === "string" && document.getElementById("fpsOut").textContent !== ""`, 10000, "send.mjs run").catch(() => {});
       await sleep(300);
-      const refKept = await evaluate(s, `[localStorage.getItem("send:refresh78"), window.__firstRefresh, document.getElementById("refresh78").value, document.getElementById("refresh78Out").textContent].join(" / ")`);
+      const refKept = await evaluate(s, `[localStorage.getItem("send:refresh67"), window.__firstRefresh, document.getElementById("refresh67").value, document.getElementById("refresh67Out").textContent].join(" / ")`);
       check(refKept === "13 / 13 / 13 / 13", `send ${z.name}: a delay of 13 kept over a reload, its label before the first paint and after (${refKept})`);
-      await evaluate(s, `(() => { const e = document.getElementById("refresh78"); e.value = "1"; e.dispatchEvent(new Event("change")); })()`);
+      await evaluate(s, `(() => { const e = document.getElementById("refresh67"); e.value = "1"; e.dispatchEvent(new Event("change")); })()`);
       await evaluate(s, setFolds(SEND_FOLDS, false));
       await navigate(s, `${SEND}?fps=24&payload=test&auto`);
       await until(s, `/^LIZARD-\\d+/.test(document.getElementById("tx").textContent)`, 20000, "the test stream painted");
@@ -400,7 +400,7 @@ const SIZES = [
     await evaluate(s, `window.__launch({ files: [{ getFile: async () => new File(["opened"], "opened.txt", { lastModified: 1700000000000 }) }] })`);
     await until(s, `[...document.querySelectorAll("#pickList .t")].map((t) => t.textContent).join() === "opened.txt"`, 8000, "the opened file listed").catch(() => {});
     check(await evaluate(s, `[...document.querySelectorAll("#pickList .t")].map((t) => t.textContent).join() === "opened.txt"`), `send: a file opened with the app is listed`);
-    await evaluate(s, `caches.open("lizard-share").then((c) => c.put(new Request(location.origin + "/share/0"), new Response("shared!", { headers: { "content-type": "text/plain", "x-name": encodeURIComponent("from app.txt"), "x-modified": "1700000000000" } })))`);
+    await evaluate(s, `caches.open("lizard-share").then((c) => c.put(new Request(location.origin + "/share/0"), new Response("shared!", { headers: { "x-name": encodeURIComponent("from app.txt"), "x-modified": "1700000000000" } })))`);
     await navigate(s, `${SEND}?shared`);
     await until(s, `[...document.querySelectorAll("#pickList .t")].map((t) => t.textContent).join() === "from app.txt"`, 8000, "the shared file listed").catch(() => {});
     const sh = await evaluate(s, `(async () => ({ rows: [...document.querySelectorAll("#pickList .t")].map((t) => t.textContent).join(), left: (await (await caches.open("lizard-share")).keys()).length, url: location.search }))()`);
@@ -537,7 +537,7 @@ const SIZES = [
 }
 
 // ai: 3. The light through the fake camera: 1920 x 1080 clips at 30 fps of a sender at 24, LIZARD-96, one clip pixel a
-// ai: sample, as check_rates.mjs builds them. First the test stream (2.5 s, looped), then a file (a lap and 8%).
+// ai: sample, as check_rates.mjs builds them. First the test stream (2.5 s, looped), then a file (a cycle and 8%).
 {
   const CW = 1920, CH = 1080, FD = 24, FC = 30, SUBCH = 96, LEN = 300000, NAME = "holiday-photo.jpg";
   await initWh();
@@ -562,9 +562,9 @@ const SIZES = [
   }
   const testPath = join(scratch, "test.y4m");
   await clip(testPath, (seq) => phy.frame(seq), 75);
-  const xs = new XferSender(bytes, { name: NAME, type: "image/jpeg", chunkLog2: DEFAULT_LOG2, M, Encoder });
-  phy.setSource((id, out) => xs.block(id, out));
-  const frames = Math.ceil((xs.sched.lap * 1.08) / (B - 1)) + 24, clipFrames = Math.ceil((frames * FC) / FD), path = join(scratch, "file.y4m");
+  const xs = new XferSender(bytes, { name: NAME, sbLog2: DEFAULT_LOG2, M, Encoder });
+  phy.setSource((id, out) => xs.block(id, out), xs);
+  const frames = Math.ceil((xs.carousel.cycle * 1.08) / (B - 1)) + 24, clipFrames = Math.ceil((frames * FC) / FD), path = join(scratch, "file.y4m");
   await clip(path, (seq) => phy.frame(seq, xs.frameIds(B)), clipFrames);
   console.log(`     clips: the test stream, 75 frames; a ${LEN} B file, ${clipFrames} frames (${frames} display frames of LIZARD-${SUBCH})`);
 
@@ -576,36 +576,16 @@ const SIZES = [
   const ts = await evaluate(t, `(() => { const $ = (id) => document.getElementById(id); return { dt: ${DT}, lab: $("lab").textContent, why: $("why").textContent }; })()`);
   await screenshot(t, `${OUT}/recv-phone-portrait-test.png`);
   // ai: the test stream's block: its name and Speed, no meter (2026-11-07; "Reading the test stream" before); the lab
-  // ai: line the rate, the registered share and the format (Developer Tools)
-  check(ts.dt?.name === "Test stream" && ts.dt.frac === null && Object.keys(ts.dt.rows).join() === "Speed" && /^\d+\sKB\/s, \d+% registered, LIZARD-96 at 24\sfps$/.test(ts.lab), `test stream: ${JSON.stringify(ts.dt)} / "${ts.lab}" / "${ts.why}"`);
-  // ai: The camera's rate under twice the word's (2026-11-11, the apps' rule for a camera no phase lock holds; a fixed 24
-  // ai: before), a hint (its row's class h, the info icon): the fake camera runs at 30, so the test stream at 24 is told
-  // ai: "recommended 15", as a clip whose word says 30; a clip whose word says 15, half the camera's rate, nothing.
+  // ai: line the rate, the registered share and the format (Developer Tools); a static word states no display rate
+  // ai: (2026-11-18 evening, SPEC 5.2), so no "at N fps" after the format
+  check(ts.dt?.name === "Test stream" && ts.dt.frac === null && Object.keys(ts.dt.rows).join() === "Speed" && /^\d+\sKB\/s, \d+% registered, LIZARD-96$/.test(ts.lab), `test stream: ${JSON.stringify(ts.dt)} / "${ts.lab}" / "${ts.why}"`);
+  // ai: The camera's rate under twice the word's (2026-11-11, the apps' rule for a camera no phase lock holds) is a hint
+  // ai: (its row's class h, the info icon) only where the sender states its rate: a static word states none since
+  // ai: 2026-11-18, so the test stream at 24 on the 30 fps camera gives no hint row. The two word clips (a word saying 30,
+  // ai: one saying 15) went with the rate in the static word: the page's band reads static words alone.
   const rows = `[...document.querySelectorAll("#why .wr")].map((r) => (r.classList.contains("h") ? "hint:" : "") + r.dataset.k + "|" + r.querySelector(".v").textContent).join(" / ")`;
   const tw = await evaluate(t, rows);
-  check(/(^| \/ )hint:Sender at 24\sfps\|recommended 15( \/ |$)/.test(tw), `the test stream at 24 fps on a 30 fps camera: the hint row "${tw}"`);
-  for (const wf of [FC, FC / 2]) {
-    const clipPhy = await makePhy({ phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: wf, variants: [{ name: "rx" }] }), clipPath = join(scratch, `word${wf}.y4m`);
-    const fd = openSync(clipPath, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
-    writeSync(fd, `YUV4MPEG2 W${CW} H${CH} F${FC}:1 Ip A1:1 C420jpeg\n`);
-    for (let i = 0; i < 60; i++) {
-      const fr = await clipPhy.frame(i), ox = (CW - fr.w) >> 1, oy = (CH - fr.h) >> 1;
-      y.fill(235);
-      for (let r = 0; r < fr.h; r++) for (let c = 0; c < fr.w; c++) y[(oy + r) * CW + ox + c] = Math.round(20 + 215 * fr.drive[r * fr.w + c]);
-      writeSync(fd, "FRAME\n"); writeSync(fd, y); writeSync(fd, chroma);
-    }
-    closeSync(fd);
-    const f = await chrome(`word${wf}`, [`--use-file-for-fake-video-capture=${clipPath}`]);
-    await size(f, SIZES[0]);
-    await navigate(f, `${BASE}?auto&seen`);
-    await until(f, `/at ${wf}\\sfps/.test(document.getElementById("lab").textContent)`, 30000, `the ${wf} fps test stream read`);
-    await sleep(1200);
-    // ai: the hint as a row (2026-11-11; a warning from 2026-11-07, a sentence naming the LIZARD app before): the sender's
-    // ai: rate and the most the camera reads
-    const fw = await evaluate(f, rows);
-    if (wf > FC / 2) check(new RegExp(`(^| / )hint:Sender at ${wf}\\sfps\\|recommended 15( / |$)`).test(fw), `a sender at ${wf} fps on a 30 fps camera: the hint row "${fw}"`);
-    else check(!/Sender at/.test(fw), `a sender at ${wf} fps on a 30 fps camera: no hint, "${fw}"`);
-  }
+  check(!/Sender at/.test(tw), `the test stream at 24 fps on a 30 fps camera, a static word stating no rate: no hint row ("${tw}")`);
   // ai: The light gone (the video paused, as a camera turned to a wall): the state falls back to looking, which says
   // ai: nothing (2026-11-06, as the apps'; its words drawn clear while the run holds the line's room), the code's name
   // ai: leaves the lab line (until 2026-09-26 the band, once read, stayed on both for good).
@@ -659,15 +639,14 @@ const SIZES = [
   const c = await evaluate(s, STATE);
   await screenshot(s, `${OUT}/recv-phone-portrait-received-stopped.png`);
   check(c.dt === null && c.deliver && c.go === "Start" && c.why === "", `stopped: the card and Save kept, no block, "${c.go}"`);
-  // ai: started again on the same clip: the camera's view back in the card's place, the finished file named again by the
-  // ai: light, Save's file the same, and the camera left running (it stops itself once a file, not each time the light
-  // ai: names one)
+  // ai: started again on the same clip (2026-11-20): the finished transfer was let go when the camera stopped for it, so
+  // ai: the file in the light is a new transfer and comes in a second time, as a second download would: its block in the
+  // ai: column, the camera's view in the card's place, the camera on. Stopped part way below, it is left unfinished.
   await evaluate(s, `document.getElementById("go").click()`);
   await until(s, `document.getElementById("go").textContent === "Stop" && document.getElementById("done").hidden && /LIZARD-/.test(document.getElementById("lab").textContent)`, 30000, "the code read again after a restart");
+  await until(s, `(${DT})?.name === ${JSON.stringify(NAME)}`, 30000, "the file coming in a second time");
   const d = await evaluate(s, STATE);
-  await sleep(1500);
-  const d2 = await evaluate(s, STATE);
-  check(d.dt === null && !d.deliver && d.href === b.href && d2.go === "Stop", `started again: no block for the file already in (${JSON.stringify(d.dt)}), the camera's view in the card's place, the same Save, the camera still on 1.5 s later ("${d2.go}")`);
+  check(d.dt?.name === NAME && !d.deliver && d.go === "Stop", `started again: the file coming in a second time (${JSON.stringify(d.dt)}), the camera's view in the card's place, the camera on ("${d.go}")`);
   await evaluate(s, `document.getElementById("go").click()`);
   await size(s, SIZES[2]);
   await sleep(300);
@@ -749,6 +728,13 @@ const SIZES = [
   const HOMEM = `(() => { const $ = (id) => document.getElementById(id), rows = [...document.querySelectorAll("#list li")];
     return { iw: innerWidth, sw: document.documentElement.scrollWidth, rows: rows.map((r) => r.querySelector(".name").textContent), acts: rows[0] ? [...rows[0].querySelectorAll(".acts > *")].map((a) => a.textContent).join(",") : "",
       href: rows[0]?.querySelector("a[download]")?.href ?? "", download: rows[0]?.querySelector("a[download]")?.download ?? "", tips: !!$("tips") || !!$("tipsAgain"), empty: !$("empty").hidden, clear: $("clearAllTop").checkVisibility(), heads: [...document.querySelectorAll("main h2")].filter((x) => x.checkVisibility()).map((x) => x.querySelector(".ft")?.textContent ?? x.textContent).join(","), meta: rows[0]?.querySelector(".meta")?.textContent ?? "", solid: [...document.querySelectorAll(".primary")].map((b) => b.id).join(), bar: [...document.querySelectorAll(".bar .brand, .bar > button, .bar > a.btn")].filter((b) => b.checkVisibility()).map((b) => b.textContent).join(",") }; })()`;
+  // ai: the second copy, stopped part way above, listed under Unfinished; let go so Home's checks below see one file
+  await size(s, SIZES[0]);
+  await navigate(s, HOME);
+  await until(s, `!document.getElementById("partial").hidden && document.querySelectorAll("#partialList li").length === 1`, 5000, "the stopped second copy under Unfinished");
+  const second = await evaluate(s, `document.querySelector("#partialList li .name").textContent`);
+  check(second.startsWith(NAME), `home: the second copy stopped part way listed under Unfinished ("${second}")`);
+  await evaluate(s, `(async () => { const d = await (await navigator.storage.getDirectory()).getDirectoryHandle("lizard-xfer"); for await (const [n] of d.entries()) await d.removeEntry(n, { recursive: true }); return true; })()`);
   for (const [k, z] of SIZES.entries()) {
     await size(s, z);
     await navigate(s, HOME);
@@ -823,8 +809,8 @@ const SIZES = [
   // ai: An unfinished transfer (2026-10-22, library.mjs unfinished): a folder under lizard-xfer as the fountain worker
   // ai: leaves one (its header and meta.json), listed under Unfinished with its share and size, Continue and Delete;
   // ai: Delete asks on itself, then removes the folder.
-  const MAKE_PART = `(async () => { const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("lizard-xfer", { create: true })).getDirectoryHandle("00112233aabbccdd", { create: true });
-    for (const [n, b] of [["header", new Uint8Array(${PAYLOAD})], ["meta.json", new TextEncoder().encode(JSON.stringify({ name: "half.bin", type: "", length: 3133383, chunks: 3, verified: 1, root: "00112233aabbccdd", fraction: 0.37, bytesIn: 1159352 }))]]) {
+  const MAKE_PART = `(async () => { const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle("lizard-xfer", { create: true })).getDirectoryHandle("00112233aabbccdd0a0b0c", { create: true });
+    for (const [n, b] of [["header", new Uint8Array(${PAYLOAD})], ["meta.json", new TextEncoder().encode(JSON.stringify({ name: "half.bin", length: 3133383, sourceBlocks: 3, verified: 1, root: "00112233aabbccdd", fraction: 0.37, bytesIn: 1159352 }))]]) {
       const w = await (await d.getFileHandle(n, { create: true })).createWritable(); await w.write(b); await w.close(); } return true; })()`;
   await evaluate(s, MAKE_PART);
   await navigate(s, HOME);

@@ -59,10 +59,10 @@ async function frame(m) {
   // heap: the page watches this for a step, which is a heap growth and a stall the ms above already paid for.
   // quad: the lattice corners the finder settled on, in camera pixels. The page turns it into the symbol's size
   // and the pixels a cycle of the finest ring got, which is what decides how much of the frame comes back.
-  // ai: ids and bytes: every block the frame verified and the judge did not call bad, repeats included (the page says
+  // ai: ids, tags and bytes: every block the frame verified and the judge did not call bad, repeats included (the page says
   // ai: which are new, since 2026-09-29), whatever they carry: whether they are a file's is the light's to say (its
   // ai: header, the fountain worker).
-  const out = { type: "result", tag, found: r.found, seen: r.seen, bad: r.bad, test: r.test ? 1 : 0, judged: r.judged, heap: heapTop(), quad: r.found ? r.quad : null, built: r.built ? 1 : 0, ids: r.got.map((g) => g.id) };
+  const out = { type: "result", tag, found: r.found, seen: r.seen, bad: r.bad, test: r.test ? 1 : 0, judged: r.judged, heap: heapTop(), quad: r.found ? r.quad : null, built: r.built ? 1 : 0, ids: r.got.map((g) => g.id), tois: r.got.map((g) => g.toi) };
   if (r.got.length) {
     const B = phy.usefulBytes, bytes = new Uint8Array(B * r.got.length);
     r.got.forEach((g, k) => bytes.set(g.bytes, k * B));
@@ -71,7 +71,7 @@ async function frame(m) {
   out.ms = performance.now() - t;
   if (vf) out.vf = vf;
   if (m.verify) out.probe = cornerProbe(px, w, h, isRgba ? 4 : 1);   // ai: the page cannot see a VideoFrame's pixels, so the crop check is answered from here
-  // What the band said (src/fmt.h): the version, and the rate the sender means to paint at. Null on a frame that
+  // What the band said (src/fmt.h): the version and the layout's counts. Null on a frame that
   // read no word. The page keeps the last one, so this travels per frame and is averaged nowhere.
   // ai: The ring the word was read in rides with it (an index into sim/lizard_pick.mjs RINGS).
   if (r.fmt) out.fmt = { ...r.fmt, ring: r.ring };

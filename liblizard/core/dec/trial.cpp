@@ -216,7 +216,7 @@ TrialRun trialRun(FrontHalf& fh, const TrialFrames& t) {
       if (!s) throw wg::Error("trial: no free slot on the ring");
       slots.push_back(s);
     }
-    BatchOut out = fh.finish(fh.run(slots, 0));
+    BatchOut out = fh.finish(fh.run(slots));
     for (size_t j = 0; j < slots.size(); j++) {
       const uint32_t i = (uint32_t)(k + j);
       const auto& fr = t.frames[i];

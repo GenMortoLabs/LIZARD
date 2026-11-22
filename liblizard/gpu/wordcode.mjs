@@ -1,12 +1,13 @@
-// The format word as a linear code, for the GPU reader (glsl/word.mjs). The word is its magic and four bytes, static
-// ai: [0x4C, then 32 bits: the version less 4 (6), the 7/8 blocks (8), the 2/3 and 1/2 blocks (7 each), their CRC-4
-// ai: (src/fmt.c crc4), the first the most significant] (since 2026-11-18; that day a rate code in place of the 8th count
-// ai: bit and the CRC, then four zero bits in place of the CRC; [0x4C, version, fps, ext0, ext1] from 2026-11-15, [0x4C, version, fps] before) or animated [0xB3, id, three bytes of a carousel symbol], and bytes - 5 Reed-Solomon parity bytes, one code a ring over every word cell:
-// ai: RS(16,5), (32,5), (64,5) at W = 32, 64, 128 word cells a side, the 64, 128 and 256 rings (src/fmt.c, src/rs.c:
+// The format word as a linear code, for the GPU reader (glsl/word.mjs). The word is its magic and five bytes
+// ai: [0x4C, then 40 bits, the first the most significant: the word's index (35 bits: (configuration x 241 + fps) x 30
+// ai: + delay - 1, the configuration's own index configIndex's) and its CRC-5 (src/fmt.c crc5: x^5 + x^2 + 1)] (since
+// ai: 2026-11-22; the version less 4, the 6/7, 2/3 and 1/2 counts and a CRC-4 in 32 bits from 2026-11-18; another magic
+// ai: refused: src/fmt.h), and bytes - 6 Reed-Solomon parity bytes, one code a ring over every word cell:
+// ai: RS(16,6), (32,6), (64,6) at W = 32, 64, 128 word cells a side, the 64, 128 and 256 rings (src/fmt.c, src/rs.c:
 // ai: GF(256), polynomial 0x11D, roots alpha^0 upward, data first).
-// Reed-Solomon is linear over GF(2), so every valid word is its magic's BASE xor the rows of its four bytes' set bits:
-// ai: STATIC_WORDS static words (whose counts make a frame of their version) and (ID_MAX + 1) x 2^24 animated ones a ring
-// ai: (any ring may carry any version since 2026-09-27): the reader solves the word from its most reliable bytes by Gauss-Jordan over
+// Reed-Solomon is linear over GF(2), so every valid word is the magic's BASE xor the rows of its five bytes' set bits:
+// ai: WORDS words a ring (any ring may carry any version since 2026-09-27): the reader solves the word from its most
+// ai: reliable bytes by Gauss-Jordan over
 // ai: GF(256) and scores the candidates' bits over this code (glsl/word.mjs), where the reference decodes hard bytes
 // ai: with erasures.
 //
@@ -19,32 +20,71 @@ const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
 const mul = (a, b) => (a && b ? EXP[LOG[a] + LOG[b]] : 0);
 
 export const BYTES_MAX = 64;
-// ai: The word's first byte (src/fmt.h OB_FMT_MAGIC, OB_FMT_MAGIC_ANIM), its data bytes (OB_FMT_DATA) and the last
-// ai: carousel id (OB_FMT_ID_MAX)
-export const MAGIC = 0x4c, MAGIC_ANIM = 0xb3, DATA = 5, ID_MAX = 254;
+// ai: The word's first byte (src/fmt.h OB_FMT_MAGIC) and its data bytes (OB_FMT_DATA)
+export const MAGIC = 0x4c, DATA = 6;
 // ai: The versions a word states (src/fmt.h OB_FMT_VERSION_MIN, OB_FMT_VERSION_MAX): 4 to 67, sub-channels / 16 (sim/lizard_pick.mjs
 // ai: STEP), 64 to 1072 sub-channels (since 2026-11-18; 4 to 64 from 2026-10-29), its six bits' every value.
 export const VERSION_MIN = 4;
 export const VERSION_MAX = 67;
-// ai: A static word's data bytes (src/fmt.c ob_fmt_pack: count [7/8, 2/3, 1/2] a frame of the version,
-// ai: sim/lizard_pick.mjs layoutOf) and an animated one's
-// ai: src/fmt.c crc4: x^4 + x + 1 over a static word's 28 content bits, most significant first, from 0
-export function crc4(c) {
-  let r = (c << 4) >>> 0;
-  for (let i = 31; i >= 4; i--) if ((r >>> i) & 1) r = (r ^ (0x13 << (i - 4))) >>> 0;
-  return r & 15;
+// ai: The clock (src/fmt.h OB_FMT_FPS_MAX, OB_FMT_DELAY_MAX, OB_FMT_CLOCKS): fps 0 to 240 (0 a still), delay 1 to 30.
+export const FPS_MAX = 240, DELAY_MAX = 30, CLOCKS = (FPS_MAX + 1) * DELAY_MAX;
+// ai: The configurations in index order (src/fmt.c ob_fmt_index): a version's, then by the 6/7 count a, the 2/3 count t
+// ai: and the 1/2 count c, each from 0. A block's slots (src/fmt.c ob_block_slots: its code's sent bits) and a version's
+// ai: data slots (OB_FMT_SLOTS); room the slots past a, t and the one 3/4 block a frame needs; cCount the 1/2 counts there.
+export const SLOTS67 = 4480, SLOTS34 = 5120, SLOTS23 = 5760, SLOTS12 = 7680, VERSION_SLOTS = 10176;
+const room = (v, a, t) => v * VERSION_SLOTS - SLOTS34 - a * SLOTS67 - t * SLOTS23;
+const cCount = (r) => (r < 0 ? 0 : Math.min(127, Math.floor(r / SLOTS12)) + 1);
+const tCount = (v, a) => { let n = 0; for (let t = 0; t <= 127; t++) { const k = cCount(room(v, a, t)); if (!k) break; n += k; } return n; };
+// ai: BEFORE[v - VERSION_MIN]: the configurations of every version before v (src/fmt.c OB_FMT_BEFORE), the last CONFIGS
+export const BEFORE = (() => {
+  const b = [0];
+  for (let v = VERSION_MIN; v <= VERSION_MAX; v++) { let n = 0; for (let a = 0; a <= 255; a++) n += tCount(v, a); b.push(b.at(-1) + n); }
+  return b;
+})();
+export const CONFIGS = BEFORE.at(-1), WORDS = CONFIGS * CLOCKS;
+export function configIndex(version, count) {
+  if (version < VERSION_MIN || version > VERSION_MAX || !layoutOf(subchOf(version), count).length) return -1;
+  let i = BEFORE[version - VERSION_MIN];
+  for (let a = 0; a < count[0]; a++) i += tCount(version, a);
+  for (let t = 0; t < count[1]; t++) i += cCount(room(version, count[0], t));
+  return i + count[2];
 }
-export function staticWord(version, count) {
-  if (!layoutOf(subchOf(version), count).length) throw new Error(`no static word: version ${version}, counts ${count}`);
-  const c = (version - VERSION_MIN) * 2 ** 22 + count[0] * 2 ** 14 + count[1] * 2 ** 7 + count[2], x = (c * 16 + crc4(c)) >>> 0;
-  return [MAGIC, x >>> 24, (x >>> 16) & 255, (x >>> 8) & 255, x & 255];
+export function configOf(index) {
+  if (!(index >= 0 && index < CONFIGS)) return null;
+  let v = VERSION_MIN;
+  while (BEFORE[v + 1 - VERSION_MIN] <= index) v++;
+  let r = index - BEFORE[v - VERSION_MIN], a = 0, t = 0;
+  for (let k; r >= (k = tCount(v, a)); a++) r -= k;
+  for (let k; r >= (k = cCount(room(v, a, t))); t++) r -= k;
+  return { version: v, count: [a, t, r] };
 }
-export const animWord = (id, sym) => [MAGIC_ANIM, id, sym[0], sym[1], sym[2]];
+// ai: src/fmt.c crc5: x^5 + x^2 + 1 over the 35-bit index, most significant first, from 0
+export function crc5(c) {
+  let r = BigInt(c) << 5n;
+  for (let i = 39n; i >= 5n; i--) if ((r >> i) & 1n) r ^= 0x25n << (i - 5n);
+  return Number(r & 31n);
+}
+// ai: The word's six data bytes (src/fmt.c ob_fmt_pack): the magic, then the index and its CRC-5 in 40 bits
+export function word(version, count, fps = 60, delay = 1) {
+  const i = configIndex(version, count);
+  if (i < 0 || !(fps >= 0 && fps <= FPS_MAX) || !(delay >= 1 && delay <= DELAY_MAX)) throw new Error(`no word: version ${version}, counts ${count}, clock ${fps}/${delay}`);
+  const c = (i * (FPS_MAX + 1) + fps) * DELAY_MAX + delay - 1, x = BigInt(c) * 32n + BigInt(crc5(c));
+  return [MAGIC, ...[32n, 24n, 16n, 8n, 0n].map((s) => Number((x >> s) & 255n))];
+}
+// ai: A word's fields from its five bytes after the magic, or null where its CRC-5 or index refuses it
+export function wordOf(bytes) {
+  let x = 0n;
+  for (const b of bytes) x = (x << 8n) | BigInt(b);
+  const c = Number(x >> 5n);
+  if (Number(x & 31n) !== crc5(c) || c >= WORDS) return null;
+  const k = c % CLOCKS, cfg = configOf(Math.floor(c / CLOCKS));
+  return { ...cfg, fps: Math.floor(k / DELAY_MAX), delay: 1 + (k % DELAY_MAX) };
+}
 // The codeword's length for W word cells a side (src/fmt.c ob_fmt_bytes; no word under the 64 ring's 32 cells,
 // ai: src/fmt.h OB_FMT_SIDE_CELLS).
 export const bytesFor = (W) => (W < 32 ? 0 : Math.min(4 * Math.floor(W / 8), BYTES_MAX));
 
-// src/rs.c rs_encode, for the word's 5 data bytes (`data`, its magic first) and bytes - 5 roots.
+// src/rs.c rs_encode, for the word's 6 data bytes (`data`, its magic first) and bytes - 6 roots.
 export function wordBytes(data, bytes) {
   const k = DATA, nroots = bytes - k, cw = new Uint8Array(bytes), g = new Uint8Array(nroots + 1);
   cw.set(data.slice(0, k));
@@ -70,12 +110,11 @@ export function wordBits(cw, W) {
   return out;
 }
 
-// The two magics' BASEs (static, animated) and the 32 rows (data byte 1's bits 0..7, then byte 2's, 3's and 4's) for W
-// word cells a side.
+// The magic's BASE and the 40 rows (data byte 1's bits 0..7, then byte 2's to 5's) for W word cells a side.
 export function wordCode(W) {
   const bytes = bytesFor(W), bits = (d) => wordBits(wordBytes(d, bytes), W);
-  const base = [bits([MAGIC, 0, 0, 0, 0]), bits([MAGIC_ANIM, 0, 0, 0, 0])], rows = [];
-  for (let j = 1; j < DATA; j++) for (let b = 0; b < 8; b++) { const d = [0, 0, 0, 0, 0]; d[j] = 1 << b; rows.push(bits(d)); }
+  const base = [bits([MAGIC, ...Array(DATA - 1).fill(0)])], rows = [];
+  for (let j = 1; j < DATA; j++) for (let b = 0; b < 8; b++) { const d = Array(DATA).fill(0); d[j] = 1 << b; rows.push(bits(d)); }
   return { W, bytes, base, rows };
 }
 
@@ -88,41 +127,25 @@ export function wordCode(W) {
 // ai: 0.758 of the best kept, a clean one at 0.74 dropped). E[m] is the most disagreements on m cells that keep the
 // ai: union bound (every word of the ring within E[m] of a random hard word on those m cells) at BUDGET / GATE_CHOICES,
 // ai: so the three together stay at BUDGET, the C's own false-word rate in that ring (SPEC 5.4, three roots left: its
-// ai: steps' pass rate on garbage times a magic's 1/256 and its check's share of the 32 bits after it, cFalseWord below);
-// ai: -1 where no count does. The bound counts every word a word may be, WORDS: STATIC_WORDS static and (ID_MAX + 1) x
-// ai: 2^24 animated. Which cells count depends on the magnitudes
+// ai: steps' pass rate on garbage times a magic's 1/256 and its check's share of the 40 bits after it, cFalseWord below);
+// ai: -1 where no count does. The bound counts every word a word may be, WORDS. Which cells count
+// ai: depends on the magnitudes
 // ai: alone, which a garbage frame's signs do not, so the bound holds for each choice as it stands. SIDE_KEEP is the
 // ai: search's: F8 zeroes a side under SIDE_KEEP of the best side's sum, at most the two least, before it scores
 // ai: (0.75, the best of 0.85, 0.75 and 0.70 on the lab's damage sweep).
 export const TAU = 0.1, SIDE_KEEP = 0.75, GATE_CHOICES = 3;
 // ai: The C's false-word rate on garbage (soft values uniform in -0.5 to 0.5) in a ring of W word cells a side, exact
-// ai: as test/fmt_test.c p_pass has it: RS(bytes, 5) passing errors only, then each erasure step (2, 4, ... nroots - 3
-// ai: least confident bytes, src/fmt.c ob_fmt_decode), a false codeword's data bytes uniform, so 1/256 for each magic
-// ai: and the static words' share of the 32 bits after it (STATIC_WORDS / 2^32: every version's counts that make a frame,
-// ai: each with its one CRC-4), or the ids' of the id byte.
-// ai: STATIC_WORDS: per version, the (a, t, c) whose slots leave one 3/4 block and two blocks with pilots (src/fmt.c
-// ai: ob_fmt_layout), counted by a and t with c's room in closed form
-function staticWords() {
-  const s7 = 4496, s3 = 5152, s2 = 5760, s1 = 7680;
-  let n = 0;
-  for (let v = VERSION_MIN; v <= VERSION_MAX; v++) {
-    const all = v * 10240;
-    for (let a = 0; a < 256; a++) for (let t = 0; t < 128; t++) {
-      const room = all - Math.max(1, 2 - a) * s3 - a * s7 - t * s2;   // ai: the 3/4 blocks the pilots and the fill need
-      if (room >= 0) n += Math.min(127, Math.floor(room / s1)) + 1;
-    }
-  }
-  return n;
-}
-export const STATIC_WORDS = staticWords();
-export const WORDS = STATIC_WORDS + (ID_MAX + 1) * 2 ** 24;
+// ai: as test/fmt_test.c p_pass has it: RS(bytes, 6) passing errors only, then each erasure step (1, 3, ... nroots - 3
+// ai: least confident bytes on an even nroots, src/fmt.c ob_fmt_decode), a false codeword's data bytes uniform, so 1/256
+// ai: for the magic and the words' share of the 40 bits after it (WORDS / 2^40: every configuration with every clock,
+// ai: each with its one CRC-5): 1.7e-8 a read since 2026-11-22 (5.3e-10 with the 32-bit word before).
 export function cFalseWord(W) {
-  const bytes = bytesFor(W), nroots = bytes - DATA;
+  const bytes = bytesFor(W), nroots = bytes - DATA, first = 2 - ((nroots - 3) & 1);
   const binom = (n, k) => { let r = 1; for (let i = 0; i < k; i++) r = (r * (n - i)) / (i + 1); return r; };
   const pass = (f) => { const t = Math.floor((nroots - f) / 2); let v = 0; for (let i = 0; i <= t; i++) v += binom(bytes - f, i) * 255 ** i; return v / 256 ** (nroots - f); };
   let steps = pass(0);
-  for (let f = 2; f <= nroots - 3; f += 2) steps += pass(f);
-  return (steps * (STATIC_WORDS / 2 ** 32 + (ID_MAX + 1) / 256)) / 256;
+  for (let f = first; f <= nroots - 3; f += 2) steps += pass(f);
+  return (steps * (WORDS / 2 ** 40)) / 256;
 }
 export const BUDGET = Object.fromEntries([32, 64, 128].map((W) => [W, cFalseWord(W)]));
 export function gateTable(W) {

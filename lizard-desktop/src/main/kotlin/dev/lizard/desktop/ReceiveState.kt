@@ -702,18 +702,12 @@ class ReceiveState(private val app: App) {
     val lab: String get() = Readout.lab(live, rx)
     // ai: the preview's box: the crop's shape (1:1; 2:1 along the camera's long side)
     val cropRatio: Float get() = if (layout != "2:1") 1f else if ((mode?.h ?: 0) > (mode?.w ?: 1)) 0.5f else 2f
-    // ai: One hint, the first that holds, while the camera runs and a word is read (dev.lizard.ui hintOf): no camera of a
-    // ai: PC's is held by the phase lock; the mode's rate where the camera agreed to none
-    // ai: locked: the phase lock on the camera (a GenICam camera's software trigger, cam/aravis.cpp, since 2026-11-01;
-    // ai: UVC's lock is {"off": why}, a stream whose trigger did not arm {})
-    val hint: Warn? get() = hintOf(stats, on, phone, played,
-        locked = (stats?.get("lock") as? JsonObject)?.let { it.isNotEmpty() && "off" !in it } == true, modeFps = mode?.fps ?: 0.0)
 
     // ai: The readout (Developer Tools; the app's devReadout): a labelled line or two a part, from the stats (receiver.cpp
     // ai: stats, the session's camera line in "camera") and the camera's mode; a part with nothing to say left
     // ai: out. The receiver's figures of its last second (the decoder's ms, captured, decoded, found, the rate, the
     // ai: window's blocks) only while live: a camera that is off has none, and a stream's read 0 until its first second
-    // ai: has closed; the held word, the totals and the file stand.
+    // ai: has closed; the last word read, the totals and the file stand.
     val readout: String get() {
         val j = stats
         val now = live
@@ -749,7 +743,7 @@ class ReceiveState(private val app: App) {
                 j.flag("test") -> "the test stream"
                 file == null -> "none yet"
                 else -> "${file.str("name").ifEmpty { "(no name)" }}: ${Readout.partOf(file.num("received"), file.num("size").toLong())}" +
-                    ", chunks ${file.num("chunksVerified").toInt()} of ${file.num("chunks").toInt()} verified${if (file.flag("verified")) ", whole" else ""}"
+                    ", chunks ${file.num("sourceBlocksVerified").toInt()} of ${file.num("sourceBlocks").toInt()} verified${if (file.flag("verified")) ", whole" else ""}"
             })
         }
         j?.str("error")?.takeIf { it.isNotEmpty() }?.let { put("error", it) }
