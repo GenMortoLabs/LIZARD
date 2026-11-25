@@ -1,5 +1,5 @@
-// ai: Several files or a folder as one POSIX tar, the way the sender bundles them into one transfer (the transfer's zstd
-// ai: compresses each 4 MiB chunk of the tar as of any file). The twin of liblizard/kotlin/Tar.kt's writer, the same
+// ai: Several files or a folder as one POSIX tar, the way the sender bundles them into one transfer (the default client's
+// ai: zstd, sim/pack.mjs, packs the tar in 4 MiB frames as it packs any file). The twin of liblizard/kotlin/Tar.kt's writer, the same
 // ai: headers: ustar (the name, and the prefix field where a path is long), a pax extended header (typeflag x) carrying
 // ai: `path` where a path fits neither field or is not plain ASCII, and `size` past ustar's 8 GiB; folders as their own
 // ai: entries (typeflag 5, so an empty folder survives); files mode 644, folders 755, owner 0; two zero blocks at the
@@ -93,8 +93,8 @@ function numbered(path, k) {
   return `${path.slice(0, cut)} (${k})${path.slice(cut)}`;
 }
 
-// ai: The transfer's header holds a name of 255 bytes of UTF-8 (liblizard/sim/xfer.mjs nameBytes): the stem is cut on
-// ai: a character so ".tar" always ends it.
+// ai: The session header's description holds a name of 255 bytes of UTF-8 at most (liblizard/sim/xfer.mjs NAME_MAX): the
+// ai: stem is cut on a character so the suffix (".tar", " and N more.tar") always ends it.
 function fitName(stem, suffix) {
   const chars = [...stem];
   while (chars.length && enc.encode(chars.join("") + suffix).length > 255) chars.pop();
@@ -104,7 +104,7 @@ function fitName(stem, suffix) {
 /**
  * The payload a choice of files and folders makes. One file alone is itself; anything else is a tar: one folder
  * named after it, several items after the first and how many more. entries as tarParts', in any order, each file's
- * folders added where missing, a path given twice numbered. Returns { name, type, size, files, bundled, blob }.
+ * folders added where missing, a path given twice numbered. Returns { name, size, files, bundled, blob }.
  */
 export function bundle(entries) {
   const used = new Set();

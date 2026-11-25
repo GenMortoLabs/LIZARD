@@ -1,7 +1,8 @@
 # liblizard
 
 The LIZARD code as a library: a luminance-only animated barcode that carries a file from a screen to a camera. A
-frame is a grey picture whose FFT coefficients carry blocks of 472 bytes (a 12-byte id naming the file, the chunk, the piece and the sender's session, and 460 of payload, CRC-checked),
+frame is a grey picture whose FFT coefficients carry blocks of 472 bytes (a 12-byte id naming the file's object, its TOI, then the source block and the symbol; 460 bytes of
+payload; under a CRC-64),
 each LDPC-coded at a rate that follows the frequency (6/7 inside, then 3/4 and 2/3, 1/2 outside), inside a border
 that says what is inside; a file goes as a fountain-coded transfer verified by its BLAKE3 root.
 
@@ -22,24 +23,24 @@ app.
 Beside them, `kotlin/` holds plain-JVM code the apps use, compiled into both the Android app and the desktop app with
 their shared UI (`../lizard-ui`): `Tar.kt`, how several files or a folder become one transfer (a tar,
 `research/SPEC.md` 9.6) and how a receiver unpacks one; `Readout.kt`, the receive screen's words and figures; and
-`Pick.kt` (`dev.lizard.pick`), the sender's ladder, rings and rates. `PhaseLock.kt`, the camera's phase lock against the display, is the
-reference the engine's C++ lock (`core/rx/phase_lock`) is held to; neither app compiles it.
+`Pick.kt` (`dev.lizard.pick`), the sender's ladder, rings and rates.
 
 ## Layers
 
-1. **Format arithmetic.** A format is its size (4 to 64: LIZARD-64 to -1024, 16 x the size; a symbol of it carries
+1. **Format arithmetic.** A format is its size (1 to 67: LIZARD-16 to -1072, 16 x the size; a symbol of it carries
    `liz_blocks_for` blocks, the rate profile's count), a ring (the border: 64, 128 or 256 cells, the 128 by default), the
    pictures a second the sender paints (1 to 240, which every frame's word states with its slowest block place's
    Refresh delay, 1 to 30), and one code or two side by side.
    `liz_geometry_of` gives what it paints; `liz_room_for` and `liz_pick` the room a symbol needs on a display and the
    most blocks that fit a room.
-2. **The per-frame codec**, on the CPU (NEON on arm64, SSE4.1 on x86-64 with AVX2 and AVX-512 forms of the LDPC chosen
-   at run time, WebAssembly SIMD in the wasm build, scalar elsewhere and in the wasm MVP build).
+2. **The per-frame codec**, on the CPU (NEON on arm64; on x86-64 the x86-64-v2 level, with AVX2 forms chosen at run
+   time; WebAssembly SIMD in the wasm build, scalar elsewhere and in the wasm MVP build).
    `liz_encoder_paint`: a frame's blocks to its picture, grey or four bytes a pixel, the frame's count for the pilots.
    `liz_decode`: a captured image, or one region of it (`liz_layout_rects`: the centre square, or the two halves of a
    2:1 region), to its verified blocks, at the layout its own word states; nothing carries from frame to frame.
 3. **The transfer.** `liz_tx`: a file (or the test stream) to each frame's blocks. `liz_rx`: a frame's verified blocks
-   in, the file out once every chunk is verified against the root, in memory or under a directory.
+   in, the file out once every source block is decoded and the file's BLAKE3 root checked (a file that fails is
+   refused whole and received again), in memory or under a directory.
 4. **The engines** (native builds): `liz_receiver` decodes camera frames on its own threads (the GPU decoder through
    Vulkan in batches, else the C on a pool) into a transfer; `liz_sender` paints frames ahead on its own threads (the
    GPU's encoder, else the C). The GPU paths read their kernels and nets from an assets directory (`share/lizard` as
@@ -155,13 +156,13 @@ some of the decoder variants, chosen among as an install's are.
 - `api/tools/stream.cpp`, `lizard_stream`: stream files, a sender's frames painted ahead into a `.lizard` whose ZIP
   comment is "LIZARD stream 1" (`core/rx/lizfile.h`), for a player that shows them in turn at their fps instead of
   painting. `lizard_stream export FILE OUT.lizard [--blocks N] [--ring 0|1|2] [--fps F] [--codes 1|2] [--frames N |
-  --laps L] [--painter auto|gpu|cpu] [--seed S]` (`liz_sender_export`; by default LIZARD-480 in the 128 ring at 15
+  --laps L] [--painter auto|gpu|cpu] [--seed S] [--assets DIR] [--level L]` (`liz_sender_export`; by default LIZARD-480 in the 128 ring at 15
   frames a second, 2.5 laps of the file's blocks, the count odd); at two codes a picture is kept as its two squares, as
   a 2:1 replay keeps a capture's halves. `lizard_stream check OUT.lizard [--threads N]`: every frame through the C into
   a transfer, whether all the frames, the even ones alone and the odd ones alone each make the file whole. Any
-  receiver's Upload reads a stream as it reads a replay. `--level L` (2026-11-18) zstd's level on the CPU; where the
-  GPU paints, the GPU packs (meta.json "zstd": "gpu"). `lizard_stream play OUT.lizard [--frames N] [--threads N]`:
-  the stream played (`liz_sender_play`) and every frame taken held to the file's own picture. The C API (2026-11-18):
+  receiver's Upload reads a stream as it reads a replay. `--level L` zstd's level on the CPU; where the
+  GPU paints, the GPU packs (meta.json "zstd": "gpu"). `lizard_stream play OUT.lizard [--frames N] [--threads N] [--assets DIR]`:
+  the stream played (`liz_sender_play`) and every frame taken held to the file's own picture. The C API:
   `liz_sender_play(path)` (a sender of a stream's frames; `liz_sender_configure` takes its format, `format` may be
   NULL), `liz_sender_stream` (its meta.json), `liz_lizard_kind(path)` (`LIZ_LIZARD_REPLAY` or `LIZ_LIZARD_STREAM`),
   `liz_sender_export(s, path, frames, level, progress, user)` (frames 0: 2.5 laps).

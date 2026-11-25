@@ -91,10 +91,10 @@ class Receiver {
   // ai: fillBatches' switch; `anchors` (the GPU
   // ai: decoder): the median of the anchors it read over the window's found frames (SPEC 6.13), null with the C.
   virtual std::string stats() = 0;
-  // ai: The newest frames with no JSON, for a reader that asks at every capture (the app's phase lock, Engine.kt):
-  // ai: [the version the last read word names, 0 before any, then 8 doubles a frame for every frame of the stats'
+  // ai: The newest frames with no JSON, for a reader that asks at every capture (the session's phase lock, phase_lock.h):
+  // ai: [the last read word's configuration (cfgOf: its index plus 1), 0 before any, then 8 doubles a frame for every frame of the stats'
   // ai: series captured after sinceMs, oldest first: ms on the camera's clock, verified blocks, new blocks, found (1
-  // ai: or 0), the pilots' r and its standard error over the even blocks, then over the odd (NaN where the frame read
+  // ai: or 0), the pilots' r and its standard error over the even sub-channels, then over the odd (NaN where the frame read
   // ai: none)]. One lock and a copy; a reader passes the newest ms it has and gets each frame once.
   virtual std::vector<double> series(double sinceMs) = 0;
   // ai: The most frames a GPU launch takes, 1 to 32 (the app's Batch size, 2026-10-02; this meaning since 2026-10-08):

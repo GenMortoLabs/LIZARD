@@ -160,7 +160,7 @@ int64_t fenceSignalledAt(int fd) {
 
 // ai: The GPU-filled ring (2026-10-07: frames generated ahead, buffered generously, presented on a fixed schedule;
 // ai: GPU only). The painter's frames stay on its device (sender.h ring()); a filler thread expands each into one of the
-// ai: ring's AHardwareBuffers (RGBA8, imported into the painter's device as a storage image, core/tx/expand.comp) as
+// ai: ring's AHardwareBuffers (RGBA8, imported into the painter's device as a storage image, core/tx/expand.slang) as
 // ai: soon as one is free, so filled buffers wait ahead of the screen; at a vsync where a picture is due the main
 // ai: thread posts the next one for that frame timeline (setFrameTimeline), with no fence (its GPU work is complete)
 // ai: and no copy. A buffer is free again once the compositor's release fence for it has signalled. Each transaction's
@@ -723,7 +723,7 @@ static std::string gTxError;
 static std::atomic<int64_t> gMakes{0};
 extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCancelMakes(JNIEnv*, jclass) { return ++gMakes; }
 // ai: The code's colours (sender.h setColours, 2026-11-16): its ink and its paper, 0xRRGGBB; the next frame shown takes
-// ai: them, the ring's (expand.comp) and the window's (Sender::take) alike
+// ai: them, the ring's (expand.slang) and the window's (Sender::take) alike
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txColours(JNIEnv*, jclass, jlong h, jint ink, jint paper) {
   tx(h)->s->setColours(static_cast<uint32_t>(ink), static_cast<uint32_t>(paper));
 }
@@ -764,10 +764,9 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txCreate(JNIE
 extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txError(JNIEnv* e, jclass) { return lizard::jni::jstr(e, gTxError); }
 
 // ai: Stream files (2026-11-18, the desktop's tx_jni.cpp alike): a sender playing one (Sender::play: its frames
-// ai: unpacked into the ring, posted as painted ones are; 0 with why in txError), a played stream's meta.json ("" for a
-// ai: painting sender), what a .lizard holds ({"kind":"stream" or "replay","meta":...}; "" with txError), Export
-// ai: (Sender::exportStart: "" or why), its state ({"on","done","written","frames","bytes","path","error"}) and its stop,
-// ai: and a painted frame's side (an export's size before it is made). A path may be /proc/self/fd/<n> (a document's).
+// ai: unpacked into the ring, posted as painted ones are; 0 with why in txError), what a .lizard holds
+// ai: ({"kind":"stream" or "replay","meta":...}; "" with txError), Export (Sender::exportStart: "" or why), its state
+// ai: ({"on","done","written","frames","bytes","path","error"}), its screen on or off (txExportShow), and a painted frame's side (an export's size before it is made). A path may be /proc/self/fd/<n> (a document's).
 extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txPlay(JNIEnv* e, jclass, jstring path) {
   applyDebugEnv();
   auto t = std::make_unique<Tx>();
@@ -775,10 +774,6 @@ extern "C" JNIEXPORT jlong JNICALL Java_dev_lizard_receiver_Native_txPlay(JNIEnv
   try { t->s = lizard::Sender::play(str(e, path), why); } catch (const std::exception& x) { why = x.what(); }
   if (!t->s) { gTxError = why; return 0; }
   return reinterpret_cast<jlong>(t.release());
-}
-extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txStream(JNIEnv* e, jclass, jlong h) {
-  const lizard::StreamPlay* p = tx(h)->s->playing();
-  return lizard::jni::jstr(e, p ? p->meta : "");
 }
 extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_lizardInfo(JNIEnv* e, jclass, jstring path) {
   std::string why;
@@ -815,7 +810,6 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txExportSta
                                   ",\"written\":" + std::to_string(st.written) + ",\"frames\":" + std::to_string(st.frames) + ",\"bytes\":" + std::to_string(st.bytes) +
                                   ",\"path\":\"" + esc(st.path) + "\",\"error\":\"" + esc(st.error) + "\"}");
 }
-extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txExportStop(JNIEnv*, jclass, jlong h) { tx(h)->s->exportStop(); }
 // ai: the screen on or off mid-export (Sender::exportShow, Send's Hide codes), the GPU ring's filler stopped across it as
 // ai: across a configure: "" or why not
 extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txExportShow(JNIEnv* e, jclass, jlong h, jboolean show) {
@@ -868,7 +862,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txConfigure
 }
 
 // ai: Refresh (Sender::setRefresh, 2026-11-17; Rate refresh 2026-11-12): the delays of the code rates 6/7, 3/4, 2/3 and
-// ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to Sender::REFRESH_MAX; the UI ties a and b),
+// ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to Sender::REFRESH_MAX, each its own slider),
 // ai: the picture before's repeated between; from the next frame made, kept across configures
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txRefresh(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   const int every[4] = {a, b, c, d};

@@ -26,6 +26,13 @@ static bool dumpThisBatch() {
   return gDumpBatch++ % every == 0 && (!most || gDumpFrames < most);
 }
 static bool dumpRoom() { static const long most = dumpEnv("LIZ_DUMP_S_MAX", 0); return !most || gDumpFrames < most; }
+// ai: LIZ_FINDER (a lab dump, 2026-11-23; tools/gpu_check.cpp replay writes the file it names): the finder's round-1
+// ai: quads, scores and result copied aside after round 1's PICK (Lane r1Buf), so a frame the second round redid keeps
+// ai: what round 1 held; copies alone, nothing a stage reads
+static bool finderDump() { static const char* p = getenv("LIZ_FINDER"); return p && *p; }
+// ai: LIZ_LEVEL0=1 (lab, 2026-11-24): the proposer also on level 0, the capture itself, in the second round beside level 1
+// ai: (its X pass reads the frame texture: the tree's fcn2X0), its slots before level 1's, SELECT's second round from them
+static bool level0() { static const char* p = getenv("LIZ_LEVEL0"); return p && *p == '1'; }
 
 namespace lizard {
 
@@ -40,31 +47,16 @@ static constexpr double MiB = 1 << 20;
 // ai: The tree's version, liblizard/gen/gen.mjs TREE_VERSION (a setup's treeVersion): the two are raised together
 // ai: whenever what this host reads of a tree changes (a stage, a buffer, a constant added, moved or meaning another
 // ai: thing), so a tree of another version is refused before any of it is read.
-// ai: 5 since 2026-10-31: the decoder's WGSL archived and F9's three dead buffers dropped (every later buffer id moved),
-// ai: pass 1's bilinear reads by the texture unit (a layout's `sampler` entry: the device's immutable linear sampler),
-// ai: the soft and LDPC steps dispatched from the gate's ARGS (each rule step's `argsAt`); 4 the LDPC pipelines'
-// ai: `lanes`; 3 REDO's R2 args; 2 PEAKS; 1 from 2026-10-29. 6 since 2026-10-31: a pipeline's `needs` (the device
-// ai: features its module asks beyond the variant's: "int16", the LDPC's "reg+i16" forms). 7 since 2026-11-02: the
-// ai: front's `trace` (TRACE, each quad's bend, in both rounds' grids) and HYP doubled (SCORE's bend bit).
-// ai: 8 since 2026-11-06: REFIT's and REFIT_POST's layouts seven bindings (the eighth, REFIT's debug words, gone).
-// ai: 9 since 2026-11-09: the anchors by ring; 10 since 2026-11-14: the proposer's and the transform's uniforms without
-// ai: their unread words; 11 since 2026-11-15: the word RS(n, 5) with two magics, F8's record words 5 and 6 an animated
-// ai: word's position (256 + it) and symbol beside a static word's version, rate and extension bytes (gen.mjs TREE_VERSION).
-// ai: 12 since 2026-11-16: F8's held version on the device (HELD, the front's heldP and heldCarry; WORD's layout without
-// ai: the lane's Held uniform, which HELD binds).
-// ai: 13 since 2026-11-18: a frame's configuration in F8's sel and record word 29 (src/fmt.h ob_fmt_held: version and
-// ai: the word's counts), HELD carrying it, the gate's lists and the rule stage's layout from it (TAB's TT table and the
-// ai: gate's codes table gone, the rule's blocks a version gone); word 6 the static word's 32 bits.
-// ai: 14 since 2026-11-18: the static word without a rate (its 6/7 count 8 bits, a CRC-4 F8 checks; the
-// ai: configuration version << 22).
-// ai: 15 since 2026-11-19: the animated header tabled: F8 one magic, record word 5 the version alone; HELD, heldP and
-// ai: heldCarry gone (each frame decoded at its own word's configuration, nothing carried).
-// ai: 16 since 2026-11-20: the squares' fill over 64 x 64 points, their sums in ANCH_SUMS (anch.sums, on ANCH_FIND's
-// ai: layout and group, between ANCH_REFIT and ANCH_FIT), a lane's anch (ANCH_K + 2 ANCH_GS) B vec4f.
-// ai: 17 since 2026-11-21: the block's CRC-64/LIZARD. 18 since 2026-11-22: the pilots apart from the blocks (B, src/lizard_phy.c): PILOT a frame's four readings (dims.pilotRead), then its shift; EP a vec4 a sub-channel; L in data-slot order (dims.lStride 159 a sub-channel).
-// ai: 19 since 2026-11-22 evening: the word's index and the clock (RS(n, 6), five unknown bytes; the Word uniform's
-// ai: before; record word 30 the clock, word 6 the word's last 32 bits).
-static constexpr int TREE_VERSION = 19;
+// ai: 23: no REFIT_POST (the tree's front.refitPost); RESID the lens record alone.
+// ai: 22: the word's four counts, every layout (no CRC): the configuration two words, record word 29 the version << 24 |
+// ai: the 6/7 count << 16 | the 3/4 << 8 | the 2/3, word 30 the clock | the 1/2 count << 16; LISTS a seventh word a frame.
+// ai: 21: the soft pass's four steps a size (tnoise, each sub-channel's 1 / N into EP's fourth float, before talign,
+// ai: which weights the pilots by it and binds EP at 6).
+// ai: 20: versions 1 to 3 in the word's list (VERSION_MIN 1, the configurations' sums from version 1).
+// ai: 19: the word's index and the clock (RS(n, 6), five unknown bytes; record word 30 the clock, word 6 the word's
+// ai: last 32 bits), the pilots apart from the blocks (PILOT a frame's four readings, then its shift; EP a vec4 a
+// ai: sub-channel; L in data-slot order, dims.lStride 159 a sub-channel), the block's CRC-64/LIZARD (REC 120 words).
+static constexpr int TREE_VERSION = 23;
 
 Consts Consts::of(const json& c) {
   Consts k;
@@ -236,13 +228,11 @@ std::unique_ptr<Lane> FrontHalf::lane(int Bl) {
   ln->measBuf = mk(16ull * C.NODES_MAX * B, STORAGE | COPY_DST | COPY_SRC);
   ln->residBuf = mk(16ull * C.RESID * B, STORAGE | COPY_DST | COPY_SRC);
   // ai: decoder.mjs lane: the anchors' records, ANCH_FIND's and ANCH_FIT's
-  ln->anchBuf = mk(16ull * (C.ANCH_K + 2ull * C.ANCH_GS) * B, STORAGE | COPY_SRC);   // ai: the anchors, then the fill's sums (glsl/anchors.mjs fillSums)
+  ln->anchBuf = mk(16ull * (C.ANCH_K + 2ull * C.ANCH_GS) * B, STORAGE | COPY_SRC);   // ai: the anchors, then the fill's sums (slang/anchors.mjs fillSums)
   ln->arecBuf = mk(16ull * C.ANCH_REC * B, STORAGE | COPY_SRC);
   auto refit = P("refit"), pick = P("pick");
   ln->refitGroup = dev.createBindGroup(refit.bgl, {ln->framesBuf, FBP("nodesBuf"), ln->selBuf, ln->measBuf, ln->mapsBuf, ln->residBuf, FBP("fitUni")});
-  // ai: decoder.mjs lane: F7's last step on REFIT's bindings
-  ln->refitPostGroup = dev.createBindGroup(P("refitPost").bgl, {ln->framesBuf, FBP("nodesBuf"), ln->selBuf, ln->measBuf, ln->mapsBuf, ln->residBuf, FBP("fitUni")});
-  // ai: decoder.mjs lane: the anchors' refit (gpu/glsl/anchors.mjs ANCH_REFIT) on REFIT_POST's bindings, then the
+  // ai: decoder.mjs lane: the anchors' refit (gpu/slang/anchors.mjs ANCH_REFIT) on REFIT's bindings, then the
   // ai: anchors' records, F8's lattice and the anchors' uniform (no texture, so made with the lane)
   ln->anchRefitGroup = dev.createBindGroup(anchRefit.bgl, {ln->framesBuf, FBP("nodesBuf"), ln->selBuf, ln->measBuf, ln->mapsBuf, ln->residBuf, FBP("fitUni"), ln->anchBuf, FBP("wordLatUni"), anchUni});
   ln->pickGroup = dev.createBindGroup(pick.bgl, {ln->framesBuf, ln->quadsBuf, ln->scoreBuf, ln->mapsBuf, ln->selBuf, ln->resultBuf, FBP("pickUni")});
@@ -280,7 +270,7 @@ void FrontHalf::backLane(Lane& ln) {
   const uint64_t a0 = dev.allocated;
   auto b = std::make_unique<BackLane>();
   auto mk = [&](uint64_t size, uint32_t usage) { return dev.createBuffer(size, usage); };
-  const uint64_t listsWords = C.SLOTS * (1 + Bb) + 6 * Bb;   // ai: gpu/plan/back_transform.mjs listsWords
+  const uint64_t listsWords = C.SLOTS * (1 + Bb) + 7 * Bb;   // ai: gpu/plan/back_transform.mjs listsWords
   b->lists = mk(4 * listsWords, STORAGE | COPY_SRC);
   b->args = mk(4ull * C.argsWords, STORAGE | INDIRECT | COPY_SRC);
   b->part = mk(16 * T["partStride"].get<uint64_t>() * Bb, STORAGE | COPY_SRC);
@@ -299,7 +289,7 @@ void FrontHalf::backLane(Lane& ln) {
     auto p = mk(48, UNIFORM | COPY_DST);
     uint32_t u[7] = {};
     float* f = (float*)u;
-    // ai: the transform's Params (glsl/back_transform.mjs PARAMS)
+    // ai: the transform's Params (slang/back_transform.mjs PARAMS)
     u[0] = T["yStride"]; u[1] = T["partStride"]; u[2] = (uint32_t)s;
     f[3] = tb["m2"].get<float>(); f[4] = tb["sx2"].get<float>(); f[5] = tb["sq2"].get<float>(); u[6] = T["sStride"];
     dev.writeBuffer(*p, 0, u, sizeof u);
@@ -371,8 +361,8 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
     auto dimsAt = [&](uint32_t l) { return l == 0 ? std::make_pair(ln.W, ln.H) : std::make_pair(ln.level[l - 1].w, ln.level[l - 1].h); };
     uint32_t slots = 0;
     std::vector<uint32_t> bases;
-    // ai: decoder.mjs ensure: no slots for level 0, which no proposer runs on
-    for (uint32_t l = 0; l < C.LEVELS; l++) { auto [w, h] = dimsAt(l); bases.push_back(slots); if (l > 0) slots += ceilDiv(w, 16) * ceilDiv(h, 16) * (uint32_t)bankKeep; }
+    // ai: decoder.mjs ensure: no slots for level 0, which no proposer runs on (but with LIZ_LEVEL0)
+    for (uint32_t l = 0; l < C.LEVELS; l++) { auto [w, h] = dimsAt(l); bases.push_back(slots); if (l > 0 || level0()) slots += ceilDiv(w, 16) * ceilDiv(h, 16) * (uint32_t)bankKeep; }
     ln.slots = slots;
     ln.rawBuf = mk(16ull * slots * B, STORAGE | COPY_DST);
     {
@@ -380,7 +370,7 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
       uint32_t u[4] = {slots, (uint32_t)cap, 0, bases[coarseFrom]};
       memcpy(&u[2], &C.TAU, 4);
       dev.writeBuffer(*ln.selUni, 0, u, 16);
-      u[3] = bases[1];
+      u[3] = bases[level0() ? 0 : 1];
       dev.writeBuffer(*ln.selUni2, 0, u, 16);
     }
     auto sel = P("select");
@@ -390,17 +380,18 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
     const json& form = S->tree["front"]["fcn2Form"];
     const bool xplane = form["xplane"], int8 = form["int8"];
     const std::string store = form["store"];
-    auto fcn2 = P("fcn2"), fcn2X = P("fcn2X");
+    auto fcn2 = P("fcn2"), fcn2X = P("fcn2X"), fcn2X0 = level0() ? P("fcn2X0") : Pipe{};
     ln.fcn2Levels.clear();
-    for (uint32_t l = 1; l < C.LEVELS; l++) {
+    for (uint32_t l = level0() ? 0 : 1; l < C.LEVELS; l++) {
       auto [w, h] = dimsAt(l);
       auto uni = mk(32, UNIFORM | COPY_DST);
-      const uint32_t u[6] = {l, w, h, slots, bases[l], ceilDiv(w, C.TILE)};   // ai: glsl/bank_fcn2.mjs Bank
+      const uint32_t u[6] = {l, w, h, slots, bases[l], ceilDiv(w, C.TILE)};   // ai: slang/bank_fcn2.mjs Bank
       dev.writeBuffer(*uni, 0, u, sizeof u);
       BufP plane;
       if (xplane) plane = mk(int8 ? (uint64_t)((w + 3) & ~3u) * h * B : (uint64_t)(store == "f32" ? 4 : 2) * (w + (w & 1)) * h * B, STORAGE);
       auto group = [&](const BufP& frames) { return dev.createBindGroup(fcn2.bgl, {plane ? plane : ln.level[l - 1].buf, frames, ln.rawBuf, ln.countsBuf, uni}); };
-      auto xgroup = [&](const BufP& frames) { return plane ? dev.createBindGroup(fcn2X.bgl, {ln.level[l - 1].buf, frames, plane, uni}) : GroupP(); };
+      if (l == 0 && !plane) throw wg::Error("LIZ_LEVEL0: level 0 needs the proposer's plane form");
+      auto xgroup = [&](const BufP& frames) { return plane ? (l == 0 ? dev.createBindGroup(fcn2X0.bgl, {ln.tex.get(), frames, plane, uni}) : dev.createBindGroup(fcn2X.bgl, {ln.level[l - 1].buf, frames, plane, uni})) : GroupP(); };
       const bool fine = l < coarseFrom;
       ln.fcn2Levels.push_back({l, w, h, group(ln.framesBuf), xgroup(ln.framesBuf), fine ? group(ln.frames2Buf) : GroupP(), fine ? xgroup(ln.frames2Buf) : GroupP(), plane, uni});
     }
@@ -438,7 +429,7 @@ void FrontHalf::ensure(Lane& ln, uint32_t W, uint32_t H) {
       ln.voteGroup2 = group(P("vote"), {ln.frames2Buf, ln.readingsBuf, ln.accBuf, ln.p5Uni}, false);
       ln.peaksGroup2 = group(P("peaks"), {ln.frames2Buf, ln.accBuf, ln.vlistBuf, ln.vcountBuf, ln.p5Uni}, false);
       ln.gatherGroup2 = group(P("gather"), {ln.frames2Buf, ln.readingsBuf, ln.accBuf, ln.candBuf, ln.quadsBuf, ln.p5Uni, ln.vlistBuf, ln.vcountBuf}, false);
-      // ai: F5d over each round's frame records (glsl/finder.mjs COMPLETE): the levels, readings, quads, P5
+      // ai: F5d over each round's frame records (slang/finder.mjs COMPLETE): the levels, readings, quads, P5
       auto lvc = ln.lvEntries(true);
       lvc.insert(lvc.end(), {ln.readingsBuf, ln.quadsBuf, ln.p5Uni});
       ln.completeGroup2 = dev.createBindGroup(P("complete").bgl, lvc);
@@ -702,7 +693,7 @@ Lane* FrontHalf::freeLane() {
 }
 
 // ai: The back half's six dispatches (back.mjs encode: gate, pass 1 fused, reduce, pass 2, soft, LDPC from the gate).
-void FrontHalf::encodeBack(wg::Encoder& e, Lane& ln, int frames, const std::function<void(const char*)>& begin) {
+void FrontHalf::encodeBack(wg::Encoder& e, Lane& ln, const std::function<void(const char*)>& begin) {
   const json& bk = S->back();
   const json& T = bk["transform"];
   auto& b = *ln.back;
@@ -739,8 +730,9 @@ void FrontHalf::encodeBack(wg::Encoder& e, Lane& ln, int frames, const std::func
     dispatchRule(e, *b.args, step, alongside);
   };
   begin("soft");
-  // ai: its three steps (the pilots' fit, the soft values, the blocks), each the served sizes side by side
-  const size_t nAlign = st["soft"].size() / 3;
+  // ai: its four steps (each sub-channel's noise, the pilots' fit by it, the soft values, the blocks), each the served
+  // ai: sizes side by side
+  const size_t nAlign = st["soft"].size() / 4;
   for (size_t k = 0; k < b.rsoft.size(); k++) stepOf(st["soft"][k], b.rsoft[k], k % nAlign != 0);
   begin("ldpc");
   const json& lsteps = ldpcForm ? st["ldpcAlts"][ldpcForm - 1] : st["ldpc"];
@@ -854,7 +846,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool p
   };
   const uint32_t n = (uint32_t)nb;
   auto step = [&](const Pipe& pl, const GroupP& g, uint32_t x, uint32_t y = 1, uint32_t z = 1) { e.setPipeline(*pl.p); e.setBindGroup(*g); e.dispatch(x, y, z); };
-  // ai: the pyramid and the grey levels in one kernel (glsl/pyramid.mjs), a PYRAMID_BLOCK square of a frame a workgroup
+  // ai: the pyramid and the grey levels in one kernel (slang/pyramid.mjs), a PYRAMID_BLOCK square of a frame a workgroup
   begin("pyramid");
   step(P("pyramid"), ln.pyrGroup, ceilDiv(W, C.PYRAMID_BLOCK), ceilDiv(H, C.PYRAMID_BLOCK), n);
   begin("bank");
@@ -866,7 +858,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool p
     auto fcn2X = P("fcn2X"), fcn2 = P("fcn2");
     // ai: bank_fcn2.mjs dispatch's round: 1 the first round's (from coarseFrom up), 2 the second's
     const uint32_t XB0 = fcn2X ? form["XB"][0].get<uint32_t>() : 0, XB1 = fcn2X ? form["XB"][1].get<uint32_t>() : 0;
-    // ai: decoder.mjs grids2: the second round's grids for one frame (gpu/glsl/finder.mjs R2), in its order: the bank's
+    // ai: decoder.mjs grids2: the second round's grids for one frame (gpu/slang/finder.mjs R2), in its order: the bank's
     // ai: X passes and networks on the levels below coarseFrom, then SELECT, the classifier, VOTE, PEAKS, GATHER,
     // ai: COMPLETE, TRACE, SCORE and PICK, each (x, y, z, the axis that counts frames); the rest unused (w 3)
     {
@@ -886,7 +878,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool p
     // ai: behind one barrier and their networks together behind the next.
     bank = [this, &ln, &e, n, TX, TY, walk, XB0, XB1, fcn2X, fcn2](int round) {
       auto in = [&](const Lane::Fcn2Level& lv) { return (lv.l < coarseFrom) == (round == 2); };
-      // ai: round 2's grids are REDO's (gpu/glsl/finder.mjs R2), from entry 0 in grids2's order; returns the entries taken
+      // ai: round 2's grids are REDO's (gpu/slang/finder.mjs R2), from entry 0 in grids2's order; returns the entries taken
       uint32_t r = 0;
       auto go = [&](bool& first, uint32_t x, uint32_t y) {
         if (round == 2) { if (first) e.dispatchIndirect(*ln.args2Buf, 12ull * r); else e.dispatchIndirectAlongside(*ln.args2Buf, 12ull * r); r++; }
@@ -895,9 +887,12 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool p
         first = false;
       };
       if (fcn2X) {
-        e.setPipeline(*fcn2X.p);
         bool first = true;
-        for (auto& lv : ln.fcn2Levels) if (in(lv)) { e.setBindGroup(round == 2 ? *lv.xgroup2 : *lv.xgroup); go(first, ceilDiv(lv.w, XB0), ceilDiv(lv.h, XB1)); }
+        for (auto& lv : ln.fcn2Levels) if (in(lv)) {
+          // ai: level 0's X pass its own kernel (the texture), the levels' side by side all the same
+          e.setPipeline(lv.l == 0 ? *P("fcn2X0").p : *fcn2X.p);
+          e.setBindGroup(round == 2 ? *lv.xgroup2 : *lv.xgroup); go(first, ceilDiv(lv.w, XB0), ceilDiv(lv.h, XB1));
+        }
       }
       e.setPipeline(*fcn2.p);
       bool first = true;
@@ -913,24 +908,32 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool p
   auto net = [&](const Pipe& k, const GroupP& g, uint32_t slots) { step(k, g, ceilDiv(slots, k.P), n); };
   net(classify, ln.classifyGroup, (uint32_t)cap);
   begin("vote");
-  // ai: F5 (glsl/finder.mjs): VOTE a lane a reading, then GATHER a workgroup a frame (its centre peaks and their quads)
+  // ai: F5 (slang/finder.mjs): VOTE a lane a reading, then GATHER a workgroup a frame (its centre peaks and their quads)
   step(P("vote"), ln.voteGroup, ceilDiv((uint32_t)cap, C.VOTE_READS), n);
   step(P("peaks"), ln.peaksGroup, ceilDiv(ln.gx * ln.gy, 256u), n);
   step(P("gather"), ln.gatherGroup, n);
-  // ai: F5d (glsl/finder.mjs COMPLETE) in the first round too (2026-11-09), a workgroup a (frame, quad): a quad of two
+  // ai: F5d (slang/finder.mjs COMPLETE) in the first round too (2026-11-09), a workgroup a (frame, quad): a quad of two
   // ai: or three corners on a frame with no quad of four is completed by one fitted homography, so such a frame is found
   // ai: here and skips the second round's level-1 bank; and its corners are completed before the second round's one cap
   // ai: over levels 1 to 4 can crowd them out (research/STATUS.md "The second round measured")
   step(P("complete"), ln.completeGroup, C.K * n);
-  step(P("trace"), ln.traceGroup, C.K * n);   // ai: each quad's bend (glsl/finder.mjs TRACE) before SCORE reads through it
+  step(P("trace"), ln.traceGroup, C.K * n);   // ai: each quad's bend (slang/finder.mjs TRACE) before SCORE reads through it
   begin("score");
   step(P("score"), ln.scoreGroup, C.HYP * n);
   step(P("pick"), ln.pickGroup, n);
+  if (finderDump()) {
+    // ai: LIZ_FINDER: round 1's quads, scores and result, as PICK left them, into r1Buf (quads, then scores, then results)
+    const uint64_t qb = 16ull * 5 * C.K * ln.B, sb = 4ull * C.HYP * ln.B, rb = 4ull * C.RESULT * ln.B;
+    if (!ln.r1Buf) ln.r1Buf = dev.createBuffer(qb + sb + rb, wg::STORAGE | wg::COPY_DST | wg::COPY_SRC, "finderR1", false);
+    e.copyBufferToBuffer(*ln.quadsBuf, 0, *ln.r1Buf, 0, qb);
+    e.copyBufferToBuffer(*ln.scoreBuf, 0, *ln.r1Buf, qb, sb);
+    e.copyBufferToBuffer(*ln.resultBuf, 0, *ln.r1Buf, qb + sb, rb);
+  }
   {
-    // ai: decoder.mjs batch: the finder's second round (gpu/glsl/finder.mjs REDO), level 1's peaks for the frames the
+    // ai: decoder.mjs batch: the finder's second round (gpu/slang/finder.mjs REDO), level 1's peaks for the frames the
     // ai: first round did not find and the finder again on those frames alone
     begin("find2");
-    // ai: every grid of the round REDO's (gpu/glsl/finder.mjs R2, decoder.mjs grids2's order): none where the first round
+    // ai: every grid of the round REDO's (gpu/slang/finder.mjs R2, decoder.mjs grids2's order): none where the first round
     // ai: found every frame, none past the last frame it sends round again
     step(P("redo"), ln.redoGroup, n);
     uint32_t r = bank(2);
@@ -950,9 +953,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool p
   step(P("nodesP"), ln.nodesGroup, (uint32_t)nodesMax, n);
   begin("refit");
   step(P("refit"), ln.refitGroup, n);
-  // ai: decoder.mjs batch: the residuals and side fits (REFIT_POST), in the refit's pass
-  step(P("refitPost"), ln.refitPostGroup, n);
-  // ai: decoder.mjs batch: the anchors in the same pass, behind REFIT_POST (no profile stage of its own): ANCH_FIND
+  // ai: decoder.mjs batch: the anchors in the same pass, behind REFIT (no profile stage of its own): ANCH_FIND
   // ai: a workgroup per (anchor, frame), ANCH_PREDICT and the border's second search (NODES centred on its own round, a
   // ai: workgroup a node), ANCH_REFIT, ANCH_SUMS (ANCH_GS workgroups a frame on ANCH_FIND's group: the squares' fill's
   // ai: sums), then ANCH_FIT a workgroup a frame, whose records pass 1 reads
@@ -964,7 +965,7 @@ std::unique_ptr<InFlight> FrontHalf::run(const std::vector<Slot*>& slots, bool p
   step(anchFit, ln.anchFitGroup, n);
   begin("word");
   step(P("wordP"), ln.wordGroup, n);
-  encodeBack(e, ln, nb, begin);
+  encodeBack(e, ln, begin);
   e.endPass();
   // ai: the readback's layout (the GPU back half's): counters, finder results, the back half's (REC, V, ITS, BCOUNTS,
   // ai: PILOT), timestamps
@@ -1090,28 +1091,29 @@ BatchOut FrontHalf::finishBatch(std::unique_ptr<InFlight> f) {
     if (!f->slots[i]) { fo.empty = true; continue; }
     const float* r = res + C.RESULT * i;
     fo.ring = r[0] == 1 ? (int)r[2] : -1;
-    // ai: the configuration decoded at, record word 29 as a float's bits (version << 22 | the 6/7 count << 14 | the 2/3
-    // ai: << 7 | the 1/2; 0 none)
+    // ai: the configuration decoded at, record word 29 as a float's bits (version << 24 | the 6/7 count << 16 | the 3/4
+    // ai: << 8 | the 2/3; 0 none; its 1/2 count in word 30's bits 16 to 23, gpu/slang/src/lib/cfg.slang)
     uint32_t cfg;
     std::memcpy(&cfg, &r[29], 4);
     fo.config = (int)cfg;
-    fo.version = (int)(cfg >> 22);
+    fo.version = (int)(cfg >> 24);
     fo.size = fo.version > 0 ? slotOf(fo.version) : -1;
     fo.n = fo.size >= 0 ? pics[fo.size]["n"].get<int>() : 0;
     fo.finder.found = r[0]; fo.finder.ring = r[2];
     for (int k = 0; k < 8; k++) fo.finder.corners[k] = r[17 + k];
-    // ai: F8's word (glsl/word.mjs): r[5] its version, the configuration word 29's; r[30] the clock as a float's bits
-    // ai: (fps | delay << 8; src/fmt.h)
+    // ai: F8's word (slang/word.mjs): r[5] its version, the configuration word 29's; r[30] the clock and the 1/2 count as
+    // ai: a float's bits (fps | delay << 8 | the 1/2 count << 16; src/fmt.h)
     if (r[5] > 0) {
       uint32_t k;
       std::memcpy(&k, &r[30], 4);
       fo.hasWord = true;
-      fo.word.version = (int)(cfg >> 22);
-      fo.word.count[0] = (int)(cfg >> 14) & 255; fo.word.count[1] = (int)(cfg >> 7) & 127; fo.word.count[2] = (int)cfg & 127;
+      fo.word.version = (int)(cfg >> 24);
+      fo.word.count[0] = (int)(cfg >> 16) & 255; fo.word.count[1] = (int)(cfg >> 8) & 255; fo.word.count[2] = (int)cfg & 255;
+      fo.word.count[3] = (int)(k >> 16 & 255);
       fo.word.fps = (int)(k & 255); fo.word.delay = (int)(k >> 8 & 255);
     }
     fo.anchors = (int)r[31];   // ai: ANCH_FIT's count (PICK zeroes the record: 0 on a frame not found)
-    // ai: the frame's two pilot readings, where the soft stage ran (its count column 6): tblocks' (glsl/back_tiers.mjs,
+    // ai: the frame's two pilot readings, where the soft stage ran (its count column 6): tblocks' (slang/back_tiers.mjs,
     // ai: src/lizard_phy.c lizard_pilot's arithmetic), r and its standard error for bit 0 of the painted count (the even
     // ai: sub-channels), then for bit 1 (the odd), NaN where a parity read none; pilotSubch the sub-channels read
     if (fo.version > 0 && fo.backCounts.size() > 6 && fo.backCounts[6] > 0) {

@@ -148,29 +148,29 @@ typedef struct { homo_t H; node_t *nodes; } ob_reg_t;
 #define OB_TLS _Thread_local
 double ob_now_ms(void);
 // Stage timers for the benches (scripts/exp/lizard_bench.mjs). A handful of clock reads per frame, left in. The slots by
-// index, as the JS and the native tools read them: 0 luma, 1 binarize, 2 finders, 3 mesh; 4 to 10 the picture's decoder
-// and encoder (sample, detrend, transform, LLR, LDPC, the encoder's transform and the rest of it); 11 to 16 inside the
-// thin frame's finder (points, turn, fit, score, the mark scan, the track read that judges a quad). Since 2026-10-25:
-// slots 4 to 12 were the binary grid code's until then, and every later slot sat 9 higher.
-enum { PROF_LUMA, PROF_BINARIZE, PROF_FINDERS, PROF_MESH,
+// index, as the JS and the native tools read them: 0 luma, 1 the finder's grey marks, 2 finders, 3 mesh; 4 to 10 the
+// picture's decoder and encoder (sample, detrend, transform, LLR, LDPC, the encoder's transform and the rest of it); 11
+// to 14 inside the thin frame's finder (the traced border, its lens, the scoring, the track read that judges a quad).
+// Since 2026-10-25: slots 4 to 12 were the binary grid code's until then, and every later slot sat 9 higher; slot 1 was
+// the binarizer's and 11 to 16 the line path's and the mark scan's until 2026-11-24.
+enum { PROF_LUMA, PROF_FF_GREY, PROF_FINDERS, PROF_MESH,
        PROF_F_SAMPLE, PROF_F_DETREND, PROF_F_FFT, PROF_F_LLR, PROF_F_LDPC, PROF_F_ENC_FFT, PROF_F_ENC_REST,   // F: the picture's decoder and encoder
-       PROF_FF_POINTS, PROF_FF_TURN, PROF_FF_FIT, PROF_FF_SCORE,   // FF: inside the thin frame's finder
-       PROF_FF_MARKS, PROF_FF_TRACK, PROF_N };   // the mark scan, and the track read that judges a quad
+       PROF_FF_TRACE, PROF_FF_LENS, PROF_FF_SCORE, PROF_FF_TRACK, PROF_N };   // FF: inside the thin frame's finder
 extern OB_TLS double ob_prof_ms[PROF_N];
 #define PROF(i, stmt) do { double t_ = ob_now_ms(); stmt; ob_prof_ms[i] += ob_now_ms() - t_; } while (0)
 void ob_luma(const uint8_t *rgba, int n, uint8_t *out);
 void ob_image_init(image_t *im, const uint8_t *px, int w, int h, float gamma);
 
 // ai: An acquisition's buffers of 64 KB and more at 1280 x 960 (the size from which Scudo maps a fresh allocation and
-// ai: faults its pages in on first touch, about 0.2 ms a megabyte on an S26 core): BIN the binarized capture, whose
-// ai: buffer border_blur's copy takes over once the finder is done with it, CB its column bits, HALF and QUARTER the
-// ai: halved and quartered pictures, LBIN and LCB theirs binarized, MEAN binarize's block means, EDGE the line scan's
-// ai: block map (edge_ctx_init). Held by the caller's workspace (lizard_ws), grown as a frame needs and freed with it
-// ai: (ob_fbufs_free). On arm64 and x86-64 the acquisition takes them from here; elsewhere it allocates them a frame as
-// ai: before.
+// ai: faults its pages in on first touch, about 0.2 ms a megabyte on an S26 core): BLUR border_blur's copy of the
+// ai: capture; PYR1 to PYR4 the finder's grey pyramid (the capture's 2 x 2 means once to four times); GREY and GRING the
+// ai: grey marks' responses and row sums (gray_cands); CODES and TRACE the traced border's cell codes and its rows'
+// ai: means, tiles and visited cells (trace_quads). Held by the caller's workspace (lizard_ws), grown as a frame needs
+// ai: and freed with it (ob_fbufs_free). On arm64 and x86-64 the acquisition takes them from here; elsewhere it allocates
+// ai: them a frame as before.
 // ai: Every byte is written before it is read within a frame, so nothing carries from one frame to the next; one
 // ai: acquisition at a time, as the workspace belongs to one thread at a time.
-enum { OB_FB_BIN, OB_FB_CB, OB_FB_HALF, OB_FB_QUARTER, OB_FB_LBIN, OB_FB_LCB, OB_FB_MEAN, OB_FB_EDGE, OB_FB_SLOTS };
+enum { OB_FB_BLUR, OB_FB_PYR1, OB_FB_PYR2, OB_FB_PYR3, OB_FB_PYR4, OB_FB_GREY, OB_FB_GRING, OB_FB_CODES, OB_FB_TRACE, OB_FB_SLOTS };
 typedef struct { void *p[OB_FB_SLOTS]; size_t cap[OB_FB_SLOTS]; } ob_fbufs_t;
 void ob_fbufs_free(ob_fbufs_t *fb);
 // Finders, orientation, homography, then the mark mesh (the anchors, the border's nodes, the interior from both).

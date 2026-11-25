@@ -1,10 +1,9 @@
 // ai: The classifier's weights (scripts/gpu/cnn/README.md, "Weights" and "Architectures"): a classifier file's document (netfile.mjs)
 // ai: packed into one storage buffer, layer by layer, weights then biases, and the element offset of each part. The
 // ai: layer list comes from the file's "arch" block; the shader is generated from the same block and these offsets
-// ai: (gpu/glsl/classify.mjs), so a file whose shapes disagree with its arch is refused. PyTorch order inside a layer:
+// ai: (gpu/slang/classify.mjs), so a file whose shapes disagree with its arch is refused. PyTorch order inside a layer:
 // ai: conv [out, in, ky, kx], fc [out, in] with the input flattened as (c, y, x).
 import { PATCH } from "./patch.mjs";
-import { loadNet } from "./netfile.mjs";
 
 export const V1 = { name: "cnn-v1", layers: [
   { type: "conv", out: 8, stride: 2 }, { type: "conv", out: 16, stride: 1 }, { type: "conv", out: 32, stride: 2 }, { type: "conv", out: 32, stride: 2 },
@@ -77,13 +76,4 @@ export function toHalf(x) {
   const rem = m & 0x1fff;
   if (rem > 0x1000 || (rem === 0x1000 && (h & 1))) h++;
   return h;
-}
-export function packWeightsF16(json) {
-  const f = packWeights(json), data = new Uint16Array((f.total + 1) & ~1);
-  for (let i = 0; i < f.total; i++) data[i] = toHalf(f.data[i]);
-  return { ...f, data };
-}
-
-export async function loadWeights(url = new URL("./weights.safetensors", import.meta.url)) {
-  return packWeights(await loadNet(url));
 }

@@ -76,13 +76,3 @@ export async function readUrl(url) {
 export async function loadNet(url) {
   return Object.defineProperty(readNet(await readUrl(url)), "source", { value: String(url) });
 }
-
-// ai: A classifier file's check reference, a path under liblizard/: for a bare name (an installed file under gpu/cnn/)
-// ai: build/cnn/reference-X.bin (in research/build/cnn/) for weights-X.safetensors (the float trainer's reference.bin
-// ai: or a q8 file's CQ81), for a path under liblizard/ reference-<name>.bin beside it, as the trainers write them
-// ai: (scripts/gpu/cnn/check.mjs, scripts/gpu/cnn/test_gemm.mjs).
-export function referenceOf(weights) {
-  if (!weights.includes("/")) return `build/cnn/${weights.replace(/^weights/, "reference").replace(/\.safetensors$/, ".bin")}`;
-  const i = weights.lastIndexOf("/");
-  return `${weights.slice(0, i)}/reference-${weights.slice(i + 1).replace(/\.safetensors$/, ".bin")}`;
-}

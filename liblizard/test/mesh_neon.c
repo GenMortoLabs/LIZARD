@@ -13,9 +13,9 @@
 #include "acquire.c"
 #include <stdio.h>
 uint32_t ob_debug_hash;
-#define SCALAR_HASH 0x8d32ff36f81bf02full
-#define NEON_HASH 0xced999361467b5a7ull
-#define X86_HASH 0xc78a9f0682037445ull
+#define SCALAR_HASH 0x075e7ceef0ceec18ull
+#define NEON_HASH 0xc306eebe767614f6ull
+#define X86_HASH 0x9a2b3a4ab6c2238dull
 static uint64_t hs = 1469598103934665603ull;
 static void mix(const void *p, size_t n) { const uint8_t *b = p; for (size_t i = 0; i < n; i++) { hs ^= b[i]; hs *= 1099511628211ull; } }
 static uint32_t rs = 1;

@@ -1,7 +1,7 @@
 // ai: A WebGPU device in node that runs nothing and records the objects asked of it, so the decoder's setup
-// ai: (liblizard/gpu/decoder.mjs FrontHalf.create) can build under node: every shader module's GLSL, every bind group
+// ai: (liblizard/gpu/decoder.mjs FrontHalf.create) can build under node: every shader module's Slang, every bind group
 // ai: layout, pipeline layout, pipeline and buffer (with the bytes written into it). gen.mjs takes what create() makes
-// ai: as the native decoder's setup (a module's GLSL to glslang). Only what the setup's build calls is here: a lane's
+// ai: as the native decoder's setup (a module's Slang to slangc). Only what the setup's build calls is here: a lane's
 // ai: textures, bind groups, command encoders and readbacks are the native host's (core/dec/front.cpp).
 // ai: installGlobals() must run before any liblizard/gpu module is imported: several read GPUBufferUsage at load.
 import { createHash } from "node:crypto";
@@ -38,7 +38,7 @@ export class Recorder {
   constructor() {
     this.seq = { b: 0, L: 0, P: 0, m: 0, p: 0 };
     this.objects = new Map();   // id -> object
-    this.modules = new Map();   // hash -> { lang: "glsl", code }
+    this.modules = new Map();   // hash -> { lang: "slang", code }
   }
   id(kind) { return `${kind}${this.seq[kind]++}`; }
   add(kind, o) { o.__id = this.id(kind); o.__kind = kind; this.objects.set(o.__id, o); return o; }
@@ -64,12 +64,12 @@ export class MockDevice {
     };
   }
   createBuffer(desc) { return new MockBuffer(this.rec, desc); }
-  // ai: A decoder stage is GLSL (gpu/pipeline.mjs shaderModule's { glsl }); WGSL here is a mistake (the decoder's WGSL
+  // ai: A decoder stage is Slang (gpu/pipeline.mjs shaderModule's { slang }); WGSL here is a mistake (the decoder's WGSL
   // ai: twins are archived, the sender's kernels reach gen.mjs through gen/sender.mjs).
-  createShaderModule({ glsl, label }) {
-    if (typeof glsl !== "string") throw new Error(`shader module ${label ?? ""}: no GLSL (a decoder stage is GLSL)`);
-    const h = hash(glsl), m = this.rec.add("m", { code: glsl, lang: "glsl", hash: h, label: label ?? null, getCompilationInfo: async () => ({ messages: [] }) });
-    this.rec.modules.set(h, { lang: "glsl", code: glsl });
+  createShaderModule({ slang, label }) {
+    if (typeof slang !== "string") throw new Error(`shader module ${label ?? ""}: no Slang (every decoder stage is)`);
+    const h = hash(slang), m = this.rec.add("m", { code: slang, lang: "slang", hash: h, label: label ?? null, getCompilationInfo: async () => ({ messages: [] }) });
+    this.rec.modules.set(h, { lang: "slang", code: slang });
     return m;
   }
   createBindGroupLayout({ entries }) {

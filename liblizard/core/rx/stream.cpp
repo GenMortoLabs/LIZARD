@@ -208,7 +208,7 @@ class Link {
   // ai: transfer is fountain coded, so any share reads, 58 of 60 as well as 1 of 3): a running credit gains share_ a
   // ai: capture, a run starts once it holds RUN, and every capture of the run is queued and the credit charged one; the
   // ai: captures between runs are skipped. Runs, not one capture in k: the phase lock reads a capture against the
-  // ai: captures a refresh either side of it (PhaseLock.kt flashNow, leaks), which an even spread at under a half never
+  // ai: captures a refresh either side of it (phase_lock.cpp, its leaks), which an even spread at under a half never
   // ai: sends: at 21 of 60 a second over USB 2 the lock never held, the camera drifted against the screen and the blocks
   // ai: fell to 0 every pass. A capture queued has its crop copied out (the camera's buffer released at once) and, with
   // ai: linkPack on, packed as a .lizard frame (stream.h PACKED, 2026-10-28), here on the pushing thread and outside mu_,
@@ -670,7 +670,7 @@ class Link {
 };
 
 // ai: A RAW or P010 frame's crop developed on the GPU for the PC (2026-10-27; 3.7 to 7 ms of the S26's CPU a frame on
-// ai: the CPU): develop.comp, the GPU decoder's (ingest/develop.h), on a device of its
+// ai: the CPU): develop.slang, the GPU decoder's (ingest/develop.h), on a device of its
 // ai: own at low priority: the crop's samples staged as they are (stageRaw), developed into a device buffer, copied into
 // ai: a mapped one, read once the submit is done. 8-bit YUV is no work to save (its Y plane is the luma, the crop one
 // ai: copy), so it stays the CPU's. Made at the first raw frame sent; where it cannot be (no Vulkan, no kernel), the

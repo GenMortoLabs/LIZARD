@@ -65,6 +65,7 @@ void XferRx::run() {
     }
     rx_->settle();
     for (size_t k = 0; k < batch.size(); k++) {
+      if (batch[k].kind == 5) { rx_->pause(batch[k].b[0] != 0); continue; }   // ai: no ticket: pause() waits for nothing
       if (batch[k].kind != 0) {
         if (batch[k].kind == 1) rx_->clearAll();
         else if (batch[k].kind == 4) rx_->releaseDone();
@@ -104,6 +105,12 @@ void XferRx::snapshot(bool atEnd) {
   snapAt_ = t;
   std::lock_guard<std::mutex> lk(pmu_);
   rx_->progress(snap_, sourceBlocks_);
+}
+
+void XferRx::pause(bool on) {
+  uint8_t b[XFER_BLOCK] = {};
+  b[0] = on;
+  push(5, b);
 }
 
 bool XferRx::take(const uint8_t* b) {

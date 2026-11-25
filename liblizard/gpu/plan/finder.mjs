@@ -1,4 +1,4 @@
-// ai: F5 and F6's constants (glsl/finder.mjs VOTE, PEAKS, GATHER, COMPLETE, TRACE, SCORE, PICK, REDO), which the host and
+// ai: F5 and F6's constants (slang/finder.mjs VOTE, PEAKS, GATHER, COMPLETE, TRACE, SCORE, PICK, REDO), which the host and
 // ai: ../../gen/gen.mjs (the native tree's consts) read too.
 import { RINGS as RING_CELLS } from "../../sim/lizard_pick.mjs";
 
@@ -9,7 +9,7 @@ export const CELL = 16;      // accumulator cell, level-0 pixels
 export const ORIENT = 8;     // 4 rotations x mirror
 // ai: The rings a hypothesis may be (sim/lizard_pick.mjs RINGS, three): an accumulator and a module count each. Four at most:
 // ai: the stages' uniforms hold the rings' module counts, node counts and lattices in one vec4 (P5, Pick, register.mjs
-// ai: Fit and Round, sample.mjs Lattice, gpu/decoder.mjs).
+// ai: Fit and Round, the Lattice uniforms, gpu/decoder.mjs).
 export const RING_COUNT = RING_CELLS.length;
 if (RING_COUNT > 4) throw new Error(`${RING_COUNT} rings: the finder's uniforms hold four`);
 // ai: GATHER's reach runs from the first ring's to the last's, so the rings go smallest first.
@@ -47,4 +47,5 @@ export const STATIONS = 32;
 // ai: counts frames (3: unused). REDO raises that axis of args2 to this frame's end for every frame it sends round again,
 // ai: and writes the other two, so a launch whose frames the first round all found dispatches none of it, and every
 // ai: grid ends at the last frame that has work. The host clears args2 a batch.
-export const R2_N = 12;
+// ai: 13 since 2026-11-24: room for level 0's X pass and network beside level 1's (the lab's LIZ_LEVEL0); 11 used without it
+export const R2_N = 13;

@@ -205,8 +205,7 @@ if (process.env.ONLY !== "files") {
   row("new bytes per decoded frame", (per2 * FD) / FC, s.freshPerFrame, "B");
   row("bytes per decoded frame, repeats", per2, s.usefulPerFrame, "B");
   // The version the sender stated IN THE BAND, come back through the clip, the fake camera and a worker: the only
-  // number here that did not travel over the network (src/fmt.h). ai: A static word states no rate (the animated
-  // header's alone, SPEC 5.2), so a static sender's band reads 0 fps.
+  // number here that did not travel over the network (src/fmt.h).
   {
     const v = versionOf(phy2 ? REPICK : SUBCH), ok = s.bandVersion === v;
     console.log(`band read through the lens: version ${s.bandVersion}  ${ok ? "as painted" : `WRONG, the clip was painted at version ${v}`}`);

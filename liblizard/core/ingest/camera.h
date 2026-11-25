@@ -1,7 +1,7 @@
 // ai: The camera's frames into the decoder's ring with no copy (2026-09-29). Each camera buffer (an AHardwareBuffer, in
 // ai: the camera's own layout, UBWC-compressed on a Qualcomm) is imported into Vulkan once and kept while the camera
 // ai: cycles through its pool; a frame's centre square is sampled from it through a YCbCr sampler into a ring layer by
-// ai: camera.comp, on the device's second queue, so a camera buffer is held only for its own ingest and never behind a
+// ai: camera.slang, on the device's second queue, so a camera buffer is held only for its own ingest and never behind a
 // ai: batch. The batch that copies the layer waits on the ingest's timeline value (FrontHalf::run).
 //
 // ai: One thread calls ingest() (the camera's); done() and the semaphore are read from any.

@@ -3,8 +3,8 @@
 #include "layout.h"
 
 // What a decode found, which the JS reads at fixed offsets (sim/ob.mjs, the wasm's ob_last): found 0, quad 8,
-// ms_detect 52, ms_sample 56, ms_decode 60, mark 64 (since 2026-10-25, when the binary grid code's ok, iters, ber and
-// gmi left it; ms_detect was at 180). tiles_ok is the count of verified blocks.
+// ms_detect 52, ms_sample 56, ms_decode 60; 64 bytes in all (since 2026-10-25, when the binary grid code's ok, iters,
+// ber and gmi left it; ms_detect was at 180). tiles_ok is the count of verified blocks.
 typedef struct {
   int found;                  // 0 no symbol, 1 registered
   int finders;                // finder candidates seen

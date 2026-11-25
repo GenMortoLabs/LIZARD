@@ -19,7 +19,7 @@
 // two was wrong cannot be told from JS and does not matter: a crop the preview cannot show cannot exist when the
 // preview is the crop.
 // ai: Neither is needed where the camera's frame goes over as a VideoFrame (vframes.mjs) to a pool worker, which copies
-// ai: the crop to luma itself (recv-worker.mjs lumaOf). Then the camera element is the preview and the canvas is drawn
+// ai: the crop to luma itself (vframes.mjs lumaOf). Then the camera element is the preview and the canvas is drawn
 // ai: only wherever no VideoFrame goes (preview).
 import { frameTap, cornerProbe } from "./vframes.mjs";
 import { verdict } from "./verdict.mjs";
@@ -394,7 +394,7 @@ function showCamera() {
   $("fps").querySelector('option[value="auto"]').textContent = String(camRate || 60);
 }
 // ai: The camera's frame as a VideoFrame (lizard-web/vframes.mjs), with the crop the grab would have read back, in place of the
-// ai: grab: a pool worker copies the crop to luma (recv-worker.mjs lumaOf: 0.3 ms at a 720 crop, where the canvas grab
+// ai: grab: a pool worker copies the crop to luma (vframes.mjs lumaOf: 0.3 ms at a 720 crop, where the canvas grab
 // ai: was 41 ms on the S26 Ultra), so the readback is skipped and the camera element is the preview. The pool measures
 // ai: the grey range on the luma it copies, so every frame goes as a VideoFrame. The grab stays wherever this page makes
 // ai: no VideoFrame or the worker takes none (it says why when ready). poolVfOff: the pool's VideoFrames given up for the

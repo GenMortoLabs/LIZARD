@@ -25,7 +25,7 @@ class PhaseLock {
  public:
   enum class Mode { Off, Track };
   // ai: A frame of the receiver's series: its capture's timestamp (ns), verified blocks, whether a symbol was
-  // ai: registered; r, rSd: the pilots' reading over the even blocks and its standard error; r2, r2Sd: over the odd;
+  // ai: registered; r, rSd: the pilots' reading over the even sub-channels and its standard error; r2, r2Sd: over the odd;
   // ai: row: the code's mean row as a share of the sensor's rows, in the order the camera reads them (NaN: not known)
   struct Frame {
     int64_t ts = 0;

@@ -1,4 +1,4 @@
-// The transfer in the light: the block id and the session header (the session's description, the FDT in it), so a
+// The transfer in the light: the block id and the session header (the send's description, its one file's map), so a
 // camera alone can recover a file. Before this the fountain's header went from the sender page to the receiver page over the rig's network, and
 // the block id was a convention of sim/phy.mjs.
 //
@@ -40,7 +40,7 @@
 // seen misses the next description under it: a control block is new when its bytes are.
 //
 // ---- The bytes it carries ----
-// A source block's source block is the source block's own bytes: the transfer compresses nothing. A client that compresses (the
+// A source block is the file's own bytes: the transfer compresses nothing. A client that compresses (the
 // default client compresses a file with zstd before it enters the transfer) hands the transfer the compressed file,
 // and the length, root and chaining values are of the bytes handed over. So every source block but the last is 2^sb_log2
 // bytes and every source block's source symbols follow from the file's length: a receiver builds any source block's decoder from the
@@ -71,14 +71,14 @@
 // content are the same bytes; receivers take any order of the keys and refuse a key twice.
 //
 // ---- The session ----
-// A sender's session is what it has on air: the files its description lists, one or more, each under its own TOI (its
+// A sender's session is what it has on air: the one file its description describes, under its own TOI (its
 // content's), and the session header under the session's TOI. A receiver files every block by its TOI alone; a file's
-// TOI names its bytes, so any description that lists it describes the same file (xfer_same_file), and a receiver
-// takes the first it holds.
-// The fountain: RaptorQ (RFC 6330), a source block one source block of K = ceil(len / 460) source symbols of 460 bytes
+// TOI names its bytes, so any description of it describes the same file (xfer_same_file), and a receiver takes the
+// first it holds.
+// The fountain: RaptorQ (RFC 6330), each source block one RaptorQ source block of K = ceil(len / 460) source symbols of 460 bytes
 // (T = XFER_PAYLOAD; one sub-block, Z = N = 1), the last zero padded; symbol s of a source block is its ESI s, so symbols
-// 0 .. K - 1 are the source block's own bytes and the rest repair (src/rq.h). A source block of one block is a block of K = 1 like
-// any other.
+// 0 .. K - 1 are the source block's own bytes and the rest repair (src/rq.h). A source block of 460 bytes or less is a source
+// block of K = 1 like any other.
 //
 // ---- The file's check (2026-11-21) ----
 // A file of one source block: its BLAKE3 the root, checked as it decodes (xfer_sb_check). Of two or more: each source
@@ -105,7 +105,8 @@
 // ---- In the wasm (src/wasm.c) ----
 // Exported as declared below: xfer_root_check, xfer_root, xfer_sb_cv, xfer_b3_hash. Wrapped for JS, with flat
 // arguments: xfer_layout, xfer_id_of, xfer_kind_of, xfer_session_write_of, xfer_session_read, xfer_desc_write_of, xfer_desc_parse, xfer_sb_ok, xfer_b3_sub,
-// xfer_sb_log2_of, xfer_name_cut_of. test/xfer_wasm.mjs drives every one.
+// xfer_sb_log2_of, xfer_name_cut_of, xfer_toi_of_wasm, which test/xfer_wasm.mjs drives every one of; xfer_same_file_of,
+// and the test stream's stream_fill_of and stream_matches_of.
 #ifndef XFER_H
 #define XFER_H
 #include <stddef.h>
@@ -119,7 +120,7 @@ enum {
   XFER_CONTROL = (1 << XFER_SBN_BITS) - 1, XFER_MAX_SOURCE_BLOCKS = XFER_CONTROL,
   XFER_HASH_BLAKE3 = 1,
   XFER_LOG2_MIN = 10, XFER_LOG2_MAX = 24, XFER_LOG2_DEFAULT = 24,
-  XFER_CV = 32, XFER_ENTRY = XFER_CV,
+  XFER_CV = 32,
   XFER_NAME_MAX = 255, XFER_EXT_MAX = 32,
   // the description (2026-11-20 evening, CBOR; the file's own map since 2026-11-22): its keys (above); the most it
   // takes, the whole payload; the longest a description is (every key at its widest, the one compression a byte)
@@ -128,14 +129,13 @@ enum {
   XFER_DESC_MAX = XFER_PAYLOAD,
   XFER_DESC_LONGEST = 1 + 3 + 10 + 35 + 3 + XFER_NAME_MAX + 2,
   // what the parses return besides 0
-  XFER_ERR = -1, XFER_ERR_HASH = -3,
+  XFER_ERR = -1,
 };
 // A block's bare id (bytes 0 to 4): its source block over its symbol; and its TOI (bytes 5 to 10), the object's.
 typedef uint64_t xfer_id_t;
 typedef uint64_t xfer_toi_t;
 #define XFER_ID_HEADER ((xfer_id_t)XFER_CONTROL << XFER_ESI_BITS)
 #define XFER_ESI_MASK ((1u << XFER_ESI_BITS) - 1u)
-#define XFER_ID_MASK (((xfer_id_t)1 << (XFER_SBN_BITS + XFER_ESI_BITS)) - 1u)
 #define XFER_TOI_MASK (((xfer_toi_t)1 << XFER_TOI_BITS) - 1u)
 // XFER_KIND_RESERVED: a control id other than the header's, which a receiver ignores.
 enum { XFER_KIND_RESERVED = -1, XFER_KIND_DATA = 0, XFER_KIND_HEADER = 1 };
@@ -166,7 +166,7 @@ static inline void xfer_toi_put(uint8_t *block, xfer_toi_t toi) {
 // root (32 bytes), length (five bytes, little-endian) and source block size (sb_log2, one byte); 1 where they are 0.
 xfer_toi_t xfer_toi_of(const uint8_t root[32], uint64_t length, int sb_log2);
 
-// An object's description: a file's (its entry's).
+// A file's description, as the session header's map carries it (xfer_desc_write, xfer_desc_read).
 typedef struct {
   uint8_t hash, sb_log2, name_len;
   uint64_t length;
@@ -174,7 +174,7 @@ typedef struct {
   uint8_t root[XFER_CV];
   uint8_t name[XFER_NAME_MAX];
   uint8_t compression; // the bytes' compression on air (XFER_COMP_*; a value this build does not know kept, 255 past it), 0 none
-  uint8_t critical;    // 1 where its attributes carry a critical attribute this build does not know
+  uint8_t critical;    // 1 where its map carries an unsigned (critical) key this build does not know
 } xfer_header_t;
 
 // ceil(length / 2^sb_log2), or 0 where that is past XFER_MAX_SOURCE_BLOCKS or sb_log2 is out of range (an empty file
@@ -224,8 +224,8 @@ int xfer_desc_read(const uint8_t *desc, size_t len, xfer_toi_t self_toi, xfer_he
 // The name a description carries for a name of len bytes (UTF-8) into out: at most XFER_NAME_MAX bytes, its byte count.
 // A longer name is cut in its stem, at a character's start, its extensions kept whole: the bytes from the earlier of
 // its last two '.' (not its first byte) that leaves at most XFER_EXT_MAX with the dot (".tar.zst" kept whole), else
-// from its last; a name with no extension (or a longer one) is cut at its end, at a character's start. A file alone's description always fits the session header
-// with a name of XFER_NAME_MAX bytes (312 bytes at the most), so nothing is cut for room.
+// from its last; a name with no extension (or a longer one) is cut at its end, at a character's start. A file's description always fits the session header
+// with a name of XFER_NAME_MAX bytes (XFER_DESC_LONGEST, 309 bytes at the most), so nothing is cut for room.
 size_t xfer_name_cut(const uint8_t *name, size_t len, uint8_t out[XFER_NAME_MAX]);
 
 // The chaining value of source block `index` of 2^sb_log2 bytes, len being its bytes (the source block size, or less for the
@@ -244,7 +244,7 @@ void xfer_b3_hash(const uint8_t *in, size_t len, uint8_t out[XFER_CV]);
 // such a boundary when that is less.
 void xfer_b3_subtree(const uint8_t *in, size_t len, uint64_t counter, int root, uint8_t out[XFER_CV]);
 
-// The test stream, the reference tools' and no part of the format (since 2026-11-20; SPEC 9.3 until then): data blocks
+// The test stream, the reference tools' and no part of the format (since 2026-11-20): data blocks
 // under a TOI the sender draws, as any send's, no header; block id i's payload the first len bytes of BLAKE3's extended
 // output of its bare id (its source block and symbol, bytes 0 to 4) as five little-endian bytes, the TOI no part. A
 // function of the id alone, so a receiver that knows it tells a test frame from its payloads without being told which

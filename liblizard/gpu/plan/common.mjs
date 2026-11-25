@@ -1,5 +1,5 @@
 // ai: The picture slots and the frame record's axis word: what every decoder stage, the back half's tables and the
-// ai: sender's paint share (2026-10-31: from glsl/common.mjs, whose WGSL pieces went with the WGSL decoder, archive/webgpu-decoder/).
+// ai: sender's paint share (2026-10-31: from the decoder's old slang/common.mjs, whose WGSL pieces went with the WGSL decoder, archive/webgpu-decoder/).
 
 import { PICTURE_SIZES, VERSIONS, N_FOR } from "../../sim/lizard_pick.mjs";
 
@@ -7,8 +7,7 @@ import { PICTURE_SIZES, VERSIONS, N_FOR } from "../../sim/lizard_pick.mjs";
 // ai: seven, 384 to 1536; gpu/tables.mjs PICTURES), a frame's picture slot its
 // ai: index here (sel.z, from F8's version), and SLOTS of them. Every per-slot table on the device (F8's tops, F9's
 // ai: sizes, the back half's gate, LISTS, ARGS, the LDPC's and the paint's uniforms, gate2's) is SLOTS long, so a
-// ai: ladder change edits no stage. Here, not in back_transform.mjs, because sample.mjs needs it and back_transform.mjs
-// ai: imports sample.mjs.
+// ai: ladder change edits no stage.
 export const SIZES = PICTURE_SIZES.filter((n) => VERSIONS.some((s) => N_FOR(s) === n));
 export const SLOTS = SIZES.length;
 

@@ -32,20 +32,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.text.style.TextOverflow
 import dev.lizard.readout.Readout
 
-// ai: The folds of the tool screens and Home's lists (HomeUnfinished, HomeFiles: the phone's Home, 2026-11-07), kept by
+// ai: The folds of the tool screens and Home's lists (HomeUnfinished, HomeFiles: Home's column, 2026-11-07), kept by
 // ai: each app under its own keys, closed until opened. The settings by topic (2026-11-12; one Settings fold a screen
-// ai: before, RecvSettings and SendSettings): Receive's Camera, Performance (titled Decoder, RecvDecoder, and a Code fold with the crop until 2026-11-13); Send's
-// ai: Code, Refresh, Performance (Layout merged into Code 2026-11-13) (RECV_FOLDS, SEND_FOLDS). Collapsed: the tool screens' column at its rail, one for Receive and Send (2026-11-07;
-// ai: each its own before)
+// ai: before; RECV_FOLDS, SEND_FOLDS): Receive's Camera, Performance, Files; Send's Code, Refresh, Control,
+// ai: Performance; then each screen's Experimental and Developer Tools. Collapsed: the tool screens' column at its rail,
+// ai: one for Receive and Send (2026-11-07; each its own before)
 enum class FoldKey {
     RecvCamera, RecvPerformance, RecvFiles, RecvExperimental, RecvTools,
     SendCode, SendRefresh, SendControl, SendPerformance, SendExperimental, SendTools,
@@ -57,7 +55,8 @@ interface Folds {
     fun toggle(k: FoldKey)
 }
 
-// ai: The camera's permission while the app has none: the one button that gets it (the phone's; why is the state line)
+// ai: The camera's permission while the app has none: the one button that gets it (the phone's; why is the line's,
+// ai: said over the preview)
 class Access(val act: Act)
 
 // ai: The file camera's choice (2026-11-09): Send's upload (Send.kt Upload) in the camera's place while the camera is
@@ -81,8 +80,8 @@ interface ReceiveHost : ToolHost {
     val upload: ReceiveUpload? get() = null   // ai: the file camera's choice, drawn in the camera's place; null otherwise
     fun toggleCamera()
     val access: Access?
-    val kept: List<Act>?               // ai: the received file's actions, the first the solid Open (each with its icon: a tile's
-                                       // ai: and the rail's); null while none is in
+    val kept: List<Act>?               // ai: the received file's actions, the first the solid Open (each with its tile's
+                                       // ai: icon); null while none is in
     val keptName: String
     val railRate: Double?
     val railPct: Double?
@@ -93,11 +92,11 @@ interface ReceiveHost : ToolHost {
     @Composable fun Picture(modifier: Modifier, portrait: Boolean)
 }
 
-// ai: Receive (the web's recv.html; both apps' since 2026-10-31): the camera's crop, the transfer (the actions: Open and
-// ai: the platform's others once a file is in, Start or Stop (the camera); then the state line, meter, figures, the
-// ai: heat warning: the desktop's order; a filing's failure is the preview's to say), Settings, Experimental, Developer Tools, About.
-// ai: Landscape: the column on the left, its edge dragged, the camera on the right as big as the rest allows; the rail
-// ai: when collapsed (play or pause, the rate, the percent, the green check and the file's actions, Home at its foot).
+// ai: Receive (the web's recv.html; both apps' since 2026-10-31): the camera's crop, or in its place the received file
+// ai: (ReceivedPanel) or the file camera's choice (Upload); the column: Start or Stop, the transfer's block, the heat
+// ai: warning (TransferPanel), then the settings folds, Experimental and Developer Tools (ToolFolds); what went wrong a
+// ai: popup (errorOf). Landscape: the column on the left, its edge dragged, the camera on the right as big as the rest
+// ai: allows; the rail when collapsed (play or pause, the rate, the percent, the green check, Home at its foot).
 // ai: Portrait (a phone): the bar over one column, the camera at its top.
 @Composable
 fun ReceiveScreen(h: ReceiveHost) = BoxWithConstraints {
@@ -169,7 +168,7 @@ private fun ReceivedPanel(h: ReceiveHost, modifier: Modifier, column: Dp?) {
                     Text(if (good && ln.files > 0) "Received ${countOf(ln.files)}" else "Received",
                         style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, color = Fg)
                 }
-                ItemTile(h.keptName, if (ln.tone == Readout.Tone.Good) ln.size else "", Icons.file, TILE.dp, onRemove = null)
+                ItemTile(h.keptName, if (good) ln.size else "", Icons.file, TILE.dp, onRemove = null)
             }
         }
     }
@@ -208,13 +207,11 @@ internal fun ReceiveSide(h: ReceiveHost, home: Boolean = false) {
     ToolFolds(h, home)
 }
 
-// ai: The transfer, the desktop's order and gaps: 12 dp under the bar the actions (once the file is kept, its actions on
-// ai: one row, Open the solid one filling it, the others their own width; Start or Stop alone under them,
-// ai: the full width; on the desktop every button its label's width, LocalButtonsFill; without the camera's permission
-// ai: the one button that gets it, why on the state line), 12 dp under
-// ai: them the transfer's block (Details), then 4 dp apart the heat warning (a filing's failure over the
-// ai: preview), 16 dp before the folds. The camera's rate hint ("Sender at 24 fps", "recommended 15", from 2026-11-11)
-// ai: went 2026-11-19 with the animated header, whose header was the only place the sender's rate was stated. A file in: its block only with Show statistics on.
+// ai: The transfer, the desktop's order and gaps: 12 dp under the bar Start or Stop (Fullscreen beside it where the
+// ai: platform has it; the column's width on the phone, every button its label's width on the desktop,
+// ai: LocalButtonsFill; without the camera's permission the one button that gets it, why said over the preview), 12 dp
+// ai: under it the transfer's block (Details), then 4 dp apart the heat warning, 16 dp before the folds. A file in: its
+// ai: actions the camera area's (ReceivedPanel), its block here only with Show statistics on and the camera off.
 @Composable
 private fun TransferPanel(h: ReceiveHost) {
     // ai: the camera's button, Fullscreen beside it where the platform has it (FullscreenBtn, Send's row's, 2026-11-13)
@@ -285,13 +282,12 @@ private fun PreviewBox(h: ReceiveHost, modifier: Modifier, portrait: Boolean) {
 }
 
 // ai: What went wrong, said in a popup (NoteDialog, ReceiveScreen; since 2026-11-07: a fatal error pops up, a warning
-// ai: that lets the run go on stays a row; a cover over the preview with the rail's red triangle from 2026-11-02, never
-// ai: the column): the line's error (the phase's why, "Camera stopped: ...", "Reading
-// ai: stopped") or a filing's refusal or a Save's failure (the note). The camera's access is no error: the preview says
-// ai: it, its button in the column. The warnings (Throttling, Sender too fast) stay rows.
+// ai: that lets the run go on stays a row; never the column): the line's error (the phase's why, "Camera stopped: ...",
+// ai: "Reading stopped") or a filing's refusal or a Save's failure (the note). The camera's access is no error: the
+// ai: preview says it, its button in the column. The warning (Throttling) stays a row.
 private fun errorOf(h: ReceiveHost): String? = h.line.takeIf { h.access == null && it.tone == Readout.Tone.Bad }?.text?.takeIf { it.isNotEmpty() }
     ?: h.note.takeIf { it.isNotEmpty() }
 
-// ai: the red triangle in a rail's square, its words the description: the phone's heat, a receiver's error
+// ai: the red triangle in a rail's square, its words the description: the phone's heat (an error is its popup)
 @Composable
 fun AlertSquare(text: String) = Square { Icon(Icons.alert, contentDescription = text, Modifier.size(24.dp), tint = Bad) }

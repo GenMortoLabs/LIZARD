@@ -1,5 +1,5 @@
-// ai: The rate profile's stage's constants, TAB's layout and each code's shape (glsl/back_tiers.mjs talign, tsoft, tblocks,
-// ai: tldpc; ../back/tiers.mjs builds it), which the sender's paint (../wgsl/send.mjs, ../encoder.mjs) shares: CODES, KNOWN, NC.
+// ai: The rate profile's stage's constants, TAB's layout and each code's shape (slang/back_tiers.mjs talign, tsoft, tblocks,
+// ai: tldpc; ../back/tiers.mjs builds it), which the sender's paint (../slang/src/send_paint.slang, ../encoder.mjs) shares: CODES, KNOWN, NC.
 import { VERSION_MAX } from "../wordcode.mjs";
 import { STEP, SUB_SLOTS } from "../../sim/lizard_pick.mjs";
 
@@ -14,8 +14,8 @@ import { STEP, SUB_SLOTS } from "../../sim/lizard_pick.mjs";
 // ai: values in their pass and on their bind groups) reads every sub-channel's two pilots (each its sign cancels: every
 // ai: term the fit sums is a product of two of its parts), fits zi = k zr (u dx + v dy) by least squares twice (the
 // ai: second about the first's answer), and keeps the shift wherever the fit stands (8 pilots or more, its matrix
-// ai: invertible; the significance test ALIGN_CHI 13.8 went 2026-11-07, as the C's), else 0, 0; each pilot unweighted,
-// ai: where the C weights it by 1 / N of its sub-channel (the moments before the fit, a pass of its own, not built). It
+// ai: invertible; the significance test ALIGN_CHI 13.8 went 2026-11-07, as the C's), else 0, 0; each pilot weighted by
+// ai: 1 / N of its sub-channel as the C's (N from the sub-channel's moments, made in talign before the fit). It
 // ai: goes to PILOT's end: PILOT[PILOT_READ B + 2 f] and the next; before it, PILOT_READ floats a frame, its readings
 // ai: (tblocks: r, its standard error, r2, its standard error; src/lizard_phy.c lizard_pilot).
 // ai: The soft stage turns every coefficient back by it as it gathers (a turn leaves |y|, so the moments and the
@@ -64,7 +64,7 @@ export const LDPC_FORMS = ["reg", "reg+i32", "reg+i16"];
 // ai: the remainder padded).
 export const CODES = [{ rate: 6, slots: 4480, name: "6/7" }, { rate: 4, slots: 5120, name: "3/4" }, { rate: 3, slots: 5760, name: "2/3" }, { rate: 2, slots: 7680, name: "1/2" }];
 // ai: 2/3 among the codes since 2026-10-07, in the format's profile since 2026-10-08 (four rates, 6/7, 3/4, 2/3, 1/2).
-// ai: A frame's blocks of each are its word's (../glsl/common.mjs CFG; TAB's TT table, a row a version, until 2026-11-18).
+// ai: A frame's blocks of each are its word's (../slang/src/lib/cfg.slang; TAB's TT table, a row a version, until 2026-11-18).
 export const NC = CODES.length;
 
 // ai: TAB's sections' word offsets, from the codes' n and the nets' words (all codes' together).
@@ -100,6 +100,6 @@ const packWords = (n) => Math.max(120, Math.ceil(n / 32) + 1);
 export const tierWgBytes = (sh, net) => (sh.wide ? 4 * sh.n : 4 * Math.ceil(sh.n / 2)) + 4 * packWords(sh.n) + 20 + 4 * (6 + 2 * net.hidden);
 
 // ai: the CRC-64's split powers in a code's uniform: 118 chunks' and the init term's, two words each, to whole vec4s
-// ai: (../back/ref_ldpc.mjs crcPowers; ../wgsl/back_ldpc.mjs PW_VECS, held to it)
+// ai: (../back/ref_ldpc.mjs crcPowers; ./send.mjs PW_VECS, held to it)
 export const PW_WORDS = 240;
 export const tierUniformWords = (sh) => 4 + 4 * sh.rowv + 4 * sh.pairv + PW_WORDS;

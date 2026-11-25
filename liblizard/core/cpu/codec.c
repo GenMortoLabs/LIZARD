@@ -32,7 +32,7 @@ int cpu_dec_frame(cpu_dec_t *d, const uint8_t *img, int iw, int ih, uint8_t *blo
     const ob_fmt_t *fm = lizard_any_word(&d->any);
     out->found = d->res.found; out->ring = d->any.which; out->n = d->any.n;
     out->word = fm != 0; out->version = fm ? fm->version : 0;
-    for (int i = 0; i < 3; i++) out->count[i] = fm ? fm->count[i] : 0;
+    for (int i = 0; i < 4; i++) out->count[i] = fm ? fm->count[i] : 0;
     out->fps = fm ? fm->fps : 0; out->delay = fm ? fm->delay : 0;
     out->total = d->any.last ? d->any.last->blocks : 0;
     memcpy(out->quad, d->res.quad, sizeof out->quad);
@@ -52,7 +52,7 @@ uint32_t ob_debug_hash;
 void cpu_hash_arm(void) { ob_debug_hash = 1; }
 uint32_t cpu_hash_take(void) { const uint32_t v = ob_debug_hash; ob_debug_hash = 0; return v; }
 // ai: codec.h's stages to internal.h's slots
-static const int PROF_OF[CPU_PROF_N] = {PROF_BINARIZE, PROF_MESH, PROF_FF_POINTS, PROF_FF_TURN, PROF_FF_FIT, PROF_FF_SCORE, PROF_FF_MARKS, PROF_FF_TRACK,
+static const int PROF_OF[CPU_PROF_N] = {PROF_FF_GREY, PROF_MESH, PROF_FF_TRACE, PROF_FF_LENS, PROF_FF_SCORE, PROF_FF_TRACK,
                                         PROF_F_SAMPLE, PROF_F_DETREND, PROF_F_FFT, PROF_F_LLR, PROF_F_LDPC};
 double cpu_prof_ms(int stage) { return stage >= 0 && stage < CPU_PROF_N ? ob_prof_ms[PROF_OF[stage]] : 0; }
 void cpu_prof_reset(void) { for (int i = 0; i < PROF_N; i++) ob_prof_ms[i] = 0; }

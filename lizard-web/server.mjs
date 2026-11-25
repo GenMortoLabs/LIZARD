@@ -2,13 +2,12 @@
 //   node lizard-web/server.mjs      (from the project's root)
 // Needs openssl (the https certificate, made once); python3's qrcode module, where installed, prints a QR of the
 // phone's address. RIG_HTTP, RIG_HTTPS: other ports (8080, 8443); RIG_UPLOADS=1: take /api/file posts (check_rates.mjs).
-// It serves the repository to the LAN but no dot folder (its key) and none of research/rig/.
-// Serves the repository over http (localhost) and https (LAN, self-signed: a phone's camera
-// ai: needs a secure origin), and takes the pages' development logs, the only thing a page sends it (2026-09-26):
-// ai: nothing it answers is read by a
-// ai: page to decode or paint. POSTs: /api/stats (the receiver's row a second, the latest kept in memory alone: rows are
-// ai: logged only in a replay since 2026-10-09, research/rig/stats.jsonl no longer written) and /api/file. GETs for node
-// ai: scripts: /api/info, /api/stats (the last row, for lizard-web/check_rates.mjs).
+// ai: It serves the repository over http (localhost) and https (the LAN, self-signed: a phone's camera needs a secure
+// ai: origin), but no dot folder (its key) and none of research/rig/, and takes the pages' development logs, the only
+// ai: thing a page sends it (2026-09-26): nothing it answers is read by a page to decode or paint. POSTs: /api/stats
+// ai: (the receiver's row a second, the latest kept in memory alone: rows are logged only in a replay since 2026-10-09,
+// ai: research/rig/stats.jsonl no longer written) and /api/file. GETs for node scripts: /api/info, /api/stats (the last
+// ai: row, for lizard-web/check_rates.mjs).
 import { createServer as http } from "node:http";
 import { createServer as https } from "node:https";
 import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from "node:fs";
@@ -46,13 +45,13 @@ async function handle(req, res) {
   if (p === "/api/stats") {
     if (req.method === "POST") {
       // ai: the latest row alone, for the checks' GET (2026-10-09: no row is appended to a log here; rows are logged
-      // ai: only as part of a replay, the Android app's Save replays)
+      // ai: only as part of a replay, the Android app's Save replays); answered { ok }: the page reads nothing back
       stats = JSON.parse(await body(req)); statsAt = Date.now();
+      return json({ ok: true });
     }
-    // ai: A post is answered { ok }: the page reads nothing back. A GET is a script's (the last row, 5 s at most old).
-    if (req.method === "POST") return json({ ok: true });
+    // ai: A GET is a script's: the last row, 5 s old at most, so a receiver that went away does not look live.
     return json({ stats: Date.now() - statsAt < 5000 ? stats : {} });
-  }   // a receiver that went away must not look live
+  }
   // ai: Uploads (a received file) only where asked for, RIG_UPLOADS=1 (check_rates.mjs): a rig on the LAN
   // ai: otherwise takes no writes. The pages record no replays since 2026-10-09 (the Android app's Save replays does).
   if (p === "/api/file" && req.method === "POST" && process.env.RIG_UPLOADS !== "1") { res.writeHead(403); return res.end("uploads off (RIG_UPLOADS=1)"); }

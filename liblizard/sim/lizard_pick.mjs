@@ -68,14 +68,15 @@ export const PAINTED_MARGIN = () => {
 // paper, has 40 versions, and a computer-generated symbol can allow more). 16 is for televisions and far away, 1024 for
 // 4K capture, top-end phones and GPU decoding. The word carried the version as subch / 8 then, so these were versions 2, 4,
 // ... 128, and a version off that ladder (LIZARD-8, -24, every odd version) was the sender's to refuse (2026-09-24): a
-// receiver reads any version exactly as it reads the ladder, with no flag. Past LIZARD-1024 the codec refuses to build
+// receiver reads any version exactly as it reads the ladder, with no flag. Past LIZARD-1072 the codec refuses to build
 // a symbol at all (src/lizard_phy.c init), since the word cannot name its version.
 // This replaced LIZARD-16 / 64 / 128 / 192 / 256 (2026-09-21), whose reasoning is above and in STATUS.md.
-// ai: Every multiple of 16 from 64 to 1072 (64 formats since 2026-11-18, the word's six version bits; 61 to 1024 from
-// ai: 2026-11-01), the word naming subch / 16, versions 4 to 67 (src/lizard_phy.h LIZARD_STEP, src/fmt.h OB_FMT_VERSION_MIN,
-// ai: OB_FMT_VERSION_MAX); the slider
-// ai: steps 16 sub-channels. The smallest, LIZARD-64, carries seven blocks (6/7 x 4, 3/4, 2/3, 1/2), two 6/7 pilot
-// ai: blocks of each parity. LIZARD-32 and -48 left on 2026-11-01 (their odd blocks' pilots one 6/7 block's 8
+// ai: Every multiple of 16 from 16 to 1072 (67 formats since 2026-11-22: versions 1 to 3 added to the word's list for
+// ai: parity, 46 configurations in its spare index values; 64 to 1072 from 2026-11-18, 61 to 1024 from 2026-11-01), the
+// ai: word naming subch / 16, versions 1 to 67 (src/lizard_phy.h LIZARD_STEP, src/fmt.h OB_FMT_VERSION_MIN,
+// ai: OB_FMT_VERSION_MAX); the slider steps 16 sub-channels. The smallest, LIZARD-16, carries two blocks (6/7, 3/4); its
+// ai: readings rest on 8 pilots each and fail the pilots' clean-capture bound (0.83, 2026-11-22), as LIZARD-32's (0.85);
+// ai: LIZARD-48 holds it. LIZARD-32 and -48 left on 2026-11-01 (their odd blocks' pilots one 6/7 block's 8
 // ai: coefficients, which read past the pilots' model on mixed captures and under 0.9 on clean ones); from 2026-10-29 to
 // ai: 2026-10-31 the ladder started at LIZARD-16 (two 3/4 blocks; under the slot-packed profile one 6/7 and one 3/4, too
 // ai: few pilots for the phase lock's two readings); from 2026-10-01 to 2026-10-29 it
@@ -83,56 +84,51 @@ export const PAINTED_MARGIN = () => {
 // ai: no diversity and carries one pilot parity alone).
 // ai: STEP: the sub-channels a version (src/lizard_phy.h LIZARD_STEP); subchOf and versionOf go between the two.
 export const STEP = 16;
-export const VERSIONS = Array.from({ length: 64 }, (_, i) => STEP * (i + 4));
+export const VERSIONS = Array.from({ length: 67 }, (_, i) => STEP * (i + 1));
 export const NAME = (subch) => `LIZARD-${subch}`;
 export const subchOf = (version) => STEP * version;
 export const versionOf = (subch) => subch / STEP;   // what the format word carries; the blocks a frame are blocksFor's
 // ai: The default senders' layout (src/lizard_phy.c lizard_tiers_for, the same integers and order of search; the format's
 // ai: rate profile from 2026-10-07 to 2026-11-18, which every receiver derived; since, a frame's word states its counts,
 // ai: layoutOf): [[rate, blocks, slots], ...] inner first
-// ai: over the frame's SUB_SLOTS subch data slots, 6/7 blocks of 4480 slots on about TIER_IN thousandths of them, 3/4 blocks
-// ai: of 5120 filling (the remainder padded), 2/3 blocks of 5760 on about TIER_23 thousandths, 1/2 blocks of 7680 on about
-// ai: the outer TIER_OUT; the tiers with blocks only; [] for a count that is no format's. blocksFor: the blocks a frame
-// ai: carries, each 472 B. BLOCK_SLOTS: a block's slots by rate index (src/lizard_phy.c lizard_block_slots: its code's sent
-// ai: bits alone: the pilots apart from the blocks since 2026-11-21, two coefficients a sub-channel, a tail on every block
-// ai: from 2026-11-20 to 11-21). SUB_SLOTS: a sub-channel's data slots (src/lizard_phy.c OB_DSUB2: 320 coefficients less
-// ai: the count and reference pilots, two slots each).
-export const TIER_IN = 390, TIER_23 = 150, TIER_OUT = 200;
+// ai: over the frame's SUB_SLOTS subch data slots, 3/4 blocks of 5120 slots on about TIER_34 thousandths of them, 2/3
+// ai: blocks of 5760 on about TIER_23, 1/2 blocks of 7680 on about the outer TIER_OUT, and 6/7 blocks of 4480 on the inner
+// ai: rest (the remainder padded; the 3/4 on the rest before 2026-11-23); the tiers with blocks only; [] for a count that is
+// ai: no format's. blocksFor: the blocks a frame carries, each 472 B. BLOCK_SLOTS: a block's slots by rate index
+// ai: (src/lizard_phy.c lizard_block_slots: its code's sent bits alone: the pilots apart from the blocks since
+// ai: 2026-11-21, two coefficients a sub-channel, a tail on every block from 2026-11-20 to 11-21). SUB_SLOTS: a
+// ai: sub-channel's data slots (src/lizard_phy.c OB_DSUB2: 320 coefficients less the count and reference pilots, two slots
+// ai: each).
+export const TIER_34 = 260, TIER_23 = 150, TIER_OUT = 200;
 export const BLOCK_SLOTS = { 6: 4480, 4: 5120, 3: 5760, 2: 7680 };
 export const SUB_SLOTS = 636;
-// ai: The default senders' layout (src/lizard_phy.c lizard_tiers_for): the 6/7, 2/3 and 1/2 counts their target thousandths
-// ai: of the slots in whole blocks, rounded half up; the 1/2, then the 2/3, then the 6/7 trimmed until one 3/4 block fits;
-// ai: the 3/4 filling the rest. A least-squares search over every count until 2026-11-19, the same counts at every version.
+// ai: The default senders' layout (src/lizard_phy.c lizard_tiers_for): the 3/4, 2/3 and 1/2 counts their target
+// ai: thousandths of the slots in whole blocks, rounded half up; the 1/2, then the 2/3, then the 3/4 trimmed until one 6/7
+// ai: block fits; the 6/7 on the rest. A least-squares search over every count until 2026-11-19.
 export function tiersFor(subch) {
   if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1)) return [];
   const all = SUB_SLOTS * subch, S = BLOCK_SLOTS, round = (tgt, s) => Math.floor((2 * tgt * all + 1000 * s) / (2000 * s));
-  let a = round(TIER_IN, S[6]), t = round(TIER_23, S[3]), c = round(TIER_OUT, S[2]);
-  const room = () => all - a * S[6] - t * S[3] - c * S[2];
-  while (room() < S[4]) { if (c) c--; else if (t) t--; else if (a) a--; else return []; }
-  const m = Math.floor(room() / S[4]);
-  return [...(a ? [[6, a, S[6]]] : []), [4, m, S[4]], ...(t ? [[3, t, S[3]]] : []), ...(c ? [[2, c, S[2]]] : [])];
+  let b = round(TIER_34, S[4]), t = round(TIER_23, S[3]), c = round(TIER_OUT, S[2]);
+  const room = () => all - b * S[4] - t * S[3] - c * S[2];
+  while (room() < S[6]) { if (c) c--; else if (t) t--; else if (b) b--; else return []; }
+  const a = Math.floor(room() / S[6]);
+  return [[6, a, S[6]], ...(b ? [[4, b, S[4]]] : []), ...(t ? [[3, t, S[3]]] : []), ...(c ? [[2, c, S[2]]] : [])];
 }
-export const blocksFor = (subch) => tiersFor(subch).reduce((n, [, b]) => n + b, 0);
-// ai: A frame's layout from its word's counts (src/fmt.c ob_fmt_layout, 2026-11-18): [6/7, 2/3, 1/2] blocks, the 6/7 0 to
-// ai: COUNT67_MAX and the others 0 to COUNT_MAX, the 3/4 filling the rest; all four tiers as [rate, blocks, slots] (0
-// ai: blocks kept), or [] where it is no frame: no room for one 3/4 block. countsFor: the default senders' counts
+export const blocksFor = (subch) => tiersFor(subch).reduce((n, [, k]) => n + k, 0);
+// ai: A frame's layout from its word's counts (src/fmt.c ob_fmt_layout, 2026-11-18; all four since 2026-11-23): [6/7,
+// ai: 3/4, 2/3, 1/2] blocks, any counts 0 or more whose blocks fit the frame's data slots, the rest padding; all four
+// ai: tiers as [rate, blocks, slots] (0 blocks kept), or [] where it is no frame. countsFor: the default senders' counts
 // ai: (tiersFor).
-export const COUNT67_MAX = 255, COUNT_MAX = 127;
-export function layoutOf(subch, [a, t, c]) {
-  if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1) || ![a, t, c].every((x, i) => Number.isInteger(x) && x >= 0 && x <= (i ? COUNT_MAX : COUNT67_MAX))) return [];
-  const all = SUB_SLOTS * subch, used = a * BLOCK_SLOTS[6] + t * BLOCK_SLOTS[3] + c * BLOCK_SLOTS[2];
-  if (used + BLOCK_SLOTS[4] > all) return [];
-  const m = Math.floor((all - used) / BLOCK_SLOTS[4]);
-  return [[6, a, BLOCK_SLOTS[6]], [4, m, BLOCK_SLOTS[4]], [3, t, BLOCK_SLOTS[3]], [2, c, BLOCK_SLOTS[2]]];
+export function layoutOf(subch, counts) {
+  if (subch < VERSIONS[0] || subch % STEP || subch > VERSIONS.at(-1) || counts.length !== 4 || !counts.every((x) => Number.isInteger(x) && x >= 0)) return [];
+  const rates = [6, 4, 3, 2], used = counts.reduce((n, x, i) => n + x * BLOCK_SLOTS[rates[i]], 0);
+  if (used > SUB_SLOTS * subch) return [];
+  return rates.map((r, i) => [r, counts[i], BLOCK_SLOTS[r]]);
 }
-export const countsFor = (subch) => { const t = tiersFor(subch), of = (r) => t.find(([q]) => q === r)?.[1] ?? 0; return [of(6), of(3), of(2)]; };
-// ai: the most blocks any layout of subch sub-channels holds (src/lizard_phy.c lizard_blocks_max_for)
-export function blocksMaxFor(subch) {
-  const all = SUB_SLOTS * subch;
-  let most = 0;
-  for (let a = 0; a <= COUNT67_MAX && a * BLOCK_SLOTS[6] + BLOCK_SLOTS[4] <= all; a++) most = Math.max(most, a + Math.floor((all - a * BLOCK_SLOTS[6]) / BLOCK_SLOTS[4]));
-  return most;
-}
+export const countsFor = (subch) => { const t = tiersFor(subch), of = (r) => t.find(([q]) => q === r)?.[1] ?? 0; return [of(6), of(4), of(3), of(2)]; };
+// ai: the most blocks any layout of subch sub-channels holds (src/lizard_phy.c lizard_blocks_max_for): 6/7 blocks alone,
+// ai: the smallest
+export const blocksMaxFor = (subch) => Math.floor((SUB_SLOTS * subch) / BLOCK_SLOTS[6]);
 // The border in modules a side, which src/lizard_phy.c sets as the corner mark's own size plus the guard interval,
 // because the border grows OUTWARDS to hold its marks and nothing ever reaches into the picture.
 export const OB_MARGIN = 12 + 3;
@@ -277,7 +273,7 @@ export function pickVersion(roomPx, top = VERSIONS.at(-1), ring = null) {
   const r = ring ?? RING_DEFAULT;
   for (const v of VERSIONS) if (v <= top && ROOM_FOR(v, r) <= roomPx && v > subch) subch = v;
   const n = N_FOR(subch), samples = SAMPLES(n, r);
-  // ai: `tight` is a room too small even for the fallback (LIZARD-64, 349.2 px in the default ring, which no real device is). `squeezed` is a room
+  // ai: `tight` is a room too small even for the fallback (LIZARD-16, 174.6 px in the default ring, which no real device is). `squeezed` is a room
   // that cannot hold the picture's samples at all, which only matters to a page that paints nearest: an
   // oversampled picture survives being shown smaller than its sample count, and LIZARD-16 read whole at 0.3
   // device px a sample. Both reported, never silent.

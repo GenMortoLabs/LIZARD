@@ -1,6 +1,6 @@
-// ai: The four codes on the GPU (2026-10-07; the kernels in ../glsl/back_tiers.mjs, TAB's layout and the codes' shapes in
+// ai: The four codes on the GPU (2026-10-07; the kernels in ../slang/back_tiers.mjs, TAB's layout and the codes' shapes in
 // ai: ../plan/back_tiers.mjs): one stage a back half, its soft values and LDPC. A frame's layout is its word's (its
-// ai: configuration in the gate's list, ../glsl/common.mjs CFG; every version's default profile a row of TAB until
+// ai: configuration in the gate's list, ../slang/src/lib/cfg.slang; every version's default profile a row of TAB until
 // ai: 2026-11-18), so any layout of any version at any picture slot decodes. A lane's groups and the dispatches are the
 // ai: native host's (core/dec/front.cpp), from exportFor.
 //
@@ -11,7 +11,7 @@ import { ruleTables } from "./codes.mjs";
 import { crcPowers, PAYLOAD, stopFor } from "./ref_ldpc.mjs";
 import { netWords } from "./stop/rule.mjs";
 import { tierShape, tierWgBytes, tierUniformWords, tabLayout, CODES, WHITE_SLOTS, LDPC_FORMS } from "../plan/back_tiers.mjs";
-import { talignSource, tsoftSource, tblocksSource, tldpcSource } from "../glsl/back_tiers.mjs";
+import { tnoiseSource, talignSource, tsoftSource, tblocksSource, tldpcSource } from "../slang/back_tiers.mjs";
 import { computePipeline } from "../pipeline.mjs";
 import { argsOffset, ldpcArgsOffset } from "./transform.mjs";
 
@@ -43,7 +43,7 @@ export function ruleContents(rt, nets = []) {
   return { L, tab, consts };
 }
 
-// ai: A code's uniform T at batch size B (../glsl/back_tiers.mjs's TierCode block).
+// ai: A code's uniform T at batch size B (../slang/back_tiers.mjs's TierCode block).
 function tierUniform(code, sh, dims, B) {
   const w = new Uint32Array(tierUniformWords(sh));
   w.set([B, dims.lStride, dims.blocksMax, dims.recCap], 0);
@@ -74,7 +74,8 @@ export class RuleStage {
     const bgl = (types) => device.createBindGroupLayout({ entries: types.map((type, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: type === "u" ? "uniform" : type === "r" ? "read-only-storage" : "storage" } })) });
     const st = new RuleStage();
     Object.assign(st, { bh, layout: L, consts, codes: rt.codes, shapes, alts });
-    st.alignBgl = bgl(["r", "r", "r", "w", "r", "u"]);
+    st.noiseBgl = bgl(["r", "r", "r", "w", "u"]);
+    st.alignBgl = bgl(["r", "r", "r", "w", "r", "u", "r"]);
     st.softBgl = bgl(["r", "r", "r", "w", "w", "w", "r", "r", "u"]);
     st.blocksBgl = bgl(["r", "r", "w", "w", "r", "u"]);
     st.ldpcBgl = bgl(["r", "r", "r", "r", "w", "w", "w", "w", "u"]);
@@ -83,16 +84,17 @@ export class RuleStage {
     device.queue.writeBuffer(st.tabBuf, 0, tab);
     st.tBufs = rt.codes.map((code, c) => { const w = tierUniform(code, shapes[c], bh.dims, bh.B), b = device.createBuffer({ size: w.byteLength, usage: U.UNIFORM | U.COPY_DST }); device.queue.writeBuffer(b, 0, w); return b; });
     const args = { layout: L, codes: consts };
-    // ai: every kernel in GLSL (../glsl/back_tiers.mjs)
-    const ldpcCode = (sh, c) => ({ glsl: tldpcSource(sh, { c, inv: L.inv[c], ...args, net: { hidden: nets[c].hidden, at: L.netAt[c] } }) });
-    [st.align, st.soft, st.blocksPipe, ...st.ldpc] = await Promise.all([
-      computePipeline(device, { code: { glsl: talignSource({ f16, ...args }) }, layout: pl(st.alignBgl), label: "talign" }),
-      computePipeline(device, { code: { glsl: tsoftSource({ f16, ...args }) }, layout: pl(st.softBgl), label: "tsoft" }),
-      computePipeline(device, { code: { glsl: tblocksSource(args) }, layout: pl(st.blocksBgl), label: "tblocks" }),
+    // ai: every kernel from ../slang/back_tiers.mjs
+    const ldpcCode = (sh, c) => (tldpcSource(sh, { c, inv: L.inv[c], ...args, net: { hidden: nets[c].hidden, at: L.netAt[c] } }));
+    [st.noise, st.align, st.soft, st.blocksPipe, ...st.ldpc] = await Promise.all([
+      computePipeline(device, { code: tnoiseSource({ f16 }), layout: pl(st.noiseBgl), label: "tnoise" }),
+      computePipeline(device, { code: talignSource({ f16, ...args }), layout: pl(st.alignBgl), label: "talign" }),
+      computePipeline(device, { code: tsoftSource({ f16, ...args }), layout: pl(st.softBgl), label: "tsoft" }),
+      computePipeline(device, { code: tblocksSource(args), layout: pl(st.blocksBgl), label: "tblocks" }),
       ...shapes.map((sh, c) => computePipeline(device, { code: ldpcCode(sh, c), layout: pl(st.ldpcBgl), label: `tldpc ${CODES[c].name}` })),
     ]);
     st.ldpcAlts = await Promise.all(alts.map((set) => Promise.all(set.map((sh, c) => computePipeline(device, { code: ldpcCode(sh, c), layout: pl(st.ldpcBgl), label: `tldpc ${CODES[c].name} ${sh.form}` })))));
-    // ai: EP: a sub-channel's estimate and its two pilots' values (tsoft), a vec4
+    // ai: EP: a sub-channel's estimate and its two pilots' values (tsoft), then its 1 / N (tnoise), a vec4
     st.bytes = { EP: 16 * bh.B * bh.dims.subchMax };
     bh.log(`rate profile (LDPC ${LDPC_FORMS.join(", ")}): ${shapes.map((sh, c) => `${CODES[c].name} n ${sh.n} z ${sh.z}, ${sh.threads} lanes, ${tierWgBytes(sh, nets[c])} B, the learned stop ${nets[c].hidden} x ${nets[c].hidden}`).join("; ")}; TAB ${(tab.byteLength / 1024).toFixed(0)} KB`);
     return st;
@@ -106,7 +108,8 @@ export class RuleStage {
     const so = this.bh.soft, uv = idOf(so.uvBuf), tab = idOf(this.tabBuf);
     const step = (pipeline, bgl, binds, argsAt) => ({ pipeline: idOf(pipeline), bgl: idOf(bgl), binds, argsAt });
     const soft = [];
-    for (const s of so.served) soft.push(step(this.align, this.alignBgl, ["lane:S", uv, "lane:LISTS", "lane:PILOT", tab, idOf(so.params[s])], argsOffset(s, "reduce")));
+    for (const s of so.served) soft.push(step(this.noise, this.noiseBgl, ["lane:S", uv, "lane:LISTS", "lane:EP", idOf(so.params[s])], argsOffset(s, "soft")));
+    for (const s of so.served) soft.push(step(this.align, this.alignBgl, ["lane:S", uv, "lane:LISTS", "lane:PILOT", tab, idOf(so.params[s]), "lane:EP"], argsOffset(s, "reduce")));
     for (const s of so.served) soft.push(step(this.soft, this.softBgl, ["lane:S", uv, "lane:LISTS", "lane:L", "lane:EP", "lane:BCOUNTS", "lane:PILOT", tab, idOf(so.params[s])], argsOffset(s, "soft")));
     for (const s of so.served) soft.push(step(this.blocksPipe, this.blocksBgl, ["lane:LISTS", "lane:EP", "lane:BLK", "lane:PILOT", tab, idOf(so.params[s])], argsOffset(s, "reduce")));
     const ldpcOf = (pipes) => pipes.map((pipe, c) => step(pipe, this.ldpcBgl, ["lane:L", "lane:BLK", "lane:LISTS", tab, "lane:V", "lane:ITS", "lane:REC", "lane:BCOUNTS", idOf(this.tBufs[c])], ldpcArgsOffset(c)));

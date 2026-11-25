@@ -42,7 +42,7 @@ fun DetailsBlock(d: Details, modifier: Modifier = Modifier, clear: Boolean = fal
         Row(Modifier.fillMaxWidth().heightIn(min = 30.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.file, contentDescription = null, Modifier.size(20.dp), tint = muted)
             if (d.test) Text(d.name, style = nameStyle, color = fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            else NameLine("", d.name, "", nameStyle, fg, Modifier.weight(1f))
+            else NameLine(d.name, nameStyle, fg, Modifier.weight(1f))
             if (d.spinning) CircularProgressIndicator(Modifier.size(16.dp), color = fg, strokeWidth = 2.dp, trackColor = if (clear) Color.Transparent else Line)
             else if (d.end.isNotEmpty()) Text(d.end, style = figures, color = muted, maxLines = 1)
         }
@@ -59,20 +59,18 @@ fun DetailsBlock(d: Details, modifier: Modifier = Modifier, clear: Boolean = fal
 // ai: A warning as a status label (2026-11-07; a sentence before, "Set the sender to at most 30 fps for this camera.";
 // ai: sentences are for popups and covers): its label ("Throttling") and where a figure helps a value ("camera 42 of 60
 // ai: fps"). Drawn as a row under the block, the red triangle before its label (WarnRow; rows, not chips); in a rail the
-// ai: triangle alone, its words the description (text). (A hint form, the grey info icon, served the camera's rate advice
-// ai: from 2026-11-11 to 11-19.)
+// ai: triangle alone, its words the description (text).
 class Warn(val label: String, val value: String = "") {
     val text get() = if (value.isEmpty()) label else "$label, $value"
 }
 
 @Composable
-fun WarnRow(w: Warn, modifier: Modifier = Modifier, clear: Boolean = false) {
+fun WarnRow(w: Warn, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxWidth().heightIn(min = 26.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(Icons.alert, contentDescription = "Warning", Modifier.size(16.dp),
-            tint = if (clear) Color.Transparent else Bad)
-        Text(w.label, style = MaterialTheme.typography.bodyMedium, color = if (clear) Color.Transparent else Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (w.value.isNotEmpty()) Text(w.value, style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = if (clear) Color.Transparent else Muted, maxLines = 1)
+        Icon(Icons.alert, contentDescription = "Warning", Modifier.size(16.dp), tint = Bad)
+        Text(w.label, style = MaterialTheme.typography.bodyMedium, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (w.value.isNotEmpty()) Text(w.value, style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"), color = Muted, maxLines = 1)
     }
 }
 

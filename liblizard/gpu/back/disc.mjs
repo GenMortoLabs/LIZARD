@@ -1,5 +1,5 @@
 // The transform's tables and stage plan, the host side shared by the decoder's back half (transform.mjs) and the
-// sender's encoder (../encoder.mjs, ../wgsl/inverse.mjs): the disc's layout of a picture's coefficients, the rows a
+// sender's encoder (../encoder.mjs, ../slang/src/send_irows.slang): the disc's layout of a picture's coefficients, the rows a
 // version takes, the decode size, the detrend's basis and twiddles (transformTables), and the FFT's stages
 // (stagesOf). Plain JS over the codec's wasm (sim/ob.mjs over liblizard/build/ob.mjs), so the sender's pages carry
 // none of the decoder's kernels.
@@ -36,7 +36,7 @@ export function uvOf(p, n, bw) {
 // packed at off[v]. rows[v] = (off, count, nonnegative entries, umaxN) for the shader; UV[i] is the S entry of pos[i]
 // for the soft-value stage. Every entry of pos maps to exactly one entry of S, and S has npos entries.
 // ai: UC[i] is pos[i]'s (u, v) itself, u in the high half (signed) and v in the low, for the soft stage's turn of a
-// ai: coefficient by the grid's shift (glsl/back_tiers.mjs talign).
+// ai: coefficient by the grid's shift (slang/back_tiers.mjs talign).
 export function discLayout(shape, pos) {
   const { n, bw, npos } = shape;
   const byV = new Map();
@@ -65,9 +65,43 @@ export function discLayout(shape, pos) {
   return { V, rows, off, UV, UC, count };
 }
 
+// The sender's disc: the frame's spectrum transposed, so the inverse's second pass runs along the picture's rows and
+// writes it row-major (../slang/src/send_ipic.slang). Coefficient (u, v) sits at (v, u) where u > 0 or u = 0 (v > 0
+// there), else its Hermitian partner's place (-v, -u), conjugated: every entry in the half-plane v' > 0 or v' = 0,
+// u' > 0, laid out as discLayout lays the plain one (row v' holds u' = ustart .. umaxP then -umaxN .. -1). UV[i] is
+// pos[i]'s S entry, bit 31 set where it is conjugated (../slang/src/send_paint.slang put); rows and V as discLayout's.
+// core/tx/send_tables.cpp sendTables is its twin.
+export function sendDiscLayout(shape, pos) {
+  const { n, bw, npos } = shape;
+  const tOf = (u, v) => (u > 0 || (u === 0 && v > 0) ? [v, u, 0] : [-v, -u, 1]);
+  const byV = new Map();
+  for (let i = 0; i < npos; i++) { const [a, b] = tOf(...uvOf(pos[i], n, bw)); if (!byV.has(b)) byV.set(b, []); byV.get(b).push(a); }
+  const V = Math.max(...byV.keys()) + 1;
+  const rows = new Uint32Array(4 * V), off = new Uint32Array(V), np = new Uint32Array(V), un = new Uint32Array(V);
+  let count = 0;
+  for (let v = 0; v < V; v++) {
+    const us = byV.get(v) ?? [], set = new Set(us), ustart = v === 0 ? 1 : 0;
+    const maxP = Math.max(ustart - 1, ...us.filter((u) => u >= 0)), maxN = Math.max(0, ...us.filter((u) => u < 0).map((u) => -u));
+    let ok = us.length === maxP + 1 - ustart + maxN && set.size === us.length;
+    for (let u = ustart; u <= maxP && ok; u++) ok = set.has(u);
+    for (let u = -maxN; u < 0 && ok; u++) ok = set.has(u);
+    if (!ok) throw new Error(`the sender's disc row v = ${v} of ${n}/${npos / 320} is not u = ${ustart}..${maxP}, -${maxN}..-1`);
+    off[v] = count; np[v] = maxP + 1 - ustart; un[v] = maxN;
+    rows.set([count, us.length, np[v], maxN], 4 * v);
+    count += us.length;
+  }
+  if (count !== npos) throw new Error(`the sender's disc holds ${count} entries for ${npos} coefficients`);
+  const UV = new Uint32Array(npos);
+  for (let i = 0; i < npos; i++) {
+    const [u, v, cj] = tOf(...uvOf(pos[i], n, bw)), ustart = v === 0 ? 1 : 0;
+    UV[i] = ((off[v] + (u >= 0 ? u - ustart : np[v] + un[v] + u)) | (cj << 31)) >>> 0;
+  }
+  return { V, rows, UV };
+}
+
 // ai: rowsBy[c], c = 0 .. blocks: the disc rows (1 + the largest v) that the coefficients of a frame's first c chunks
 // ai: take, rowsBy[blocks] = V. Chunk b reads pos[i] for i in 8 b x 320 .. 8 (b + 1) x 320 (sub-channels 8b to
-// ai: 8b + 7, 320 coefficients each, as glsl/back_tiers.mjs tsoft gathers them), and every version is a prefix of its
+// ai: 8b + 7, 320 coefficients each, as slang/back_tiers.mjs tsoft gathers them), and every version is a prefix of its
 // ai: size's largest, so rowsOfVersion(tb, v), its first CHUNKS v chunks' rows, is version v's own V
 // ai: (scripts/gpu/back/check_rows.mjs holds every version of every size to it).
 export function rowsByCount({ n, bw, blocks, npos }, pos) {

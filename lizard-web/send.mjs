@@ -221,7 +221,7 @@ function gpuGiveUp(e) {
   if (running) go();
 }
 
-// ai: The format's size, a slider (2026-10-01): every version from 2 to 64, 16 sub-channels a step (src/lizard_phy.h
+// ai: The format's size, a slider (2026-10-01): every version from 1 to 67, 16 sub-channels a step (src/lizard_phy.h
 // ai: LIZARD_STEP, sim/lizard_pick.mjs STEP), which is what the format word names, so every step is a symbol every
 // ai: receiver reads (steps of 8 sub-channels from 2026-10-01 to 2026-10-29). #subch holds what the page reads, the
 // ai: sub-channels; the slider (#blocks) is a view over it, kept out of the saved settings. No auto since 2026-11-07 (its
@@ -259,7 +259,7 @@ $("subch").addEventListener("change", showBlocks);
 // ai: itself since 2026-10-02 (#subch 480, #fps 60: set here, after the page was drawn, they flashed auto first). A
 // ai: setting the user changed is kept over these (persist, below), and a URL preset over that.
 
-// A LIZARD file goes as a chunked transfer (sim/xfer.mjs): source blocks of 2^source block bytes (?source block=10..24, 16 MiB unless
+// A LIZARD file goes as a chunked transfer (sim/xfer.mjs): source blocks of 2^chunk bytes (?chunk=10..24, 16 MiB unless
 // ai: asked), a fountain each, the header in the light, and only there: the receiver reads it blind
 // ai: (2026-09-26).
 const URLP = new URLSearchParams(location.search), SB_LOG2 = +URLP.get("chunk") || null;   // ai: null: src/xfer.h xfer_sb_log2_for's
@@ -268,7 +268,7 @@ const URLP = new URLSearchParams(location.search), SB_LOG2 = +URLP.get("chunk") 
 const FIT = URLP.get("fit") ?? "stretch", SURROUND = URLP.get("bg") ?? "none";
 
 // Which generator fills a test block (sim/phy.mjs STREAMS), in the spec the worker builds its codec from.
-// ai: The receiver judges it from the light (SPEC 9.3), so it is BLAKE3 and nothing else.
+// ai: The receiver judges it from the light (liblizard/src/xfer.h stream_fill), so it is BLAKE3 and nothing else.
 const STREAM = "blake3";
 
 function spec() {
@@ -1216,11 +1216,11 @@ $("pickDone").onclick = () => openPicker(picking);
 $("inkTile").onclick = () => openPicker("ink");
 $("paperTile").onclick = () => openPicker("paper");
 showColours();
-// ai: A preset that is no format (?subch=16, ?subch=24, ?subch=auto) is no symbol: back to the page's default,
+// ai: A preset that is no format (?subch=24, ?subch=1088, ?subch=auto) is no symbol: back to the page's default,
 // ai: LIZARD-480 (#subch's own), and say so, rather than paint it; a kept "auto" (the slider's first step until
 // ai: 2026-11-07) goes back to it quietly.
 if (!VERSIONS.includes(+$("subch").value)) {
-  if (URLP.has("subch")) $("tx").textContent = `${$("subch").value} sub-channels is no format (a multiple of 16 from 64 to 1024): showing LIZARD-480`;
+  if (URLP.has("subch")) $("tx").textContent = `${$("subch").value} sub-channels is no format (a multiple of 16 from 16 to 1072): showing LIZARD-480`;
   $("subch").value = "480";
 }
 showStatsLabels();

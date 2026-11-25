@@ -11,7 +11,7 @@
 // ai:                                      to the model, and built by emcc with -msimd128 it holds the model to
 // ai:                                      wasm's own instructions.
 // ai:   neon_check synth                   digests of the vector sites no blind decode reaches (the transform on every
-// ai:                                      shape a stage takes, RGBA to luma, the binarizer's ragged sizes, the encoder
+// ai:                                      shape a stage takes, RGBA to luma, the encoder
 // ai:                                      and its painter), and every
 // ai:                                      ring with every picture size painted, read blind and compared byte for
 // ai:                                      byte. No input files.
@@ -55,7 +55,6 @@
 #endif
 
 uint32_t ob_debug_hash;                                                   // ai: the host's, read by lizard_phy.c (as wasm.c and core/cpu/codec.c)
-void ob_test_binarize(const uint8_t *img, int w, int h, uint8_t *bin);    // ai: acquire.c
 
 #if defined(__wasm_simd128__)
 #define BUILD_VECTOR "wasm simd128"
@@ -167,8 +166,12 @@ static void unit_f(const lanes_t a, const lanes_t b) {
     same("wasm_f32x4_pmax", lanes(wasm_f32x4_pmax(va, vb)), w, 0, &a, &b);
     for (int i = 0; i < 4; i++) w.u32[i] = a.f32[i] <= b.f32[i] ? 0xffffffffu : 0;
     same("wasm_f32x4_le", lanes(wasm_f32x4_le(va, vb)), w, 0, &a, &b);
+    for (int i = 0; i < 4; i++) w.u32[i] = a.f32[i] < b.f32[i] ? 0xffffffffu : 0;
+    same("wasm_f32x4_lt", lanes(wasm_f32x4_lt(va, vb)), w, 0, &a, &b);
     for (int i = 0; i < 4; i++) w.u32[i] = a.u32[i] & 0x7fffffffu;
     same("wasm_f32x4_abs", lanes(wasm_f32x4_abs(va)), w, 0, &a, 0);
+    for (int i = 0; i < 4; i++) w.f32[i] = sqrtf(a.f32[i]);
+    same("wasm_f32x4_sqrt", lanes(wasm_f32x4_sqrt(va)), w, 1, &a, 0);
     for (int i = 0; i < 4; i++) w.i32[i] = m_trunc_sat(a.f32[i]);
     same("wasm_i32x4_trunc_sat_f32x4", lanes(wasm_i32x4_trunc_sat_f32x4(va)), w, 0, &a, 0);
     same("wasm_f32x4_make", lanes(wasm_f32x4_make(a.f32[0], a.f32[1], a.f32[2], a.f32[3])), a, 1, &a, 0);
@@ -229,6 +232,24 @@ static void unit_i(const lanes_t a, const lanes_t b, const lanes_t c, int it) {
     same("wasm_u16x8_extend_high_u8x16", lanes(wasm_u16x8_extend_high_u8x16(va)), w, 0, &a, 0);
     for (int i = 0; i < 4; i++) w.u32[i] = (uint32_t)a.u16[2 * i] + a.u16[2 * i + 1];
     same("wasm_u32x4_extadd_pairwise_u16x8", lanes(wasm_u32x4_extadd_pairwise_u16x8(va)), w, 0, &a, 0);
+    // ai: the new C finder's (2026-11-24): the unsigned widening load, the unsigned maximum, the 16-to-32 widenings, the
+    // ai: 32-bit arithmetic shift (any count, modulo 32) and the saturating narrowing
+    for (int i = 0; i < 8; i++) w.u16[i] = a.u8[i];
+    same("wasm_u16x8_load8x8", lanes(wasm_u16x8_load8x8(a.u8)), w, 0, &a, 0);
+    OP(wasm_u16x8_max, u16, 8, a.u16[i] > b.u16[i] ? a.u16[i] : b.u16[i]);
+    for (int i = 0; i < 4; i++) w.u32[i] = a.u16[i];
+    same("wasm_u32x4_extend_low_u16x8", lanes(wasm_u32x4_extend_low_u16x8(va)), w, 0, &a, 0);
+    for (int i = 0; i < 4; i++) w.u32[i] = a.u16[4 + i];
+    same("wasm_u32x4_extend_high_u16x8", lanes(wasm_u32x4_extend_high_u16x8(va)), w, 0, &a, 0);
+    { volatile uint32_t n = it % 3 == 0 ? rnd() : rnd() % 40; const uint32_t k = n;
+      for (int i = 0; i < 4; i++) w.i32[i] = a.i32[i] < 0 ? ~(~a.i32[i] >> (k & 31)) : a.i32[i] >> (k & 31);
+      same("wasm_i32x4_shr", lanes(wasm_i32x4_shr(va, k)), w, 0, &a, 0);
+      for (int i = 0; i < 4; i++) w.i32[i] = a.i32[i] < 0 ? ~(~a.i32[i] >> 2) : a.i32[i] >> 2;
+      same("wasm_i32x4_shr 2", lanes(wasm_i32x4_shr(va, 2)), w, 0, &a, 0); }
+    for (int i = 0; i < 4; i++) { w.u16[i] = (uint16_t)(a.i32[i] < 0 ? 0 : a.i32[i] > 65535 ? 65535 : a.i32[i]); w.u16[4 + i] = (uint16_t)(b.i32[i] < 0 ? 0 : b.i32[i] > 65535 ? 65535 : b.i32[i]); }
+    same("wasm_u16x8_narrow_i32x4", lanes(wasm_u16x8_narrow_i32x4(va, vb)), w, 0, &a, &b);
+    for (int i = 0; i < 4; i++) { w.i16[i] = (int16_t)(a.i32[i] < -32768 ? -32768 : a.i32[i] > 32767 ? 32767 : a.i32[i]); w.i16[4 + i] = (int16_t)(b.i32[i] < -32768 ? -32768 : b.i32[i] > 32767 ? 32767 : b.i32[i]); }
+    same("wasm_i16x8_narrow_i32x4", lanes(wasm_i16x8_narrow_i32x4(va, vb)), w, 0, &a, &b);
     OP(wasm_u8x16_min, u8, 16, a.u8[i] < b.u8[i] ? a.u8[i] : b.u8[i]); OP(wasm_u8x16_max, u8, 16, a.u8[i] > b.u8[i] ? a.u8[i] : b.u8[i]);
     OP(wasm_u8x16_lt, u8, 16, a.u8[i] < b.u8[i] ? 0xff : 0); OP(wasm_i8x16_ne, u8, 16, a.u8[i] != b.u8[i] ? 0xff : 0);
     OP(wasm_u8x16_sub_sat, u8, 16, (uint8_t)(a.u8[i] > b.u8[i] ? a.u8[i] - b.u8[i] : 0));
@@ -516,21 +537,6 @@ static int synth_luma(void) {
   return bad != 0;
 }
 
-static void synth_binarize(void) {
-  static const int SZ[][2] = { { 16, 16 }, { 37, 29 }, { 64, 8 }, { 129, 131 }, { 640, 480 }, { 1283, 961 }, { 1080, 1080 } };
-  dig_t d = DIG0;
-  for (size_t s = 0; s < sizeof SZ / sizeof *SZ; s++) for (int kind = 0; kind < 2; kind++) {
-    const int w = SZ[s][0], h = SZ[s][1];
-    uint8_t *img = malloc((size_t)w * h + 64), *bin = malloc((size_t)w * h + 64);
-    rnd_seed((uint64_t)(w * 3 + h + kind));
-    for (int i = 0; i < w * h; i++) img[i] = (uint8_t)(kind ? (((i % w) >> 2) & 1 ? 30 + (rnd() & 15) : 220 - (rnd() & 15)) : rnd());
-    ob_test_binarize(img, w, h, bin);
-    d = dig(d, bin, (size_t)w * h);
-    free(img); free(bin);
-  }
-  printf("synth binarize: %016llx\n", (unsigned long long)d);
-}
-
 // ai: A symbol painted by the codec (lizard_encode, lizard_paint_rgba, then the painter's RGBA back to luma) on a
 // ai: white page, P pixels of it all round.
 static uint8_t *paint_page(const lizard_t *f, const uint8_t *blocks, int P, int *side, dig_t *d) {
@@ -628,7 +634,6 @@ static int synth(void) {
   int fails = 0;
   synth_fft();
   fails += synth_luma();
-  synth_binarize();
   fails += synth_lab();
   fails += synth_pairs();
   printf("synth: %s\n", fails ? "FAILED" : "every round trip came back");

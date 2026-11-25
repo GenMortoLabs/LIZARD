@@ -18,6 +18,7 @@ LIZ_API void liz_session_start(liz_session*, const char*) { none(); }
 LIZ_API void liz_session_stop(liz_session*) { none(); }
 LIZ_API void liz_session_reconfigure(liz_session*, const char*, const char*) { none(); }
 LIZ_API void liz_session_batch_cap(liz_session*, int) { none(); }
+LIZ_API void liz_session_phase_lock(liz_session*, int) { none(); }
 LIZ_API size_t liz_session_stats(liz_session*, char* json, size_t cap) { if (json && cap) *json = '\0'; none(); return 0; }
 LIZ_API size_t liz_session_camera(liz_session*, char* json, size_t cap) { if (json && cap) *json = '\0'; none(); return 0; }
 LIZ_API int liz_session_preview(liz_session*, uint64_t, int, uint8_t*, size_t, uint32_t*, uint32_t*, uint64_t*) { return none(); }

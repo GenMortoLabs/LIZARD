@@ -10,7 +10,7 @@ extern "C" {
 typedef struct cpu_dec cpu_dec_t;
 
 // ai: What a frame's decode found. ring: the ring that registered (an index into src/lizard_phy.h LIZARD_RING), -1 none. n: the picture it was finished
-// ai: at, 0 not finished. word: the frame's own word read (version = sub-channels / 16, count its 6/7, 2/3 and 1/2 blocks; fps
+// ai: at, 0 not finished. word: the frame's own word read (version = sub-channels / 16, count its 6/7, 3/4, 2/3 and 1/2 blocks; fps
 // ai: and delay the sender's clock, src/fmt.h). total: the blocks
 // ai: of the layout it was finished at (ok[] and blocks[] hold that many; cpu_dec_top the most). quad: the symbol's corners in the image, TL
 // ai: TR BR BL. pilot_*: what the pilots read (liblizard/src/any.h lizard_any_pilot: r of the even sub-channels and of
@@ -20,7 +20,7 @@ typedef struct {
   float quad[8];
   int pilot_subch;
   float pilot_r[2], pilot_sd[2];
-  int count[3];
+  int count[4];
   int fps, delay;
 } cpu_frame_t;
 
@@ -45,7 +45,7 @@ void cpu_hash_arm(void);
 uint32_t cpu_hash_take(void);
 // ai: The codec's stage timers for the calling thread (internal.h PROF_*), ms since the last reset, by stage: acquire's
 // ai: parts, then the picture's (sample, detrend, transform, LLR, LDPC).
-enum { CPU_PROF_BINARIZE, CPU_PROF_MESH, CPU_PROF_POINTS, CPU_PROF_TURN, CPU_PROF_FIT, CPU_PROF_SCORE, CPU_PROF_MARKS, CPU_PROF_TRACK,
+enum { CPU_PROF_GREY, CPU_PROF_MESH, CPU_PROF_TRACE, CPU_PROF_LENS, CPU_PROF_SCORE, CPU_PROF_TRACK,
        CPU_PROF_SAMPLE, CPU_PROF_DETREND, CPU_PROF_FFT, CPU_PROF_LLR, CPU_PROF_LDPC, CPU_PROF_N };
 double cpu_prof_ms(int stage);
 void cpu_prof_reset(void);

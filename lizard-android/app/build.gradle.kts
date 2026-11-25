@@ -68,7 +68,7 @@ kotlin {
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
-// ai: liblizard/out's setup, blobs and device SPIR-V (not naga's .raw.spv, not wgsl/, naga/, spvx/) as assets/lizard/;
+// ai: liblizard/out's setup, blobs and device SPIR-V (not an older tree's .raw.spv, wgsl/, naga/, spvx/) as assets/lizard/;
 // ai: copied to filesDir/lizard/ at the first start after an install (Assets.ensure, before the session is made).
 abstract class LizardAssets : DefaultTask() {
     @get:Internal abstract val out: DirectoryProperty

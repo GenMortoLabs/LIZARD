@@ -109,7 +109,7 @@
              that fit the room, until 2026-11-07); #subch the value the page reads (the sub-channels), the slider a
              view over it (send.mjs); its label the rate profile's blocks, titled Blocks with Show statistics on and
              Density, the bytes alone, with it off (#blocksTitle) -->
-        <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 27.1 KB</span></span><input id="blocks" type="range" min="4" max="64" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
+        <div class="blocks"><span class="row"><span id="blocksTitle">Density</span><span id="blocksOut">58, 26.7 KB</span></span><input id="blocks" type="range" min="1" max="67" step="1" value="30" data-view aria-label="blocks"><input id="subch" type="hidden" value="480"></div>
         <!-- ai: the ring, the 128 by default (sim/lizard_pick.mjs RING_DEFAULT; an Auto option, the same ring, until 2026-10-05),
              named by its border's look with Show statistics off (Thin the 256, Medium the 128, Thick the 64, that order)
              and by its cells with it on (64, 128, 256): send.mjs ringOptions, the inline script below -->
@@ -139,10 +139,10 @@
              slider the pictures between new blocks of its code rate, the format's tiers from the inside out, 1 to 60, 1
              each by default (6/7 and 3/4 on one slider from 2026-11-17 to 11-22, while their tails carried the pilots); a
              held rate's blocks repeat the frame before's (send.mjs refreshOf, the worker's "refresh") -->
-        <div class="blocks"><span class="row"><span>6/7</span><span id="refresh67Out">1</span></span><input id="refresh67" type="range" min="1" max="60" step="1" value="1" aria-label="6/7"></div>
-        <div class="blocks"><span class="row"><span>3/4</span><span id="refresh34Out">1</span></span><input id="refresh34" type="range" min="1" max="60" step="1" value="1" aria-label="3/4"></div>
-        <div class="blocks"><span class="row"><span>2/3</span><span id="refresh23Out">1</span></span><input id="refresh23" type="range" min="1" max="60" step="1" value="1" aria-label="2/3"></div>
-        <div class="blocks"><span class="row"><span>1/2</span><span id="refresh12Out">1</span></span><input id="refresh12" type="range" min="1" max="60" step="1" value="1" aria-label="1/2"></div>
+        <div class="blocks"><span class="row"><span>6/7</span><span id="refresh67Out">1</span></span><input id="refresh67" type="range" min="1" max="30" step="1" value="1" aria-label="6/7"></div>
+        <div class="blocks"><span class="row"><span>3/4</span><span id="refresh34Out">1</span></span><input id="refresh34" type="range" min="1" max="30" step="1" value="1" aria-label="3/4"></div>
+        <div class="blocks"><span class="row"><span>2/3</span><span id="refresh23Out">1</span></span><input id="refresh23" type="range" min="1" max="30" step="1" value="1" aria-label="2/3"></div>
+        <div class="blocks"><span class="row"><span>1/2</span><span id="refresh12Out">1</span></span><input id="refresh12" type="range" min="1" max="30" step="1" value="1" aria-label="1/2"></div>
       </div>
     </details>
     <details id="foldPerf" class="dev"><summary>Performance</summary>
@@ -172,7 +172,7 @@
     // ai: (sim/lizard_pick.mjs tiersFor, src/lizard_phy.c lizard_tiers_for): over the frame's 636 s data slots, a 6/7 blocks
     // ai: of 4480, t 2/3 of 5760 and c 1/2 of 7680, each 39, 15 and 20% of them in whole blocks rounded half up, then c, t
     // ai: and a trimmed in that order until one 3/4 block of 5120 fits, the 3/4 filling: a + m + t + c blocks; a value that
-    // ai: is no format (LIZARD-64 to -1072 in steps of 16; a kept "auto" from before 2026-11-07 among them) is the page's
+    // ai: is no format (LIZARD-16 to -1072 in steps of 16; a kept "auto" from before 2026-11-07 among them) is the page's
     // ai: default, LIZARD-480, as send.mjs makes it.
     (() => { try {
       const ls = localStorage, $ = (id) => document.getElementById(id);

@@ -226,6 +226,7 @@ struct Device {
   uint32_t family = 0;
   VkCommandPool pool = VK_NULL_HANDLE;
   VkPipelineCache cache = VK_NULL_HANDLE;
+  bool pipeStats = false;   // ai: LIZ_PIPE_STATS: pipelines created with statistics capture, printed (lab)
   // ai: the layouts' immutable sampler (Bind::Sampler): bilinear, clamped to the edge, normalised coordinates, one
   // ai: level; made at the first layout that names it, destroyed with the device
   VkSampler linear = VK_NULL_HANDLE;

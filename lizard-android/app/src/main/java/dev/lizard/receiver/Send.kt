@@ -452,9 +452,9 @@ class SendState(private val a: MainActivity) {
     // ai: at the slider's release (the box resized once: a resize mid-send reconfigures where the room changed)
     fun chooseMargin(m: Int) { margin = m.coerceIn(Pick.QUIET, MARGIN_MAX); prefs.edit().putInt("sendMargin", margin).apply() }
     // ai: a group's delay (its code rates), applied at once (the sender's next frame; no configure)
-    fun chooseRefresh(rates: List<Int>, v: Int) {
-        if (rates.all { refresh[it] == v }) return
-        refresh = refresh.copyOf().also { e -> for (r in rates) e[r] = v.coerceIn(1, REFRESH_MAX) }
+    fun chooseRefresh(rate: Int, v: Int) {
+        if (refresh[rate] == v) return
+        refresh = refresh.copyOf().also { e -> e[rate] = v.coerceIn(1, REFRESH_MAX) }
         prefs.edit().putString("sendRates", refreshText(refresh)).apply()
         refreshNow()
     }

@@ -54,12 +54,14 @@ class XferRx {
   void releaseDone();
   // ai: XferRxCore::allow (the receiver's bounds; a transfer refused for them taken afresh), done when it returns
   void allow(uint64_t limit, double room);
+  // ai: XferRxCore::pause, in order with the blocks queued before it (the receive session's, at a camera's stop and start)
+  void pause(bool on);
   // ai: Waits until the worker has taken everything queued and every solve it started is taken in (tools and tests; the
   // ai: app never needs it).
   void drain();
 
  private:
-  struct Item { uint8_t kind; std::array<uint8_t, XFER_BLOCK> b; };   // ai: kind 0 a block, 1 a clear, 2 a forget (b the root, NUL-ended), 4 a release, 3 an allow (b the limit and room)
+  struct Item { uint8_t kind; std::array<uint8_t, XFER_BLOCK> b; };   // ai: kind 0 a block, 1 a clear, 2 a forget (b the root, NUL-ended), 4 a release, 3 an allow (b the limit and room), 5 a pause (b[0] on)
   void push(uint8_t kind, const uint8_t* b);
   void ask(uint8_t kind, const uint8_t* b);
   void run();

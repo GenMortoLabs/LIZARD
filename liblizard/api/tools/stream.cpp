@@ -9,7 +9,8 @@
 // ai:     painter packing its own).
 // ai:     A line each tenth: frames, ms a frame; the file's bytes and a frame's raw size at the end.
 // ai:   lizard_stream check OUT.lizard [--threads N]
-// ai:     every frame read by the C (liz_decode on meta.json's layout, nothing held) into a transfer, three times: all
+// ai:     every frame read by the C (liz_decode on each entry's centre square, a 2:1 picture's two squares their own
+// ai:     entries, nothing held) into a transfer, three times: all
 // ai:     the frames, the even ones alone, the odd ones alone (a camera at half the rate in step with the loop): whether
 // ai:     each makes the file whole (its BLAKE3 root verified) and after how many frames; the read rate a player needs at
 // ai:     the stream's fps. Exit 0 where all three make it whole.
@@ -67,10 +68,10 @@ int doExport(int argc, char** argv) {
   int64_t cycle = 0;
   const auto tw = std::chrono::steady_clock::now();
   while ((cycle = liz_sender_cycle(s)) <= 0) {
-    if (std::chrono::steady_clock::now() - tw > std::chrono::minutes(30)) return fail("the file's chunks were not made in 30 minutes");
+    if (std::chrono::steady_clock::now() - tw > std::chrono::minutes(30)) return fail("the file's source blocks were not made in 30 minutes");
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  std::printf("chunks made in %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tw).count());
+  std::printf("source blocks made in %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - tw).count());
   if (liz_sender_configure(s, &fmt, p, 0, as, nullptr) != LIZ_OK) return fail(std::string("configure: ") + liz_last_error());
   liz_geometry g{};
   liz_sender_geometry(s, &g);
@@ -224,6 +225,6 @@ int main(int argc, char** argv) {
   std::fprintf(stderr, "lizard_stream export FILE OUT.lizard [--blocks N] [--ring 0|1|2] [--fps F] [--codes 1|2] [--frames N | --cycles L]\n"
                        "              [--painter auto|gpu|cpu] [--seed S] [--assets DIR] [--level L]\n"
                        "lizard_stream check OUT.lizard [--threads N]\n"
-                       "lizard_stream play OUT.lizard [--frames N] [--threads N]\n");
+                       "lizard_stream play OUT.lizard [--frames N] [--threads N] [--assets DIR]\n");
   return 2;
 }

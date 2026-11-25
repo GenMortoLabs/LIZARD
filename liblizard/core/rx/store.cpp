@@ -199,7 +199,7 @@ class FileStore final : public Store {
   }
   bool append(uint32_t c, uint32_t sym, const uint8_t* payload) override {
     Open* h = handle(c);
-    uint8_t r[REC] = {}, i[4];   // ai: zeroed: the id's bytes 8 to 11 (its TSI and spare) are no record's
+    uint8_t r[REC] = {}, i[4];   // ai: zeroed: the id's bytes 5 to 11 (its TOI and spare byte) are no record's
     xfer_id_put(r, sym);
     memcpy(r + IDB, payload, PAYLOAD);
     put32(i, sym);

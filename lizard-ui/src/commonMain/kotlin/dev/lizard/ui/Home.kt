@@ -94,10 +94,10 @@ fun whenOf(at: Long): String = if (at > 0) DateFormat.getDateTimeInstance(DateFo
 // ai: a date as the phone's lists say it (2026-11-07; whenOf's "Nov 7, 2026, 1:10 PM" before, a bundle's line taking two):
 // ai: today its time ("1:10 PM"), this year its month and day ("Nov 5"), another year the date ("Nov 5, 2025"); the PC's
 // ai: columns keep whenOf
-fun shortWhen(at: Long, now: Long = System.currentTimeMillis()): String {
+fun shortWhen(at: Long): String {
     if (at <= 0) return ""
     val d = Calendar.getInstance().apply { timeInMillis = at }
-    val n = Calendar.getInstance().apply { timeInMillis = now }
+    val n = Calendar.getInstance()
     val year = d.get(Calendar.YEAR) == n.get(Calendar.YEAR)
     return when {
         year && d.get(Calendar.DAY_OF_YEAR) == n.get(Calendar.DAY_OF_YEAR) -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(at))
@@ -233,7 +233,6 @@ fun BundleScreen(name: String, files: Int, size: Long, acts: List<Act>, items: L
         } }
     }
 }
-
 
 // ai: Home on a PC (2026-11-06; the web's index.html the same), spacious, the one place a PC's buttons stretch: the bar
 // ai: across the window (the mark and LIZARD; About, the credits in a dialog, and Source code on its right), the content

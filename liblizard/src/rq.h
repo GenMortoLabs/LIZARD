@@ -1,7 +1,8 @@
-// RaptorQ (RFC 6330), one source block, for the transfer's chunks (src/xfer.h): a chunk of len bytes is K = ceil(len / T)
-// source symbols of T bytes (the last zero padded), sent as encoding symbols by ESI: 0 .. K - 1 the source symbols
-// themselves, K and up repair symbols (internal symbol id ESI + K' - K, RFC 6330 5.3.1). One source block and one sub-block
-// (Z = N = 1): the transfer's chunk is the source block, and nothing of the RFC's object partitioning is used.
+// RaptorQ (RFC 6330), one source block, for the transfer's source blocks (src/xfer.h): a source block of len bytes is
+// K = ceil(len / T) source symbols of T bytes (the last zero padded), sent as encoding symbols by ESI: 0 .. K - 1 the
+// source symbols themselves, K and up repair symbols (internal symbol id ESI + K' - K, RFC 6330 5.3.1). One source
+// block and one sub-block (Z = N = 1): each of the transfer's source blocks is RaptorQ's one, and nothing of the RFC's
+// object partitioning is used.
 //
 // The encoder solves for the L intermediate symbols once (rq_enc_new) and makes any symbol after (rq_enc_symbol). The
 // decoder keeps every distinct symbol it is given and, from K of them on, solves after each new one until the block is
@@ -37,8 +38,6 @@ int rq_dec_add(rq_dec_t *d, uint32_t esi, const uint8_t *sym);
 int rq_dec_hold(rq_dec_t *d, uint32_t esi, const uint8_t *sym);
 // A solve over the symbols held: 1 whole (now or before), 0 more wanted (fewer than K, or a rank short), -1 out of memory.
 int rq_dec_solve(rq_dec_t *d);
-// The distinct symbols held.
-uint32_t rq_dec_count(const rq_dec_t *d);
 // The block's len bytes into out, once rq_dec_add has said 1: 0, or -1 before.
 int rq_dec_recover(const rq_dec_t *d, uint8_t *out);
 void rq_dec_free(rq_dec_t *d);

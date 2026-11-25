@@ -20,7 +20,7 @@ export const ringOfSpec = (spec) => (spec.span ? RINGS.indexOf(spec.span / 2) : 
 // ai: every version is a prefix of its picture's top (gpu/plan/back_transform.mjs listsBlocks), so one set of back
 // ai: half tables a picture serves every version. A picture's slot is its index here (sel.z on the device).
 export const PICTURES = SIZES.map((n) => { const [lo, hi] = versionRange(n); return { n, subch: subchOf(hi), lo, hi }; });
-// ai: The picture slot a version decodes at, -1 outside the word's range (1 to 64).
+// ai: The picture slot a version decodes at, -1 outside the word's versions (1 to 67).
 export const slotOf = (version) => PICTURES.findIndex((p) => version >= p.lo && version <= p.hi);
 // ai: Where picture sample 0 sits and how far apart samples are, in modules, for picture n in ring table t: the
 // ai: codec's margin + 0.5 / scale and 1 / scale, scale = n / span (src/wasm.c lizard_grid_out).

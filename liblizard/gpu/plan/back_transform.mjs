@@ -1,4 +1,4 @@
-// ai: The back half's transform's layouts (glsl/back_transform.mjs: the gate, the fused pass 1, reduce, pass 2): LISTS,
+// ai: The back half's transform's layouts (slang/back_transform.mjs: the gate, the fused pass 1, reduce, pass 2): LISTS,
 // ai: ARGS, the gate's uniform, PIC's lattice, the anchors' record and pass 1's workgroup memory, which ../back/transform.mjs,
 // ai: ../back/back.mjs and ../../gen/gen.mjs read.
 import { SIZES, SLOTS } from "./common.mjs";
@@ -17,27 +17,29 @@ export const ARGS_WORDS = 12;
 export const argsLdpc = (c) => SLOTS * ARGS_WORDS + 3 * c;
 // ai: ARGS whole, u32 words: ARGS_WORDS a picture slot, then 3 a code.
 export const argsWords = SLOTS * ARGS_WORDS + 3 * NC;
-// ai: LISTS: a size's count and frames (SLOTS (1 + B)), then from listsHead each frame's (w, h), configuration (version
-// ai: << 22 | its static word's counts, ../glsl/common.mjs CFG; the version alone before 2026-11-18), rows and
-// ai: ring, then from listsAll every listed frame of every size in the batch's order (the LDPC's workgroups' frames:
-// ai: a workgroup a (block of a code, listed frame)).
+// ai: LISTS: a size's count and frames (SLOTS (1 + B)), then from listsHead each frame's (w, h), configuration's first
+// ai: word (the version << 24 | its word's 6/7, 3/4 and 2/3 counts, ../slang/src/lib/cfg.slang; the version << 22 | three
+// ai: counts from 2026-11-18 to 11-23, the version alone before), rows and ring, then from listsAll every listed frame
+// ai: of every size in the batch's order (the LDPC's workgroups' frames: a workgroup a (block of a code, listed frame)),
+// ai: then from listsHalf each frame's 1/2 count, the configuration's second word.
 export const listsHead = (B) => SLOTS * (1 + B);
-export const listsWords = (B) => listsHead(B) + 6 * B;
+export const listsWords = (B) => listsHead(B) + 7 * B;
 export const listsBlocks = (B) => listsHead(B) + 2 * B;
 export const listsRows = (B) => listsHead(B) + 3 * B;
 export const listsRing = (B) => listsHead(B) + 4 * B;
 export const listsAll = (B) => listsHead(B) + 5 * B;
+export const listsHalf = (B) => listsHead(B) + 6 * B;
 export const ARGS_SLOT = { pass1: 0, reduce: 3, pass2: 6, soft: 9 };
 // ai: The gate's uniform in u32 words: at[s] = (n / CPW, V, the size's top version, 0) a slot, then the rows table
 // ai: flat, entry v SLOTS + s the rows version v takes at slot s (transform.mjs fills it), padded to whole vec4u.
 // ai: counts: versions 0 to the largest built size's top. (A codes table followed, each version's blocks a code, until
-// ai: 2026-11-18: a frame's blocks are its word's, ../glsl/common.mjs CFG.)
+// ai: 2026-11-18: a frame's blocks are its word's, ../slang/src/lib/cfg.slang.)
 export const gateRowsAt = (c, s) => 4 * SLOTS + c * SLOTS + s;
 export const gateWords = (counts) => 4 * SLOTS + 4 * Math.ceil((counts * SLOTS) / 4);
 
 export const LATTICE_MAX = 36;   // node coordinates a side PIC holds (register.mjs NODES_MAX / 4 is 34)
 
-// ai: The anchors (SPEC 6.13; glsl/anchors.mjs; the C's src/acquire.c anchor_find and border_fill_anchors, src/lizard_phy.c
+// ai: The anchors (SPEC 6.13; slang/anchors.mjs; the C's src/acquire.c anchor_find and border_fill_anchors, src/lizard_phy.c
 // ai: lizard_finish_ext's erase): ANCH_SIDE x ANCH_SIDE anchors, ANCH_K a frame. ANCH_FIT writes a frame's record,
 // ai: ANCH_REC vec4f, which pass 1 reads: [0] (on, 0, 0, the anchors found);
 // ai: [1] to [3] the 9 knots of an axis in modules (the lattice's ends, the anchors' centres between) and the anchor's
@@ -45,7 +47,7 @@ export const LATTICE_MAX = 36;   // node coordinates a side PIC holds (register.
 // ai: inner knots' residuals in image px,
 // ai: knot q = 7 j + i in .xy of [4 + q / 2] for an even q, .zw for an odd; at ANCH_SURF the shading the squares are
 // ai: filled with, (b0, b1, b2, b3), (b4, b5, 0, 0): b0 + b1 u + b2 u^2 + b3 w + b4 w^2 + b5 u w, u and w a sample's
-// ai: module x and y as 2 (m - margin) / span - 1 (glsl/anchors.mjs ANCH_FIT); at ANCH_GAIN the gain's surface, the
+// ai: module x and y as 2 (m - margin) / span - 1 (slang/anchors.mjs ANCH_FIT); at ANCH_GAIN the gain's surface, the
 // ai: signal's swing fitted in the same basis, (a0, a1, a2, a3), (a4, a5, 0, 0) (SPEC 6.10; pass 1 multiplies each sample by
 // ai: its mean over its value). Here, not in anchors.mjs, because pass 1 reads it and anchors.mjs imports this module.
 export const ANCH_SIDE = 7, ANCH_K = ANCH_SIDE * ANCH_SIDE, ANCH_SURF = 4 + Math.ceil(ANCH_K / 2), ANCH_GAIN = ANCH_SURF + 2, ANCH_REC = ANCH_SURF + 4;

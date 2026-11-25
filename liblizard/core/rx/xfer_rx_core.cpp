@@ -76,7 +76,7 @@ void radix24(std::vector<uint32_t>& v) {
   }
 }
 
-// ai: sim/fountain.mjs Decoder: a source block's RaptorQ decoder (src/rq.h), its symbols the ids' 18 bits; it takes every
+// ai: sim/fountain.mjs Decoder: a source block's RaptorQ decoder (src/rq.h), its symbols the ids' 24-bit ESIs; it takes every
 // ai: symbol it is given and solves from K on
 struct Dec {
   rq_dec_t* d = nullptr;
@@ -149,6 +149,7 @@ struct XferRxCore::Rx {
     uint32_t verified = 0, rejected = 0, over = 0;
     double ms = 0;
     double firstMs = 0, doneMs = 0;   // ai: XferProgress.secs: this transfer's first data block taken, its finish (nowMs)
+    double pausedMs = 0, pausedAt = 0;   // ai: the time paused while it wanted blocks (pause), and when the pause in force began
     bool done = false;
     // ai: the store could not keep this transfer (store.h: over the memory cap, a write refused): it ends here, never
     // ai: done, its blocks no longer taken; the store's error says why. Its header again (allow) begins it afresh.
@@ -395,6 +396,18 @@ struct XferRxCore::Rx {
       store->drop(c); s.recs = s.dups = 0;
       say("xfer: chunk " + std::to_string(c) + " rejected");
     }
+    // ai: the blocks paused (Rx::pause): the clock stopped where blocks are still wanted, every source block verified or
+    // ai: solving being the solves' time, which counts
+    void pause(bool on, double t) {
+      if (on) {
+        if (!hdr || done || failed || !firstMs || pausedAt) return;
+        uint32_t ready = 0;
+        for (uint32_t c = 0; c < hdr->h.source_blocks; c++) ready += c < sbs.size() && (sbs[c].state == VERIFIED || sbs[c].state == SOLVING);
+        if (ready < hdr->h.source_blocks) pausedAt = t;
+      } else if (pausedAt) {
+        pausedMs += t - pausedAt; pausedAt = 0;
+      }
+    }
     void finish() {
       saveMeta();   // ai: the finished file's name, compression and root beside it until it is taken out (store.h fileStore)
       path = store->finish(hdr->name);
@@ -402,6 +415,7 @@ struct XferRxCore::Rx {
       done = true;
       doneMs = nowMs();
       if (!firstMs) firstMs = doneMs;   // ai: an empty file: no data block, no time
+      pause(false, doneMs);
       rx.finished.push_back(serial);
       say("xfer: " + hdr->name + " verified, " + path);
     }
@@ -418,7 +432,8 @@ struct XferRxCore::Rx {
       p.verified = verified;
       p.rejected = rejected; p.over = over; p.solveMs = ms;
       p.done = done; p.failed = failed; p.path = path; p.doneAt = doneAt;
-      p.secs = firstMs ? ((done ? doneMs : nowMs()) - firstMs) / 1000 : 0;
+      const double end = done ? doneMs : nowMs();
+      p.secs = firstMs ? (end - firstMs - pausedMs - (pausedAt ? end - pausedAt : 0)) / 1000 : 0;
       p.bytesIn = 0; p.solving = 0;
       if (perSb) p.per.resize(h.h.source_blocks);
       for (uint32_t c = 0; c < h.h.source_blocks; c++) {
@@ -742,6 +757,10 @@ struct XferRxCore::Rx {
   // ai: XferRxCore::allow: the bounds on every transfer; one the store refused is let go (it wrote nothing) and one
   // ai: whose store failed mid-way (a write refused, the disk full) parked as it stands, so its description opens it
   // ai: again (the folder resumed): a session header's description held, opened again at once
+  void pause(bool on) {
+    const double t = nowMs();
+    for (auto& [k, o] : objs) o->pause(on, t);
+  }
   void allow(uint64_t lim, double room) {
     root->limit = lim; root->room = room;
     std::vector<std::pair<uint64_t, bool>> again;
@@ -810,6 +829,7 @@ void XferRxCore::releaseDone() { rx_->releaseDone(); }
 void XferRxCore::forget(const std::string& root) { rx_->forget(root); }
 void XferRxCore::progress(XferProgress& p, bool perSb) const { rx_->progress(p, perSb); }
 void XferRxCore::allow(uint64_t limit, double room) { rx_->allow(limit, room); }
+void XferRxCore::pause(bool on) { rx_->pause(on); }
 const std::atomic<uint64_t>& XferRxCore::taken() const { return rx_->taken; }
 const std::vector<uint8_t>* XferRxCore::data() const { return rx_->focus && rx_->focus->done ? rx_->focus->store->data() : nullptr; }
 

@@ -1,6 +1,6 @@
 // ai: The receive session's JNI (2026-10-31): dev.lizard.SessionNative's static methods over lizard.h layer 5
 // ai: (liz_session_*), registered by registerSession from the loading library's JNI_OnLoad (the binding's liblizard,
-// ai: the desktop app's library). No callback into the JVM: every native thread (the session's, the camera's, the
+// ai: the desktop app's library, the Android app's). No callback into the JVM: every native thread (the session's, the camera's, the
 // ai: receiver's) stays C++ alone, and the app polls (stats, camera, preview); the session's log goes to stderr (Android:
 // ai: the system log, tag lizard). Strings are true UTF-8 and UTF-16 (jni_text.h). create's refusal is an
 // ai: IllegalArgumentException with its sentence; the other calls return at once (lizard.h), the static ones that can

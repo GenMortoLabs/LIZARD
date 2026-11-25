@@ -10,9 +10,9 @@
 enum { OB_FW = 2, OB_FB = 9 * OB_FW, OB_MAX_NODES = 40 };
 // CELL_WORD is a flag on the format word's cells (fmt.h). They are painted light or dark like any other cell, so
 // every painter reads them through `& 3` and does not care; what the flag says is that a DECODER cannot predict
-// them. The word carries a rate the sender chose, so a receiver standing anywhere has the wrong bits for those
-// cells, and a registration template that included them would be correlating against noise: measured at 720 with
-// the rate mis-stated by one, a symbol that gave 22 blocks of 24 gave 6. So the mesh skips them (acquire.c
+// them. The word carries what the sender chose (its layout and its clock), so a receiver standing anywhere has the
+// wrong bits for those cells, and a registration template that included them would be correlating against noise:
+// measured at 720 with the word's rate (a field then) mis-stated by one, a symbol that gave 22 blocks of 24 gave 6. So the mesh skips them (acquire.c
 // node_ncc, refine_node) and registration does not depend on the word at all, which is what layout.c's
 // ob_layout_set_fmt has always claimed.
 enum { CELL_DATA = 0, CELL_LIGHT = 1, CELL_DARK = 2, CELL_WORD = 8 };
@@ -23,7 +23,7 @@ enum { CELL_DATA = 0, CELL_LIGHT = 1, CELL_DARK = 2, CELL_WORD = 8 };
 // so no run of track cells is longer than four modules (every 5 x 5 patch of the track sees an edge).
 //
 // The band carries BOTH the track and the format word (fmt.h), interleaved in runs of OB_BAND_RUN
-// cells. The word says which format this is and the sender's display rate; everything else about
+// cells. The word says which format this is (its version and layout) and the sender's clock; everything else about
 // the symbol follows from the format. Counting anchors instead was built and measured on 2026-09-21 and
 // cost a quarter of the timing track and four modules of border, for a version read on 93 captures
 // of 129 against the word's 99 of 99. fmt.h has the numbers.
@@ -52,8 +52,8 @@ enum { OB_THIN_CORNER = 12, OB_THIN_RESERVE = OB_THIN_CORNER + 3 };
 // the look (runs of equal cells fuse into bars of random length otherwise) and the size is what the measurements force
 // in BOTH directions. Smaller fails: 1 x 1 reads the format word on 65 of
 // 80 captures against 79, halves the payload under lens distortion (5511 B against 11256 at k1 = 0.06) and starts
-// losing frames outright at 480 px and fill 0.4, because binarize calls a pixel dark when it is under its 40 px
-// neighbourhood's mean and a one-module cell is the smallest feature the symbol has.
+// losing frames outright at 480 px and fill 0.4, because the finder of then (binarized, until 2026-11-24) called a pixel
+// dark when it was under its 40 px neighbourhood's mean and a one-module cell is the smallest feature the symbol has.
 //
 // BIGGER ALSO FAILS, and it was measured on 2026-09-21 because a coarser cell looks like it should be blur-proof.
 // It is not, and the reason is that the band is not what blur limits: the MESH's sampling accuracy is, and a
@@ -149,9 +149,5 @@ void ob_layout_set_fmt(ob_layout_t *L, const uint8_t *cw);
 
 // The block CRC, the BCH-derived CRC-64 over n bytes (layout.c; SPEC 7.1).
 uint64_t ob_crc64(const uint8_t *p, int n);
-// The format word's CRC-5 of its 35-bit index c (fmt.h, SPEC 5.1): x^5 + x^2 + 1, by carry-less multiplication where the
-// processor has it; ob_crc5_bits the bit loop, the same value (test/crc_check.c).
-uint32_t ob_crc5(uint64_t c);
-uint32_t ob_crc5_bits(uint64_t c);
 
 #endif

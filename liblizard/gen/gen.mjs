@@ -1,37 +1,39 @@
 // ai: The native decoder's setup, taken from the decoder's setup host: liblizard/gpu/decoder.mjs FrontHalf.create,
 // ai: with the options the native receiver runs (main's call below), is built on a recording device (mockgpu.mjs) once
-// ai: a variant, and what it made is written out: every shader module's GLSL (gpu/glsl/) compiled to SPIR-V by glslang
-// ai: (`compileGlsl`), every bind group layout and pipeline, every static buffer with the bytes the host wrote into it,
+// ai: a variant, and what it made is written out: every shader module's Slang (gpu/slang/) compiled to SPIR-V by slangc
+// ai: (`compileSlang`), every bind group layout and pipeline, every static buffer with the bytes the host wrote into it,
 // ai: and the values the lanes and batches are made from (`exportTree`). The native host (core/dec/) builds exactly
 // ai: these objects and is the one that runs lanes and batches. Nothing here decodes; the tables come from the codec's
 // ai: wasm module (sim/ob.mjs over liblizard/build/ob.mjs).
 //
-// ai: The sender's GPU painter (gen/sender.mjs) is the browser sender's WGSL (gpu/wgsl/send.mjs, inverse.mjs), read by
-// ai: naga (rewritten where naga reads WGSL otherwise than Tint, `nagaWgsl`) into the same out/spv. The decoder's WGSL
-// ai: twins went 2026-10-31 (archive/webgpu-decoder/).
+// ai: The sender's GPU painter (gen/sender.mjs) is the sender's Slang (gpu/slang/send.mjs, src/send_*.slang), compiled
+// ai: into the same out/spv; the web's encoder runs the WGSL slangc writes from the same Slang (webWgsl,
+// ai: gpu/send_wgsl.mjs). The engine's own shaders (core/ingest/*.slang, core/tx/*.slang: the camera's ingest, the
+// ai: presenter's stretch and expand, the stream files' packing) are Slang too, compiled from their files. Every kernel's
+// ai: source is Slang since 2026-11-24 (the decoder's GLSL and the sender's WGSL before it; the decoder's WGSL twins went
+// ai: 2026-10-31, archive/webgpu-decoder/).
 //
 // ai: A variant is (precision, subgroups): precision int8 (the int8 proposer, the classifier f16 with its int8 twin
 // ai: built beside), f16 or f32, subgroups whether the classifier reduces by shuffles. The back half is built at every
 // ai: batch size a device may need (B_CEIL down to 1: the host builds it at Bmax where memory holds fewer frames), all
-// ai: at workgroup memory 32 KB, the floor every phone we know has. The anchors' stages (gpu/glsl/anchors.mjs, SPEC
+// ai: at workgroup memory 32 KB, the floor every phone we know has. The anchors' stages (gpu/slang/anchors.mjs, SPEC
 // ai: 6.13) are a setup's `anch` (exportAnch), built with the front half; pass 1, every back half's, reads their
 // ai: records.
 //
 //   node liblizard/gen/gen.mjs [out]      (lizard-android/build.sh gen; out defaults to liblizard/out)
-// ai: Writes out/setup/<variant>.json, out/blobs/<hash>.bin (the buffers' bytes), out/glsl/<hash>.comp (a decoder
-// ai: module), out/wgsl/<hash>.wgsl and out/naga/<hash>.wgsl (a sender's module as written and as naga reads it) and
-// ai: out/spv/<hash>.spv, and out/gen.json (the variants, the modules, the GLSL ones among them, the gpu sources' hash
-// ai: that made them; the WebGPU receiver's WGSL and its packed tree went 2026-11-22, archive/webgpu-receiver-2026-11-22/).
+// ai: Writes out/setup/<variant>.json, out/blobs/<hash>.bin (the buffers' bytes), out/slang/<hash>.slang (a decoder
+// ai: module's text), out/slang/send_<name>.slang (a sender's) and out/spv/<hash>.spv, send_<name>.spv and
+// ai: ingest_<name>.spv, and out/gen.json (the variants, the modules, the gpu sources' hash that made them; the WebGPU
+// ai: receiver's WGSL and its packed tree went 2026-11-22, archive/webgpu-receiver-2026-11-22/).
 // ai: Needs, each checked before anything runs: ../build/ob.mjs and the module it names,
-// ai: ../bindings/wasm/dist/lizard.wasm (liblizard's ./build.sh); wgsl2spv and glslang 16.6.0 (lizard-android/build.sh
-// ai: tools; glslang at liblizard/.tools/glslang, else the PATH's); SPIRV-Tools' spirv-val and shaderc's glslc, the
-// ai: Android NDK's or else the PATH's.
+// ai: ../bindings/wasm/dist/lizard.wasm (liblizard's ./build.sh); slang 2026.22's slangc (lizard-android/build.sh tools;
+// ai: liblizard/.tools/slang, else the PATH's). slangc validates the SPIR-V it writes.
 import { installGlobals, Recorder, mockAdapter } from "./mockgpu.mjs";
 import { senderSetup } from "./sender.mjs";
-import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, realpathSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -39,84 +41,53 @@ installGlobals();
 const HERE = new URL("./", import.meta.url), LIB = new URL("../", import.meta.url);
 const OUT = process.argv[2] ? pathToFileURL(`${resolve(process.argv[2])}/`) : new URL("../out/", HERE);
 const imp = (p) => import(new URL(p, LIB).href);
-// ai: Run as a script (not when a check imports stripCaps or nagaWgsl), by real path: through a symlink or a space
+// ai: Run as a script (not when a check imports stripCaps), by real path: through a symlink or a space
 // ai: import.meta.url and argv[1] spell the one file two ways.
 const MAIN = (() => { try { return fileURLToPath(import.meta.url) === realpathSync(process.argv[1]); } catch { return false; } })();
 
 // ai: The tree's version, every setup's treeVersion, which the native host (core/dec/front.cpp TREE_VERSION) refuses a
 // ai: tree of another of: raised in both places whenever what the host reads of a tree changes.
-// ai: 5 since 2026-10-31: the decoder's WGSL archived and F9's three dead buffers dropped (every later buffer id moved),
-// ai: pass 1's bilinear reads by the texture unit (a layout's `sampler` entry: the device's immutable linear sampler),
-// ai: the soft and LDPC steps dispatched from the gate's ARGS (each rule step's `argsAt`); 4 the LDPC pipelines'
-// ai: `lanes`; 3 REDO's R2 args; 2 PEAKS; 1 from 2026-10-29. 6 since 2026-10-31: a pipeline's `needs` (the device
-// ai: features its module asks beyond the variant's: "int16", the LDPC's "reg+i16" forms). 7 since 2026-11-02: the
-// ai: front's `trace` (TRACE, each quad's bend, in both rounds' grids) and HYP doubled (SCORE's bend bit).
-// ai: 8 since 2026-11-06: REFIT's and REFIT_POST's layouts seven bindings (the eighth, REFIT's debug words, gone).
-// ai: 9 since 2026-11-09: the anchors by ring (3 x 3 of 4 modules, 5 x 5 of 6, 7 x 7 of 8; the anchors' uniform a vec4f
-// ai: a ring longer): a tree of the old anchors would read the 64 and 128 rings' squares where the codec no longer paints them.
-// ai: 10 since 2026-11-14: the proposer's uniform without the old bank's tau and eps, the transform's Params without its
-// ai: five unread words (both written by the host, so every later word moved).
-// ai: 11 since 2026-11-15: the word RS(n, 5) with two magics (src/fmt.h): F8's record words 5 and 6 carry an animated
-// ai: word's position (as 256 + it) and symbol beside a static word's version, rate and extension bytes.
-// ai: 12 since 2026-11-16: F8's held version on the device (glsl/word.mjs HELD, the front's `heldP` and its buffer
-// ai: `heldCarry`; WORD's layout without the lane's Held uniform, which HELD binds as version, post, frames, hold).
-// ai: 13 since 2026-11-18: a frame's configuration (src/fmt.h ob_fmt_held) in F8's sel, record word 29 and HELD, the
-// ai: gate's lists and the rule stage's layout from it (no TT table, no codes table, no rule blocks a version).
-// ai: 14 since 2026-11-18: the static word without a rate: its 6/7 count 8 bits and a CRC-4 F8 checks, the
-// ai: configuration version << 22.
-// ai: 15 since 2026-11-19: the animated header tabled: F8 one magic (the code a base and 32 rows a ring, half the
-// ai: sets), record word 5 the version alone; HELD, `heldP` and `heldCarry` gone (nothing carries from frame to frame).
-// ai: 16 since 2026-11-20: the squares' fill fitted over 64 x 64 points (ANCH_FILL; 16 x 16 before), their sums in
-// ai: ANCH_SUMS (anch.sums: a workgroup an (ANCH_GS-th of the points, frame), on ANCH_FIND's layout, between ANCH_REFIT
-// ai: and ANCH_FIT), a lane's anch (ANCH_K + 2 ANCH_GS) B vec4f, the constant ANCH_GS.
-// ai: 17 since 2026-11-21: the block's CRC-64/LIZARD (src/layout.c ob_crc64): a 472-byte block, its CRC in the two words
-// ai: after it; a code's uniform's powers 240 words (two a chunk), REC 120 words a record (REC_BYTES, PAYLOAD 472).
-// ai: 18 since 2026-11-22: the pilots apart from the blocks (B, src/lizard_phy.c): PILOT a frame's four readings (dims.pilotRead), then its shift; EP a vec4 a sub-channel; L in data-slot order (dims.lStride 159 a sub-channel).
-// ai: 19 since 2026-11-22 evening: the word's index and the clock (RS(n, 6), F8 solving five unknown bytes; the Word
-// ai: uniform's before; record word 30 the clock, word 6 the word's last 32 bits).
-export const TREE_VERSION = 19;
+// ai: 23: the map past F7 the C's one model (REFIT's homography, ANCH_REFIT's lens over the border and the anchors on
+// ai: every frame, ANCH_FIT's mesh): no REFIT_POST (the tree's front.refitPost), the record RESID the lens alone (5 vec4).
+// ai: 22: the word's four counts, every layout (no CRC): the configuration two words, record word 29 the version << 24 |
+// ai: the 6/7 count << 16 | the 3/4 << 8 | the 2/3, word 30 the clock | the 1/2 count << 16; LISTS a seventh word a frame.
+// ai: 21: the soft pass's four steps a size (tnoise, each sub-channel's 1 / N into EP's fourth float, before talign,
+// ai: which weights the pilots by it and binds EP at 6).
+// ai: 20: versions 1 to 3 in the word's list (VERSION_MIN 1, the configurations' sums from version 1).
+// ai: 19: the word's index and the clock (RS(n, 6), F8 solving five unknown bytes; record word 30 the clock, word 6 the
+// ai: word's last 32 bits), the pilots apart from the blocks (PILOT a frame's four readings, then its shift; EP a vec4 a
+// ai: sub-channel; L in data-slot order, dims.lStride 159 a sub-channel), the block's CRC-64/LIZARD (a 472-byte block,
+// ai: its CRC in the two words after it; REC 120 words a record).
+export const TREE_VERSION = 23;
 
-const NDK = process.env.ANDROID_NDK_HOME || `${process.env.ANDROID_HOME || `${homedir()}/Android/Sdk`}/ndk/27.1.12297006`;
-// ai: SPIRV-Tools' spirv-val and shaderc's glslc: the Android NDK's shader-tools where there is an NDK, else the
-// ai: system's on the PATH
 const EXE = process.platform === "win32" ? ".exe" : "";
-const shaderTool = (name) => {
-  const ndk = join(NDK, "shader-tools", { darwin: "darwin-x86_64", win32: "windows-x86_64" }[process.platform] ?? "linux-x86_64", name + EXE);
-  if (existsSync(ndk)) return ndk;
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) if (dir && existsSync(join(dir, name + EXE))) return join(dir, name + EXE);
-  return ndk;
-};
-// ai: wgsl2spv (gen/wgsl2spv, naga 30 as a library: lizard-android/build.sh tools builds it) in place of naga-cli, whose
-// ai: writer zeroes workgroup memory from one invocation and bounds every loop (wgsl2spv/src/main.rs says what that
-// ai: cost). The SPIR-V reaches the driver as it validates: spirv-opt -O unrolled the fused pass 1 and F8's word to three
-// ai: times their size (2026-09-29).
-// ai: glslang for the decoder's GLSL modules: liblizard/.tools/glslang (lizard-android/build.sh tools puts the release
-// ai: build there) where it is, else the PATH's. Not the NDK's glslc (shaderc 2022.3 on an older glslang), which
-// ai: compiles only the host's own ingest and expand. Pinned: a module is named by its source, so another glslang would
-// ai: write other SPIR-V under the same names; a run refuses any but GLSLANG (build.sh tools's GLSLANG too).
-export const GLSLANG = "16.6.0";
-const glslangVersion = (p) => { try { return execFileSync(p, ["--version"], { encoding: "utf8" }).split("\n")[0].split(":").pop().trim(); } catch { return null; } };
-const glslangTool = () => {
-  const lab = fileURLToPath(new URL(`../.tools/glslang/bin/glslang${EXE}`, HERE));
+// ai: slangc for every module (gpu/slang/, the kernels' source since 2026-11-24, and the engine's own shaders):
+// ai: liblizard/.tools/slang (lizard-android/build.sh tools) where it is, else the PATH's. Pinned (SLANG, build.sh's too):
+// ai: a module is named by its source, so another slangc would write other SPIR-V under the same names; a run refuses any
+// ai: but SLANG. One compiler, two targets: SPIR-V 1.3 for the native hosts, WGSL for the web's encoder. The SPIR-V
+// ai: reaches the driver as slangc writes it (no spirv-opt: it unrolled the fused pass 1 and F8's word to three times
+// ai: their size, 2026-09-29).
+export const SLANG = "2026.22";
+const slangTool = () => {
+  const lab = fileURLToPath(new URL(`../.tools/slang/bin/slangc${EXE}`, HERE));
   if (existsSync(lab)) return lab;
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) if (dir && existsSync(join(dir, "glslang" + EXE))) return join(dir, "glslang" + EXE);
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) if (dir && existsSync(join(dir, "slangc" + EXE))) return join(dir, "slangc" + EXE);
   return lab;
 };
-export const TOOLS = { wgsl2spv: fileURLToPath(new URL(`./wgsl2spv/target/release/wgsl2spv${EXE}`, HERE)), glslang: glslangTool(), val: shaderTool("spirv-val"), glslc: shaderTool("glslc") };
+export const TOOLS = { slangc: slangTool() };
 
 // ai: What a run needs, checked before the gpu modules load (sim/ob.mjs imports ../build/ob.mjs, which names the
 // ai: codec's module): every one missing, each with where it comes from.
 const WASM = new URL("bindings/wasm/dist/lizard.wasm", LIB);
 if (MAIN) {
-  const ndk = (or) => `the Android NDK's shader-tools: ANDROID_NDK_HOME; or ${or} on the PATH`;
   const missing = [
     [fileURLToPath(new URL("build/ob.mjs", LIB)), "liblizard/build.sh"], [fileURLToPath(WASM), "liblizard/build.sh"],
-    [TOOLS.wgsl2spv, "lizard-android/build.sh tools"], [TOOLS.glslang, `glslang ${GLSLANG}: lizard-android/build.sh tools, or glslang on the PATH`],
-    [TOOLS.val, ndk("SPIRV-Tools")], [TOOLS.glslc, ndk("shaderc")],
+    [TOOLS.slangc, `slang ${SLANG}: lizard-android/build.sh tools, or slangc on the PATH`],
   ].filter(([p]) => !existsSync(p));
   if (missing.length) { console.error(missing.map(([p, from]) => `no ${p} (${from})`).join("\n")); process.exit(1); }
-  const v = glslangVersion(TOOLS.glslang);
-  if (v !== GLSLANG) { console.error(`${TOOLS.glslang} is glslang ${v ?? "of no version it states"}; the tree's modules are glslang ${GLSLANG}'s (lizard-android/build.sh tools)`); process.exit(1); }
+  // ai: slangc prints its version to stderr
+  const sv = (() => { try { const r = spawnSync(TOOLS.slangc, ["-version"], { encoding: "utf8" }); return `${r.stdout ?? ""}${r.stderr ?? ""}`.trim().split("\n")[0] || null; } catch { return null; } })();
+  if (sv !== SLANG) { console.error(`${TOOLS.slangc} is slang ${sv ?? "of no version it states"}; the tree's modules are slang ${SLANG}'s (lizard-android/build.sh tools)`); process.exit(1); }
 }
 
 const { FrontHalf, CAP_MS, B_CEIL, LEVELS, COUNTERS, TAU, INSTALLED, receiverOptions, RESULT, SEL_WORDS, TS_MAX, TS_PLAIN, RING_SLACK, TWIN_FRAMES, TWIN_ROUNDS } =
@@ -144,53 +115,6 @@ const LIMITS = { maxBufferSize: 2 ** 31, maxStorageBufferBindingSize: 2 ** 31, m
 const FEATURES = ["timestamp-query", "shader-f16", "subgroups"];
 export const VARIANTS = ["int8", "f16", "f32"].flatMap((precision) => [true, false].map((subgroups) => ({ precision, subgroups, name: `${precision}${subgroups ? "-sg" : ""}` })));
 const BACK_B = [B_CEIL, 16, 8, 4, 2, 1];
-
-// ai: The WGSL as naga 30 reads it: Tint takes three constructs naga does not, each rewritten here to the same
-// ai: arithmetic:
-// ai:   `enable subgroups;`: naga has the subgroup builtins without it and refuses the directive;
-// ai:   a bitcast between f16 vectors and u32s (bitcast<vec4<f16>>(vec2<u32>), bitcast<vec2<f16>>(u32) and back):
-// ai:     naga has none; the halves are unpacked to f32 and converted back (pack2x16float the other way), which is
-// ai:     exact for every f16 but a denormal a device flushes. A cast to u32s is rewritten only where its argument
-// ai:     names f16 (the same spelling casts f32 vectors elsewhere, which naga takes).
-const HELPERS = {
-  liz_h4: "fn liz_h4(w: vec2<u32>) -> vec4<f16> { return vec4<f16>(vec2<f16>(unpack2x16float(w.x)), vec2<f16>(unpack2x16float(w.y))); }",
-  liz_h2: "fn liz_h2(w: u32) -> vec2<f16> { return vec2<f16>(unpack2x16float(w)); }",
-  liz_p4: "fn liz_p4(h: vec4<f16>) -> vec2<u32> { return vec2<u32>(pack2x16float(vec2f(h.xy)), pack2x16float(vec2f(h.zw))); }",
-  liz_p2: "fn liz_p2(h: vec2<f16>) -> u32 { return pack2x16float(vec2f(h)); }",
-  liz_pack4xI8: "fn liz_pack4xI8(v: vec4<i32>) -> u32 { let u = bitcast<vec4<u32>>(v) & vec4<u32>(0xffu); return u.x | (u.y << 8u) | (u.z << 16u) | (u.w << 24u); }",
-};
-// ai:   pack4xI8: naga lowers it to a conversion into 8-bit integers and a bitcast of that vector to u32, which the
-// ai:     S26's Adreno 840 gets wrong (the odd bytes of the proposer's int8 plane came back 0, and the int8 variant
-// ai:     found nothing, 2026-09-29); rewritten to the low bytes shifted together, WGSL's definition (Tint's form).
-const CASTS = [["pack4xI8(", "liz_pack4xI8", false], ["bitcast<vec4<f16>>(", "liz_h4", false], ["bitcast<vec2<f16>>(", "liz_h2", false], ["bitcast<vec2<u32>>(", "liz_p4", true], ["bitcast<u32>(", "liz_p2", true]];
-// ai: The argument of the call whose "(" ends at i - 1: up to its balancing ")".
-function argAt(s, i) {
-  let depth = 1, j = i;
-  for (; j < s.length && depth; j++) { if (s[j] === "(") depth++; else if (s[j] === ")") depth--; }
-  return s.slice(i, j - 1);
-}
-export function nagaWgsl(code) {
-  let s = code.replace(/^\s*enable subgroups;\s*$/m, "");
-  const used = new Set();
-  for (const [from, to, onlyF16] of CASTS) {
-    let out = "", at = 0;
-    for (let i = s.indexOf(from); i >= 0; i = s.indexOf(from, at)) {
-      const arg = argAt(s, i + from.length);
-      if (onlyF16 && !arg.includes("f16")) { out += s.slice(at, i + from.length); at = i + from.length; continue; }
-      out += s.slice(at, i) + `${to}(`; at = i + from.length; used.add(to);
-    }
-    s = out + s.slice(at);
-  }
-  if (used.size) {
-    // ai: After the directives, which WGSL wants before any declaration.
-    const lines = s.split("\n");
-    let at = 0;
-    while (at < lines.length && /^\s*(enable|requires|diagnostic)\b|^\s*$|^\s*\/\//.test(lines[at])) at++;
-    lines.splice(at, 0, ...[...used].map((k) => HELPERS[k]));
-    s = lines.join("\n");
-  }
-  return s;
-}
 
 // ai: A buffer, texture view or pipeline of the recorder as its id; everything else as it is.
 const idOf = (o) => (o == null ? null : o.__id ?? null);
@@ -235,10 +159,10 @@ function exportTree(fh, v) {
     weightsPrecision: fh.weights.precision,
     front: {
       pyramid: pb(fh.pyramid), classify: pbNet(fh.classify),
-      vote: pb(fh.vote), peaks: pb(fh.peaks), gather: pb(fh.gather), complete: pb(fh.complete), score: pb(fh.score), pick: pb(fh.pick), trace: pb(fh.trace), nodesP: pb(fh.nodesP), refit: pb(fh.refit), refitPost: pb(fh.refitPost), wordP: pb(fh.wordP), select: pb(fh.select),
-      // ai: the finder's second round (gpu/glsl/finder.mjs REDO; gpu/bank_fcn2.mjs COARSE_FROM)
+      vote: pb(fh.vote), peaks: pb(fh.peaks), gather: pb(fh.gather), complete: pb(fh.complete), score: pb(fh.score), pick: pb(fh.pick), trace: pb(fh.trace), nodesP: pb(fh.nodesP), refit: pb(fh.refit), wordP: pb(fh.wordP), select: pb(fh.select),
+      // ai: the finder's second round (gpu/slang/finder.mjs REDO; gpu/bank_fcn2.mjs COARSE_FROM)
       redo: pb(fh.redo), coarseFrom: fh.bank.COARSE_FROM,
-      fcn2: pb(fh.fcn2), fcn2X: pb(fh.fcn2X), fcn2Form: { TX: f.TX, TY: f.TY, XB: f.XB, walk: f.walk, xplane: f.xplane, int8: f.int8, store: f.store, name: f.name },
+      fcn2: pb(fh.fcn2), fcn2X: pb(fh.fcn2X), fcn2X0: pb(fh.fcn2X0), fcn2Form: { TX: f.TX, TY: f.TY, XB: f.XB, walk: f.walk, xplane: f.xplane, int8: f.int8, store: f.store, name: f.name },
       buffers: Object.fromEntries(["planBuf", "planUni", "p4Uni", "pickUni", "nodesBuf", "tmplBuf", "wordPtsBuf", "wordUni", "wordLatUni", "fitUni", "weightsBuf"].map((k) => [k, idOf(fh[k])])),
       round: idOf(fh.round),
       twins: tf ? { large: twin(tf.large) } : null,
@@ -248,7 +172,7 @@ function exportTree(fh, v) {
   };
 }
 
-// ai: The anchors' stages (gpu/glsl/anchors.mjs), which the native host builds with the front half (core/dec/setup.cpp
+// ai: The anchors' stages (gpu/slang/anchors.mjs), which the native host builds with the front half (core/dec/setup.cpp
 // ai: build): ANCH_FIND and ANCH_FIT ({ p, bgl }), ANCH_SUMS (sums: on ANCH_FIND's layout and group, run between
 // ai: ANCH_REFIT and ANCH_FIT) and their uniform (anchUni).
 function exportAnch(fh) {
@@ -265,24 +189,42 @@ function exportAnch(fh) {
 // ai: loader takes them: buffers with the hash of the bytes the host wrote (out/blobs/<hash>.bin, shared by every
 // ai: buffer and variant holding the same bytes: the back half's tables are the same at every B), layouts, pipelines
 // ai: by module hash.
-// ai: A pipeline's lanes, its workgroup's invocations (the product of the module's @workgroup_size, or a GLSL module's
-// ai: local_size_x, _y and _z, where they are literal): the host leaves out a pipeline past its device's
-// ai: maxComputeWorkGroupInvocations (core/dec/setup.cpp).
-function lanesOf(code) {
-  const m = /@workgroup_size\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?(?:,\s*(\d+)\s*)?\)/.exec(code ?? "");
-  if (m) return { lanes: Number(m[1]) * Number(m[2] ?? 1) * Number(m[3] ?? 1) };
-  const g = /layout\s*\(([^)]*local_size_x[^)]*)\)\s*in\s*;/.exec(code ?? "");
-  if (!g) return {};
-  const at = (k) => { const v = new RegExp(`local_size_${k}\\s*=\\s*(\\d+)`).exec(g[1]); return v ? Number(v[1]) : 1; };
-  return { lanes: at("x") * at("y") * at("z") };
+// ai: The web encoder's WGSL (gpu/send_wgsl.mjs): each sender kernel the web runs, and the present's vertex and fragment
+// ai: stages, compiled by slangc from the same Slang as the native SPIR-V (gpu/slang/src/send_*.slang): one source, the
+// ai: WGSL never written by hand. The web's build has no slangc, so the module is kept in the tree, written again only
+// ai: where its text changed. (Until 2026-11-24 the GLSL through glslang, spirv-opt, naga and two rewrites for Tint's
+// ai: uniformity analysis: slangc hands the entry's builtins to the body as parameters, which the analysis follows.)
+// ai: slangc's optimisation level, every Slang module's (2026-11-24): its default -O1 inlined every function of COMPLETE
+// ai: into one with each copy's loops (glslang's 43 loops 85), and the S26 ran the finder's vote stages +24% slower;
+// ai: -O2 (smaller again) and -O0 (glslang's shape) both level with the GLSL there; -O2 level on the iGPU and in the
+// ai: sender on both (research/build/slang-2026-11-24/)
+const SLANG_OPT = ["-O2"];
+function webWgsl(name, { code, stage }) {
+  const dir = mkdtempSync(join(tmpdir(), "liz-wgsl-"));
+  const [src, w] = [`${name}.slang`, `${name}.wgsl`].map((f) => join(dir, f));
+  try {
+    writeFileSync(src, code);
+    run(TOOLS.slangc, [src, "-target", "wgsl", "-entry", "main", "-stage", stage, "-warnings-as-errors", "all", ...SLANG_OPT, "-o", w]);
+    return readFileSync(w, "utf8");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
-// ai: The device features a module needs beyond its variant's, by the extension that brings each into its GLSL
-// ai: (gpu/glsl/common.mjs): "int16" (GL_EXT_shader_explicit_arithmetic_types_int16, SPIR-V Int16: shaderInt16). The
-// ai: host leaves out a pipeline whose device lacks one (core/dec/setup.cpp); compileGlsl holds the SPIR-V to it.
-const NEEDS = [["int16", /GL_EXT_shader_explicit_arithmetic_types_int16\b/, 22]];   // ai: the capability's number, Int16
-function needsOf(code) {
-  const needs = NEEDS.filter(([, re]) => re.test(code ?? "")).map(([k]) => k);
-  return needs.length ? { needs } : {};
+
+// ai: The device features a module needs beyond its variant's, by the capability its SPIR-V declares for each: "int16"
+// ai: (Int16: shaderInt16; tldpc's i16 form alone). The host leaves out a pipeline whose device lacks one
+// ai: (core/dec/setup.cpp).
+const NEEDS = [["int16", 22]];   // ai: the capability's number, Int16
+// ai: A stage's lanes and needs from its SPIR-V (compiled here once, the compile loop reusing it): its entry's LocalSize
+// ai: (OpExecutionMode, opcode 16, mode 17), the workgroup's invocations, which the host holds to its device's
+// ai: maxComputeWorkGroupInvocations (core/dec/setup.cpp), and the capabilities NEEDS names.
+const early = new Map();
+function slangFacts(h, code) {
+  if (!early.has(h)) early.set(h, compileSlang(h, code));
+  const path = fileURLToPath(new URL(`spv/${h}.spv`, OUT)), b = readFileSync(path), w = new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+  let lanes = null;
+  for (let i = 5; i < w.length; i += w[i] >>> 16 || 1) if ((w[i] & 0xffff) === 16 && w[i + 2] === 17) lanes = w[i + 3] * w[i + 4] * w[i + 5];
+  if (!lanes) throw new Error(`${h}: no LocalSize in its SPIR-V`);
+  const caps = capsOf(path), needs = NEEDS.filter(([, cap]) => caps.has(cap)).map(([k]) => k);
+  return { lanes, ...(needs.length ? { needs } : {}) };
 }
 function exportObjects(rec, tree, blobs) {
   const want = new Set();
@@ -297,27 +239,28 @@ function exportObjects(rec, tree, blobs) {
       if (blob && !blobs.has(blob)) blobs.set(blob, o.data);
       buffers[id] = { size: o.size, usage: o.usage, blob };
     } else if (o.__kind === "L") bgls[id] = o.entries;
-    else if (o.__kind === "p") pipelines[id] = { module: o.module.hash, entry: o.entry, groups: o.layout.groups.map((g) => g.__id), label: o.label, ...lanesOf(o.module.code), ...needsOf(o.module.code) };
+    else if (o.__kind === "p") pipelines[id] = { module: o.module.hash, entry: o.entry, groups: o.layout.groups.map((g) => g.__id), label: o.label,
+      ...slangFacts(o.module.hash, o.module.code) };
   }
   return { buffers, bgls, pipelines };
 }
 
-// ai: SPIR-V without the capabilities naga declares that a compute module never uses: StorageInputOutput16 (4436)
-// ai: comes with every f16 module, and asks the device for 16-bit shader inputs and outputs, which a compute shader
-// ai: has none of (its only inputs are u32 builtins) and some drivers lack. The NDK's spirv-opt (2022.4) has no
-// ai: --trim-capabilities, so the instruction (OpCapability, opcode 17, two words) is cut here.
-// ai: UniformAndStorageBuffer16BitAccess (4434) too: naga declares it with every f16 module, the S26 Ultra's Adreno 840
-// ai: lacks the feature (its vkjson, 2026-09-29), and a compute module needs it only for a 16-bit type in a uniform
-// ai: block. spirv-val does not check either (a module with f16 in a uniform validates without it: a negative control
-// ai: run 2026-09-29), so the types are checked here: a capability is dropped only where no variable of its storage
-// ai: class (Uniform for 4434, Input or Output for 4436) reaches a 16-bit type, and a module where one does throws.
+// ai: SPIR-V without the capabilities a compute module declares and never uses (naga's, then slangc's):
+// ai: StorageInputOutput16 (4436) asks the device for 16-bit shader inputs and outputs, which a compute shader has none
+// ai: of (its only inputs are u32 builtins) and some drivers lack. UniformAndStorageBuffer16BitAccess (4434): slangc
+// ai: declares it with every module holding a 16-bit type in a buffer, the S26 Ultra's Adreno 840 lacks the feature (its
+// ai: vkjson, 2026-09-29), and a compute module needs it only for a 16-bit type in a uniform block. Validation does not
+// ai: check either (a module with f16 in a uniform validates without it: a negative control run 2026-09-29), so the types
+// ai: are checked here: a capability is dropped only where no variable of its storage class (Uniform for 4434, Input or
+// ai: Output for 4436) reaches a 16-bit type, and a module where one does throws.
 const DROP_CAPS = new Map([[4436, [1, 3]], [4434, [2]]]);
 export function stripCaps(path) {
   const b = readFileSync(path), w = new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4), out = Array.from(w.subarray(0, 5));
-  const types = new Map(), vars = [];
+  const types = new Map(), vars = [], bufferBlock = new Set();
   for (let i = 5; i < w.length;) {
     const n = w[i] >>> 16, op = w[i] & 0xffff;
     if (!n) throw new Error(`${path}: a zero-length instruction at word ${i}`);
+    if (op === 71 && w[i + 2] === 3) bufferBlock.add(w[i + 1]);                                                  // OpDecorate BufferBlock
     if (op === 21 || op === 22) types.set(w[i + 1], { small: w[i + 2] === 16, of: [] });                        // OpTypeInt, OpTypeFloat
     else if (op === 23 || op === 24 || op === 28 || op === 29) types.set(w[i + 1], { small: false, of: [w[i + 2]] });   // vector, matrix, array, runtime array
     else if (op === 30) types.set(w[i + 1], { small: false, of: Array.from(w.subarray(i + 2, i + n)) });          // OpTypeStruct
@@ -326,141 +269,53 @@ export function stripCaps(path) {
     i += n;
   }
   const small = (id, seen = new Set()) => { if (seen.has(id)) return false; seen.add(id); const t = types.get(id); return !!t && (t.small || t.of.some((x) => small(x, seen))); };
+  // ai: a Uniform variable of a BufferBlock struct is a storage buffer in SPIR-V 1.3's older form (slangc's at
+  // ai: spirv_1_3), its 16-bit types StorageBuffer16BitAccess's (the capability's old name StorageUniformBufferBlock16)
+  const storageLike = (v) => v.sc === 12 || (v.sc === 2 && bufferBlock.has(types.get(v.type)?.of[0]));
   const needed = new Set();
-  for (const [cap, classes] of DROP_CAPS) if (vars.some((v) => classes.includes(v.sc) && small(v.type))) needed.add(cap);
+  for (const [cap, classes] of DROP_CAPS) if (vars.some((v) => classes.includes(v.sc) && !(cap === 4434 && storageLike(v)) && small(v.type))) needed.add(cap);
   if (needed.size) throw new Error(`${path}: a 16-bit type in a ${[...needed].map((c) => (c === 4434 ? "uniform block" : "shader input or output")).join(" and ")}: capability ${[...needed].join(", ")} needed, which the S26's Adreno lacks`);
+  // ai: a storage buffer that reaches a 16-bit type needs StorageBuffer16BitAccess (4433), which UniformAndStorageBuffer16
+  // ai: BitAccess implies: slangc declares the latter alone (2026-11-24), so where it is dropped the former is declared
+  const caps = new Set();
+  for (let i = 5; i < w.length; i += w[i] >>> 16) if ((w[i] & 0xffff) === 17) caps.add(w[i + 1]);
+  const storage16 = caps.has(4434) && !caps.has(4433) && vars.some((v) => storageLike(v) && small(v.type));
   for (let i = 5; i < w.length;) {
     const n = w[i] >>> 16, op = w[i] & 0xffff;
+    if (op === 17 && w[i + 1] === 4434 && storage16) out.push((2 << 16) | 17, 4433);
     if (!(op === 17 && DROP_CAPS.has(w[i + 1]))) for (let k = 0; k < n; k++) out.push(w[i + k]);
     i += n;
   }
   writeFileSync(path, new Uint8Array(new Uint32Array(out).buffer));
 }
 
-// ai: The bitcast helpers nagaWgsl wrote (liz_h4, liz_h2, liz_p4, liz_p2: naga's WGSL has no bitcast between f16
-// ai: vectors and u32s) given back their one instruction in the SPIR-V: each body becomes OpBitcast of its parameter,
-// ai: which SPIR-V allows between types of one bit width (Tint emits the same). The unpack and pack they are
-// ai: written with cost the f16 proposer 3.52 ms a frame on the iGPU against the web's 2.65 (2026-09-29). Found by
-// ai: name (wgsl2spv writes names), their signature checked.
-const BITCASTS = { liz_h4: ["v4f16", "v2u32"], liz_h2: ["v2f16", "u32"], liz_p4: ["v2u32", "v4f16"], liz_p2: ["u32", "v2f16"] };
-export function patchBitcasts(path) {
-  const b = readFileSync(path), w = new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4);
-  const str = (i, n) => { let s = ""; for (let k = i; k < i + n; k++) for (let j = 0; j < 4; j++) { const c = (w[k] >>> (8 * j)) & 255; if (!c) return s; s += String.fromCharCode(c); } return s; };
-  const names = new Map(), types = new Map(), fnTypes = new Map();
-  for (let i = 5; i < w.length;) {
-    const n = w[i] >>> 16, op = w[i] & 0xffff;
-    if (op === 5) names.set(w[i + 1], str(i + 2, n - 2));                                                      // OpName
-    else if (op === 21) types.set(w[i + 1], `${w[i + 3] ? "i" : "u"}${w[i + 2]}`);                            // OpTypeInt
-    else if (op === 22) types.set(w[i + 1], `f${w[i + 2]}`);                                                   // OpTypeFloat
-    else if (op === 23) types.set(w[i + 1], `v${w[i + 3]}${types.get(w[i + 2])}`);                             // OpTypeVector
-    else if (op === 33) fnTypes.set(w[i + 1], [w[i + 2], Array.from(w.subarray(i + 3, i + n))]);               // OpTypeFunction
-    i += n;
-  }
-  let bound = w[3], patched = 0;
-  const out = Array.from(w.subarray(0, 5));
-  for (let i = 5; i < w.length;) {
-    const n = w[i] >>> 16, op = w[i] & 0xffff;
-    const want = op === 54 ? BITCASTS[names.get(w[i + 2])] : null;                                               // OpFunction
-    if (!want) { for (let k = 0; k < n; k++) out.push(w[i + k]); i += n; continue; }
-    const [ret, params] = fnTypes.get(w[i + 4]), name = names.get(w[i + 2]);
-    if (types.get(ret) !== want[0] || params.length !== 1 || types.get(params[0]) !== want[1]) throw new Error(`${path}: ${name} is ${types.get(ret)}(${params.map((p) => types.get(p))}), not ${want[0]}(${want[1]})`);
-    for (let k = 0; k < n; k++) out.push(w[i + k]);
-    i += n;
-    let param = -1, labeled = false;
-    for (; (w[i] & 0xffff) !== 56; i += w[i] >>> 16) {                                                          // to OpFunctionEnd
-      const op2 = w[i] & 0xffff;
-      if (op2 === 55) { param = w[i + 2]; for (let k = 0; k < (w[i] >>> 16); k++) out.push(w[i + k]); }         // OpFunctionParameter
-      else if (op2 === 248 && !labeled) {                                                                          // the first OpLabel
-        labeled = true;
-        out.push(w[i], w[i + 1]);
-        const id = bound++;
-        out.push((4 << 16) | 124, ret, id, param);                                                               // OpBitcast
-        out.push((2 << 16) | 254, id);                                                                            // OpReturnValue
-      }
-    }
-    out.push(w[i]);                                                                                                // OpFunctionEnd
-    i += 1;
-    patched++;
-  }
-  out[3] = bound;
-  writeFileSync(path, new Uint8Array(new Uint32Array(out).buffer));
-  return patched;
-}
-
-// ai: The workgroup size declared as SPIR-V's WorkgroupSize builtin constant too, equal to the entry point's LocalSize, as
-// ai: glslc writes it (2026-10-23, the sender on macOS): Metal has no initializer for threadgroup memory, so MoltenVK's
-// ai: SPIRV-Cross zeroes a workgroup variable with a loop strided by gl_WorkGroupSize, which it declares only from that
-// ai: constant, and the kernel would not compile ("use of undeclared identifier 'gl_WorkGroupSize'"). Only where a
-// ai: workgroup variable has an initializer (naga's Native zeroing) and no such constant exists; 0 where nothing changed.
-export function declareWorkgroupSize(path) {
-  const b = readFileSync(path), w = new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4);
-  let size = null, uint = 0, uvec3 = 0, zeroed = false, firstType = -1, firstFn = -1;
-  for (let i = 5; i < w.length;) {
-    const n = w[i] >>> 16, op = w[i] & 0xffff;
-    if (op === 16 && w[i + 2] === 17) size = [w[i + 3], w[i + 4], w[i + 5]];                                    // OpExecutionMode LocalSize
-    else if (op === 71 && w[i + 2] === 11 && w[i + 3] === 25) return 0;                                         // BuiltIn WorkgroupSize already
-    else if (op === 21 && w[i + 2] === 32 && w[i + 3] === 0) uint = w[i + 1];                                   // OpTypeInt 32 0
-    else if (op === 59 && w[i + 3] === 4 && n === 5) zeroed = true;                                             // a Workgroup OpVariable with initializer
-    if (firstType < 0 && ((op >= 19 && op <= 39) || (op >= 41 && op <= 52) || op === 59)) firstType = i;
-    if (firstFn < 0 && op === 54) firstFn = i;                                                                  // OpFunction
-    i += n;
-  }
-  for (let i = 5; i < w.length && uint; i += w[i] >>> 16) if ((w[i] & 0xffff) === 23 && w[i + 2] === uint && w[i + 3] === 3) uvec3 = w[i + 1];
-  if (!zeroed || !size || firstType < 0 || firstFn < 0) return 0;
-  let bound = w[3];
-  const decl = [], ids = { uint: uint || bound++ };
-  if (!uint) decl.push((3 << 16) | 21, ids.uint, 32, 0);                                                        // OpTypeInt 32 0
-  ids.uvec3 = uvec3 || bound++;
-  if (!uvec3) decl.push((4 << 16) | 23, ids.uvec3, ids.uint, 3);                                                // OpTypeVector
-  const c = size.map((v) => { const id = bound++; decl.push((4 << 16) | 43, ids.uint, id, v); return id; });  // OpConstant
-  const wgs = bound++;
-  decl.push((6 << 16) | 44, ids.uvec3, wgs, ...c);                                                              // OpConstantComposite
-  const out = [...w.subarray(0, firstType), (4 << 16) | 71, wgs, 11, 25, ...w.subarray(firstType, firstFn), ...decl, ...w.subarray(firstFn)];
-  out[3] = bound;
-  writeFileSync(path, new Uint8Array(new Uint32Array(out).buffer));
-  return 1;
-}
-
-function run(cmd, args) {
-  try { return execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
+function run(cmd, args, input) {
+  try { return execFileSync(cmd, args, { encoding: "utf8", ...(input === undefined ? { stdio: ["ignore", "pipe", "pipe"] } : { input, stdio: ["pipe", "pipe", "pipe"] }) }); }
   catch (e) { const err = new Error(`${cmd.split("/").pop()} ${args.join(" ")}: ${(e.stderr || e.stdout || e.message).toString().trim().split("\n").slice(0, 12).join("\n")}`); err.tool = true; throw err; }
 }
 
-// ai: A sender's module (gen/sender.mjs): its WGSL, naga's reading of it, then wgsl2spv to SPIR-V 1.3 (its options in its main.rs) with
-// ai: naga's bound checks off (`--unchecked`: index, buffer and image, since 2026-09-30: an index out of range is
-// ai: undefined behaviour here, where WebGPU clamps it), the capabilities no compute module uses cut, validated for
-// ai: Vulkan 1.3 (workgroup memory zeroed by its initializer is 1.3's), its workgroup size declared as the builtin
-// ai: constant (declareWorkgroupSize, for MoltenVK). A decoder module (GLSL): compileGlsl.
-function compile(h, { lang, code }) {
-  if (lang === "glsl") return compileGlsl(h, code);
-  const [w, n, raw, spv] = [`wgsl/${h}.wgsl`, `naga/${h}.wgsl`, `spv/${h}.raw.spv`, `spv/${h}.spv`].map((p) => fileURLToPath(new URL(p, OUT)));
-  writeFileSync(w, code);
-  writeFileSync(n, nagaWgsl(code));
-  run(TOOLS.wgsl2spv, [n, raw, "--unchecked"]);
-  stripCaps(raw);
-  patchBitcasts(raw);
-  if (h.startsWith("send_")) declareWorkgroupSize(raw);
-  run(TOOLS.val, ["--target-env", "vulkan1.3", raw]);
-  writeFileSync(spv, readFileSync(raw));
-  return { bytes: statSync(spv).size };
+// ai: A module (gpu/slang/, out/slang/<h>.slang its text) to SPIR-V 1.3 (the host's Vulkan 1.1 floor), a compute entry
+// ai: `main`, every warning an error. slangc validates its SPIR-V with its own SPIRV-Tools (the NDK's spirv-val predates
+// ai: Slang's source-language operand); a workgroup variable has no initializer (Slang zeroes none, so MoltenVK's
+// ai: SPIRV-Cross writes no zeroing loop over gl_WorkGroupSize).
+function compileSlang(h, code) {
+  const src = fileURLToPath(new URL(`slang/${h}.slang`, OUT));
+  writeFileSync(src, code);
+  return slangSpv(src, fileURLToPath(new URL(`spv/${h}.spv`, OUT)), h);
 }
-
-// ai: A GLSL module (gpu/glsl/): glslang for Vulkan 1.1, which is SPIR-V 1.3, naga's version, so a device of the
-// ai: host's Vulkan 1.1 floor loads either; no optimiser (the SPIR-V reaches the driver as written, as naga's does);
-// ai: bound checks are GLSL's own, none. Its capabilities checked as naga's are (stripCaps: a 16-bit type in a
-// ai: uniform block or an input refused), validated for Vulkan 1.3 as naga's (a workgroup variable a GLSL source
-// ai: zeroes, GL_EXT_null_initializer, is 1.3's or its extension's, as naga's zeroing is).
-function compileGlsl(h, code) {
-  const [g, raw, spv] = [`glsl/${h}.comp`, `spv/${h}.raw.spv`, `spv/${h}.spv`].map((p) => fileURLToPath(new URL(p, OUT)));
-  writeFileSync(g, code);
-  run(TOOLS.glslang, ["-V", "--target-env", "vulkan1.1", "-S", "comp", "--quiet", "-o", raw, g]);
-  stripCaps(raw);
-  // ai: a capability a pipeline's `needs` names is declared exactly where its source asks for it
-  const caps = capsOf(raw);
-  for (const [k, re, cap] of NEEDS) if (caps.has(cap) !== re.test(code)) throw new Error(`${g}: capability ${cap} ${caps.has(cap) ? "declared without" : "not declared with"} its extension: the pipeline's needs ("${k}") would be wrong`);
-  run(TOOLS.val, ["--target-env", "vulkan1.3", raw]);
-  writeFileSync(spv, readFileSync(raw));
-  return { bytes: statSync(spv).size, glsl: true };
+// ai: a Slang file to SPIR-V at spv, its capabilities held to the Adreno's (stripCaps)
+function slangSpv(src, spv, name) {
+  // ai: warning 41012 (the profile's capability atoms widened for what the module uses) is not an error: the SPIR-V's own
+  // ai: capabilities are what a device is held to (NEEDS, stripCaps)
+  run(TOOLS.slangc, [src, "-target", "spirv", "-profile", "spirv_1_3", "-entry", "main", "-stage", "compute", "-warnings-as-errors", "all", "-warnings-disable", "41012", ...SLANG_OPT, "-o", spv]);
+  stripCaps(spv);
+  const b = readFileSync(spv), version = b.readUInt32LE(4);
+  if (version !== 0x10300) throw new Error(`${name}: slangc wrote SPIR-V ${version >> 16}.${(version >> 8) & 255}, not 1.3`);
+  // ai: a Workgroup variable (OpVariable, opcode 59, storage class 4) with an initializer would need the device's
+  // ai: shaderZeroInitializeWorkgroupMemory, which the host does not ask for (core/dec/setup.cpp variantsFor)
+  const w = new Uint32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+  for (let i = 5; i < w.length; i += w[i] >>> 16) if ((w[i] & 0xffff) === 59 && w[i + 3] === 4 && w[i] >>> 16 > 4) throw new Error(`${name}: a workgroup variable with an initializer (zero it in the kernel, then a barrier)`);
+  return { bytes: b.byteLength };
 }
 
 // ai: A SPIR-V module's capabilities (OpCapability, opcode 17).
@@ -474,15 +329,16 @@ function capsOf(path) {
 // ai: names what it was made from; nothing checks it at run time, so a change to gpu/ wants gen run again).
 function sourcesHash() {
   const h = createHash("sha256");
-  const walk = (dir) => { for (const f of readdirSync(dir).sort()) { const p = `${dir}/${f}`; if (statSync(p).isDirectory()) walk(p); else if (/\.(mjs|safetensors)$/.test(f)) h.update(f).update(readFileSync(p)); } };
-  for (const d of ["gpu/plan", "gpu/wgsl", "gpu/glsl", "gpu/back", "gpu/cnn", "gpu"]) { const dir = fileURLToPath(new URL(d, LIB)); for (const f of readdirSync(dir).sort()) { const p = `${dir}/${f}`; if (statSync(p).isFile() && /\.(mjs|safetensors)$/.test(f)) h.update(`${d}/${f}`).update(readFileSync(p)); } }
-  walk(fileURLToPath(new URL("gpu/cnn/proposer", LIB))); walk(fileURLToPath(new URL("gpu/back/stop", LIB)));
+  const walk = (dir) => { for (const f of readdirSync(dir).sort()) { const p = `${dir}/${f}`; if (statSync(p).isDirectory()) walk(p); else if (/\.(mjs|safetensors|slang)$/.test(f)) h.update(f).update(readFileSync(p)); } };
+  // ai: send_wgsl.mjs, gen's own output, left out
+  for (const d of ["gpu/plan", "gpu/slang", "gpu/back", "gpu/cnn", "gpu"]) { const dir = fileURLToPath(new URL(d, LIB)); for (const f of readdirSync(dir).sort()) { const p = `${dir}/${f}`; if (statSync(p).isFile() && /\.(mjs|safetensors)$/.test(f) && f !== "send_wgsl.mjs") h.update(`${d}/${f}`).update(readFileSync(p)); } }
+  walk(fileURLToPath(new URL("gpu/cnn/proposer", LIB))); walk(fileURLToPath(new URL("gpu/back/stop", LIB))); walk(fileURLToPath(new URL("gpu/slang/src", LIB)));
   h.update(readFileSync(WASM));
   return h.digest("hex").slice(0, 16);
 }
 
 async function main() {
-  for (const d of ["setup", "wgsl", "naga", "glsl", "spv", "blobs"]) mkdirSync(new URL(`${d}/`, OUT), { recursive: true });
+  for (const d of ["setup", "slang", "spv", "blobs"]) mkdirSync(new URL(`${d}/`, OUT), { recursive: true });
   const tables = await formatTables();
   const net = await loadNet(new URL(NET, LIB));
   const modules = new Map(), summary = [], blobs = new Map(), used = {};
@@ -491,6 +347,8 @@ async function main() {
     const adapter = mockAdapter(rec, { features: FEATURES, limits: LIMITS });
     const fh = await FrontHalf.create(adapter, tables, {
       ...receiverOptions(net), precision: v.precision, subgroups: v.subgroups, backN: 1536, log: (m) => log.push(m), twins: null,
+      // ai: LIZ_GEN_CAP=<n> (lab, 2026-11-24): SELECT's cap in place of decoder.mjs CAP, for a tree written elsewhere (argv[2])
+      ...(process.env.LIZ_GEN_CAP ? { cap: +process.env.LIZ_GEN_CAP } : {}),
     });
     const tree = exportTree(fh, v);
     tree.backs[fh.bh.B] = exportBack(fh.bh);
@@ -510,35 +368,39 @@ async function main() {
   console.log(`${blobs.size} blobs, ${(blobBytes / 1024).toFixed(0)} KB`);
   const compiled = {}, failed = [];
   for (const [h, code] of modules) {
-    try { compiled[h] = compile(h, code); } catch (e) { if (!e.tool) throw e; failed.push({ h, message: e.message }); }
+    try { compiled[h] = early.get(h) ?? compileSlang(h, code.code); } catch (e) { if (!e.tool) throw e; failed.push({ h, message: e.message }); }
   }
   // ai: The sender's GPU encoder (gen/sender.mjs, 2026-10-02): its kernels as out/spv/send_<name>.spv, its manifest
   // ai: setup/send.json and its paint's TAB blobs/<hash>.bin (the codes and the whitening), for core/tx/gpu_painter.cpp.
   const send = await senderSetup();
   writeFileSync(new URL(`blobs/${send.tab.hash}.bin`, OUT), send.tab.bytes);
   for (const [k, code] of Object.entries(send.modules)) {
-    try { compiled[`send_${k}`] = compile(`send_${k}`, { lang: "wgsl", code }); } catch (e) { if (!e.tool) throw e; failed.push({ h: `send_${k}`, message: e.message }); }
+    try { compiled[`send_${k}`] = compileSlang(`send_${k}`, code); } catch (e) { if (!e.tool) throw e; failed.push({ h: `send_${k}`, message: e.message }); }
   }
   writeFileSync(new URL("setup/send.json", OUT), JSON.stringify(send.manifest));
+  // ai: the web encoder's WGSL from the same Slang (webWgsl), into the tree beside the encoder
+  const wgsl = {};
+  for (const [k, src] of Object.entries(send.web)) {
+    try { wgsl[k] = webWgsl(`send_${k}`, src); } catch (e) { if (!e.tool) throw e; failed.push({ h: `web send_${k}`, message: e.message }); }
+  }
+  if (Object.keys(wgsl).length === Object.keys(send.web).length) {
+    const text = `// The web encoder's WGSL (encoder.mjs): compiled by ../gen/gen.mjs from the sender's Slang (slang/src/send_*.slang,\n// slangc ${SLANG}). Generated: never edited by hand.\nexport const SEND_WGSL = ${JSON.stringify(wgsl, null, 1)};\n`;
+    const at = new URL("../gpu/send_wgsl.mjs", HERE);
+    if (!existsSync(at) || readFileSync(at, "utf8") !== text) writeFileSync(at, text);
+    console.log(`web: ${Object.keys(wgsl).length} WGSL modules, ${(Buffer.byteLength(text) / 1024).toFixed(0)} KB (gpu/send_wgsl.mjs)`);
+  }
   console.log(`sender: ${Object.keys(send.modules).length} kernels, TAB ${(send.tab.bytes.byteLength / 1024).toFixed(0)} KB`);
   for (const f of failed) console.log(`FAIL ${f.h}\n${f.message}\n`);
-  // ai: The native host's own shaders (core/ingest/*.comp, GLSL: the camera's ingest samples through a YCbCr
-  // ai: sampler, which WGSL has no word for) to out/spv/ingest_<name>.spv by glslc.
-  const ingestDir = new URL("../core/ingest/", HERE);
-  for (const f of readdirSync(ingestDir).filter((f) => f.endsWith(".comp"))) {
-    const out = fileURLToPath(new URL(`spv/ingest_${f.replace(/\.comp$/, "")}.spv`, OUT));
-    run(TOOLS.glslc, ["--target-env=vulkan1.1", "-O", fileURLToPath(new URL(f, ingestDir)), "-o", out]);
-    run(TOOLS.val, ["--target-env", "vulkan1.1", out]);
-    console.log(`ingest ${f}: ${statSync(out).size} B of SPIR-V`);
-  }
-  // ai: The sender's own GLSL (core/tx/*.comp: the desktop presenter's expand of a ring frame into an RGBA8 storage
-  // ai: image, which WGSL's bind kinds here do not cover) to out/spv/send_<name>.spv by glslc (2026-10-07).
-  const txDir = new URL("../core/tx/", HERE);
-  for (const f of readdirSync(txDir).filter((f) => f.endsWith(".comp"))) {
-    const out = fileURLToPath(new URL(`spv/send_${f.replace(/\.comp$/, "")}.spv`, OUT));
-    run(TOOLS.glslc, ["--target-env=vulkan1.1", "-O", fileURLToPath(new URL(f, txDir)), "-o", out]);
-    run(TOOLS.val, ["--target-env", "vulkan1.1", out]);
-    console.log(`sender ${f}: ${statSync(out).size} B of SPIR-V`);
+  // ai: The engine's own shaders, Slang from their files to out/spv/<prefix><name>.spv: core/ingest/ (ingest_: the camera's
+  // ai: frame through the YCbCr sampler the host builds for its format, and the raw develop) and core/tx/ (send_: the
+  // ai: presenter's expand and Lanczos stretch into RGBA8 storage images, the stream files' packing). Native alone: no WGSL.
+  const engine = [["../core/ingest/", "ingest_"], ["../core/tx/", "send_"]].flatMap(([d, pre]) => {
+    const dir = new URL(d, HERE);
+    return readdirSync(dir).filter((f) => f.endsWith(".slang")).map((f) => ({ src: fileURLToPath(new URL(f, dir)), name: `${pre}${f.replace(/\.slang$/, "")}` }));
+  });
+  for (const { src, name } of engine) {
+    try { const c = slangSpv(src, fileURLToPath(new URL(`spv/${name}.spv`, OUT)), name); console.log(`engine ${name}: ${c.bytes} B of SPIR-V`); }
+    catch (e) { if (!e.tool) throw e; failed.push({ h: name, message: e.message }); }
   }
   const spvBytes = Object.values(compiled).reduce((a, c) => a + c.bytes, 0);
   console.log(`${modules.size} modules: ${Object.keys(compiled).length} compiled (${(spvBytes / 1024).toFixed(0)} KB of SPIR-V), ${failed.length} failed`);
@@ -546,17 +408,18 @@ async function main() {
   // ai: copied whole (the desktop's bundle, an install) carries no stale file. Only gen's own names: a file put in
   // ai: spv/ by hand (bench_dot.spv) stays.
   const kept = new Set([...VARIANTS.map((v) => `setup/${v.name}.json`), "setup/send.json", ...[...blobs.keys(), send.tab.hash].map((h) => `blobs/${h}.bin`)]);
-  for (const h of [...modules.keys(), ...Object.keys(send.modules).map((k) => `send_${k}`)]) for (const f of [`wgsl/${h}.wgsl`, `naga/${h}.wgsl`, `glsl/${h}.comp`, `spv/${h}.raw.spv`, `spv/${h}.spv`]) kept.add(f);
-  for (const [dir, names] of [[ingestDir, "ingest_"], [txDir, "send_"]]) for (const f of readdirSync(dir).filter((f) => f.endsWith(".comp"))) kept.add(`spv/${names}${f.replace(/\.comp$/, "")}.spv`);
-  const ours = { setup: /\.json$/, blobs: /^[0-9a-f]{16}\.bin$/, wgsl: /\.wgsl$/, naga: /\.wgsl$/, glsl: /\.comp$/, spv: /^([0-9a-f]{16}|send_\w+|ingest_\w+)(\.raw)?\.spv$/ };
+  for (const h of modules.keys()) for (const f of [`slang/${h}.slang`, `spv/${h}.spv`]) kept.add(f);
+  for (const k of Object.keys(send.modules)) for (const f of [`slang/send_${k}.slang`, `spv/send_${k}.spv`]) kept.add(f);
+  for (const { name } of engine) kept.add(`spv/${name}.spv`);
+  const ours = { setup: /\.json$/, blobs: /^[0-9a-f]{16}\.bin$/, wgsl: /\.wgsl$/, naga: /\.wgsl$/, glsl: /\.comp$/, slang: /\.slang$/, spv: /^([0-9a-f]{16}|send_\w+|ingest_\w+)(\.raw)?\.spv$/ };
   let gone = 0;
-  for (const [d, re] of Object.entries(ours)) for (const f of readdirSync(new URL(`${d}/`, OUT))) if (re.test(f) && !kept.has(`${d}/${f}`)) { rmSync(new URL(`${d}/${f}`, OUT)); gone++; }
+  // ai: wgsl/, naga/ and glsl/ an earlier run's alone (the sender's WGSL and every GLSL module went 2026-11-24, with
+  // ai: spv/'s .raw.spv copies), each let go once empty
+  for (const [d, re] of Object.entries(ours)) for (const f of existsSync(new URL(`${d}/`, OUT)) ? readdirSync(new URL(`${d}/`, OUT)) : []) if (re.test(f) && !kept.has(`${d}/${f}`)) { rmSync(new URL(`${d}/${f}`, OUT)); gone++; }
+  for (const d of ["wgsl", "naga", "glsl"]) if (existsSync(new URL(`${d}/`, OUT)) && !readdirSync(new URL(`${d}/`, OUT)).length) rmSync(new URL(`${d}/`, OUT), { recursive: true });
   if (gone) console.log(`${gone} files of an earlier run let go`);
-  // ai: the glslang that wrote the GLSL modules, by version: a module is named by its source, so another glslang writes
-  // ai: other SPIR-V under the same names
-  const glsl = Object.keys(compiled).filter((h) => compiled[h].glsl), glslang = run(TOOLS.glslang, ["--version"]).split("\n")[0].split(":").pop().trim();
-  console.log(`${glsl.length} of them GLSL (glslang ${glslang})`);
-  writeFileSync(new URL("gen.json", OUT), JSON.stringify({ sources: sourcesHash(), writer: `wgsl2spv (naga 30.0.1: zero-init native, no loop bounding, bound checks off); glslang ${glslang} (SPIR-V 1.3, no optimiser) for the GLSL modules`, variants: summary, modules: Object.keys(compiled), glsl, failed: failed.map((f) => f.h) }, null, 1));
+  console.log(`${Object.keys(compiled).length + engine.length} SPIR-V modules by slangc ${SLANG}: ${Object.keys(compiled).length} the decoder's and the sender's, ${engine.length} the engine's`);
+  writeFileSync(new URL("gen.json", OUT), JSON.stringify({ sources: sourcesHash(), writer: `slangc ${SLANG} (SPIR-V 1.3, ${SLANG_OPT.join(" ")}) for every module, and the web encoder's WGSL (gpu/send_wgsl.mjs) from the same Slang`, variants: summary, modules: Object.keys(compiled), engine: engine.map((e) => e.name), failed: failed.map((f) => f.h) }, null, 1));
   if (failed.length) process.exit(1);
 }
 

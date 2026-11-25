@@ -67,27 +67,27 @@ int lizard_any_blocks(void) { return ANY.last ? ANY.last->blocks : 0; }
 int lizard_any_max_blocks(void) { return lizard_any_top(&ANY); }
 // ai: The word this frame's ring read, or 0.
 const ob_fmt_t *lizard_any_fmt(void) { return lizard_any_word(&ANY); }
-// ai: the pilots the blind receiver's last frame read: out[0], out[1] r of the even and of the odd blocks, out[2],
-// ai: out[3] their standard errors; the blocks read, 0 for none
+// ai: the pilots the blind receiver's last frame read: out[0], out[1] r of the even and of the odd sub-channels, out[2],
+// ai: out[3] their standard errors; the sub-channels read, 0 for none
 int lizard_any_pilot_get(float *out) { return lizard_any_pilot(&ANY, out, out + 2); }
 
 // The bit map of the codec lizard_setup made (lizard_phy.h LIZARD_BITMAP, the only one), which a spec may name (sim/ob.mjs
 // Focus refuses any other).
 int lizard_bitmap_get(void) { return fready ? F.bitmap : -1; }
 
-// What the last decode read out of the band, an ob_fmt_t (fmt.h: the version, then count[3], as ints), or 0 for nothing
-// read.
+// What the last decode read out of the band, an ob_fmt_t (fmt.h: the version, count[4], fps and delay, as ints), or 0
+// for nothing read.
 const ob_fmt_t *lizard_fmt_rx_ptr(void) { return fready ? lizard_fmt_rx(&F) : 0; }
-// ai: The frame's layout the next encode paints (lizard_phy.h lizard_layout): 6/7, 2/3 and 1/2 blocks, the 3/4 filling;
+// ai: The frame's layout the next encode paints (lizard_phy.h lizard_layout): 6/7, 3/4, 2/3 and 1/2 blocks, the rest padded;
 // ai: 0, or -1 where it is no frame. lizard_blocks() then says the frame's blocks; lizard_blocks_max() the most any layout
 // ai: of this codec holds (what a told receiver's buffers hold, a frame's word choosing its own).
-int lizard_layout_set(int a, int t, int c) { const int k[3] = { a, t, c }; return fready ? lizard_layout(&F, k) : -1; }
+int lizard_layout_set(int a, int b, int t, int c) { const int k[OB_TIERS] = { a, b, t, c }; return fready ? lizard_layout(&F, k) : -1; }
 // ai: the sender's clock the word states (lizard_phy.h lizard_clock): fps 0 to 240 (0 a still), delay 1 to 30
 int lizard_clock_set(int fps, int delay) { return fready ? lizard_clock(&F, fps, delay) : -1; }
 int lizard_blocks_max(void) { return F.blocks_max; }
 // ai: The pilots (lizard_phy.h lizard_parity, lizard_pilot): the count mod 4 the next encode paints, and what the last told
-// ai: decode read, out[0], out[1] r of the even and of the odd blocks, out[2], out[3] their standard errors; the
-// ai: blocks read, 0 for none.
+// ai: decode read, out[0], out[1] r of the even and of the odd sub-channels, out[2], out[3] their standard errors; the
+// ai: sub-channels read, 0 for none.
 int lizard_parity_set(int c) { return fready ? lizard_parity(&F, c) : -1; }
 int lizard_pilot_get(float *out) { return fready ? lizard_pilot(&F, out, out + 2) : 0; }
 // ai: the grid's shift the last decode read off the pilots and turned back (lizard_phy.h lizard_align), for a measurement
@@ -270,7 +270,7 @@ int ob_test_crc_gate_out(const float *est, float *blk_est, float *bar, uint8_t *
 
 // The layout's numbers, so the JS keeps no copy: id bytes, payload bytes, symbol bits, source block bits, the control
 // source block, name bytes at most, sb_log2 least and most, source blocks at most, BLAKE3's
-// hash byte, TOI bits, the TOI's first byte in the id, an entry's bytes at most, a description's bytes at most.
+// hash byte, TOI bits, the TOI's first byte in the id, the longest description, a description's bytes at most.
 void xfer_layout(int32_t *out) {
   const int32_t v[] = { XFER_ID_BYTES, XFER_PAYLOAD, XFER_ESI_BITS, XFER_SBN_BITS, XFER_CONTROL, XFER_NAME_MAX,
                         XFER_LOG2_MIN, XFER_LOG2_MAX, XFER_MAX_SOURCE_BLOCKS, XFER_HASH_BLAKE3, XFER_TOI_BITS, XFER_ID_TOI,

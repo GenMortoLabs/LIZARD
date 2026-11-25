@@ -246,7 +246,7 @@ class SendState(val full: FullScreen) {
     var seed by mutableStateOf(Prefs.seed)
     // ai: Code's Colours (2026-11-16, lizard-ui Colours): the code's ink and its paper, 0xRRGGBB, kept; handed to each
     // ai: sender made and at each change (the sender's colours are atomics: no lock, any time), the presenter painting
-    // ai: them from the sender (expand.comp, the area round the code the paper)
+    // ai: them from the sender (expand.slang, the area round the code the paper)
     var ink by mutableStateOf(Prefs.ink)
     var paper by mutableStateOf(Prefs.paper)
     var toolsOpen by mutableStateOf(Prefs.toolsOpen)
@@ -300,7 +300,6 @@ class SendState(val full: FullScreen) {
     val canExport get() = source != "stream" && !test
     // ai: the run exports with no screen: the code area blank, no presenter, no Pause
     val blind get() = sending && runExport && !runDisplay
-    val railShown get() = collapsed
     val ringIndex get() = if (ring in Pick.RINGS.indices) ring else Pick.RING_DEFAULT
     // ai: the margin past the quiet zone the presenter keeps at the area's edges, for the ring configured
     private val edge get() = edgeShare
@@ -688,9 +687,9 @@ class SendState(val full: FullScreen) {
     fun chooseCodes(v: Int) { codes = if (v == 2) 2 else 1; Prefs.codes = codes; repick() }
     // ai: a group's delay (its code rates), applied at once (the sender's next frame; no configure): not while a prepare
     // ai: holds the sender's lock (the UI thread would wait out the driver's compile), which hands it on as it ends
-    fun chooseRefresh(rates: List<Int>, v: Int) {
-        if (rates.all { refresh[it] == v }) return
-        refresh = refresh.copyOf().also { e -> for (r in rates) e[r] = v.coerceIn(1, REFRESH_MAX) }
+    fun chooseRefresh(rate: Int, v: Int) {
+        if (refresh[rate] == v) return
+        refresh = refresh.copyOf().also { e -> e[rate] = v.coerceIn(1, REFRESH_MAX) }
         Prefs.refresh = refreshText(refresh)
         if (h != preparing) refreshNow()
     }

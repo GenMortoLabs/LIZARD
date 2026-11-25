@@ -1,6 +1,17 @@
 // RFC 6330 (RaptorQ) constants for rq.c, every value the RFC's: V0 to V3 (section 5.5), Table 2's K', J(K'), S(K'),
 // H(K'), W(K') (section 5.6), the degree table (5.3.5.2, Table 1), and the octet field's exponent and logarithm over
 // x^8 + x^4 + x^3 + x^2 + 1 with alpha = 2 (5.7). Do not edit.
+//
+// These tables are Code Components of RFC 6330 (tables of values, Section 4 of the IETF Trust's Legal Provisions
+// Relating to IETF Documents, effective 28 December 2009), taken under its Simplified BSD License:
+//
+// Copyright (c) 2011 IETF Trust and the persons identified as authors of the code. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without modification, is permitted pursuant to, and
+// subject to the license terms contained in, the Simplified BSD License set forth in Section 4.c of the IETF Trust's
+// Legal Provisions Relating to IETF Documents (http://trustee.ietf.org/license-info). Its text: rq_tables.LICENSE.
+//
+// This code was derived from IETF RFC 6330. Please reproduce this note if possible.
 #ifndef RQ_TABLES_H
 #define RQ_TABLES_H
 #include <stdint.h>

@@ -7,7 +7,7 @@ static int top_subch(int n) {
   for (int s = LIZARD_STEP * OB_FMT_VERSION_MAX; s >= LIZARD_STEP * OB_FMT_VERSION_MIN; s -= LIZARD_STEP) if (lizard_n_for(s) == n) return s;
   return 0;
 }
-// ai: The ring codecs' picture: the smallest a format has (the ladder's foot's, 384 since LIZARD-32 left it).
+// ai: The ring codecs' picture: the smallest a format has (the ladder's foot's, 384: versions 1 to 5).
 static int ring_n(void) { return lizard_n_for(LIZARD_STEP * OB_FMT_VERSION_MIN); }
 void lizard_any_free(lizard_any_t *a) {
   for (int r = 0; r < LIZARD_RINGS; r++) lizard_free(&a->ring[r]);
@@ -24,7 +24,7 @@ int lizard_any_init(lizard_any_t *a, int nmax) {
   return a->ring[0].block_bytes;
 }
 // ai: The codec for subch sub-channels (picture n) in ring r: the ring's own where it is that format (n = ring_n() at its
-// ai: top), else the cache, else built now. Each count is a format of its own (its rate profile), not a prefix.
+// ai: top), else the cache, else built now. Each count is a format of its own (its layout the word's), not a prefix.
 static lizard_t *pic_for(lizard_any_t *a, int r, int n, int subch) {
   if (n == ring_n() && subch == top_subch(n)) return &a->ring[r];
   int slot = -1, oldest = 0;

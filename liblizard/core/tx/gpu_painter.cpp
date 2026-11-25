@@ -46,6 +46,8 @@ std::unique_ptr<GpuPainter> GpuPainter::create(const std::string& assets, std::f
   // ai: the kernels write the block's id as XFER_ID_BYTES bytes (the bare id and the 48-bit TOI, src/xfer.h)
   if (json.value("ids", 0) != XFER_ID_BYTES) throw std::runtime_error("the GPU sender's " + assets + "/setup/send.json predates the 12-byte block id: regenerate liblizard/out");
   if (json.value("rqPar", 0) != 6) throw std::runtime_error("the GPU sender's " + assets + "/setup/send.json predates the 48-bit TOI: regenerate liblizard/out");
+  // ai: the disc the spectrum transposed and ipic's picture row-major (send_tables.cpp's UV, no tpose; 2026-11-24)
+  if (json.value("disc", std::string()) != "transposed") throw std::runtime_error("the GPU sender's " + assets + "/setup/send.json predates the transposed disc: regenerate liblizard/out");
   const std::string blob = json["tab"]["blob"];
   const std::string err = p->k_.load(text, readFile(assets + "/" + blob));
   if (!err.empty()) throw std::runtime_error(err);
@@ -58,18 +60,21 @@ std::unique_ptr<GpuPainter> GpuPainter::create(const std::string& assets, std::f
   p->bglPaint_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RO, Bind::RW, Bind::Uniform}, "send paint");
   p->bglIrows_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RW, Bind::Uniform, Bind::Uniform}, "send irows");
   p->bglIpic_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RW, Bind::Uniform}, "send ipic");
-  p->bglTpose_ = d.createBindGroupLayout({Bind::RO, Bind::RW, Bind::Uniform}, "send tpose");
+  // ai: ipic's frame form (the copy form's: the frame's bytes from workgroup memory): FRAME, SU, G, BORDER, TAPS
+  p->bglIpicFrame_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RW, Bind::Uniform, Bind::Uniform, Bind::RO, Bind::RO}, "send ipic frame");
   p->bglRsv_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RW, Bind::Uniform}, "send rsv");
   p->bglRsh_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RO, Bind::RW, Bind::Uniform}, "send rsh");
   const std::string spv = assets + "/spv/send_";
   p->paint_ = d.createPipeline(spirv(spv + "paint.spv"), p->bglPaint_, "send paint");
-  p->tpose_ = d.createPipeline(spirv(spv + "tpose.spv"), p->bglTpose_, "send tpose");
   p->rsv_ = d.createPipeline(spirv(spv + "rsv.spv"), p->bglRsv_, "send rsv");
   p->rsh_ = d.createPipeline(spirv(spv + "rsh.spv"), p->bglRsh_, "send rsh");
-  p->rshCopy_ = d.createPipeline(spirv(spv + "rshCopy.spv"), p->bglRsh_, "send rsh copy");
+  p->rshBorder_ = d.createPipeline(spirv(spv + "rshBorder.spv"), p->bglRsh_, "send rsh border");
+  const char* st = getenv("LIZ_SEND_STAGES");
+  p->staged_ = st && *st && *st != '0';
+  const int q = p->staged_ ? 2 * STAGES : 2;
   for (int f = 0; f < FLIGHTS; f++) {
-    p->qs_[f] = d.createQuerySet(2, "send time");
-    p->time_[f] = d.createBuffer(16, wg::MAP_READ | wg::COPY_DST, "send TIME");
+    p->qs_[f] = d.createQuerySet(q, "send time");
+    p->time_[f] = d.createBuffer(8ull * q, wg::MAP_READ | wg::COPY_DST, "send TIME");
   }
   // ai: TAB, the paint's codes and whitening: the same for every format, made once
   p->TAB_ = d.createBuffer(4ull * p->k_.tab.size(), wg::STORAGE | wg::COPY_DST, "send TAB", false);
@@ -79,7 +84,7 @@ std::unique_ptr<GpuPainter> GpuPainter::create(const std::string& assets, std::f
 
 GpuPainter::~GpuPainter() {
   try { if (dev_) dev_->waitIdle(); } catch (const std::exception&) {}   // ai: a lost or hung device (wg::Lost): nothing to wait for
-  gPaint_.reset(); gIrows_.reset(); gIpic_.reset(); gTpose_.reset(); gRsv_.reset(); gRsh_.reset();
+  gPaint_.reset(); gIrows_.reset(); gIpic_.reset(); gRsv_.reset(); gRsh_.reset();
   if (fReady_) lizard_free(&f_);
 }
 
@@ -93,6 +98,7 @@ std::string GpuPainter::pipes(int n) {
   const std::string spv = assets_ + "/spv/send_", s = std::to_string(n);
   irows_ = dev_->createPipeline(spirv(spv + "irows" + s + ".spv"), bglIrows_, "send irows " + s);
   ipic_ = dev_->createPipeline(spirv(spv + "ipic" + s + ".spv"), bglIpic_, "send ipic " + s);
+  ipicFrame_ = dev_->createPipeline(spirv(spv + "ipicFrame" + s + ".spv"), bglIpicFrame_, "send ipic frame " + s);
   pipesN_ = n;
   return "";
 }
@@ -140,8 +146,8 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
       }
       for (; depth >= floorDepth; depth = depth / 2 >= floorDepth ? depth / 2 : (depth > floorDepth ? floorDepth : 0)) {
       try {
-        gPaint_.reset(); gIrows_.reset(); gIpic_.reset(); gTpose_.reset(); gRsv_.reset(); gRsh_.reset();
-        BLOCKS_.reset(); S_.reset(); Y_.reset(); PQT_.reset(); PIC_.reset(); FRAME_.reset(); READ_.reset();
+        gPaint_.reset(); gIrows_.reset(); gIpic_.reset(); gRsv_.reset(); gRsh_.reset();
+        BLOCKS_.reset(); S_.reset(); Y_.reset(); TMP_.reset(); PIC_.reset(); FRAME_.reset(); READ_.reset();
         FRAME_ = d.createBuffer(uint64_t(depth) * 4ull * t.FS, STORAGE | COPY_SRC | COPY_DST, "send FRAME");
         READ_ = d.createBuffer(R * 4ull * t.FS, MAP_READ | COPY_DST, "send READ");
         if (ringOnly) {
@@ -165,8 +171,10 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
         SU_ = d.createBuffer(48, UNIFORM | COPY_DST, "send SU", false);
         d.writeBuffer(*SU_, 0, t.su.data(), 48);
         Y_ = d.createBuffer(Z * uint64_t(t.Vr) * n * 8, STORAGE, "send Y");
-        PQT_ = d.createBuffer(Z * 4ull * std::max<uint64_t>(uint64_t(n) * n, t.copy ? 0 : uint64_t(t.q) * n), STORAGE, "send PQT");
-        PIC_ = d.createBuffer(Z * 4ull * n * n, STORAGE, "send PIC");
+        // ai: TMP, rsv's rows (q x n a symbol), where the taps are not copies
+        TMP_ = d.createBuffer(t.copy ? 16 : Z * 4ull * t.q * n, STORAGE, "send TMP");
+        // ai: PIC, ipic's picture, where the taps are not copies (the copy form's ipic writes the frame)
+        PIC_ = d.createBuffer(t.copy ? 16 : Z * 4ull * n * n, STORAGE, "send PIC");
         TAPS_ = d.createBuffer(4 * t.taps.size(), STORAGE | COPY_DST, "send TAPS", false);
         d.upload(*TAPS_, 0, t.taps.data(), 4 * t.taps.size());
         BORDER_ = d.createBuffer(t.border.size(), STORAGE | COPY_DST, "send BORDER", false);
@@ -177,16 +185,15 @@ std::string GpuPainter::configure(int subch, int span, int fps, int frames, int 
         d.writeBuffer(*GU_, 48, t.anch.data(), 4 * t.anch.size());
         gPaint_ = d.createBindGroup(bglPaint_, {BLOCKS_, TAB_, UV_, S_, PU_});
         gIrows_ = d.createBindGroup(bglIrows_, {S_, TW_, Y_, ROWS_, SU_});
-        gIpic_ = d.createBindGroup(bglIpic_, {Y_, TW_, PQT_, SU_});
-        gTpose_ = d.createBindGroup(bglTpose_, {PQT_, PIC_, GU_});
-        if (!t.copy) gRsv_ = d.createBindGroup(bglRsv_, {PIC_, TAPS_, PQT_, GU_});
-        gRsh_ = d.createBindGroup(bglRsh_, {t.copy ? PIC_ : PQT_, TAPS_, BORDER_, FRAME_, GU_});
+        gIpic_ = t.copy ? d.createBindGroup(bglIpicFrame_, {Y_, TW_, FRAME_, SU_, GU_, BORDER_, TAPS_}) : d.createBindGroup(bglIpic_, {Y_, TW_, PIC_, SU_});
+        if (!t.copy) gRsv_ = d.createBindGroup(bglRsv_, {PIC_, TAPS_, TMP_, GU_});
+        gRsh_ = d.createBindGroup(bglRsh_, {TMP_, TAPS_, BORDER_, FRAME_, GU_});
         d.flush();
         frames_ = R;
         depth_ = depth;
         staging_.assign(Z * V * k_.blockBytes, 0);
         log_("gpu sender: LIZARD-" + std::to_string(subch) + (t.codes > 1 ? " x " + std::to_string(t.codes) : "") + " at " + std::to_string(n) + ", " + std::to_string(t.FW) + " x " + std::to_string(t.W) + " px, encodes of " + std::to_string(R) +
-             (t.copy ? ", rsh's copy" : "") + ", a ring of " + std::to_string(depth) + " frames, " + std::to_string(d.allocated.load() >> 20) + " MB on " + name_);
+             (t.copy ? ", the copy form" : "") + ", a ring of " + std::to_string(depth) + " frames, " + std::to_string(d.allocated.load() >> 20) + " MB on " + name_);
         return "";
       } catch (const OutOfMemory&) {
         log_("gpu sender: encodes of " + std::to_string(R) + " with a ring of " + std::to_string(depth) + " do not fit; fewer");
@@ -230,16 +237,22 @@ GpuPainter::Pending GpuPainter::submit(const uint8_t* blocks, int count, int par
   const int fl = flight_++ % FLIGHTS;
   auto enc = d.encoder();
   enc.clearBuffer(*S_, 0, uint64_t(RZ) * t.npos * 8);
-  enc.beginComputePass(qs_[fl].get(), 0, 1);
+  // ai: staged (LIZ_SEND_STAGES): a pass a stage, its own pair; otherwise one pass, one pair
+  wg::QuerySet* qs = qs_[fl].get();
+  const auto stage = [&](int k) { if (staged_) { if (k) enc.endPass(); enc.beginComputePass(qs, 2 * k, 2 * k + 1); } };
+  enc.beginComputePass(qs, 0, 1);
   if (fill) fill(enc);
   enc.setPipeline(*paint_); enc.setBindGroup(*gPaint_); enc.dispatch(V, 1, RZ);
+  stage(1);
   enc.setPipeline(*irows_); enc.setBindGroup(*gIrows_); enc.dispatch(t.Vr, 1, RZ);
-  enc.setPipeline(*ipic_); enc.setBindGroup(*gIpic_); enc.dispatch(n / 4, 1, RZ);
-  enc.setPipeline(*tpose_); enc.setBindGroup(*gTpose_); enc.dispatch(n / 4 / k_.tposeTile, n / k_.tposeTile, RZ);
+  stage(2);
+  enc.setPipeline(t.copy ? *ipicFrame_ : *ipic_); enc.setBindGroup(*gIpic_); enc.dispatch(n / 4, 1, RZ);
+  stage(3);
   if (!t.copy) { enc.setPipeline(*rsv_); enc.setBindGroup(*gRsv_); enc.dispatch((n / 4 + k_.rsvThreads - 1) / k_.rsvThreads, t.q, RZ); }
-  enc.setPipeline(t.copy ? *rshCopy_ : *rsh_); enc.setBindGroup(*gRsh_); enc.dispatch((t.RW + k_.rshThreads - 1) / k_.rshThreads, t.W, R);
+  stage(4);
+  enc.setPipeline(t.copy ? *rshBorder_ : *rsh_); enc.setBindGroup(*gRsh_); enc.dispatch((t.RW + k_.rshThreads - 1) / k_.rshThreads, t.W, R);
   enc.endPass();
-  enc.resolveQuerySet(*qs_[fl], 0, 2, *time_[fl], 0);
+  enc.resolveQuerySet(*qs, 0, staged_ ? 2 * STAGES : 2, *time_[fl], 0);
   if (out) enc.copyBufferToBuffer(*FRAME_, uint64_t(first) * 4 * t.FS, *READ_, 0, uint64_t(R) * 4 * t.FS);
   Pending p;
   p.flight = fl;
@@ -266,9 +279,21 @@ double GpuPainter::finish(Pending& p) {
   }
   p.ticket.reset();
   if (!d.features.timestamps) return wall;
-  uint64_t ts[2];
-  std::memcpy(ts, d.read(*time_[p.flight], 0, 16), 16);
-  return double((ts[1] - ts[0]) & d.timestampMask) * d.timestampPeriod / 1e6;
+  if (!staged_) {
+    uint64_t ts[2];
+    std::memcpy(ts, d.read(*time_[p.flight], 0, 16), 16);
+    return double((ts[1] - ts[0]) & d.timestampMask) * d.timestampPeriod / 1e6;
+  }
+  uint64_t ts[2 * STAGES];
+  std::memcpy(ts, d.read(*time_[p.flight], 0, sizeof ts), sizeof ts);
+  double all = 0;
+  for (int k = 0; k < STAGES; k++) {
+    const double ms = double((ts[2 * k + 1] - ts[2 * k]) & d.timestampMask) * d.timestampPeriod / 1e6;
+    stageMs_[k] += ms;
+    all += ms;
+  }
+  stageEncodes_++;
+  return all;
 }
 
 void GpuPainter::readSlot(int slot, std::vector<uint8_t>& out) {

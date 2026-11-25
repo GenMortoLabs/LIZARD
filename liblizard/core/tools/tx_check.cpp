@@ -40,6 +40,8 @@
 // ai:       the C's paint at the same counts (the border to the byte, the square within a grey level: the web's auto
 // ai:       rule), then its GPU ms a frame over encodes of its most, the test stream made on the device and the blocks
 // ai:       given whole alternately (their difference the device's BLAKE3), `encode` frames an encode (4 unset; 2026-11-18);
+// ai:       LIZ_ENCODES=<k> the encodes of each kind timed (16 unset), LIZ_SEND_STAGES=1 each stage's GPU ms a frame too
+// ai:       (GpuPainter's per-stage timestamp pairs; 2026-11-24)
 // ai:       ring an index into src/lizard_phy.h
 // ai:       LIZARD_RING, the default ring (LIZARD_RING_DEFAULT, the 128) unset
 // ai:   LIZ_PAINTER=gpu|auto tx_check paint ...   the Sender painting on the GPU (or auto), every frame read blind as before
@@ -60,7 +62,7 @@
 // ai:   the border, their pixels and the dark ones counted
 // ai:   LIZ_REPAINT=<frame> tx_check paint ...   at that frame the Sender configured again on the other painter (the GPU's
 // ai:       becomes the CPU's, the CPU's the GPU's; 2026-11-16): a file the GPU made read back for the CPU's painters
-// ai:       (tx/gpu_encoder.h host), the rest of the run read blind as before
+// ai:       (tx/gpu_stream.h host), the rest of the run read blind as before
 // ai:   tx_check flights <subch> [encodes] [frames an encode]   the GPU painter's encodes in flight (2026-11-16,
 // ai:       GpuPainter::submit): the test stream's frames painted GpuPainter::FLIGHTS at a time, nothing waited for
 // ai:       between, then painted again one encode at a time and waited for: every ring frame byte-equal (6 encodes of 8
@@ -176,7 +178,7 @@ int main(int argc, char** argv) {
     Mapped m(argv[2]);
     const std::string dir = argv[3];
     std::map<std::string, std::string> kv;
-    static const std::set<std::string> known{"subch", "refresh", "block", "frame", "burst", "tier", "tierframe", "join", "chunk", "seed", "frames", "decoder", "batch"};
+    static const std::set<std::string> known{"subch", "refresh", "block", "frame", "burst", "tier", "tierframe", "join", "chunk", "seed", "frames", "decoder", "batch", "pause"};
     for (int a = 4; a < argc; a++) {
       const char* e = strchr(argv[a], '=');
       const std::string key = e ? std::string(argv[a], size_t(e - argv[a])) : "";
@@ -281,6 +283,8 @@ int main(int argc, char** argv) {
     }
     XferRx& rx = *xr;
     bool ok_decode = true;
+    const double pauseS = num("pause", 0);
+    bool pausedOnce = false;
     uint64_t r = 0x9e3779b97f4a7c15ull ^ (uint64_t(seed) << 32 | seed);   // ai: xorshift64*, the channel's, the carousel's seed apart
     auto unit = [&r] { r ^= r >> 12; r ^= r << 25; r ^= r >> 27; return double((r * 0x2545f4914f6cdd1dull) >> 11) / double(1ull << 53); };
     // ai: the picture losses' two states: a run ends with 1 / burst, one begins so the share lost is pFrame
@@ -411,6 +415,14 @@ int main(int argc, char** argv) {
         // ai: wanting K + 1) is completed, and the file's doneAt stamped, within its picture, not when a busy solver returned
         // ai: while the producer ran on (the receiver stamps a fed-on source block at its recovery, xfer_rx_core.cpp recovered)
         rx.drain();
+        // ai: pause=<s> (2026-11-24): the receiver paused that long at half the lossless receiver's pictures, as a camera
+        // ai: stopped mid-transfer: the transfer's clock (XferProgress.secs) leaves it out
+        if (pauseS > 0 && !pausedOnce && pictures >= uint64_t(double(K) / perPicture / 2)) {
+          pausedOnce = true;
+          rx.pause(true);
+          std::this_thread::sleep_for(std::chrono::milliseconds(int64_t(pauseS * 1000)));
+          rx.pause(false);
+        }
       }
       if (pictures % (recv ? group : 64)) continue;
       p = rx.progress();
@@ -464,6 +476,7 @@ int main(int argc, char** argv) {
            (unsigned long long)taken, 100 * over, (unsigned long long)K, p.verified, p.over, p.rejected,
            (unsigned long long)p.lost, (tMade - t0) / 1e3, (tFed - tMade) / 1e3, (tDone - tFed) / 1e3, (nowMs() - tDone) / 1e3,
            (anonMb(), anonPeak), same ? "byte for byte the source's" : "NOT the source's");
+    if (pauseS > 0) printf("  the transfer's clock %.2f s, the feed %.2f s with %.2f s paused at half\n", p.secs, (tFed - tMade) / 1e3, pausedOnce ? pauseS : 0.0);
     recv.reset();
     for (auto& f : painters) lizard_free(&f);
     return ok ? 0 : 1;
@@ -533,8 +546,8 @@ int main(int argc, char** argv) {
     GpuStream* sp = st.get();
     x.makeOnCpu([sp](uint32_t c, const rq_enc_t* e) { return sp->put(c, e); });
     x.waitMade();
-    if (!x.fault().empty() || !st->done()) { printf("FAIL: %s\n", x.fault().empty() ? "chunks missing on the device" : x.fault().c_str()); return 1; }
-    printf("every chunk solved and on the device in %.0f ms\n", nowMs() - t0);
+    if (!x.fault().empty() || !st->done()) { printf("FAIL: %s\n", x.fault().empty() ? "source blocks missing on the device" : x.fault().c_str()); return 1; }
+    printf("every source block solved and on the device in %.0f ms\n", nowMs() - t0);
     if (!frames) { printf("timed alone (frames 0: no reference, nothing compared)\n"); return 0; }
     t0 = nowMs();
     XferTx ref(data, len, "f.bin", -1, "");
@@ -565,7 +578,7 @@ int main(int argc, char** argv) {
       for (size_t i = 0; i < data_.size(); i++) {
         ref.block(data_[i], refb.data());
         if (std::memcmp(refb.data(), got.data() + i * XFER_PAYLOAD, XFER_PAYLOAD)) {
-          if (wrong < 5) printf("block: chunk %u symbol %u differs\n", xfer_id_sbn(data_[i]), xfer_id_esi(data_[i]));
+          if (wrong < 5) printf("block: source block %u symbol %u differs\n", xfer_id_sbn(data_[i]), xfer_id_esi(data_[i]));
           wrong++;
         }
       }
@@ -830,12 +843,22 @@ int main(int argc, char** argv) {
     // ai: the encodes alternate the test stream made on the device from the ids (the sender's test path) and the same
     // ai: blocks given whole (a file's path): the difference a frame is the device's BLAKE3 (2026-11-15)
     double gpu[2] = {0, 0}, wall[2] = {0, 0};
-    const int encodes = 16;
+    const char* ne = getenv("LIZ_ENCODES");   // ai: encodes of each kind (16 unset; 2026-11-24, the timing A/B's)
+    const int encodes = ne && atoi(ne) > 0 ? atoi(ne) : 16;
+    std::array<double, GpuPainter::STAGES> st[2] = {};
+    g->takeStageMs();   // ai: the check's encodes left out
     for (int i = 0; i < 2 * encodes; i++) {
       const int k = i & 1;
       const double t0 = nowMs();
       gpu[k] += g->encode(blocks.data(), R, (i >> 1) & 3, out.data(), 0, k == 0);
       wall[k] += nowMs() - t0;
+      const auto s = g->takeStageMs();
+      for (int j = 0; j < GpuPainter::STAGES; j++) st[k][j] += s[j];
+    }
+    if (g->staged()) for (int k = 0; k < 2; k++) {
+      printf("stages (%s), ms a frame:", k ? "blocks given" : "test stream");
+      for (int j = 0; j < GpuPainter::STAGES; j++) printf(" %s %.4f", GpuPainter::STAGE_NAMES[j], st[k][j] / (encodes * R));
+      printf("\n");
     }
     const double perFrame = encodes * R, nb = static_cast<double>(g->blocks()) * g->codes();
     printf("time: %.3f ms of GPU a frame making the test stream, %.3f with the blocks given: BLAKE3 %+.3f ms a frame, %+.2f us a block "
@@ -977,9 +1000,9 @@ int main(int argc, char** argv) {
     printf("pace: LIZARD-%d x %d at %d a second, %d s: %ld taken, %ld late\n", subch, codes, fps, secs, taken, late);
     if (pf && madeAt >= 0) {
       const long after = (long)secs * fps - madeAt;
-      printf("cpu: every chunk made %.0f ms after the configure for %.0f core-ms; then %.3f core-ms a frame over %ld frames (%.1f%% of a core)\n",
+      printf("cpu: every source block made %.0f ms after the configure for %.0f core-ms; then %.3f core-ms a frame over %ld frames (%.1f%% of a core)\n",
              wMade - w0, cMade - c0, (cpuMs() - cMade) / after, after, (cpuMs() - cMade) / (nowMs() - wMade) * 100);
-    } else if (pf) printf("cpu: not every chunk made in the run\n");
+    } else if (pf) printf("cpu: not every source block made in the run\n");
     else if (madeAt >= 0) {
       const long after = (long)secs * fps - madeAt;
       printf("cpu: %.3f core-ms a frame from 2 s on over %ld frames (%.1f%% of a core; the test stream: the painting alone)\n", (cpuMs() - cMade) / after, after,

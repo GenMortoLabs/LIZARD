@@ -14,7 +14,7 @@ std::string SendConsts::load(const std::string& manifest, const std::vector<uint
   nlohmann::json j;
   try { j = nlohmann::json::parse(manifest); } catch (const std::exception& e) { return std::string("the sender's manifest: ") + e.what(); }
   if (!j.contains("tab") || !j.contains("codes")) return "the sender's manifest predates the rate profile (no tab or codes): regenerate liblizard/out";
-  slots = j["slots"]; tposeTile = j["tposeTile"]; rsvThreads = j["rsvThreads"]; rshThreads = j["rshThreads"];
+  slots = j["slots"]; rsvThreads = j["rsvThreads"]; rshThreads = j["rshThreads"];
   blockBytes = j["blockBytes"];
   const auto& p = j["paramsAt"];
   paramsSizes = p["sizes"]; paramsDims = p["dims"]; paramsPw = p["pw"]; paramsWords = p["words"];
@@ -29,7 +29,7 @@ std::string SendConsts::load(const std::string& manifest, const std::vector<uint
   std::memcpy(tab.data(), tabBytes.data(), 4 * words);
   if (pw.size() != 240) return "the sender's pw words are not 240 (the CRC-64's split powers): regenerate liblizard/out";
   if (slots < 1 + static_cast<int>(codeRate.size())) return "the paint's uniform holds " + std::to_string(slots) + " sizes, too few for the codes' tiers";
-  // ai: rsh's G with the anchors' 8 words (SPEC 6.13, gpu/wgsl/send.mjs GA_BYTES); a tree from before them names none
+  // ai: rsh's G with the anchors' 8 words (SPEC 6.13, gpu/plan/send.mjs GA_BYTES); a tree from before them names none
   if (!j.contains("gWords")) return "the sender's manifest predates the anchors in the format (no gWords): regenerate liblizard/out";
   if (j["gWords"] != 20) return "rsh reads " + j["gWords"].dump() + " words of G, the painter writes 20";
   return "";
@@ -61,9 +61,19 @@ std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendT
   t = SendTables{};
   t.n = f.n; t.subch = f.subch; t.blocks = f.blocks; t.blockBytes = f.block_bytes; t.npos = f.subch * LIZARD_SUB;
   const int n = f.n, bw = f.bw;
-  // ai: discLayout: row v holds u = ustart .. umaxP then -umaxN .. -1 (ustart 1 on v = 0), packed at off[v]
+  // ai: gpu/back/disc.mjs sendDiscLayout: the spectrum transposed, so the inverse's second pass runs along the picture's
+  // ai: rows (slang/src/send_ipic.slang writes it row-major): (u, v) at (v, u) where u > 0 or u = 0, else at its
+  // ai: Hermitian partner's (-v, -u) conjugated (UV's bit 31); row v holds u = ustart .. umaxP then -umaxN .. -1
+  // ai: (ustart 1 on v = 0), packed at off[v]
+  const auto tOf = [&](int p, int& u, int& v) {
+    int a, b;
+    uvOf(p, n, bw, a, b);
+    if (a > 0 || (a == 0 && b > 0)) { u = b; v = a; return 0u; }
+    u = -b; v = -a;
+    return 1u;
+  };
   std::map<int, std::vector<int>> byV;
-  for (int i = 0; i < t.npos; i++) { int u, v; uvOf(f.pos[i], n, bw, u, v); byV[v].push_back(u); }
+  for (int i = 0; i < t.npos; i++) { int u, v; tOf(f.pos[i], u, v); byV[v].push_back(u); }
   if (byV.empty()) return "no coefficients";
   t.Vr = byV.rbegin()->first + 1;
   std::vector<uint32_t> off(t.Vr), np(t.Vr), un(t.Vr);
@@ -76,7 +86,7 @@ std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendT
     int maxP = ustart - 1, maxN = 0;
     for (int u : us) { if (u >= 0) maxP = std::max(maxP, u); else maxN = std::max(maxN, -u); }
     const std::set<int> have(us.begin(), us.end());
-    bool ok = static_cast<int>(us.size()) == maxP + 1 - ustart + maxN;
+    bool ok = static_cast<int>(us.size()) == maxP + 1 - ustart + maxN && have.size() == us.size();
     for (int u = ustart; u <= maxP && ok; u++) ok = have.count(u) != 0;
     for (int u = -maxN; u < 0 && ok; u++) ok = have.count(u) != 0;
     if (!ok) return "disc row v = " + std::to_string(v) + " is not contiguous";
@@ -87,9 +97,9 @@ std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendT
   if (static_cast<int>(count) != t.npos) return "the disc holds " + std::to_string(count) + " entries for " + std::to_string(t.npos);
   t.uv.resize(t.npos);
   for (int i = 0; i < t.npos; i++) {
-    int u, v; uvOf(f.pos[i], n, bw, u, v);
+    int u, v; const uint32_t cj = tOf(f.pos[i], u, v);
     const int ustart = v == 0 ? 1 : 0;
-    t.uv[i] = off[v] + (u >= 0 ? static_cast<uint32_t>(u - ustart) : np[v] + un[v] + static_cast<uint32_t>(u));
+    t.uv[i] = (off[v] + (u >= 0 ? static_cast<uint32_t>(u - ustart) : np[v] + un[v] + static_cast<uint32_t>(u))) | cj << 31;
   }
   // ai: the twiddles as the web computes them, in double, kept as f32
   t.tw.resize(2 * n);
@@ -145,7 +155,7 @@ std::string sendTables(const lizard_t& f, const SendConsts& k, int frames, SendT
   std::copy(k.pw.begin(), k.pw.end(), t.pu.begin() + k.paramsPw);
   sendBorder(f, t.W, t.border);
   // ai: the anchors' runs in a symbol's pixels (src/lizard_phy.c lizard_encode: square i from module m0(i) of the drive, a
-  // ai: modules a side, the drive LIZARD_QUIET modules into the symbol), d and e of rsh's G (gpu/wgsl/send.mjs GA)
+  // ai: modules a side, the drive LIZARD_QUIET modules into the symbol), d and e of rsh's G (gpu/slang/src/send_rsh.slang)
   int geo8[8];
   lizard_anchor_geom(&f, geo8);
   t.anch.assign(8, 0);

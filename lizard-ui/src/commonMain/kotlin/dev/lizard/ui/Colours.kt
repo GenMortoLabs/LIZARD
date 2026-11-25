@@ -45,7 +45,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // ai: Send's code colours (2026-11-16, both apps and the web): the code's ink and its paper, 0xRRGGBB, a frame's grey painted
-// ai: along the line between them where it is shown, each channel apart (core/tx/sender.h setColours: expand.comp on the
+// ai: along the line between them where it is shown, each channel apart (core/tx/sender.h setColours: expand.slang on the
 // ai: GPU, Sender::take on the CPU; the web's lizard_tx_rgba and its WebGPU present), the margin round the code the
 // ai: paper; black and white by default, the grey itself. The last row of Code: two tiles filled with their colours,
 // ai: Primary (the ink: the dark modules and the border) and Secondary (the paper: the light, the quiet zone and the

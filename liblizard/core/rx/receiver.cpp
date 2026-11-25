@@ -16,6 +16,9 @@
 #include "trial.h"
 #include "camera.h"
 #include "codec.h"
+extern "C" {
+#include "fmt.h"
+}
 #include "pool.h"
 #include "xfer_rx.h"
 
@@ -34,12 +37,12 @@
 namespace {
 // ai: a frame's word for the stats: its version and counts (and the ring it was read in), the sender's clock (fps, 0 a
 // ai: still; delay, its places' largest)
-nlohmann::json wordJson(int version, const int count[3], int ring, int fps, int delay) {
-  return {{"version", version}, {"ring", ring}, {"count", nlohmann::json::array({count[0], count[1], count[2]})}, {"fps", fps}, {"delay", delay}};
+nlohmann::json wordJson(int version, const int count[4], int ring, int fps, int delay) {
+  return {{"version", version}, {"ring", ring}, {"count", nlohmann::json::array({count[0], count[1], count[2], count[3]})}, {"fps", fps}, {"delay", delay}};
 }
-// ai: the last word read's configuration for the series' head (src/fmt.h: version << 22 | the 6/7, 2/3 and 1/2 counts),
-// ai: a statistic: no frame is decoded by it
-int cfgOf(int version, const int count[3]) { return version << 22 | count[0] << 14 | count[1] << 7 | count[2]; }
+// ai: the last word read's configuration for the series' head: its index (src/fmt.h ob_fmt_index) plus 1, 0 where it is
+// ai: none; a statistic: no frame is decoded by it
+int cfgOf(int version, const int count[4]) { return (int)(ob_fmt_index(version, count) + 1); }
 }  // namespace
 
 namespace lizard {
@@ -83,11 +86,11 @@ double sideOf(const float* c) {
 // ai: Each pushed frame's camera timestamp and stream (the receiver's count of cameraClosed calls when it came) by its
 // ai: tag, until its result comes back, and the newest SERIES frames as
 // ai: [ms on the camera's clock, verified blocks, new blocks, 1 where the finder registered a symbol, the pilots' r and
-// ai: its standard error over the even blocks, then over the odd (SPEC 7.3; null where none were read)] for the stats
+// ai: its standard error over the even sub-channels, then over the odd (SPEC 7.3; null where none were read)] for the stats
 // ai: ("series", about two seconds, so a reader
 // ai: that asks twice a second misses none and sees a frame more than once: it keeps the newest it has counted).
 // ai: Which captures read and which did not, against the camera's own clock, is how the camera's phase against the
-// ai: display shows (the app's PhaseLock.kt; STATUS "A delay for the camera's phase").
+// ai: display shows (phase_lock.h; STATUS "A delay for the camera's phase").
 constexpr size_t SERIES = 150;
 struct Stamps {
   struct At { int64_t ns; uint64_t stream; };
@@ -685,7 +688,7 @@ void GpuReceiver::deliver(BatchOut& out, const Kept& k) {
 
 // ai: The window's rate (goodputKBs, 2026-10-10): the test stream's new blocks, and a file's blocks as the transfer took
 // ai: them (XferRx::taken), not the ids new to the dedupe, which also counted a file's blocks held while its header was
-// ai: not being read (and dropped there) and blocks of a chunk already verified: a stalled transfer read the light's full
+// ai: not being read (and dropped there) and blocks of a source block already verified: a stalled transfer read the light's full
 // ai: rate. mu held.
 static long rateFold(XferRx& x, uint64_t& seen) { const uint64_t t = x.taken(); const long d = (long)(t - seen); seen = t; return d; }
 
@@ -731,8 +734,7 @@ std::string GpuReceiver::stats() {
     {"gpuMs", last.gpuFrames ? last.gpuMs / last.gpuFrames : 0}, {"B", fh ? batchSize : 0}, {"cap", cap.load()}, {"fill", fill.load()},
     {"bandVersion", lastWord.is_null() ? json() : lastWord["version"]}, {"word", lastWord}, {"anchors", anchors},
     {"totals", {{"frames", totalFrames}, {"blocks", totalBlocks}}}, {"series", stamps.series},
-    // ai: a file only once a header named one: the page reads a file's presence as a transfer under way; type, the
-    // ai: header's media type, is what the app opens and shares the file as (2026-10-01)
+    // ai: a file only once a header named one: the page reads a file's presence as a transfer under way
     {"file", p.header ? json{{"name", p.name}, {"size", p.length}, {"received", p.bytesIn}, {"fraction", p.fraction}, {"verified", p.done}, {"secs", p.secs}, {"sourceBlocks", p.sourceBlocks}, {"sourceBlocksVerified", p.verified}, {"sourceBlocksSolving", p.solving}, {"inHand", p.inHand}, {"root", p.root}, {"compression", p.compression},
                                  {"refusal", p.refusal}, {"limit", p.limit}, {"free", p.free}, {"failed", p.failed}, {"error", p.failed ? p.error : std::string()}} : json()},
     {"test", last.test > 0},

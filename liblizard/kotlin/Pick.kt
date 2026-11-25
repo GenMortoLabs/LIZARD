@@ -12,9 +12,9 @@ object Pick {
     const val STEP = 16
     // ai: a block's payload, bytes (src/xfer.h XFER_PAYLOAD: the block's 472 less its 12-byte id, since 2026-11-21): what a block carries
     const val PAYLOAD = 460
-    // ai: every version from 4 to 67 (16 sub-channels each): LIZARD-64 to -1072 (the word's six version bits since
-    // ai: 2026-11-18; to 64 before), the web's VERSIONS (src/fmt.h OB_FMT_VERSION_MIN, OB_FMT_VERSION_MAX)
-    const val VERSION_MIN = 4
+    // ai: every version from 1 to 67 (16 sub-channels each): LIZARD-16 to -1072 (1 to 3 since 2026-11-22, 4 to 67 from
+    // ai: 2026-11-18), the web's VERSIONS (src/fmt.h OB_FMT_VERSION_MIN, OB_FMT_VERSION_MAX)
+    const val VERSION_MIN = 1
     const val VERSION_MAX = 67
     val VERSIONS = (VERSION_MIN..VERSION_MAX).map { STEP * it }
     // ai: the senders' version unless one is chosen: 30, LIZARD-480 (the web sender's #subch default, 2026-10-01)

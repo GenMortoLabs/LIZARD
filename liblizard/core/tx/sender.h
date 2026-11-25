@@ -145,7 +145,7 @@ class Sender {
   bool seed(uint32_t seed);
   // ai: The code's colours (2026-11-16, Send's Colours): its ink and its paper, 0xRRGGBB, a frame's grey painted along
   // ai: the line between them where it is shown, each channel apart, ink + (paper - ink) v / 255 rounded (take here,
-  // ai: the presenters' expand.comp on the GPU); black and white by default, the grey itself. The painters and the ring
+  // ai: the presenters' expand.slang on the GPU); black and white by default, the grey itself. The painters and the ring
   // ai: keep grey; any time, the next frame shown takes them.
   void setColours(uint32_t ink, uint32_t paper) { ink_ = ink & 0xffffffu; paper_ = paper & 0xffffffu; }
   uint32_t ink() const { return ink_; }

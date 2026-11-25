@@ -32,20 +32,18 @@ object Native {
     @JvmStatic external fun txBytes(h: Long): Long
     @JvmStatic external fun txConfigure(h: Long, subch: Int, span: Int, fps: Int, threads: Int, painter: Int, assets: String, codes: Int, gap: Int, vsynced: Boolean, vsync: Boolean): String
     @JvmStatic external fun txPrepare(h: Long, assets: String): String
-    // ai: Rate refresh: a new block of the rates 6/7, 3/4, 2/3, 1/2 every a, b, c, d frames (1 to 10), from the next frame
+    // ai: Rate refresh: a new block of the rates 6/7, 3/4, 2/3, 1/2 every a, b, c, d frames (1 to REFRESH_MAX, 30), from the next frame
     @JvmStatic external fun txRefresh(h: Long, a: Int, b: Int, c: Int, d: Int)
     @JvmStatic external fun txSeed(h: Long, seed: Int): Boolean
     // ai: the blocks a frame of subch sub-channels carries (the format's rate profile, src/lizard_phy.h lizard_blocks_for)
     @JvmStatic external fun blocksFor(subch: Int): Int
-    // ai: stream files (2026-11-18, jni.cpp txPlay ...): a sender playing one (0: txError), its meta.json, what a .lizard
-    // ai: holds ({"kind","meta"}, "" with txError), Export and its state and stop, a painted frame's side
+    // ai: stream files (2026-11-18, jni.cpp txPlay ...): a sender playing one (0: txError), what a .lizard holds
+    // ai: ({"kind","meta"}, "" with txError), Export, its state and its screen on or off, a painted frame's side
     @JvmStatic external fun txPlay(path: String): Long
-    @JvmStatic external fun txStream(h: Long): String
     @JvmStatic external fun lizardInfo(path: String): String
     @JvmStatic external fun txExport(h: Long, path: String, cycles: Double, display: Boolean, level: Int, name: String,
                                      blocks: Int, ring: Int, fps: Int, codes: Int, frameBlocks: Int): String
     @JvmStatic external fun txExportState(h: Long): String
-    @JvmStatic external fun txExportStop(h: Long)
     @JvmStatic external fun txExportShow(h: Long, show: Boolean): String
     @JvmStatic external fun frameSide(subch: Int, span: Int): Int
     @JvmStatic external fun txPresent(h: Long, surface: android.view.Surface): Boolean

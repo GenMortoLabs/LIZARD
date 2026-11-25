@@ -25,7 +25,7 @@ import java.util.Locale
 import kotlin.concurrent.thread
 import dev.lizard.ui.*
 
-// ai: The received files (2026-10-25, the PC receiver; the Android app's Library.kt, the web's library.mjs): a verified
+// ai: The received files (2026-10-25, the PC receiver; the Android app's Received.kt, the web's library.mjs): a verified
 // ai: file is taken out of the receiver's store by the receive session into the data folder's kept/ (liblizard/core/rx/
 // ai: session.h: kept/<id>/ with filing.json and file/<name>, which no store's open empties; Session.kept lists them),
 // ai: then filed from there into the Downloads folder and its take let go (Session.placed): file, into LIZ_DOWNLOADS,

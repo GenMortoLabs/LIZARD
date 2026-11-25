@@ -96,7 +96,7 @@ class RoundTripTest {
 
   @Test fun failures() {
     assertFailsWith<IllegalArgumentException> { Encoder(Format(0)) }
-    // ai: past LIZARD-1024 is no format
+    // ai: past LIZARD-1072 is no format
     assertFailsWith<IllegalArgumentException> { Encoder(Format(Lizard.MAX_BLOCKS + 1)) }
     assertFailsWith<IllegalArgumentException> { Lizard.geometry(Format(Lizard.MAX_BLOCKS + 1)) }
     assertFailsWith<IllegalArgumentException> { Lizard.geometry(Format(10, ring = 7)) }

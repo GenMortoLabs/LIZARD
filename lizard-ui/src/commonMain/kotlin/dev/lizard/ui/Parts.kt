@@ -123,7 +123,7 @@ fun CollapseBtn(collapsed: Boolean, onClick: () -> Unit) =
 
 // ai: The collapsed column (the web's 56 px rail): the button that opens it at its top (`onClick`; on every platform,
 // ai: the desktop's sash beside it), a hairline under its row as the bar's, then the caller's squares, and `foot` at its
-// ai: bottom (Home: the only way home from a tool page in landscape, 2026-10-05).
+// ai: bottom (Home: the collapsed column's way home, 2026-10-05, as HomeRow is the open column's).
 val RailWidth = 56.dp
 
 @Composable
@@ -163,7 +163,7 @@ fun PctSquare(frac: Double) = Square {
 }
 
 // ai: The work at a transfer's end in a rail's square (2026-11-14): a spinner over its figure (Readout.Line.spin: the
-// ai: chunks verified of all, "52/64", then the share saved, "50%"), the percentage square's figure-over-unit
+// ai: source blocks verified of all, "52/64", then the share saved, "50%"), the percentage square's figure-over-unit
 @Composable
 fun DecodingSquare(figure: String) = Square {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -184,10 +184,10 @@ fun SwapBtn(label: String, onClick: () -> Unit) =
     }
 
 // ai: A file's progress (the web's .meter): a 6 dp track on the soft fill, round ends, filled in the foreground's colour
-// ai: to frac; nothing for null, or its room alone where `hold` (a run's lines keep their place, 2026-11-02)
+// ai: to frac; nothing for null
 @Composable
-fun Meter(frac: Double?, hold: Boolean = false) {
-    if (frac == null) { if (hold) Spacer(Modifier.padding(vertical = 8.dp).height(6.dp)); return }
+fun Meter(frac: Double?) {
+    if (frac == null) return
     Box(Modifier.fillMaxWidth().padding(vertical = 8.dp).height(6.dp).clip(RoundedCornerShape(3.dp)).background(Soft)) {
         if (frac > 0) Box(Modifier.fillMaxWidth(frac.toFloat().coerceIn(0f, 1f)).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(Fg))
     }
@@ -198,28 +198,17 @@ fun Meter(frac: Double?, hold: Boolean = false) {
 @Composable
 fun Spinner() = CircularProgressIndicator(Modifier.size(28.dp), color = Fg, strokeWidth = 3.dp, trackColor = Line)
 
-// ai: A line that names a file (2026-10-23; the web's ui.mjs sayName): its head, up to the name and a comma after it,
-// ai: on one line, the name's stem cut with an ellipsis where the line is too narrow and its ending kept whole
-// ai: (Readout.nameParts); the rest after it on the same line, cut with an ellipsis where even the stem is gone (one
-// ai: line always, 2026-11-02: the rest wrapping under it made the line two lines tall, then one, as its figures moved).
+// ai: A file's name on one line (2026-10-23; the web's ui.mjs sayName): its stem cut with an ellipsis where the line is
+// ai: too narrow, its ending kept whole (Readout.nameParts)
 @Composable
-fun NameLine(before: String, name: String, after: String, style: TextStyle, color: Color, modifier: Modifier = Modifier) {
+fun NameLine(name: String, style: TextStyle, color: Color, modifier: Modifier = Modifier) {
     val (stem, end) = Readout.nameParts(name)
-    val comma = after.startsWith(",")
-    val rest = (if (comma) after.drop(1) else after).trim()
-    // ai: the head, the ending and the rest measured first, in that order; the stem takes what is left
+    // ai: the ending measured first; the stem takes what is left
     Row(modifier) {
-        if (before.isNotEmpty()) Text(before, style = style, color = color, maxLines = 1)
         Text(stem, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-        Text(end + if (comma) "," else "", style = style, color = color, maxLines = 1)
-        if (rest.isNotEmpty()) Text(" $rest", style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(end, style = style, color = color, maxLines = 1)
     }
 }
-
-// ai: A section's heading (the web's section h2): small, grey, 24 dp over it
-@Composable
-fun SectionLabel(text: String, modifier: Modifier = Modifier) =
-    Text(text, style = MaterialTheme.typography.titleSmall, color = Muted, modifier = modifier.padding(top = 24.dp, bottom = 4.dp))
 
 // ai: A row (the web's .item): a leading icon on a soft square, the title and the line under it, a trailing control;
 // ai: the whole row its main action where it has one; a hairline under it where `divider` (the web's rows of a list).
@@ -411,10 +400,8 @@ fun CodeBlock(text: String, size: Int = 13) =
     Text(text, fontFamily = Mono, fontSize = size.sp, lineHeight = (size + 5).sp, color = if (size < 13) Fg else Muted,
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).clip(RoundedCornerShape(8.dp)).background(Card).padding(horizontal = 12.dp, vertical = 8.dp))
 
-// ai: A choice among a few (Send's FPS, Ring, Codes, Encoder, VSync, Payload; Receive's Decoder, Codes and the camera's
-// ai: few; Show statistics, Exclusive fullscreen): 36 dp, 8 dp corners, on the soft fill, the
-// ai: chosen one solid with its label semibold (greyed, GreyInk: still marked, faded); Chips lays them in a row that wraps,
-// ai: 8 dp apart.
+// ai: A choice among a few (a ChipChoice's, Settings.kt): 36 dp, 8 dp corners, on the soft fill, the chosen one solid
+// ai: with its label semibold (greyed, GreyInk: still marked, faded); Chips lays them in a row that wraps, 8 dp apart.
 @Composable
 fun Chip(text: String, on: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     Box(Modifier.heightIn(min = 36.dp).clip(RoundedCornerShape(8.dp)).background(if (on) (if (enabled) Fg else GreyInk) else Soft)

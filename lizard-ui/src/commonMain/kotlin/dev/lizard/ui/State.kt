@@ -10,7 +10,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import java.io.File
-import kotlin.math.floor
 
 // ai: What both apps read out of the receive session's JSON (2026-10-31; each app's own parsing before, the desktop's
 // ai: kotlinx and the Android app's org.json): the stats a quarter second (liblizard/core/rx/session.h stats(): the
@@ -91,10 +90,10 @@ fun runLine(r: Run): String = when (r.state) {
     RunState.Failed -> "${r.run}: ${r.why}"
 }
 
-// ai: Transfers begun and not finished (2026-10-22): the receive session's store, one folder a transfer by its root's
-// ai: first 16 hex digits with its header and meta.json; Session.partials lists them, newest first. A receiver resumes
-// ai: one when its file is in the light again; Home lists them to continue or delete. The web keeps the same in its
-// ai: origin's OPFS (lizard-web/library.mjs unfinished).
+// ai: Transfers begun and not finished (2026-10-22): the receive session's store, one folder a transfer, named by its
+// ai: root's first 16 hex digits and its TOI's 12, with its header and meta.json; Session.partials lists them, newest
+// ai: first (id the folder's name). A receiver resumes one when its file is in the light again; Home lists them to
+// ai: continue or delete. The web keeps the same in its origin's OPFS (lizard-web/library.mjs unfinished).
 data class Partial(val id: String, val name: String, val length: Long, val fraction: Double, val root: String, val at: Long)
 
 fun partialsOf(listing: String): List<Partial> = runCatching {

@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # ai: The Android decoder's build steps; core/, gen/, out/ and .tools/ are liblizard's:
-#   ./build.sh tools     ../liblizard/gen/wgsl2spv (naga 30 as a library), once (cargo: Rust 1.87 or later); and
-#                        glslang 16.6.0 into ../liblizard/.tools/glslang, the Khronos release build (Linux x86-64 or
-#                        macOS), its sha256 checked, unless that glslang is there already (curl, tar)
-#   ./build.sh gen       the setup from the JS host (liblizard/gpu/decoder.mjs): ../liblizard/out/{setup,blobs,wgsl,naga,glsl,spv}. Needs Node,
-#                        ../liblizard/build/ob.mjs and ../liblizard/bindings/wasm/dist/lizard.wasm (liblizard's
-#                        ./build.sh), wgsl2spv and glslang 16.6.0 (tools), and spirv-val and glslc: the NDK's
-#                        shader-tools (ANDROID_NDK_HOME, else $ANDROID_HOME/ndk/27.1.12297006, else
-#                        ~/Android/Sdk/ndk/27.1.12297006), else SPIRV-Tools and shaderc on the PATH
+#   ./build.sh tools     slang 2026.22 into ../liblizard/.tools/slang, the shader-slang release build (Linux x86-64 or
+#                        macOS arm64), its sha256 checked, unless it is there already (curl, tar)
+#   ./build.sh gen       the setup from the JS host (liblizard/gpu/decoder.mjs): ../liblizard/out/{setup,blobs,slang,spv},
+#                        every kernel and the engine's own shaders by slangc, and ../liblizard/gpu/send_wgsl.mjs (the
+#                        web encoder's WGSL, slangc's). Needs Node, ../liblizard/build/ob.mjs and
+#                        ../liblizard/bindings/wasm/dist/lizard.wasm (liblizard's ./build.sh) and slang 2026.22 (tools)
 #   ./build.sh ffmpeg    FFmpeg's decoding libraries for the phone (../liblizard/ffmpeg/build.sh android, the pinned release
 #                        fetched and checked): ../liblizard/build/ffmpeg/android, the file camera's (core/cam/media.cpp);
 #                        android, apk and install make it first where it is not there
@@ -26,30 +24,30 @@ PHONE=/data/local/tmp/lizard
 step=${1:-}; shift || true
 # ai: the phone's FFmpeg (the file camera's images and videos), made once
 ffmpeg_libs() { [ -f $LIB/build/ffmpeg/android/jniLibs/arm64-v8a/libavformat.so ] || $LIB/ffmpeg/build.sh android; }
-# ai: glslang for gen's GLSL modules (../liblizard/gen/gen.mjs GLSLANG): a module is named by its source, so the
-# ai: compiler is pinned; the release's own builds, each checked by the sha256 the release states for it
-GLSLANG=16.6.0
-glslang() {
-  local dir=$LIB/.tools/glslang asset sum tmp got
-  [ "$("$dir/bin/glslang" --version 2>/dev/null | sed -n 's/^Glslang Version: [0-9]*://p')" = "$GLSLANG" ] && return 0
+# ai: Slang for every module gen compiles (../liblizard/gen/gen.mjs SLANG; the kernels' source since 2026-11-24): a
+# ai: module is named by its source, so the compiler is pinned; the release's own builds, each checked by the sha256 the
+# ai: release states for it
+SLANG=2026.22
+slang() {
+  local dir=$LIB/.tools/slang asset sum tmp got
+  [ "$("$dir/bin/slangc" -version 2>&1 | head -1)" = "$SLANG" ] && return 0
   case "$(uname -s)-$(uname -m)" in
-    Linux-x86_64) asset=linux-x86_64-release.tar.gz; sum=2c34071f56ecf39d16233294d3739cf43f981fd39080f2fd9dccb782101191ce ;;
-    Darwin-*) asset=macos-universal-release.tar.gz; sum=4f8c05f2888a73ed0b7b274bc524af9130e09ae94b43c0f3f9ed83cfae852834 ;;
-    *) echo "glslang $GLSLANG: no release build for $(uname -sm) here; put glslang $GLSLANG at $dir/bin/glslang" >&2; return 1 ;;
+    Linux-x86_64) asset=linux-x86_64-glibc-2.27.tar.gz; sum=e03168bb9214795d1b455755b76b569e82d9d3f6a416d02fd00602e268a57bb2 ;;
+    Darwin-arm64) asset=macos-aarch64.tar.gz; sum=885b5bd9a79a1ae81fdb92212f5f7c785001f870d45c39f9bb5df01339db3fea ;;
+    *) echo "slang $SLANG: no release build for $(uname -sm) here; put slang $SLANG at $dir (bin/slangc)" >&2; return 1 ;;
   esac
   tmp=$(mktemp -d)
-  curl -fsSL --retry 3 -o "$tmp/glslang.tar.gz" "https://github.com/KhronosGroup/glslang/releases/download/$GLSLANG/glslang-$GLSLANG-$asset"
-  got=$( (sha256sum "$tmp/glslang.tar.gz" 2>/dev/null || shasum -a 256 "$tmp/glslang.tar.gz") | cut -d' ' -f1)
-  if [ "$got" != "$sum" ]; then echo "glslang-$GLSLANG-$asset: sha256 $got, the release's is $sum" >&2; rm -rf "$tmp"; return 1; fi
+  curl -fsSL --retry 3 -o "$tmp/slang.tar.gz" "https://github.com/shader-slang/slang/releases/download/v$SLANG/slang-$SLANG-$asset"
+  got=$( (sha256sum "$tmp/slang.tar.gz" 2>/dev/null || shasum -a 256 "$tmp/slang.tar.gz") | cut -d' ' -f1)
+  if [ "$got" != "$sum" ]; then echo "slang-$SLANG-$asset: sha256 $got, the release's is $sum" >&2; rm -rf "$tmp"; return 1; fi
   rm -rf "$dir"; mkdir -p "$dir"
-  tar xzf "$tmp/glslang.tar.gz" -C "$dir"
+  tar xzf "$tmp/slang.tar.gz" -C "$dir"
   rm -rf "$tmp"
-  echo "glslang $("$dir/bin/glslang" --version | sed -n 's/^Glslang Version: [0-9]*://p') in $dir"
+  echo "slang $("$dir/bin/slangc" -version 2>&1 | head -1) in $dir"
 }
 case $step in
   tools)
-    (cd $LIB/gen/wgsl2spv && cargo build --release)
-    glslang
+    slang
     ;;
   gen)
     node $LIB/gen/gen.mjs "$@"
@@ -72,8 +70,7 @@ case $step in
     adb shell mkdir -p $PHONE/out/spv $PHONE/research/build
     adb push build/android/lizard_gpu_check $PHONE/ >/dev/null
     adb push $OUT/setup $OUT/blobs $PHONE/out/ >/dev/null
-    # ai: the SPIR-V the device loads, not naga's raw copies
-    tmp=$(mktemp -d); cp $OUT/spv/*.spv "$tmp"/; rm -f "$tmp"/*.raw.spv; adb push "$tmp"/. $PHONE/out/spv/ >/dev/null; rm -rf "$tmp"
+    adb push $OUT/spv/. $PHONE/out/spv/ >/dev/null
     if [ "${1:-}" = selftest ]; then
       adb push $RESEARCH/build/gpu_selftest_frames $RESEARCH/build/gpu_selftest_ref.json $RESEARCH/build/gpu_selftest_ref_int8.json $PHONE/research/build/ >/dev/null
     fi
@@ -90,6 +87,6 @@ case $step in
     adb shell pm grant dev.fosslabs.lizard android.permission.CAMERA
     ;;
   *)
-    sed -n 2,17p ./build.sh; exit 2   # ai: the script's own folder, where it has changed to
+    sed -n 2,20p ./build.sh; exit 2   # ai: the script's own folder, where it has changed to
     ;;
 esac

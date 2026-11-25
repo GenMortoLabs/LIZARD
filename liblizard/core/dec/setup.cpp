@@ -23,8 +23,9 @@ std::vector<std::string> variantsFor(const wg::Device& d) {
   std::vector<std::string> out;
   const auto& F = d.features;
   const auto& L = d.limits;
-  // ai: the SPIR-V zeroes workgroup memory by initializer (gen/wgsl2spv), which needs shaderZeroInitializeWorkgroupMemory
-  if (L.maxComputeSharedMemorySize < 32768 || L.maxPerStageStorageBuffers < 10 || !F.zeroInit) return out;
+  // ai: no module initialises workgroup memory (gen refuses one that does, gen.mjs slangSpv), so no device needs
+  // ai: shaderZeroInitializeWorkgroupMemory (every variant did until the GLSL went, 2026-11-24)
+  if (L.maxComputeSharedMemorySize < 32768 || L.maxPerStageStorageBuffers < 10) return out;
   const bool sg = F.subgroupShuffle;
   auto add = [&](const std::string& p) { if (sg) out.push_back(p + "-sg"); out.push_back(p); };
   const bool halfOk = F.f16;

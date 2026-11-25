@@ -390,12 +390,22 @@ class ReceiveState(private val app: App) {
     }
     // ai: the camera's mode: kept by the session as the camera's (its "mode" setting); running, the stream started again
     // ai: in it (a stop and a start, as a hand would); with no session, named at the next start
-    private var pendingMode: Mode? = null   // ai: the mode pickMode started the camera again in, until it reports it
-    private var pendingStopped = false      // ai: and whether the camera has shown it stopped since
+    // ai: The modes picked and not yet the session's: until the session settles on a pick (its kept mode the pick, and
+    // ai: streaming in it or not streaming) its description names the mode before, the reopened camera with no stream
+    // ai: and its kept mode the old one (2026-11-02: the old mode back in the menu for a moment, on a slow camera's
+    // ai: reopen every time), or the stream a first pick started while a second waits (2026-11-24: the first back on the
+    // ai: chip, taps "too fast"). The field keeps the newest pick until the session settles on it, or on a mode none of
+    // ai: the picks (and not the one before them) is: one it ran in their place (the lock's rate) or kept on a refusal.
+    private var modePicks = emptyList<Int>()   // ai: the picks' indices, the newest last
+    private var pickedFrom = -1                // ai: the mode the session kept before them
+    private var keptIndex = -1                 // ai: the mode the session keeps (its description's kept.mode)
     private fun pickMode(m: Mode) {
         mode = m
-        if (running) { chosenMode = m; pendingMode = m; pendingStopped = false; stop(); start() }
-        else session?.set("mode", m.index.toDouble()) ?: run { chosenMode = m }
+        val s = session
+        if (!running && s == null) { chosenMode = m; return }
+        if (modePicks.isEmpty()) pickedFrom = keptIndex
+        modePicks = modePicks + m.index
+        if (running) { chosenMode = m; stop(); start() } else s?.set("mode", m.index.toDouble())
     }
     fun chooseDecoder(d: String) {
         if (d == decoder) return
@@ -604,7 +614,7 @@ class ReceiveState(private val app: App) {
         root = f?.str("root").orEmpty()
         val ph = rxPhaseOf(j)
         if (ph != phase) phase = ph
-        if (phase is RxPhase.Error) pendingMode = null   // ai: a chosen mode that would not start: the field shows what is
+        if (phase is RxPhase.Error) modePicks = emptyList()   // ai: a chosen mode that would not start: the field shows what is
         if (decoder == "auto" && running) j?.str("autoRan")?.takeIf { it.isNotEmpty() }?.let { autoRan = it }
         // ai: a phone's or an upload's own crop is the receiver's (the session makes it so at the start)
         if (fixed) j?.str("layout")?.takeIf { it == "1:1" || it == "2:1" }?.let { if (it != layout) layout = it }
@@ -629,19 +639,15 @@ class ReceiveState(private val app: App) {
         if (cj == camJson) return
         camJson = cj
         val j = parse(cj)
-        if (pendingMode != null && j?.let { camInfo(it) } == null) pendingStopped = true
         val ci = j?.let { camInfo(it) } ?: return
+        if (ci.id != info?.id) modePicks = emptyList()   // ai: another camera's modes: the picks' indices were the last one's
         info = ci
-        val started = j.num("mode").toInt()
+        // ai: the mode streaming, else the one a start takes (the session's "mode" is the one started last, streaming or not)
+        val started = if (j.flag("streaming")) j.num("mode").toInt() else -1
         val kept = j["kept"] as? JsonObject
-        // ai: a mode just chosen (pickMode) stays the field's until the camera reports a stream started after its stop: in
-        // ai: between, the session describes the reopened camera with no stream and its kept mode still the old one, which
-        // ai: put the old mode back in the menu for a moment (2026-11-02; on a slow camera's reopen every time)
-        val pm = pendingMode
-        if (pm != null) {
-            if (started < 0) pendingStopped = true
-            else if (pendingStopped) { pendingMode = null; mode = ci.modes.getOrNull(started) ?: mode }
-        } else mode = ci.modes.getOrNull(if (started >= 0) started else kept?.num("mode")?.toInt() ?: -1) ?: mode
+        keptIndex = kept?.let { if ("mode" in it) it.num("mode").toInt() else -1 } ?: -1
+        if (modePicks.isNotEmpty() && (started < 0 || started == keptIndex) && (keptIndex == modePicks.last() || (keptIndex !in modePicks && keptIndex != pickedFrom))) modePicks = emptyList()
+        if (modePicks.isEmpty()) mode = ci.modes.getOrNull(if (started >= 0) started else keptIndex) ?: mode
         val key = "${ci.id}/$layout"
         if (key != keptFor) {
             keptFor = key

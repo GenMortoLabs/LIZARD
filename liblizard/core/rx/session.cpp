@@ -43,6 +43,7 @@
 #include "pack.h"
 #include "phase_host.h"
 #include "receiver.h"
+#include "xfer_rx.h"
 #include "replay.h"
 #include "stream.h"
 extern "C" {
@@ -915,6 +916,8 @@ struct Session::Impl {
       if (const std::shared_ptr<Rx> r = current()) {
         try {
           r->r->cameraClosed();
+          // ai: the transfers' clocks stopped while they want blocks (xfer_rx_core.h XferProgress.secs): a pause is not receiving time
+          if (const std::shared_ptr<XferRx> x = r->r->transfer()) x->pause(true);
         } catch (const std::exception& e) {
           say(std::string("receiver: the camera's close: ") + e.what());
         }
@@ -971,6 +974,7 @@ struct Session::Impl {
       mode = index;
       streamed = true;
       starts++;
+      if (const std::shared_ptr<Rx> r = current()) if (const std::shared_ptr<XferRx> x = r->r->transfer()) x->pause(false);
       {
         std::lock_guard<std::mutex> l(ptrMu);
         modeNow = {{"w", m.width}, {"h", m.height}, {"format", m.format}, {"fps", m.fps}};
@@ -1049,7 +1053,7 @@ struct Session::Impl {
   }
 
   // ai: the phase lock (phase_host.h)
-  // ai: The lock's host, made with the session: Engine.kt's order around PhaseLock.kt (phase_lock.h) for a camera that
+  // ai: The lock's host, made with the session: the order around PhaseLock (phase_lock.h) for a camera that
   // ai: can delay a capture, driven from that camera's capture results on its own thread (onCapture); the receiver's
   // ai: series its feed, the camera started last its lever. A camera with no capture results (UVC, a phone, an
   // ai: upload, the simulated one) never reaches it: its stats' lock says why (camera.h delayBar).
@@ -1623,7 +1627,7 @@ struct Session::Impl {
       r->r->forget(root);
       return "";
     }
-    // ai: a folder by its id (the root's 16 hex digits and the tag's 6, -2 on for a second beside a received file not
+    // ai: a folder by its id (the root's 16 hex digits and the TOI's 12, -2 on for a second beside a received file not
     // ai: yet taken out), or every folder of a root (its hex or its first 16 digits; the store's forget, store.h)
     if (root.size() < 16 || !plainName(root)) return "no transfer " + root;
     const bool folder = root.size() != 16 && root.size() != 64;

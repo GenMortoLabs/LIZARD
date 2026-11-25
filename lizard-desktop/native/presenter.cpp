@@ -348,7 +348,7 @@ void barrier(const DevFns& D, VkCommandBuffer cb, VkImage img, VkImageLayout fro
 // ai: whole pixels with one to spare
 int stretchTaps(int s, int d) { return static_cast<int>(std::ceil(6.0 * std::max(1.0, static_cast<double>(s) / d))) + 1; }
 
-// ai: One axis of the stretch's table (scale_h.comp, scale_v.comp): for each of d destination pixels its first source
+// ai: One axis of the stretch's table (scale_h.slang, scale_v.slang): for each of d destination pixels its first source
 // ai: pixel, then `taps` weights: Lanczos-3 at the source pixels about the destination pixel's centre (in source pixels,
 // ai: (o + 0.5) s / d - 0.5), the argument divided by the widening, normalised to sum 1, zero past the support. A whole
 // ai: scale's centres fall on source pixels and every weight but the centre's is 0: an exact copy.
@@ -670,7 +670,7 @@ struct Presenter::Impl {
   std::vector<VkCommandBuffer> cbs;
   std::vector<VkFence> fences;
   std::vector<VkSemaphore> acquired;
-  // ai: the expand kernel (liblizard/core/tx/expand.comp, send_expand.spv in the sender's assets): a ring frame to a
+  // ai: the expand kernel (liblizard/core/tx/expand.slang, send_expand.spv in the sender's assets): a ring frame to a
   // ai: slot image; a descriptor set an image in flight (the ring's buffer and the slot's view), and the ring buffer
   // ai: each holds while its commands may read it (a configure makes a new ring; the old one lives on until then)
   VkShaderModule expandSm = VK_NULL_HANDLE;
@@ -680,8 +680,8 @@ struct Presenter::Impl {
   VkDescriptorPool dpool = VK_NULL_HANDLE;
   std::vector<VkDescriptorSet> dsets;
   // ai: Scaling Lanczos's stretch (2026-11-17; Bilinear the blit's linear filter, the stretch before): the grey picture to its
-  // ai: place on screen by Lanczos-3 in two passes on one channel (the code's colours applied in the last), across (liblizard/core/tx/scale_h.comp,
-  // ai: send_scale_h.spv) into a buffer of floats the place's width by the picture's height, then down (scale_v.comp)
+  // ai: place on screen by Lanczos-3 in two passes on one channel (the code's colours applied in the last), across (liblizard/core/tx/scale_h.slang,
+  // ai: send_scale_h.spv) into a buffer of floats the place's width by the picture's height, then down (scale_v.slang)
   // ai: into an RGBA8 image the place's size, copied 1:1 to the swapchain's image; the taps' weights a table made on the
   // ai: CPU for the sizes (stretchAxis), so no kernel computes one. All of it a frame in flight (Stretch), made again
   // ai: where the sizes change.
@@ -1963,7 +1963,7 @@ void Presenter::Impl::presentOnce(bool live) {
         D.vkCmdPushConstants(cb, scalePl, VK_SHADER_STAGE_COMPUTE_BIT, 0, 40, sp);
         D.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, scalePl, 0, 1, &st.set, 0, nullptr);
         D.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, scaleHPipe);
-        D.vkCmdDispatch(cb, (static_cast<uint32_t>(dw) + 127) / 128, (static_cast<uint32_t>(s.h) + 15) / 16, 1);   // ai: scale_h.comp's ROWS
+        D.vkCmdDispatch(cb, (static_cast<uint32_t>(dw) + 127) / 128, (static_cast<uint32_t>(s.h) + 15) / 16, 1);   // ai: scale_h.slang's ROWS
         VkMemoryBarrier mm{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
         mm.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         mm.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;

@@ -1,4 +1,4 @@
-// ai: F4's plan and its weight packers (glsl/classify.mjs, the int8, f16 and f32 forms on this plan): patches a
+// ai: F4's plan and its weight packers (slang/classify.mjs, the int8, f16 and f32 forms on this plan): patches a
 // ai: workgroup, tiles, buffers, scratch, the weights' layouts (the host packs a classifier file by them).
 import { PATCH } from "../cnn/patch.mjs";
 import { planArch, toHalf } from "../cnn/weights.mjs";
@@ -237,8 +237,8 @@ export function packWeightsInt8(doc) {
   return { data: u, offsets: { gemm: true, int8: true, key: layout.key, layers: layout.layers, quant: { bits: q.bits, qmax: q.qmax, inv: q.inv } }, arch, val: doc.val ?? null, total: plan.total, macs: plan.macs };
 }
 
-// ai: An f32 literal (WGSL's and GLSL's) that gives back exactly v (an f32 the contract multiplies by); the GLSL twin's
-// ai: too (../glsl/classify.mjs).
+// ai: An f32 literal in a kernel's text that gives back exactly v (an f32 the contract multiplies by); the Slang
+// ai: module's (../slang/classify.mjs).
 export function exactF32(v) {
   let s = (+v).toPrecision(9);
   if (!/[.e]/.test(s)) s += ".0";

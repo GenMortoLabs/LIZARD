@@ -1,4 +1,4 @@
-// ai: F8's shape and its tables (glsl/word.mjs WORD): the search's constants, the Word uniform's layout and the packers
+// ai: F8's shape and its tables (slang/src/word.slang): the search's constants, the Word uniform's layout and the packers
 // ai: of its code, GF(256)'s tables, the generator's columns, plan points and lattice (the host's build;
 // ai: scripts/gpu/word_check.mjs's JS mirror).
 import { SLOTS } from "./common.mjs";

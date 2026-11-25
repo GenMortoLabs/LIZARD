@@ -718,7 +718,6 @@ rq_dec_t *rq_dec_new(size_t len, uint32_t T, uint32_t esi_limit) {
   return d;
 }
 
-uint32_t rq_dec_count(const rq_dec_t *d) { return d->n; }
 
 // The rows of a solve over the symbols held: the padding symbols' (zero right sides), then the held ones in order.
 static int dec_rows(const rq_dec_t *d, rq_rows_t *rw) {

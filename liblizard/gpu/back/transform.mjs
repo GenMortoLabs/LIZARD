@@ -3,7 +3,7 @@
 // restated.
 //
 // build(device, { B, tables, precision, blkStride, picture }) compiles the four shaders for every built picture size
-// (../glsl/back_transform.mjs: the gate, the fused pass 1, reduce, pass 2) and holds the shared tables; a lane's
+// (../slang/back_transform.mjs: the gate, the fused pass 1, reduce, pass 2) and holds the shared tables; a lane's
 // buffers and bind groups and the dispatches are the native host's (core/dec/front.cpp backLane). Buffer names follow
 // DESIGN section 2.
 // ai: Pass 1 is fused: it samples the frame through the front half's texture, maps and residuals, on the grid of the
@@ -15,7 +15,7 @@ import { RING_COUNT } from "../plan/finder.mjs";
 import { CHUNKS } from "../plan/back_tiers.mjs";
 import { gridOf } from "../tables.mjs";
 import { rowsOfVersion } from "./disc.mjs";
-import { gateSource, pass1Source, reduceSource, pass2Source } from "../glsl/back_transform.mjs";
+import { gateSource, pass1Source, reduceSource, pass2Source } from "../slang/back_transform.mjs";
 import { shaderModule } from "../pipeline.mjs";
 
 // The usage flags by value, so the module loads in node (the tables and the layout are used there without a device).
@@ -33,7 +33,7 @@ export class Transform {
   // ai: frame for V and ITS).
   // ai: picture: the rings, [{ span, margin, lattice }] a ring (gpu/tables.mjs formatTables rings: span, margin and
   // ai: nodeX), PIC a size holding each ring's grid for that size (gridOf) and lattice. The LDPC's dispatches are sized
-  // ai: by each listed frame's own counts (its word's configuration, ../glsl/common.mjs CFG).
+  // ai: by each listed frame's own counts (its word's configuration, ../slang/src/lib/cfg.slang).
   static async build(device, { B, tables, precision = "f32", blkStride, picture }) {
     if (precision === "f16" && !device.features.has("shader-f16")) throw new Error("precision f16 without shader-f16");
     if (!picture) throw new Error("the transform samples the frame itself: picture, the front half's rings, is required");
@@ -49,7 +49,7 @@ export class Transform {
     t.gateBgl = layout([RO, RO, RW, RW, UN, RW, RW, RW, RW]);
     // The fused pass 1: the frame texture, lists, twiddles, PART, Y, counters and params, then maps, resid and PIC.
     // ai: and the anchors' records at binding 10 (read-only: eight storage buffers), then the linear sampler its
-    // ai: bilinear reads take (binding 11, ../glsl/common.mjs LUMH; natively the layout's immutable sampler)
+    // ai: bilinear reads take (binding 11, ../slang/src/lib/lumh.slang; natively the layout's immutable sampler)
     const texEntry = { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float", viewDimension: "2d-array" } };
     const fusedTail = [RO, RO, RW, RW, RW, UN, RO, RO, UN, RO].map((type, k) => entry(k + 1, type));
     const smpEntry = { binding: 11, visibility: GPUShaderStage.COMPUTE, sampler: { type: "filtering" } };
@@ -59,14 +59,14 @@ export class Transform {
     const pipe = (bgl, code, label) => d.createComputePipelineAsync({ label, layout: d.createPipelineLayout({ bindGroupLayouts: [bgl] }), compute: { module: shaderModule(d, code, label), entryPoint: "main" } });
     // ai: The gate's rows table: an entry a version up to the largest built size's top.
     const counts = 1 + Math.max(...t.built.map((s) => tables[s].blocks / CHUNKS));
-    const jobs = [pipe(t.gateBgl, { glsl: gateSource(B, { blkStride, counts, chunks: CHUNKS }) }, "back gate")];
+    const jobs = [pipe(t.gateBgl, gateSource(B, { blkStride, counts, chunks: CHUNKS }), "back gate")];
     t.reduce = []; t.pass2 = []; t.pass1f = [];
     const set = (arr, s) => (p) => { arr[s] = p; };
     for (const s of t.built) {
       const { n } = tables[s];
-      jobs.push(pipe(t.redBgl, { glsl: reduceSource({ n, B }) }, `back reduce ${n}`).then(set(t.reduce, s)));
-      jobs.push(pipe(t.p2Bgl, { glsl: pass2Source({ n, prec: precision, B }) }, `back pass2 ${n}`).then(set(t.pass2, s)));
-      jobs.push(pipe(t.p1fBgl, { glsl: pass1Source({ n, prec: precision, B }) }, `back pass1 fused ${n}`).then(set(t.pass1f, s)));
+      jobs.push(pipe(t.redBgl, reduceSource({ n, B }), `back reduce ${n}`).then(set(t.reduce, s)));
+      jobs.push(pipe(t.p2Bgl, pass2Source({ n, prec: precision, B }), `back pass2 ${n}`).then(set(t.pass2, s)));
+      jobs.push(pipe(t.p1fBgl, pass1Source({ n, prec: precision, B }), `back pass1 fused ${n}`).then(set(t.pass1f, s)));
     }
     const done = await Promise.all(jobs);
     t.gate = done[0];
@@ -80,7 +80,7 @@ export class Transform {
       if (tb.V > 512) throw new Error(`V = ${tb.V} rows at n = ${tb.n}: the rows uniform holds 512`);
       const r = new Uint32Array(2048); r.set(tb.rows); t.rowsBufs[s] = up(r, U.UNIFORM);
     }
-    // ai: PIC a size (glsl/back_transform.mjs PICTURE): per ring (g0, step, nodes a side, first coordinate) as f32,
+    // ai: PIC a size (slang/back_transform.mjs PICTURE): per ring (g0, step, nodes a side, first coordinate) as f32,
     // ai: then every ring's lattice coordinates, LATTICE_MAX a ring.
     t.picUnis = [];
     if (picture.length !== RING_COUNT) throw new Error(`${picture.length} rings: PIC holds ${RING_COUNT}`);

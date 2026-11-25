@@ -46,9 +46,10 @@ received archive into a folder, and the web receiver offers it as the `.tar` it 
 2. **Fountain-code each chunk** (RaptorQ, RFC 6330). The encoder can produce as many 460-byte pieces as needed, and
    any set as large as the chunk rebuilds it, at most a piece or two more, whichever pieces they are. A missed frame costs only time, and nothing
    ever has to go back to the sender.
-3. **Describe the file** in a session header (a CBOR map of its size, BLAKE3 hash, name and type), sent in the same
-   stream as the data. The receiver hashes each chunk as it rebuilds it and checks the whole file against that hash.
-4. **Make blocks.** A block is a 12-byte id (which file, which chunk, which piece, which sender's session), 460 bytes of
+3. **Describe the file** in a session header (one CBOR map of its length, chunk size, BLAKE3 root, name and, where it
+   was packed, its compression), sent in the same stream as the data, about one block in 190. The receiver hashes each
+   chunk as it rebuilds it and checks the whole file against that root at the end.
+4. **Make blocks.** A block is a 12-byte id (which file, by a number taken from its content; which chunk; which piece), 460 bytes of
    payload and a 64-bit CRC (CRC-64/LIZARD, from a BCH code: every error of up to 11 bits is caught).
 5. **Add error correction.** Each block becomes one LDPC codeword. How much protection it gets depends on where it
    will sit in the spectrum:
@@ -86,7 +87,7 @@ received archive into a folder, and the web receiver offers it as the `.tar` it 
    perspective, lens distortion and the display's own scaling, to about a tenth of a module. The border gives the
    outline; the anchors give the lens's bend inside it.
 4. **Read the format word.** It states the version (so the picture's size), how many blocks each code rate has and
-   the sender's clock (its pictures a second and its slowest block place's delay), as one index under a CRC-5,
+   the sender's clock (its pictures a second and its slowest block place's delay), as one index under
    Reed-Solomon and a magic byte; where every block lies follows from that. A frame whose own word cannot be read is
    not decoded.
 5. **Sample and transform.** Read the picture at the sender's sample positions, erase the anchors, and take a 2D
@@ -97,7 +98,8 @@ received archive into a folder, and the web receiver offers it as the `.tar` it 
 7. **Decode.** Undo the scrambling and the interleaving, run the LDPC decoder, and keep a block only if every parity
    check holds and its CRC matches.
 8. **Rebuild the file.** Blocks go to their chunk's fountain decoder, in any order and from any frames. Each rebuilt
-   chunk is checked against its hash; the file is handed over only when every chunk checks, unpacked if it was packed.
+   chunk is hashed as it is rebuilt; the file is handed over only when its BLAKE3 root matches the session header's,
+   unpacked if it was packed, and a file that fails is received again.
 9. **Stay in step with the screen** (Android app). The camera and the screen both run near 60 Hz but drift apart, and
    a capture taken across a change of picture sees two pictures blended. The pilots show how much of the previous and
    of the next picture leaked into each capture, and the app delays one camera frame now and then to keep its
@@ -110,8 +112,8 @@ A receiver collects whatever blocks verify, from any frames, and drops repeats b
 its frames for its audience without telling any receiver.
 
 - **Refresh.** The frame rate is the clock, and each code rate's block places take a new block only every n pictures
-  (1 to 65,535; Send › Refresh in the apps and the web page, a delay each code rate; the pilots are apart from the
-  blocks, so every place's delay is free). A camera
+  (1 to 30; Send › Refresh in the apps and the web page, a delay each code rate; the pilots are apart from the
+  blocks, so every place's delay is free). Each frame's word states the frame rate and the largest delay. A camera
   too slow for the screen, whose every capture spans two or more pictures, still reads the places that held still. In
   simulation (a physical model of the S26's camera, a sender at 60 pictures a second), a 30 a second camera with a
   33 ms exposure read nothing when every place changed every picture, and 260 to 370 blocks a second (120 to 175
@@ -313,8 +315,9 @@ grows with its frequency), which is turned back before decoding.
 - **The sender decides; the word states integers.** Each frame's word gives its version and how many blocks each
   code rate has, as broadcast signalling states each stream's blocks: no receiver repeats a sender's choice to find
   the layout, so every implementation reads the same one, and a sender can change its split without any receiver
-  changing. The word carries only what decoding needs. Its magic byte has one value in use and a second reserved, which
-  today's receivers refuse, so a later version can add a second kind of word without moving this one.
+  changing. The word carries only what decoding needs, enumerated into one index so that its 40 bits hold it with a
+  CRC. It has one magic byte and no extension: a format that changes the picture is another format, with a magic of its
+  own, and what extends LIZARD goes in the session header's CBOR map.
 - **Soft-decision LDPC.** The decoder uses how sure it is of each bit, not just its value, which lets the same parity
   correct far more errors.
 - **One large code with many blocks**, rather than many small codes side by side: each small code would need its own
@@ -340,12 +343,12 @@ grows with its frequency), which is turned back before decoding.
 | picture | the grey square inside the border | data area |
 | coefficient | one 2D spatial frequency of the picture, carrying two bits as one of four phases | subcarrier carrying a QPSK symbol |
 | sub-channel | 320 consecutive coefficients, ordered from coarse to fine | group of subcarriers |
-| block | 472 bytes (a 12-byte id and 460 of payload) plus a 64-bit CRC, sent as one LDPC codeword over 2,248 to 3,840 consecutive frequencies by its code rate | codeword, packet |
+| block | 472 bytes (a 12-byte id and 460 of payload) plus a 64-bit CRC, sent as one LDPC codeword over 2,240 to 3,840 consecutive frequencies by its code rate | codeword, packet |
 | code rate | the share of the sent bits that is data | code rate |
 | rate profile | which code rate each block gets, by its frequencies | unequal error protection |
-| version | how much a frame holds: a code with k sub-channels (64 to 1,072, in steps of 16) is version k / 16; 592 sub-channels hold 71 blocks at the default split, about 33.4 KB | QR version (capacity) |
+| version | how much a frame holds: a code with k sub-channels (64 to 1,072, in steps of 16) is version k / 16; 592 sub-channels hold 71 blocks at the default split, about 32.7 KB of payload | QR version (capacity) |
 | ring, LIZARD-64, -128, -256 | the border's size, and the code's name: 64, 128 or 256 band cells a side, LIZARD-128 by default. It does not depend on the version: any ring can carry any picture. A larger ring gives the picture more of the screen but asks for a steadier camera | none (a QR code's size follows its version) |
-| format word | the short Reed-Solomon-coded header in the border: the frame's version and its block counts | format information |
+| format word | the short Reed-Solomon-coded header in the border: the frame's version, its block counts and the sender's clock (pictures a second and the largest refresh delay), as one index | format information |
 | timing track | the known pattern in the border's band | timing pattern |
 | corner mark | the square at each corner of the border | finder pattern |
 | guard | the picture's edges wrapped round it | cyclic prefix |
@@ -353,9 +356,9 @@ grows with its frequency), which is turned back before decoding.
 | bit map, whitening | the fixed permutation and the scrambling of a codeword's bits | interleaver, scrambler |
 | registration | working out where each point of the code falls in the camera image | deskewing, geometric correction |
 | soft values | how confident the receiver is of each bit | log-likelihood ratios (LLRs) |
-| chunk | a 16 MiB piece of the file, with its own fountain and hash | |
+| chunk | a 16 MiB piece of the file (a source block), with its own fountain | source block |
 | fountain | an erasure code that rebuilds a chunk from any set of pieces slightly larger than it | fountain (rateless) code |
-| session header | the one block that describes the file: its size, hash, name and type | |
+| session header | the one control block, which describes the send's one file: its length, chunk size, BLAKE3 root, name and compression | |
 | refresh delay | how many pictures a block place keeps its block before taking a new one | |
 | 2:1 | two codes side by side, read as the two halves of each camera frame | |
 | test stream | frames of known content, used for measuring | |
@@ -389,7 +392,8 @@ nothing carries from one frame to the next, and a frame whose own word cannot be
 ### Receiving on the CPU (`liblizard/src/`)
 
 The reference decoder, in C. It runs as WebAssembly with SIMD in a pool of web workers (the web receiver's one
-decoder), and natively in the Android and desktop apps on a pool of threads (NEON on arm64, SSE4.1 on x86-64):
+decoder), and natively in the Android and desktop apps on a pool of threads (NEON on arm64; on x86-64, x86-64-v2 with AVX2 where the
+processor has it):
 
 1. **Find.** The image goes to luma, and a local threshold makes a black and white copy for the finder alone. The
    corner marks are searched for at full, half and quarter scale. Each candidate quad is scored by reading the timing
@@ -405,9 +409,9 @@ decoder), and natively in the Android and desktop apps on a pool of threads (NEO
 
 ### Receiving on the GPU (`liblizard/gpu/`)
 
-Designed from the format for the GPU, not ported from the C. Its kernels are written in GLSL; its setup (the kernels'
+Designed from the format for the GPU, not ported from the C. Its kernels are written in Slang; its setup (the kernels'
 sizes, tables and nets) is built by its JavaScript host in `liblizard/gpu/`, and the kernels are compiled to SPIR-V by
-glslang and run by a C++ Vulkan host (`liblizard/core/`) in the Android and desktop apps; in the Android app it takes
+slangc and run by a C++ Vulkan host (`liblizard/core/`) in the Android and desktop apps; in the Android app it takes
 camera frames with no copy. The web receiver decodes with the C alone. Frames go in batches: one
 batch is one submission and one readback. The nets and kernels run in int8 where a device supports it, else f16, else
 f32.
@@ -455,7 +459,8 @@ A beta since 0.1 (0.0.1 and the builds before it were alphas); the format may st
 | desktop app, a 2013 Logitech C930e webcam (a worst case: MJPEG, its focus set by hand) | 75 to 127 KB/s median (2026-11-16, logged) |
 
 No current figure exists for one code alone (1:1), nor for the web receiver on a phone. The runs above predate the
-current format word; what their blocks carry has not changed.
+current format (its word, its pilots apart from the blocks, the block's id and CRC); a block then carried 471 bytes of
+payload, 460 now.
 
 Once the Android app's phase lock holds, the rate stays. What moves it from there is the camera and the screen, not
 the decoder: the app asks the camera for its picture with no sharpening, noise reduction or other enhancement (each is
@@ -499,15 +504,16 @@ Released in 0.2.4 and 0.3.0:
 
 On main since 0.3.0, for the next release (its senders and receivers read none of 0.3.0's words):
 
-- **Each frame's word states its layout.** A static word is the version (6 bits: versions 4 to 67, up to 1,072
-  sub-channels), the 6/7 block count (8 bits), the 2/3 and 1/2 counts (7 bits each) and a CRC-4 of them; the 3/4
-  blocks fill the rest. The sender chooses the counts and every receiver reads and checks them. A frame whose word
-  cannot be read is not decoded.
+- **Each frame's word states its layout and the sender's clock.** The word is 40 bits under RS(n, 6): one index of
+  the configuration (the version, 1 to 67, up to 1,072 sub-channels, and the 6/7, 3/4, 2/3 and 1/2 block counts: any
+  counts whose blocks fit, the rest padding), the frame rate (0 to 240, 0 a still) and the largest Refresh delay (1 to
+  30). The sender chooses the counts and every receiver reads and checks them. A frame whose word cannot be read is
+  not decoded.
 - **One kind of word, and no extension of the picture.** The animated word and its header carousel (0.3.0) are out:
   every frame carries the static word (magic 0x4C) and is decoded at it alone, with nothing held from frame to frame.
   Its magic, 0xB3, is no longer reserved: a format that changes the picture is another format with a magic of its
-  own, which a LIZARD receiver refuses, and what extends LIZARD goes in the session header. The display rate, which
-  only the animated header stated, is in the light no longer, and the senders' Header setting went with it.
+  own, which a LIZARD receiver refuses, and what extends LIZARD goes in the session header. The senders' Header
+  setting went with the carousel.
 - **Every block names its file.** The block id is 96 bits, three 32-bit words: 16 bits of chunk, the 24-bit piece
   number, a 48-bit object number taken from the file's own content, and a reserved byte (460 bytes of payload, 471 in
   0.3.0). A receiver files each block under its object number, so blocks seen before their header wait for it, two
@@ -528,6 +534,8 @@ On main since 0.3.0, for the next release (its senders and receivers read none o
 - **The web receiver decodes with the C.** Its WebGPU decoder (0.3.0) is out: the page decodes on a pool of
   WebAssembly workers, as it did wherever WebGPU was missing, and the installed web app is about 4 MB smaller. The
   Android and desktop apps keep the GPU decoder; the web sender keeps its WebGPU encoder.
+- **Pilots apart from the blocks.** Every sub-channel's count pilot and reference sit on two coefficients of their
+  own, so no block carries a pilot and every block place's Refresh delay is free (1 to 30, a slider each code rate).
 - **Senders tuned per deployment:** Refresh's delays, stream files and the split ([Tuning a sender](#tuning-a-sender));
   the native senders make the fountain's pieces on the GPU, and the desktop sender can scale its picture with
   Lanczos-3.
@@ -541,7 +549,7 @@ a file that compresses as zstd frames before it enters, and an application that 
 
 | folder | what it is |
 |---|---|
-| `liblizard/` | the library: the C codec (`src/`, the format's reference), the GPU decoder's GLSL kernels and their setup and the sender's WebGPU encoder (`gpu/`), the native engine (`core/`: the decoder on Vulkan, the C on the CPU, the transfer, the sender), the generator that compiles the GPU decoder for Vulkan (`gen/`), and a C API with WebAssembly and Kotlin bindings (`include/`, `api/`, `bindings/`) |
+| `liblizard/` | the library: the C codec (`src/`, the format's reference), the GPU decoder's and sender's Slang kernels, the decoder's setup and the sender's WebGPU encoder (`gpu/`), the native engine (`core/`: the decoder on Vulkan, the C on the CPU, the transfer, the sender), the generator that compiles the GPU decoder for Vulkan (`gen/`), and a C API with WebAssembly and Kotlin bindings (`include/`, `api/`, `bindings/`) |
 | `lizard-web/` | the web app: sender and receiver pages, installable as a PWA |
 | `lizard-android/` | the Android app: receiver and sender, native Vulkan decoding |
 | `lizard-ui/` | the Android and desktop apps' screens, in Compose Multiplatform, written once: Home, Send and Receive, their theme, icons and parts, each screen over an interface the app implements with its own platform views; built by each app's own Gradle build as its `:lizard-ui` |
@@ -577,15 +585,14 @@ dot folders, to that network. `node lizard-web/pwa/build.mjs` builds the install
 static site. Its checks (`lizard-web/check_send.mjs`, `check_ui.mjs`, `check_app.mjs`, `check_rates.mjs`) drive
 Google Chrome, as `google-chrome` on the PATH.
 
-**The GPU kernels**, into `liblizard/out/`, need Rust 1.87 or later for [naga](https://github.com/gfx-rs/wgpu/tree/trunk/naga),
-[glslang](https://github.com/KhronosGroup/glslang) 16.6.0 for the kernels written in GLSL, and SPIRV-Tools' `spirv-val`
-and shaderc's `glslc`: the Android NDK 27.1's (`ANDROID_NDK_HOME`, else `$ANDROID_HOME/ndk/27.1.12297006`, else
-`~/Android/Sdk/ndk/27.1.12297006`) or any on the PATH. `lizard-android/build.sh tools` builds naga's tool and, on
-Linux x86-64 and macOS, downloads glslang's release build into `liblizard/.tools/glslang`, checked by its SHA-256
-(elsewhere, a glslang 16.6.0 on the PATH); the build refuses any other glslang version. No GPU is needed.
+**The GPU kernels**, into `liblizard/out/`, need [Slang](https://github.com/shader-slang/slang) 2026.22: every kernel
+(the decoder's, the sender's and the engine's own shaders) is Slang, compiled by slangc to SPIR-V for the native apps
+and, for the sender's, to the WGSL the web encoder runs. `lizard-android/build.sh tools` downloads Slang's release build
+into `liblizard/.tools/` on Linux x86-64 and macOS on Apple Silicon, checked by its SHA-256 (elsewhere, the same
+version on the PATH); the build refuses any other version. No GPU is needed.
 
 ```
-lizard-android/build.sh tools  # naga 30.0.1 and glslang 16.6.0, once
+lizard-android/build.sh tools  # Slang 2026.22, once
 lizard-android/build.sh gen    # the GPU decoder's and encoder's kernels and tables
 ```
 

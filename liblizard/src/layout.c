@@ -121,39 +121,6 @@ uint64_t ob_crc64(const uint8_t *p, int n) {
   return ~c;
 }
 
-// ai: The format word's CRC-5 (fmt.h, SPEC 5.1; 2026-11-22): x^5 + x^2 + 1 (USB's) over the word's 35-bit index, most
-// ai: significant first, from 0, not reflected: (c x^5) mod G. By carry-less multiplication where the processor has it
-// ai: (OB_HAVE_CLMUL64, as the CRC-64's): Barrett's reduction, q = floor(c MU / x^35) with MU = floor(x^40 / G) (degree
-// ai: 35), the remainder the low five bits of q G, two products (research/build/word-index-2026-11-22/crc5_model.py
-// ai: holds it to the bit loop). Elsewhere (the wasm, OB_SCALAR) the bit loop, which test/crc_check.c holds it to over
-// ai: every index.
-#define CRC5_G 0x25ull
-#define CRC5_MU 0x967c6ea12ull
-static uint32_t crc5_bits(uint64_t c) {
-  uint64_t r = (c & 0x7ffffffffull) << 5;
-  for (int i = 39; i >= 5; i--) if (r >> i & 1) r ^= CRC5_G << (i - 5);
-  return (uint32_t)(r & 31);
-}
-#if defined(OB_HAVE_CLMUL64) && defined(OB_X86)
-__attribute__((target("pclmul,sse4.1"))) static uint32_t crc5_clmul(uint64_t c) {
-  const __m128i p = _mm_clmulepi64_si128(_mm_cvtsi64_si128((long long)(c & 0x7ffffffffull)), _mm_cvtsi64_si128((long long)CRC5_MU), 0x00);
-  const uint64_t q = ((uint64_t)_mm_cvtsi128_si64(p) >> 35) | ((uint64_t)_mm_extract_epi64(p, 1) << 29);
-  return (uint32_t)_mm_cvtsi128_si64(_mm_clmulepi64_si128(_mm_cvtsi64_si128((long long)q), _mm_cvtsi64_si128((long long)CRC5_G), 0x00)) & 31;
-}
-#elif defined(OB_HAVE_CLMUL64)
-OB_CLMUL_TARGET static uint32_t crc5_clmul(uint64_t c) {
-  const uint64x2_t p = vreinterpretq_u64_p128(vmull_p64((poly64_t)(c & 0x7ffffffffull), (poly64_t)CRC5_MU));
-  const uint64_t q = (vgetq_lane_u64(p, 0) >> 35) | (vgetq_lane_u64(p, 1) << 29);
-  return (uint32_t)vgetq_lane_u64(vreinterpretq_u64_p128(vmull_p64((poly64_t)q, (poly64_t)CRC5_G)), 0) & 31;
-}
-#endif
-uint32_t ob_crc5(uint64_t c) {
-#ifdef OB_HAVE_CLMUL64
-  if (OB_HAVE_CLMUL64()) return crc5_clmul(c);
-#endif
-  return crc5_bits(c);
-}
-uint32_t ob_crc5_bits(uint64_t c) { return crc5_bits(c); }
 
 // j is the TRACK cell's index, not a module: the track takes every second run of OB_BAND_RUN cells of the band, the word the rest.
 int ob_thin_track(int side, int j) {
@@ -187,12 +154,12 @@ void ob_layout_set_fmt(ob_layout_t *L, const uint8_t *cw) {
   }
 }
 
-
-// Thin frame: a lattice every OB_THIN_PITCH modules whose border nodes sit on the border's centre
-// line, each a 5 x 5 patch of the border pattern. No mark is painted: the border is the mark.
+// Thin frame: a lattice every OB_THIN_PITCH modules whose border nodes sit on OB_NODE_LINE (layout.h: not the
+// border's middle), each a 5 x 5 patch of the border pattern. No mark is painted: the border is the mark.
 // 1 where (x, y) falls in a corner mark: a solid block filling the square [0, S) at each corner, with
 // its outermost ring light so a symbol against a dark bezel is still one dark run the scan can find
-// the inner edge of, and its innermost ring light as the separator between the block and the coded rings inside it.
+// the inner edge of, and its innermost ring light as the separator between the block and the coded rings inside it
+// (but where the border's line crosses it).
 static int thin_corner(const ob_layout_t *L, int x, int y, int *dark) {
   const int S = L->corner;
   // FOUR corners. Three, QR's arrangement, was tried on 2026-09-21 and reverted: the fourth corner is a MEASURED
@@ -202,10 +169,12 @@ static int thin_corner(const ob_layout_t *L, int x, int y, int *dark) {
   const int cx = x < L->w - 1 - x ? x : L->w - 1 - x, cy = y < L->h - 1 - y ? y : L->h - 1 - y;
   if (cx >= S || cy >= S) return 0;
   const int in = cx >= 1 && cx <= S - 2 && cy >= 1 && cy <= S - 2;
-  // The gap band stays light, so the line's inner edge, which fit_lines fits, is at the same depth under a mark as
-  // anywhere else and the mark cannot pull the curve.
+  // The gap band stays light, so the line's inner edge, which the finder traces, is at the same depth under a mark as
+  // anywhere else and the mark cannot pull the curve. The line itself (depths 1 to OB_THIN_LINE) runs through the
+  // mark's separator, so it is one closed loop round the symbol (2026-11-23; a module's gap beside each mark before,
+  // which made each side a contour of its own).
   const int d = cx < cy ? cx : cy;
-  *dark = in && !(d >= OB_THIN_GAP && d < OB_THIN_TRACK);
+  *dark = (in && !(d >= OB_THIN_GAP && d < OB_THIN_TRACK)) || (d >= 1 && d <= OB_THIN_LINE);
   return 1;
 }
 

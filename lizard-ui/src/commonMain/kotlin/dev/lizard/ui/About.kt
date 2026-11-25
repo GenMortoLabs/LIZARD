@@ -43,8 +43,8 @@ val LocalCredits = staticCompositionLocalOf { emptyList<Credit>() }
 const val SOURCE_URL = "https://github.com/GenMortoLabs/LIZARD"
 val LocalBrowse = staticCompositionLocalOf<(String) -> Unit> { {} }
 
-// ai: Source code (2026-11-03; the web's #source): a row after About on Home, Send and Receive, drawn as a fold's row (a
-// ai: hairline over it, 56 dp), opening the repository
+// ai: Source code (2026-11-03; the web's Source code link): a row after About on Home's column (HomeColumn), drawn as a
+// ai: fold's row (a hairline over it, 56 dp), opening the repository; the PC's Home (HomeWide) has it in its bar
 @Composable
 fun SourceRow() {
     val browse = LocalBrowse.current

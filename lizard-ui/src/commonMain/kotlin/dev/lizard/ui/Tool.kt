@@ -41,7 +41,7 @@ interface ToolHost {
     // ai: the main area alone on the screen: the desktop's full screen on both screens; Send's on the phone while sending
     val alone: Boolean get() = false
     // ai: the platform's on the main area (the desktop's: in full screen the pointer near its left edge shows the edge
-    // ai: strip, App.kt)
+    // ai: strip, FullScreen.kt)
     val areaModifier: Modifier get() = Modifier
 }
 

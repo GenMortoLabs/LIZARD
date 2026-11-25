@@ -4,7 +4,7 @@
 // ai: SYM itself (a source block's symbols 480 B apart, about 1.03 times the file): in place where the device shares the system's
 // ai: memory, else through a slot and a copy on the device's second queue, beside the painting;
 // ai: each frame's blocks are
-// ai: then made on the device from their ids alone (blocks: gpu/wgsl/rq_enc.mjs BLOCKS, the tuple of RFC 6330 5.3.5.4
+// ai: then made on the device from their ids alone (blocks: gpu/slang/src/send_rq_blocks.slang, the tuple of RFC 6330 5.3.5.4
 // ai: made there, the XOR of its intermediate symbols written into the painter's BLOCKS in the encode's own submission),
 // ai: or read back for the CPU's painters (host). The host hands over 8 bytes a block.
 // ai: Why the split: the solve is a chain (2,121 peel levels and 104,741 Gauss-Jordan steps in order at 16 MiB), which
@@ -74,7 +74,7 @@ class GpuStream {
   wg::Device& dev_;
   File f_;
   std::vector<uint32_t> idw_;   // ai: the ids as written
-  uint32_t toiHi_[2] = {};      // ai: the file's TOI's high 24 bits and the session's (their ids' bytes 8 to 10), PAR's words 4 and 5
+  uint32_t toiHi_[2] = {};      // ai: the file's TOI's high 24 bits and the session header's (their ids' bytes 8 to 10), PAR's words 4 and 5
   std::mutex poolMu_;           // ai: pool2's and queue2's (the workers' copies)
   bool uma_ = false;            // ai: the device shares the system's memory: SYM host-visible, written in place
   std::once_flag symOnce_;      // ai: SYM made by the first worker

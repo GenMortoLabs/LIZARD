@@ -1,5 +1,5 @@
-// ai: F7's constants, its round and the host's ring order (glsl/register.mjs NODES, REFIT, REFIT_POST; the anchors'
-// ai: refit, glsl/anchors.mjs), which the host and ../../gen/gen.mjs read too.
+// ai: F7's constants, its round and the host's ring order (slang/register.mjs NODES, REFIT; the anchors'
+// ai: refit, slang/anchors.mjs), which the host and ../../gen/gen.mjs read too.
 
 export const WINDOW = 12;   // modules a side of a node's template
 export const SUB = 2;       // template samples a module, each way
@@ -8,10 +8,10 @@ export const SUB = 2;       // template samples a module, each way
 export const NODES_MAX = 136;
 // ai: Room for every ring's nodes in a round's light counts (Round.light, a node at its ring's base index).
 export const LIGHT_MAX = 4 * NODES_MAX;
-// ai: resid's record a frame: the nodes' residuals, then LENS_SLOTS vec4f of the lens about the camera's axis that
-// ai: ANCH_REFIT fits over the border and the anchors (COONS's Lens; 2026-10-17), which every sampler adds back; REFIT_POST
-// ai: writes it none.
-export const LENS_SLOTS = 5, RESID = NODES_MAX + LENS_SLOTS;
+// ai: resid's record a frame: LENS_SLOTS vec4f of the lens about the camera's axis that ANCH_REFIT fits over the border
+// ai: and the anchors (register.mjs LENS; 2026-10-17), which every sampler adds to REFIT's homography; REFIT writes it
+// ai: none. (The nodes' residuals before it, NODES_MAX vec4f, went with the sides' curves on 2026-11-24.)
+export const LENS_SLOTS = 5, RESID = LENS_SLOTS;
 
 // ai: F7's round ([steps, stride, step], the host's Round): +-3 modules at half a module, one template sample a module
 export const ROUND = [6, SUB * SUB, 0.5];
@@ -21,8 +21,6 @@ export const ROUND = [6, SUB * SUB, 0.5];
 // ai: 0.07% more blocks over the published lenses for 0.06 to 0.08 ms more of the S26's half; +-0.2 no cheaper there and
 // ai: 0.22% fewer; one sample a module 4.2% fewer)
 export const ANCH_ROUND = [2, 1, 0.25];
-// ai: The border nodes' pitch along a side, modules (src/layout.h OB_THIN_PITCH): COONS finds a position's node span by it
-export const NODE_PITCH = 16;
 // ai: a round's lattice side: where its samples (one a module at stride SUB^2, every one at stride 1) are a whole
 // ai: number of offset steps apart, the window's WINDOW / spacing - 1 spacings a side in steps and the offsets' reach
 // ai: each way (F7's round 35, ANCH_ROUND's 51); else 0, a round nodesSource refuses
@@ -35,14 +33,6 @@ export const latticeSide = ([steps, stride, step]) => {
 // ai: the 4090, the S26's frame): 2 read 0.012% fewer blocks than 5 for 0.9 to 1.4% of the S26's frame (REFIT 0.031 to
 // ai: 0.014 ms at two a launch), 3 0.002% more for 0.6 to 0.9%.
 export const WMIN = 0.3, DELTA = 0.4, ITERS = 2;
-
-// ai: A side's residual curve takes 1 to SIDE_MAX coefficients (a constant to a quintic in the position along it),
-// ai: the count chosen per side and frame by AICc on the side's own nodes (2026-09-29: each frame decided from its own
-// ai: evidence, with no constant set on a phone). SIDE_MAX is the power basis's conditioning on
-// ai: [-1, 1] at the rings' node counts, not a fitted value.
-export const SIDE_MAX = 6;
-
-export const SIDE_NODES = NODES_MAX / 4 + 1;
 
 export const LENS_P = 11;
 

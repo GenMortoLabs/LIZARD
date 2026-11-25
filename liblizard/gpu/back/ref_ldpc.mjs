@@ -1,10 +1,10 @@
 // The LDPC's learned stop for a code and the CRC-64 split's powers, shared by the rate profile's stage (tiers.mjs,
-// glsl/back_tiers.mjs) and the sender's paint (../encoder.mjs, wgsl/send.mjs).
+// slang/back_tiers.mjs) and the sender's paint (../encoder.mjs, ../slang/src/send_paint.slang).
 import { loadStop, ruleUrlFor } from "./stop/rule.mjs";
 
 export const PAYLOAD = 472;                   // bytes a block, the id first (src/lizard_phy.h LIZARD_BLOCK)
 
-// ai: A code's learned stop (DESIGN section 6), what glsl/back_tiers.mjs builds the code's kernel from: after
+// ai: A code's learned stop (DESIGN section 6), what slang/back_tiers.mjs builds the code's kernel from: after
 // ai: iterations 1 to 29 the MLP of stop/ on (bad, low, first, prev, t, grow) gives up when its score is under its
 // ai: threshold, each code its own file by its m checks (stop/rule.mjs ruleUrlFor, loadStop, once a file). It replaced
 // ai: the funnel and the C's stall test on 2026-09-28 (scripts/gpu/back/stop/README.md).
@@ -34,15 +34,4 @@ export function crcPowers(len = PAYLOAD) {
   for (let w = 0; w < words; w++) { const end = Math.min(4 * w + 4, len); put(w, xpow(8 * (len - end))); }
   put(words, mulPoly(ONES, xpow(8 * len)) ^ ONES);
   return pw;
-}
-// The split's arithmetic on a block's bytes, the shader's: the CRC as a BigInt (held to ob_crc64 by its check).
-export function crcSplit(bytes, pw = crcPowers(bytes.length)) {
-  const words = Math.ceil(bytes.length / 4);
-  let acc = 0n;
-  for (let w = 0; w < words; w++) {
-    let c = 0n;
-    for (let t = 0; t < 4 && 4 * w + t < bytes.length; t++) { c ^= BigInt(bytes[4 * w + t]); for (let q = 0; q < 8; q++) c = mulx(c); }
-    acc ^= mulPoly(c, (BigInt(pw[2 * w]) << 32n) | BigInt(pw[2 * w + 1]));
-  }
-  return acc ^ ((BigInt(pw[2 * words]) << 32n) | BigInt(pw[2 * words + 1]));
 }

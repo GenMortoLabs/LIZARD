@@ -84,8 +84,10 @@ struct XferProgress {
   uint64_t limit = 0, free = 0;
   // ai: the transfer's own clock, s: from its first data block taken (the blocks held for its header count from that
   // ai: header) to its last source block verified, or to this snapshot while it runs; 0 before a data block (2026-10-10; an
-  // ai: app's own poll clock carried one file's start into the next file's time). Time with no blocks coming (a camera
-  // ai: stopped mid-transfer) counts.
+  // ai: app's own poll clock carried one file's start into the next file's time). A pause (XferRxCore::pause: the camera
+  // ai: stopped) does not count while the transfer still wants blocks; once every source block is in, the solves' time
+  // ai: counts with the camera stopped or not (2026-11-24: a paused receive's speed read 3.35 MB/s against about 4.6
+  // ai: while it ran).
   double secs = 0;
   // ai: counts, the web's names: rejected source blocks, headers refused, source blocks RaptorQ wanted a block
   // ai: more than K for, solve ms; forwarded blocks handed to the worker (control ones in), doneAt how many had been
@@ -133,6 +135,9 @@ class XferRxCore {
   // ai: (parked as it stands), taken afresh at its next header (a Start after it, or the bounds changed: refused again
   // ai: if it is still past them, failing again if the store still cannot write).
   void allow(uint64_t limit, double room);
+  // ai: The blocks paused (on: the camera stopped) or flowing again (off): each transfer that still wants blocks stops
+  // ai: its clock (XferProgress.secs) until the pause ends. On the thread that calls block().
+  void pause(bool on);
   // ai: Data blocks added to a source block still collecting since this was made, never reset (2026-10-10): what a transfer
   // ai: actually took, a block held for a header counted once its header lets it in, none of a source block already verified
   // ai: or of a symbol refused. Any thread may read it; a receiver's rate is its change over a window.

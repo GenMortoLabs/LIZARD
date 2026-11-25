@@ -13,7 +13,7 @@ class LizardException(val code: Int, message: String) : RuntimeException(message
 
 enum class PixelFormat(internal val code: Int, val bytes: Int) { GREY(1, 1), RGBX(2, 4), RGBA(3, 4), BGRA(4, 4) }
 
-// ai: blocks, the format's size (4 to 64: LIZARD-64 to -1024, 16 x blocks; a symbol carries the rate profile's blocks, the
+// ai: blocks, the format's size (1 to 67: LIZARD-16 to -1072, 16 x blocks; a symbol carries the rate profile's blocks, the
 // ai: geometry's frameBlocks over codes); ring 0 to RINGS - 1 (the 64, 128 or 256 ring) or RING_DEFAULT; the
 // ai: display rate its word states; codes, 1 or 2 symbols side by side
 data class Format(val blocks: Int, val ring: Int = Lizard.RING_DEFAULT, val fps: Int = 60, val codes: Int = 1)
@@ -30,8 +30,8 @@ object Lizard {
   const val BLOCK = 472
   const val ID_BYTES = 12
   const val PAYLOAD = 460
-  const val MIN_BLOCKS = 4
-  const val MAX_BLOCKS = 64
+  const val MIN_BLOCKS = 1
+  const val MAX_BLOCKS = 67
   const val RINGS = 3
   const val RING_DEFAULT = -1
   const val GAP_MODULES = 12

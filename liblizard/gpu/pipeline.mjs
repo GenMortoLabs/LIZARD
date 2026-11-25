@@ -16,10 +16,11 @@ export async function computePipeline(device, { code, layout, label }) {
 }
 
 // ai: A stage's shader module from its source: WGSL text (the browser sender's kernels, encoder.mjs, on the page's
-// ai: WebGPU device), or { glsl } (a decoder stage, glsl/, on the recording device of ../gen/mockgpu.mjs, which gen.mjs
-// ai: compiles with glslang). The decoder's WGSL twins went 2026-10-31 (archive/webgpu-decoder/).
+// ai: WebGPU device), or a stage's { slang } (slang/, every kernel's source since 2026-11-24) on the recording device of
+// ai: ../gen/mockgpu.mjs, which gen.mjs compiles with slangc. The decoder's WGSL twins went 2026-10-31
+// ai: (archive/webgpu-decoder/), its GLSL 2026-11-24.
 export function shaderModule(device, src, label) {
   if (typeof src === "string") return device.createShaderModule({ label, code: src });
-  if (typeof src?.glsl !== "string") throw new Error(`${label ?? "a stage"}: a source is WGSL text (the sender's) or { glsl } (a decoder stage)`);
-  return device.createShaderModule({ label, glsl: src.glsl });
+  if (typeof src?.slang !== "string") throw new Error(`${label ?? "a stage"}: a source is WGSL text (the sender's) or { slang }`);
+  return device.createShaderModule({ label, slang: src.slang });
 }

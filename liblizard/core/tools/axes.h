@@ -1,5 +1,5 @@
 // ai: Where the camera's optical axis fell in each frame of a recording (the lens model's, liblizard/src/acquire.c
-// ai: and gpu/glsl/register.mjs LENS): meta.json's `axes` ([x, y] px, null the frame's centre) where the run has it
+// ai: and gpu/slang/register.mjs LENS): meta.json's `axes` ([x, y] px, null the frame's centre) where the run has it
 // ai: (Save replays since 2026-10-17), else from its layout: a 2:1 run's frames are the halves of one capture, the left
 // ai: first (the pair shares its `ms`: a frame whose `ms` the next shares is a left, one the frame before shares a
 // ai: right; a lone first frame a right, whose left the kept window cut off), the left's axis the middle of its right

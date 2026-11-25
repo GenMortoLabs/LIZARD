@@ -55,7 +55,7 @@ const made = (ptr) => {
   return ptr;
 };
 
-export const BLOCK = 472, ID_BYTES = 12, PAYLOAD = 460, MIN_BLOCKS = 4, MAX_BLOCKS = 64, RINGS = 3, RING_DEFAULT = -1, GAP_MODULES = 12;
+export const BLOCK = 472, ID_BYTES = 12, PAYLOAD = 460, MIN_BLOCKS = 1, MAX_BLOCKS = 67, RINGS = 3, RING_DEFAULT = -1, GAP_MODULES = 12;
 const PIXFMT = { grey: 1, rgbx: 2, rgba: 3, bgra: 4 };
 const bpp = (f) => (f === "grey" ? 1 : 4);
 const pixfmt = (f) => {
@@ -85,7 +85,7 @@ export const simd = () => mod()._liz_simd() === 1;
 
 // ---- 1. format arithmetic --------------------------------------------------------------------------------------------
 
-// ai: format: { blocks (4 to 64: LIZARD-64 to -1024, 16 x blocks), ring (0 to 2: the 64, 128 or 256 ring; -1 the default, the 128), fps (1 to 240, the word states it), codes (1 or 2) }
+// ai: format: { blocks (1 to 67: LIZARD-16 to -1072, 16 x blocks), ring (0 to 2: the 64, 128 or 256 ring; -1 the default, the 128), fps (1 to 240, the word states it), codes (1 or 2) }
 function formatAt(p, { blocks, ring = RING_DEFAULT, fps = 60, codes = 1 }) {
   M.HEAP32.set([blocks, ring, fps, codes], p >> 2);
   return p;

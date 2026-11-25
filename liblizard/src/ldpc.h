@@ -1,6 +1,6 @@
 // Quasi-cyclic IRA LDPC: H = [Hd | Hp], Hd built from Z x Z circulants over a base graph of kb data columns and mb
 // block rows (each of the format's four codes its own: ldpc_base.h, z = 128 for every one), Hp the bit-level
-// accumulator staircase. The format's codes ship as their base matrices, one a rate of the rate profile; the 6/7
+// accumulator staircase. The format's codes ship as their base matrices, one a code rate of the format's four; the 6/7
 // code's last data column, the zeros past the block, is never sent (np below). The construction is pre-2005 literature throughout (Gallager
 // codes, IRA staircase encoding, circulant lifting with girth conditioning).
 #ifndef OB_LDPC_H
@@ -26,12 +26,11 @@ typedef struct {
                       // rotation of any slot is one run of z inside [z, 3z); 0 elsewhere
 } ldpc_t;
 
-// ai: Rate indices 0 to LDPC_RATES - 1, the format's four with a code: 2 (1/2), 3 (2/3), 4 (3/4), 6 (6/7); the name and
-// ai: value of any other index are NULL and 0.
+// ai: Rate indices 0 to LDPC_RATES - 1, the format's four with a code: 2 (1/2), 3 (2/3), 4 (3/4), 6 (6/7); the name of
+// ai: any other index is NULL.
 extern const char *const ldpc_rate_name[LDPC_RATES];
-double ldpc_rate_value(int rate);
 
-// The format's code at a rate index (ldpc_base.h, the rate profile's four). Returns 0 on success, -1 for a rate index
+// The format's code at a rate index (ldpc_base.h, one of the format's four). Returns 0 on success, -1 for a rate index
 // with no code. test/ldpc_table.c holds each table to the hash of its H.
 int ldpc_init(ldpc_t *c, int rate);
 // The bits a block's slots carry under the format's code at a rate index (n - np), without building it; 0 for none.
@@ -46,6 +45,10 @@ void ldpc_encode(const ldpc_t *c, const uint8_t *data, uint8_t *codeword);
 int ldpc_decode(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter);
 // The same with a way out for a block that is going nowhere (ldpc.c). Returns -3 when it took it.
 int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter, int stall_it, float stall_ratio);
+// The same with the learned stop (ldpc_stop.h) giving up on a codeword that will not clear: -4 when it did. Meant for a
+// cap of LDPC_STOP_CAP (60), the cap its nets were trained to; a code without a net runs to the cap.
+int ldpc_decode_stop(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter);
+enum { LDPC_STOP_CAP = 60 };   // the cap the learned stop's nets were trained to
 
 // The code's shape (12 ints: n, k, m, z, zp, mb, kb, norm, slots_max, slots_total, slots, np) and its block-row
 // tables, for a decoder running somewhere else. See ldpc.c.

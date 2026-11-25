@@ -35,7 +35,7 @@ const setAxis = (axis) => {
 };
 
 // Stage times since the last call, ms, summed over the decodes in between (slots: PROF_* in src/internal.h).
-const STAGES = { luma: [0], binarize: [1], finder: [2], mesh: [3], sample: [4], demap: [5, 7], fft: [6], ldpc: [8] };
+const STAGES = { luma: [0], grey: [1], finder: [2], mesh: [3], sample: [4], demap: [5, 7], fft: [6], ldpc: [8] };
 export function prof() {
   const out = {};
   for (const [name, slots] of Object.entries(STAGES)) out[name] = slots.reduce((t, i) => t + M._ob_prof(i), 0);
@@ -92,10 +92,12 @@ export function streamMatches(id, bytes) {
 
 // ai: A receiver told nothing (src/lizard_phy.h lizard_acquire_ring, src/wasm.c lizard_any_rx): it registers against the
 // ai: rings (src/lizard_phy.h LIZARD_RING), reads the word there, and finishes the frame at the picture the word names, in whichever ring it was
-// ai: painted (any ring may carry any picture). nmax: the largest picture it decodes (sim/phy.mjs BLIND_NMAX). Its
-// ai: codecs are the module's own, apart from Lizard's, and replaced by the next LizardAny.
+// ai: painted (any ring may carry any picture). nmax: the largest picture it decodes, the ladder's largest unless given
+// ai: (1536, sim/lizard_pick.mjs PICTURE_SIZES, sim/phy.mjs BLIND_NMAX; a frame whose word names a larger picture is
+// ai: found and its word read, but not finished). Its codecs are the module's own, apart from Lizard's, and replaced by
+// ai: the next LizardAny.
 export class LizardAny {
-  constructor(nmax = 1024) {
+  constructor(nmax = 1536) {
     this.blockBytes = M._lizard_any_setup(nmax);
     if (this.blockBytes < 0) throw new Error(`lizard any to n = ${nmax} rejected`);
     this.nmax = nmax;
@@ -215,18 +217,18 @@ export class Lizard {
   // The word the last decode read out of the symbol's band, or null where it read none. This is all a receiver
   // that was told nothing goes on: the version and the layout's counts (sim/lizard_pick.mjs layoutOf), and the sender's
   // clock (fps, 0 a still; delay, its places' largest).
-  // ai: The C's ob_fmt_t (src/fmt.h): the version, the counts, fps and delay.
+  // ai: The C's ob_fmt_t (src/fmt.h): the version, the four counts (6/7, 3/4, 2/3, 1/2), fps and delay.
   static fmtOf(p) {
     if (!p) return null;
     const i = p >> 2;
-    return { version: M.HEAP32[i], count: [M.HEAP32[i + 1], M.HEAP32[i + 2], M.HEAP32[i + 3]], fps: M.HEAP32[i + 4], delay: M.HEAP32[i + 5] };
+    return { version: M.HEAP32[i], count: Array.from(M.HEAP32.subarray(i + 1, i + 5)), fps: M.HEAP32[i + 5], delay: M.HEAP32[i + 6] };
   }
   // ai: The sender's clock the next encode's word states (src/lizard_phy.h lizard_clock): fps 0 to 240 (0 a still),
   // ai: delay 1 to 30; 60 and 1 until set.
   setClock(fps, delay = 1) { if (M._lizard_clock_set(fps, delay)) throw new Error(`clock ${fps}/${delay}: fps 0 to 240, delay 1 to 30`); }
-  // ai: The frame's layout the next encode paints (src/lizard_phy.h lizard_layout): [6/7, 2/3, 1/2] blocks, the 3/4
-  // ai: filling the rest; `blocks` then the frame's.
-  setLayout([a, t, c]) { if (M._lizard_layout_set(a, t, c)) throw new Error(`layout ${a}/${t}/${c}: no frame of LIZARD-${this.subch}`); this.blocks = M._lizard_blocks(); }
+  // ai: The frame's layout the next encode paints (src/lizard_phy.h lizard_layout): [6/7, 3/4, 2/3, 1/2] blocks, the rest
+  // ai: padded; `blocks` then the frame's.
+  setLayout(k) { if (k.length !== 4 || M._lizard_layout_set(...k)) throw new Error(`layout ${k.join("/")}: no frame of LIZARD-${this.subch}`); this.blocks = M._lizard_blocks(); }
   // ai: The painted picture's count, 0 to 3 (the sender's count of painted pictures mod 4), which the next encode puts
   // ai: into the count pilots, bit 0 in the even sub-channels and bit 1 in the odd (src/lizard_phy.h lizard_parity;
   // ai: SPEC 7.3). 0 paints what every sender did before the pilots.

@@ -275,6 +275,15 @@ std::unique_ptr<Device> Device::create(const std::string& want, bool validate, s
   };
   for (const std::string& x : extras.deviceExts)
     if (has(x.c_str()) && !enabledHas(x.c_str())) enable.push_back(x.c_str());
+  // ai: LIZ_PIPE_STATS=1 (lab, 2026-11-24): every pipeline's driver statistics (registers, scratch: the Adreno's spills
+  // ai: past a few bytes of scratch read wrong answers there) printed at its creation, where the device offers them
+  VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR peE{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};
+  if (const char* ps = getenv("LIZ_PIPE_STATS"); ps && *ps && *ps != '0' && has(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME)) {
+    peE.pipelineExecutableInfo = VK_TRUE;
+    chain(peE);
+    if (!enabledHas(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME)) enable.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+    d->pipeStats = true;
+  }
   VkPhysicalDevicePresentIdFeaturesKHR pidE{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
   VkPhysicalDevicePresentWaitFeaturesKHR pwE{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_WAIT_FEATURES_KHR};
   if (enabledHas(VK_KHR_PRESENT_ID_EXTENSION_NAME) || enabledHas(VK_KHR_PRESENT_WAIT_EXTENSION_NAME)) {
@@ -639,9 +648,39 @@ std::shared_ptr<Pipeline> Device::createPipeline(const std::vector<uint32_t>& sp
   VkSpecializationInfo si{(uint32_t)me.size(), me.data(), spec.size() * 4, spec.data()};
   if (!spec.empty()) cpi.stage.pSpecializationInfo = &si;
   cpi.layout = p->layout;
-  VkResult r = vkCreateComputePipelines(dev, cache, 1, &cpi, nullptr, &p->pipe);
+  if (pipeStats) cpi.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
+  VkResult r = vkCreateComputePipelines(dev, pipeStats ? VK_NULL_HANDLE : cache, 1, &cpi, nullptr, &p->pipe);
   vkDestroyShaderModule(dev, sm, nullptr);
   check(r, ("vkCreateComputePipelines " + p->id + (label.empty() ? "" : " (" + label + ")")).c_str());
+  if (pipeStats) {
+    VkPipelineInfoKHR pi{VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR};
+    pi.pipeline = p->pipe;
+    uint32_t ne = 0;
+    vkGetPipelineExecutablePropertiesKHR(dev, &pi, &ne, nullptr);
+    std::vector<VkPipelineExecutablePropertiesKHR> ep(ne, VkPipelineExecutablePropertiesKHR{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+    vkGetPipelineExecutablePropertiesKHR(dev, &pi, &ne, ep.data());
+    for (uint32_t e = 0; e < ne; e++) {
+      VkPipelineExecutableInfoKHR ei{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR};
+      ei.pipeline = p->pipe;
+      ei.executableIndex = e;
+      uint32_t ns = 0;
+      vkGetPipelineExecutableStatisticsKHR(dev, &ei, &ns, nullptr);
+      std::vector<VkPipelineExecutableStatisticKHR> st(ns, VkPipelineExecutableStatisticKHR{VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+      vkGetPipelineExecutableStatisticsKHR(dev, &ei, &ns, st.data());
+      std::string line = "pipe-stats " + (label.empty() ? p->id : label) + " [" + ep[e].name + "]:";
+      for (const auto& s : st) {
+        char v[64];
+        switch (s.format) {
+          case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR: snprintf(v, sizeof v, "%u", s.value.b32); break;
+          case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR: snprintf(v, sizeof v, "%lld", (long long)s.value.i64); break;
+          case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR: snprintf(v, sizeof v, "%llu", (unsigned long long)s.value.u64); break;
+          default: snprintf(v, sizeof v, "%g", s.value.f64); break;
+        }
+        line += std::string(" ") + s.name + "=" + v + ";";
+      }
+      fprintf(stderr, "%s\n", line.c_str());
+    }
+  }
   return p;
 }
 

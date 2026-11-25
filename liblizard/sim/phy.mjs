@@ -28,7 +28,7 @@ const RATE = { 2: "1/2", 3: "2/3", 4: "3/4", 6: "6/7" };
 // Block contents are a function of the block id, so a receiver can check any block it decodes
 // without being told which frame it came from.
 //
-// BLAKE3 of the id (sim/ob.mjs, src/xfer.h stream_fill; SPEC 9.3; SHAKE256 until 2026-11-15), the one test stream: what a live sender paints and what the
+// BLAKE3 of the id (sim/ob.mjs, src/xfer.h stream_fill; SHAKE256 until 2026-11-15), the one test stream: what a live sender paints and what the
 // simulator's harnesses paint and check. The xorshift32 walk it replaced had a single orbit of 2^32 - 1, so two ids
 // whose seeds landed within a block of each other on it emitted byte strings that were shifts of one another (119 such
 // pairs in 40k ids), and one id seeded the absorbing zero state; neither happens under a hash. The walk went on
@@ -55,7 +55,7 @@ export const blindSpec = (nmax = BLIND_NMAX) => ({ phy: "lizard", blind: 1, nmax
 // ai: (2026-09-27), and scripts/exp/recordings.mjs lists the current version's runs alone.
 export const recordedBlind = (spec) => ({ ...blindSpec(Math.max(BLIND_NMAX, spec.n ?? 0)), stream: spec.stream });
 
-// ai: name -> generator: BLAKE3 alone (SPEC 9.3), which a blind receiver judges from the light alone (blockJudge); a
+// ai: name -> generator: BLAKE3 alone (src/xfer.h stream_fill), which a blind receiver judges from the light alone (blockJudge); a
 // ai: spec that names no stream gets it.
 export const STREAMS = { blake3: blockBytesStream };
 // ai: name -> the judge's test of a payload against its id's stream (STREAMS' bytes, compared as they are made)
@@ -68,7 +68,7 @@ export const sourceFor = (stream) => {
 
 // ai: A blind receiver's judge of a frame's verified blocks, laid out as the codec lays them (the 4-byte id, then the
 // ai: payload), from the light alone (the whole receiver blind since 2026-09-26). The test stream's payload
-// ai: is a function of its id (BLAKE3 of it, SPEC 9.3), so a frame is the test stream's when one of its verified data
+// ai: is a function of its id (BLAKE3 of it, src/xfer.h stream_fill), so a frame is the test stream's when one of its verified data
 // ai: blocks carries its id's bytes (a file's block does so with probability 2^-3752); every other verified data block
 // ai: of that frame is then bad (the CRC let a wrong block through), counted and dropped. A frame with none is a file's,
 // ai: or a test frame whose every verified block is wrong, the one case not counted: the CRC alone judges it.

@@ -60,9 +60,6 @@ class TriggerClock {
   // ai: frame arriving after end() matches nothing.
   void end();
   bool running() const { return run_.load(); }
-  // ai: The deadline of the trigger being fired, for the fire callback to read (0 before the first): the time its
-  // ai: frame will carry (match), where the moment the callback runs carries the trigger's lateness.
-  int64_t firing() const { return due_.load(); }
   // ai: A frame that arrived at arrivedNs (steadyNs's clock, as the backend stamps a frame it is handed), matched to
   // ai: the trigger that exposed it: of the triggers fired at or before arrivedNs, the one whose time out plus the
   // ai: latency is nearest the arrival. Its deadline into ns, and delayed for the first trigger a delay moved; the triggers fired
@@ -87,7 +84,6 @@ class TriggerClock {
   std::function<bool(std::string&)> fire_;
   std::function<void(const std::string&)> log_;
   std::atomic<bool> run_{false};
-  std::atomic<int64_t> due_{0};                 // ai: the deadline of the trigger being fired (firing())
   std::thread th_;
   mutable std::mutex mu_;
   std::condition_variable cv_;                  // ai: wakes the loop (begin, end, delay, the destructor) and a begin

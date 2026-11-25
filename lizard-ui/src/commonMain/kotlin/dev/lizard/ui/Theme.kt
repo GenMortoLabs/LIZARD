@@ -20,7 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.lizard.readout.Readout
 import dev.lizard.ui.res.Res
 import dev.lizard.ui.res.inter_variable
 import dev.lizard.ui.res.jetbrains_mono_regular
@@ -42,10 +41,8 @@ val Pressed = Fg.copy(alpha = 0.10f).compositeOver(Soft)
 // ai: (the foreground at 38%, Material's disabled alpha, laid on the page)
 val GreyInk = Fg.copy(alpha = 0.38f).compositeOver(Bg)
 val Bad = Color(0xFFB00020)
-// ai: a finished transfer (the web's --good, 2026-10-25 with the desktop's receiver): the received line and the rail's check
+// ai: a finished transfer (the web's --good, 2026-10-25 with the desktop's receiver): the rail's check once a file is in
 val Good = Color(0xFF0A7A2F)
-
-fun toneColour(t: Readout.Tone) = when (t) { Readout.Tone.Bad -> Bad; Readout.Tone.Good -> Good; Readout.Tone.Plain -> Fg }
 
 // ai: A target's least size, a button's, a field's and an icon button's: 48 dp under a finger, 40 under a mouse (the
 // ai: web's ui.css, its pointer:fine rule); the app names its own (LizardTheme), the rest of the look is one.
@@ -65,9 +62,6 @@ private fun interFamily() = FontFamily(listOf(FontWeight.Normal, FontWeight.Medi
 
 val Mono: FontFamily
     @Composable get() = FontFamily(Font(Res.font.jetbrains_mono_regular))
-
-// ai: Inter's bytes, for text a platform paints itself (the desktop sender's code area, AWT's)
-suspend fun interBytes(): ByteArray = Res.readBytes("font/inter_variable.ttf")
 
 // ai: The type: the web's sizes in sp, in Inter, and no letter spacing (Material's default runs 0.1 to 0.5 sp, which set
 // ai: the text wider than the web's). Titles and labels semibold (a bar's title, a state line, a field's title, a
@@ -97,8 +91,9 @@ val LizardColours = lightColorScheme(primary = Fg, onPrimary = Bg, background = 
     surfaceContainerLowest = Bg, surfaceContainerLow = Bg, surfaceContainer = Bg, surfaceContainerHigh = Bg, surfaceContainerHighest = Bg)
 
 // ai: The theme every screen of both apps is drawn in: the colours, the type in Inter, the app's target size and its
-// ai: scrollbar beside a scrolling column (LocalScrollbar; none by default), and the pointer over a column's edge that
-// ai: drags sideways (LocalResizeIcon; the platform's left-right resize cursor where it has one, the default otherwise)
+// ai: scrollbar beside a scrolling column (LocalScrollbar; none by default), the pointer over a column's edge that
+// ai: drags sideways (LocalResizeIcon; the platform's left-right resize cursor where it has one, the default otherwise),
+// ai: the app's own credits (LocalCredits) and how it opens a link (LocalBrowse)
 @Composable
 fun LizardTheme(target: Dp, scrollbar: @Composable (ScrollState, Modifier) -> Unit = { _, _ -> }, resizeIcon: PointerIcon = PointerIcon.Default,
                 credits: List<Credit> = emptyList(), browse: (String) -> Unit = {}, content: @Composable () -> Unit) {

@@ -22,9 +22,11 @@ sealed interface Setting
 class Choice<T>(val title: String, val value: T, val options: List<Pair<T, String>>, val blank: String = "", val enabled: Boolean = true,
                 val enabledFor: (T) -> Boolean = { true }, val onOpen: () -> Unit = {}, val choose: (T) -> Unit) : Setting
 
-// ai: a choice among a few as chips under its title (Chips: Send's FPS, Ring, Codes, GPU acceleration (Encoder until
-// ai: 2026-11-16), VSync, Test stream (Developer Tools' Payload until 2026-11-19); Receive's GPU acceleration (Decoder until 2026-11-16) and the phone's Decode on, Crop (1:1, 2:1; named Codes, 1 and 2, from 2026-11-09 to 11-13), Format, Phase lock, Frame rate, Save replays; Show statistics on both; the desktop's Exclusive
-// ai: fullscreen; the phone's Resolution and Compression); `enabledFor` greys a choice the device does not offer
+// ai: a choice among a few as chips under its title (Chips: Send's FPS with VSync on, Ring, Codes, GPU acceleration
+// ai: (Encoder until 2026-11-16), VSync, and Control's Test stream (Developer Tools' Payload until 2026-11-19), Source,
+// ai: Export and Hide codes; Receive's GPU acceleration (Decoder until 2026-11-16) and the phone's Decode on, Crop (1:1,
+// ai: 2:1; named Codes, 1 and 2, from 2026-11-09 to 11-13), Format, Phase lock, Frame rate, Save replays; Show
+// ai: statistics on both; the phone's Resolution and Compression); `enabledFor` greys a choice the device does not offer
 class ChipChoice<T>(val title: String, val value: T, val options: List<Pair<T, String>>, val enabled: Boolean = true,
                     val enabledFor: (T) -> Boolean = { true }, val choose: (T) -> Unit) : Setting
 
@@ -42,11 +44,11 @@ class Lines(val title: String, val value: String, val lines: List<String>, val a
 class Code(val text: String, val size: Int = 13) : Setting
 class Press(val act: Act, val enabled: Boolean = true) : Setting
 
-// ai: Grey, never hide (2026-11-18): a setting that does not apply now (one another choice turns on: Export's Laps and
-// ai: Display while it is off, what a stream fixes while it plays, Spacing with one code, Batch size on the CPU decoder,
-// ai: Replay size with Save replays off, a fixed camera's mode) keeps its row, greyed at the value it holds, so nothing
-// ai: jumps as choices change; hidden only where a row would show nothing (a button with nothing to act on, another
-// ai: device's field, an empty fold). The setting as it is, inert.
+// ai: Grey, never hide (2026-11-18): a setting that does not apply now (one another choice turns on: Export's Laps,
+// ai: Maximum size and Hide codes while it is off, what a stream fixes while it plays, Spacing with one code, Batch
+// ai: size on the CPU decoder, Replay size with Save replays off, a fixed camera's mode) keeps its row, greyed at the
+// ai: value it holds, so nothing jumps as choices change; hidden only where a row would show nothing (a button with
+// ai: nothing to act on, another device's field, an empty fold). The setting as it is, inert.
 fun greyed(s: Setting): Setting = when (s) {
     is Choice<*> -> greyedChoice(s)
     is ChipChoice<*> -> greyedChips(s)
@@ -64,10 +66,11 @@ private fun <T> greyedChips(c: ChipChoice<T>): Setting = ChipChoice(c.title, c.v
 // ai: The settings folds by topic (2026-11-12; one Settings fold a screen before): each a fold's key and title in the
 // ai: column's order, before Experimental and Developer Tools. Receive's: the camera (its choice, its mode, Phase lock, Crop
 // ai: after Frame rate, its controls; Crop in a Code fold of its own, named Codes, until 2026-11-13), the decoder's performance
-// ai: (GPU acceleration, Batch size, the phone's Decode on, PC link and Compression; titled Decoder until 2026-11-13).
-// ai: Send's: the code and its place on the screen (Density or Blocks, Ring, Codes, then Size or the phone's Brightness,
-// ai: Spacing, Margin; a Layout fold of their own until 2026-11-13), its refresh (FPS, Rate refresh), the painter
-// ai: (GPU acceleration, VSync). The web pages the same (lizard-web).
+// ai: (GPU acceleration, Batch size, the phone's Decode on, PC link and Compression; titled Decoder until 2026-11-13),
+// ai: the files (Largest file). Send's: the code and its place on the screen (Density or Blocks, Ring, Codes, then Size
+// ai: or the phone's Brightness, Spacing, Margin, Colours; a Layout fold of their own until 2026-11-13), its refresh (FPS,
+// ai: a delay a code rate), its control (controlSettings), the painter (GPU acceleration, VSync). The web pages the same
+// ai: (lizard-web).
 val RECV_FOLDS = listOf(FoldKey.RecvCamera to "Camera", FoldKey.RecvPerformance to "Performance", FoldKey.RecvFiles to "Files")
 val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refresh", FoldKey.SendControl to "Control", FoldKey.SendPerformance to "Performance")
 
@@ -76,10 +79,10 @@ val SEND_FOLDS = listOf(FoldKey.SendCode to "Code", FoldKey.SendRefresh to "Refr
 // ai: or Test stream, before): On sends the test stream whatever else the fold says, every other row greyed at its
 // ai: value; Source, Files (what is picked, painted as it goes) or Stream (a stream file played: frames
 // ai: painted ahead, sender.h play); Export, Off or On (Start writes the frames into a stream file too: Laps of the
-// ai: file's blocks, 1 to 5 in halves, 2.5 by default, its value the cycles and the file's size where known; Display, On
-// ai: or Off: Off shows nothing, the painter running as fast as it goes and the run ending with the file). Export greyed
-// ai: while a stream plays or for the test stream (a stream is painted already; the test stream has no cycle), Laps and
-// ai: Display while Export is off, the whole fold while a run goes (its settings are the run's).
+// ai: file's blocks, 1 to 5 in halves, 2.5 by default, its value the cycles and the file's size where known; Maximum
+// ai: size; Hide codes, below). Export greyed while a stream plays or for the test stream (a stream is painted already;
+// ai: the test stream has no cycle), Laps, Maximum size and Hide codes while Export is off, the whole fold but Hide
+// ai: codes while a run goes (its settings are the run's).
 const val CYCLES_MIN = 1.0
 const val CYCLES_MAX = 5.0
 const val CYCLES_DEFAULT = 2.5
@@ -190,7 +193,7 @@ fun replayBytes(mb: Int): Long = replayMb(mb).toLong() shl 20
 // ai: it from its next frame, no configure); kept as the sender's four, "a,b,c,d" (refreshText, refreshOf), as the
 // ai: sender's stats carry them.
 const val REFRESH_MAX = 30   // ai: the library's (liblizard/include/lizard.h LIZ_REFRESH_MAX), the word's largest delay
-val REFRESH_GROUPS = listOf("6/7" to listOf(0), "3/4" to listOf(1), "2/3" to listOf(2), "1/2" to listOf(3))
+val REFRESH_GROUPS = listOf("6/7", "3/4", "2/3", "1/2")   // ai: a slider a code rate, its index the rate's
 
 // ai: a kept text to the four delays: a missing or unreadable one 1, each held to 1..REFRESH_MAX
 fun refreshOf(text: String?): IntArray {
@@ -200,12 +203,12 @@ fun refreshOf(text: String?): IntArray {
 
 fun refreshText(every: IntArray): String = every.joinToString(",")
 
-// ai: choose(rates, value): the group's code rates, each to take the value
-fun rateRefreshSettings(every: IntArray, choose: (rates: List<Int>, value: Int) -> Unit): List<Setting> =
-    REFRESH_GROUPS.map { (title, rates) ->
-        val v = every[rates[0]]
+// ai: choose(rate, value): the code rate's index (0 the 6/7 to 3 the 1/2) and its delay
+fun rateRefreshSettings(every: IntArray, choose: (rate: Int, value: Int) -> Unit): List<Setting> =
+    REFRESH_GROUPS.mapIndexed { rate, title ->
+        val v = every[rate]
         Slide(title, "$v", v.toFloat(), 1f..REFRESH_MAX.toFloat(), REFRESH_MAX - 2) { x ->
-            val n = x.roundToInt().coerceIn(1, REFRESH_MAX); if (n != v) choose(rates, n) }
+            val n = x.roundToInt().coerceIn(1, REFRESH_MAX); if (n != v) choose(rate, n) }
     }
 
 // ai: Receive's Focus (2026-11-16, both apps' Camera fold, after Zoom; the camera's "focus" control, the session's set
@@ -266,9 +269,9 @@ private fun <T> ChipsView(c: ChipChoice<T>) = Field(c.title, enabled = c.enabled
     Chips { for ((k, label) in c.options) Chip(label, k == c.value, c.enabled && c.enabledFor(k)) { if (k != c.value) c.choose(k) } }
 }
 
-// ai: A count's slider whose leftmost step is auto (send.html #blocks and #subchAuto, 2026-10-05): the setting `value` (0
-// ai: auto), `shown` what auto takes now (0 while unknown), `range` the counts by hand; its value "Auto, <text>" while
-// ai: what auto takes is known (`auto` names the leftmost step: the phone's Brightness "System")
+// ai: A slider whose leftmost step is auto (2026-10-05): the setting `value` (0 auto), `shown` what auto takes now (0
+// ai: while unknown), `range` the values by hand; its value "Auto, <text>" while what auto takes is known (`auto` names
+// ai: the leftmost step: the phone's Brightness "System")
 fun autoSlide(title: String, value: Int, shown: Int, range: IntRange, text: (Int) -> String, done: (() -> Unit)?, auto: String = "Auto",
               choose: (Int) -> Unit): Slide {
     val isAuto = value == 0

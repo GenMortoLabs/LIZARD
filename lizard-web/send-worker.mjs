@@ -19,7 +19,7 @@
 // ai: Under the page's GPU encoder (gpu/encoder.mjs, since 2026-09-29) frames are asked for a batch at a time
 // ai: ("frames": count frames from seq) and come back as their blocks alone, one buffer, frame after frame, each codes x
 // ai: blocksPerFrame x 472 bytes; the page encodes them. The test stream's come as their ids alone (test, 2026-11-15):
-// ai: the encoder makes each payload from its id on the device (BLAKE3, SPEC 9.3), so nothing here hashes.
+// ai: the encoder makes each payload from its id on the device (BLAKE3, liblizard/src/xfer.h stream_fill), so nothing here hashes.
 // ai: Rate refresh (refresh.mjs, the page's "refresh", sent with every start too): a block of a held rate repeats the
 // ai: id at its place in the frame before, so only the new places take ids (the transfer's schedule, or the test
 // ai: stream's from baseId); the frame before is forgotten at start, an accepted respec and stop.

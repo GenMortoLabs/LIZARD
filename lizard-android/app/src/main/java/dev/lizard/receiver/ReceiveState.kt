@@ -427,9 +427,19 @@ class ReceiveState(private val a: MainActivity) {
         val m = modes.firstOrNull { it.size == cur.size && it.format == cur.format && it.sameRate(r) } ?: return
         pickMode(m)
     }
+    // ai: The modes picked and not yet the session's (2026-11-24): the session takes a pick on its own thread, a camera
+    // ai: restart a pick, so its description names the mode it last started until then; read as the field's value, a
+    // ai: second pick made while the first restarted put the first back on the chip until the second's restart (taps
+    // ai: "too fast"). The field keeps the newest pick until the session settles on it, or on a mode none of the picks
+    // ai: (and not the one before them) is: one it ran in their place (the lock's rate) or kept on a refusal.
+    private var modePicks = emptyList<Int>()   // ai: main's: the picks' indices, the newest last
+    private var pickedFrom = -1                // ai: main's: the mode the session kept before them
+    private var keptIndex = -1                 // ai: main's: the mode the session keeps (its description's kept.mode)
     private fun pickMode(m: Mode) {
         mode = m
         if (session == null || camId.isEmpty()) { chosen = m; return }
+        if (modePicks.isEmpty()) pickedFrom = keptIndex
+        modePicks = modePicks + m.index
         later { sizePreview(m); use { it.set("mode", m.index.toDouble()) } }
     }
     // ai: Settings' zoom: the camera moved live and the value kept for its crop (session.h set)
@@ -525,6 +535,7 @@ class ReceiveState(private val a: MainActivity) {
     private fun phaseTo(p: RxPhase) {
         if (p == phase) return
         phase = p
+        if (p is RxPhase.Error) modePicks = emptyList()   // ai: a pick that would not start: the field shows what the session has
         a.onPhase(p)
     }
 
@@ -583,13 +594,18 @@ class ReceiveState(private val a: MainActivity) {
         camJson = cj
         val j = parse(cj) ?: return
         val info = j.obj("info") ?: return
-        camId = info.str("id").removePrefix("android:")
+        val id = info.str("id").removePrefix("android:")
+        if (id != camId) modePicks = emptyList()   // ai: another camera's modes: the picks' indices were the last one's
+        camId = id
         lockBar = j.str("lockBar")
         val ms = modesOf(j)
         modes = ms
-        val started = if ("mode" in j) j.num("mode").toInt() else -1
+        // ai: the mode streaming, else the one a start takes (the session's "mode" is the one started last, streaming or not)
+        val started = if ("mode" in j && j.flag("streaming")) j.num("mode").toInt() else -1
         val kept = j.obj("kept")
-        mode = ms.getOrNull(if (started >= 0) started else kept?.let { if ("mode" in it) it.num("mode").toInt() else -1 } ?: -1) ?: mode
+        keptIndex = kept?.let { if ("mode" in it) it.num("mode").toInt() else -1 } ?: -1
+        if (modePicks.isNotEmpty() && (started < 0 || started == keptIndex) && (keptIndex == modePicks.last() || (keptIndex !in modePicks && keptIndex != pickedFrom))) modePicks = emptyList()
+        if (modePicks.isEmpty()) mode = ms.getOrNull(if (started >= 0) started else keptIndex) ?: mode
         val z = j.objs("controls")?.firstOrNull { it.str("id") == "zoom" }
         zoomRange = z?.let { it.num("min").toFloat()..maxOf(it.num("min").toFloat() + 0.1f, it.num("max").toFloat()) }
         val f = j.objs("controls")?.firstOrNull { it.str("id") == "focus" }

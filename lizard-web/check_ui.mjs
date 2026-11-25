@@ -225,12 +225,12 @@ const SIZES = [
       await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "0"; e.dispatchEvent(new Event("change")); })()`);
       const back = await evaluate(s, `[localStorage.getItem("recv:stats"), document.getElementById("blocksTitle").textContent, document.getElementById("blocksOut").textContent, document.getElementById("ring").value].join(" / ")`);
       check(back === `0 / Density / 26.7 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
-      // ai: Refresh's delays (2026-11-17, refresh.mjs; Rate refresh 2026-11-12): four sliders 1 to 60 in Refresh after
+      // ai: Refresh's delays (2026-11-17, refresh.mjs; Rate refresh 2026-11-12): four sliders 1 to 30 in Refresh after
       // ai: FPS (6/7, 3/4, 2/3, 1/2; 6/7 and 3/4 one until 2026-11-22), 1 each by default; one moved to 13 kept over a reload (send:refresh67), its
       // ai: label 13 before the first paint (the inline script's) and after the codec; set back to 1 for the steps after
       const REF = `["refresh67", "refresh34", "refresh23", "refresh12"].map((id) => { const e = document.getElementById(id), o = document.getElementById(id + "Out"); return e ? [e.closest("details")?.id, e.type, e.min, e.max, e.value, o?.textContent].join(":") : "none"; }).join(" ")`;
       const refAt = await evaluate(s, REF);
-      check(refAt === ["67", "34", "23", "12"].map(() => "foldRefresh:range:1:60:1:1").join(" "), `send ${z.name}: Refresh's delays in Refresh, four sliders 1 to 60 at 1 (${refAt})`);
+      check(refAt === ["67", "34", "23", "12"].map(() => "foldRefresh:range:1:30:1:1").join(" "), `send ${z.name}: Refresh's delays in Refresh, four sliders 1 to 30 at 1 (${refAt})`);
       await evaluate(s, `(() => { const e = document.getElementById("refresh67"); e.value = "13"; e.dispatchEvent(new Event("change")); })()`);
       await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstRefresh = document.getElementById("refresh67Out")?.textContent ?? null; });` });
       await navigate(s, SEND);

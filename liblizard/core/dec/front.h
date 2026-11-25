@@ -33,7 +33,7 @@ struct Consts {
   uint32_t TILE, B_CEIL;
   double CAP_MS;
   uint32_t TWIN_FRAMES, TWIN_ROUNDS, VERSION_MIN, VERSION_MAX, SLOTS, ARGS_WORDS, argsWords, COUNTS, REC_BYTES, PAYLOAD;
-  // ai: the anchors' (gpu/glsl/anchors.mjs): anchors a frame, and vec4f a frame of its record
+  // ai: the anchors' (gpu/slang/anchors.mjs): anchors a frame, and vec4f a frame of its record
   uint32_t ANCH_K = 0, ANCH_REC = 0, ANCH_GS = 0;
   std::map<std::string, uint32_t> ARGS_SLOT;
   static Consts of(const json& c);
@@ -59,20 +59,21 @@ struct BackLane {
 struct Lane {
   int B = 0, slotsG = 0;
   BufP dumpBuf;   // ai: LIZ_DUMP_S's copy of the back half's spectrum, made on the first batch that dumps
+  BufP r1Buf;     // ai: LIZ_FINDER's copy of round 1's quads, scores and result (front.cpp run), made on the first batch that dumps
   bool busy = false, watched = false;
   uint32_t W = 0, H = 0;
   BufP peaksBuf, selUni, selUni2, framesBuf, mapsBuf, countsBuf, readingsBuf, candBuf, quadsBuf, scoreBuf, selBuf, resultBuf, p5Uni, ldUni, measBuf, residBuf;
-  GroupP refitGroup, refitPostGroup, pickGroup;   // ai: refitPostGroup: the tree's front.refitPost
+  GroupP refitGroup, pickGroup;
   // ai: the anchors (SPEC 6.13): ANCH_FIND's records (a vec4f an anchor) and ANCH_FIT's (ANCH_REC vec4f a frame,
   // ai: which pass 1 reads), no clear (every one a batch reads is written in it); their groups bind the texture
   // ai: (ensure's); ANCH_REFIT's does not (made with the lane)
   BufP anchBuf, arecBuf;
   GroupP anchFindGroup, anchFitGroup, anchRefitGroup, anchNodesGroup;
-  // ai: the finder's second round (decoder.mjs, gpu/glsl/finder.mjs REDO): its frame records and its groups over them
+  // ai: the finder's second round (decoder.mjs, gpu/slang/finder.mjs REDO): its frame records and its groups over them
   BufP frames2Buf;
   GroupP pickGroup2, redoGroup, selGroup2, classifyGroup2, scoreGroup2, voteGroup2, peaksGroup2, gatherGroup2, completeGroup2, traceGroup2;
   // ai: PEAKS's list (PEAK_LIST vec4f a frame) and its counts (decoder.mjs vlistBuf, vcountBuf); the second round's
-  // ai: grids, REDO's args and their one-frame template (decoder.mjs args2Buf, r2Uni; gpu/glsl/finder.mjs R2)
+  // ai: grids, REDO's args and their one-frame template (decoder.mjs args2Buf, r2Uni; gpu/slang/finder.mjs R2)
   BufP vlistBuf, vcountBuf, args2Buf, r2Uni;
   std::shared_ptr<wg::QuerySet> qs, qsProfile;
   BufP qsBuf, qsProfileBuf;
@@ -127,12 +128,12 @@ struct FrameOut {
   bool empty = false;
   uint64_t tag = 0;   // ai: the caller's, as enqueued
   int ring = -1, version = 0, n = 0, size = -1;
-  int config = 0;   // ai: the configuration decoded at (version << 22 | the 6/7 count << 14 | the 2/3 << 7 | the 1/2), 0 none
+  int config = 0;   // ai: the configuration's first word decoded at (version << 24 | the 6/7 count << 16 | the 3/4 << 8 | the 2/3), 0 none
   struct { float found = 0, ring = -1; std::array<float, 8> corners{}; } finder;
   bool hasWord = false;
-  // ai: the frame's own word (src/fmt.h): its version and count, its 6/7, 2/3 and 1/2 blocks, and the sender's clock
+  // ai: the frame's own word (src/fmt.h): its version and count, its 6/7, 3/4, 2/3 and 1/2 blocks, and the sender's clock
   // ai: (fps 0 to 240, 0 a still; delay 1 to 30, its places' largest)
-  struct { int version = 0, count[3] = {0, 0, 0}, fps = 0, delay = 0; } word;
+  struct { int version = 0, count[4] = {0, 0, 0, 0}, fps = 0, delay = 0; } word;
   int anchors = 0;   // ai: result word 31: the anchors ANCH_FIT found on the frame (0: the frame not found)
   std::vector<uint32_t> counts;       // ai: COUNTERS a frame
   std::vector<uint32_t> backCounts;   // ai: the back half's COUNTS a frame
@@ -254,13 +255,13 @@ class FrontHalf {
   std::vector<std::string> timing;   // ai: the forms being timed, while their submit runs
   // ai: when the decoder was made: now()'s zero (the receiver keeps one across the decoders it makes)
   std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
-  // ai: The anchors (SPEC 6.13; gpu/glsl/anchors.mjs, the tree's `anch`): ANCH_FIND, ANCH_PREDICT (on ANCH_REFIT's
+  // ai: The anchors (SPEC 6.13; gpu/slang/anchors.mjs, the tree's `anch`): ANCH_FIND, ANCH_PREDICT (on ANCH_REFIT's
   // ai: layout and group), the border's second search (anchNodes: F7's NODES centred, on its layout, its own round's
-  // ai: group, anchNodesGroup), ANCH_REFIT and ANCH_FIT after F7's REFIT_POST in its refit's pass, the C's order; a
+  // ai: group, anchNodesGroup), ANCH_REFIT and ANCH_FIT after F7's REFIT in its refit's pass, the C's order; a
   // ai: batch with no F7 runs ANCH_FIND and ANCH_FIT alone. Pass 1 reads their records.
   Pipe anchFind, anchFit, anchRefit, anchPredict, anchNodes, anchSums;
   BufP anchUni;
-  // ai: The develop (enqueueRaw; the tree's spv/ingest_develop.spv, from core/ingest/develop.comp): its pipeline, its
+  // ai: The develop (enqueueRaw; the tree's spv/ingest_develop.spv, from core/ingest/develop.slang): its pipeline, its
   // ai: layout (the staged samples, the gamma table, the luma out) and the table (develop.h gammaLut)
   std::shared_ptr<wg::Pipeline> developPipe;
   std::shared_ptr<wg::BindGroupLayout> developBgl;
@@ -292,7 +293,7 @@ class FrontHalf {
   Slot* enqueueCamera(class CameraIngest& ci, AHardwareBuffer* hb, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint64_t tag = 0);
   // ai: A frame in a format developed to luma (ingest/develop.h, 2026-10-27): the w x h crop at (x, y) of the
   // ai: developed frame, its samples staged here as they are (any thread, as enqueueLuma), developed on the device by
-  // ai: the batch that takes the slot (develop.comp) and copied into its layer. Null when every slot is staged.
+  // ai: the batch that takes the slot (develop.slang) and copied into its layer. Null when every slot is staged.
   Slot* enqueueRaw(const RawFrame& r, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint64_t tag = 0);
   // ai: A frame already on this decoder's device (2026-11-15: the GPU painter's ring on the same wg::Device, a round
   // ai: trip that never leaves the GPU; the lab's large-file run): w x h grey bytes of buf from offset, rows stride
@@ -335,7 +336,7 @@ class FrontHalf {
   GroupP netGroup(Lane& ln, const Pipe& pipe, wg::Buffer& buf, bool second = false);
   void backLane(Lane& ln);
   void bindPicture(Lane& ln);
-  void encodeBack(wg::Encoder& e, Lane& ln, int frames, const std::function<void(const char*)>& begin);
+  void encodeBack(wg::Encoder& e, Lane& ln, const std::function<void(const char*)>& begin);
   void makeLanes(int n);
   void makeRing(int R, uint32_t W, uint32_t H);
   void destroyRing();

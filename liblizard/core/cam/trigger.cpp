@@ -193,7 +193,6 @@ void TriggerClock::loop() {
     const bool moved = moved_;
     moved_ = false;
     firing_ = true;
-    due_ = due;
     lk.unlock();
     sleepUntil(due);
     const int64_t at = steadyNs();

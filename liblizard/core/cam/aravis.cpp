@@ -40,7 +40,7 @@
 // ai: than it); waits for the free run's frames still on their way (none for 50 ms; still coming a second on, the
 // ai: camera runs free whatever it says: free run, the bar why); fires one trigger and waits for its frame (300 ms,
 // ai: three tries; none back: the trigger put off again, free run, the bar saying why from the next start); then begins
-// ai: the schedule at a period of 1 / the mode's rate less 0.1% (the desktop's Lock.kt's: the camera a little fast
+// ai: the schedule at a period of 1 / the mode's rate less 0.1% (the camera a little fast
 // ai: against a display at that rate, so the lock's moves are delays). Every change is kept and put back at stop. Each
 // ai: frame matched to its trigger (TriggerClock::match) has its trigger's deadline as its time, and one Capture on the
 // ai: capture thread after the frame's sink: that time, delayed where the trigger was the one a delay moved (or a lost

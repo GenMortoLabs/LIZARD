@@ -1,5 +1,6 @@
 #include "ldpc.h"
 #include "ldpc_base.h"
+#include "ldpc_stop.h"
 #include "simd.h"
 #include <stdlib.h>
 #include <string.h>
@@ -21,16 +22,9 @@ static int views_neon(ldpc_t *c);
 #endif
 
 // ai: The rate indices are the format's four, 2, 3, 4 and 6 (1/2, 2/3, 3/4, 6/7); 0, 1 and 5 (1/4, 1/3, 5/6) were lab
-// ai: rates (archive/ldpc-lab-rates/) and have no code. norm is the min-sum scale in sixteenths, 13 at every rate.
-typedef struct { int norm; const char *name; double r; } profile_t;
-static const profile_t PROFILE[LDPC_RATES] = {
-  [2] = { 13, "1/2", 0.5 },
-  [3] = { 13, "2/3", 2.0 / 3 },
-  [4] = { 13, "3/4", 0.75 },
-  [6] = { 13, "6/7", 6.0 / 7 },
-};
+// ai: rates (archive/ldpc-lab-rates/) and have no code. NORM is the min-sum scale in sixteenths, 13 at every rate.
+static const int NORM[LDPC_RATES] = { [2] = 13, [3] = 13, [4] = 13, [6] = 13 };
 const char *const ldpc_rate_name[LDPC_RATES] = { [2] = "1/2", [3] = "2/3", [4] = "3/4", [6] = "6/7" };
-double ldpc_rate_value(int rate) { return rate >= 0 && rate < LDPC_RATES ? PROFILE[rate].r : 0; }
 
 static int mod(int a, int z) { a %= z; return a < 0 ? a + z : a; }
 // ai: the format's table at a rate index (ldpc_base.h), or none
@@ -52,7 +46,7 @@ int ldpc_init(ldpc_t *c, int rate) {
   if (!base) return -1;
   const int z = base->z, mb = base->mb, kb = base->kb;
   const short *shift = base->shift;   // ai: [mb][kb]
-  c->z = z; c->mb = mb; c->kb = kb; c->rate = rate; c->norm = PROFILE[rate].norm;
+  c->z = z; c->mb = mb; c->kb = kb; c->rate = rate; c->norm = NORM[rate];
   c->n = (kb + mb) * z; c->k = kb * z; c->m = mb * z; c->np = base->np * z; c->nt = c->n - c->np;
 
   int edges = 0;
@@ -1016,14 +1010,86 @@ static int layers_parity_w4(const ldpc_t *c, int16_t *const *vw, int count, int 
 }
 #endif
 
+// The learned stop (ldpc_stop.h, gen/ldpc_stop.mjs): one small net a code gives up on a codeword that will not clear,
+// read after every iteration but the last on the decoder's state alone: the violated checks now (bad), their running
+// minimum (low), after iteration 1 (first) and after the iteration before (prev), the iteration t, and the posteriors'
+// growth, min(256 S_t / S_1, 65535) in integers, S the sum over the n posteriors of min(|L|, 1016). Two ReLU layers,
+// each hidden unit from its bias adding weight times input in input order (a multiply, then an add), the output's
+// products added in unit order; given up where the score is under the code's T. The same floats on every target, the
+// GPU kernel's arithmetic (gpu/slang/back_tiers.mjs). Trained to a cap of 60 (LDPC_STOP_CAP) at a budget of one clearing
+// codeword lost in 1,000; the decline gate before it is the caller's.
+static const ldpc_stop_t *stop_for(const ldpc_t *c) {
+  for (int i = 0; i < 4; i++) if (LDPC_STOPS[i].m == c->m) return &LDPC_STOPS[i];
+  return 0;
+}
+// the sum of min(|p_i|, 1016) over n int16 posteriors, exact
+static long stop_mag(const int16_t *p, int n) {
+  long s = 0;
+  int i = 0;
+#if defined(OB_X86)
+  __m128i acc = _mm_setzero_si128();
+  const __m128i cap = _mm_set1_epi16(1016), one = _mm_set1_epi16(1);
+  for (; i + 8 <= n; i += 8) acc = _mm_add_epi32(acc, _mm_madd_epi16(_mm_min_epi16(_mm_abs_epi16(_mm_loadu_si128((const __m128i *)(p + i))), cap), one));
+  int32_t t[4];
+  _mm_storeu_si128((__m128i *)t, acc);
+  s = (long)t[0] + t[1] + t[2] + t[3];
+#elif defined(OB_NEON)
+  int32x4_t acc = vdupq_n_s32(0);
+  const int16x8_t cap = vdupq_n_s16(1016);
+  for (; i + 8 <= n; i += 8) acc = vpadalq_s16(acc, vminq_s16(vabsq_s16(vld1q_s16(p + i)), cap));
+  s = vaddvq_s32(acc);
+#endif
+  for (; i < n; i++) { const int v = p[i] < 0 ? -p[i] : p[i]; s += v < 1016 ? v : 1016; }
+  return s;
+}
+// a hidden layer: out_j = max(0, b_j + sum_k Wt[k H + j] x_k), four units a vector where there are vectors
+static void stop_layer(const float *Wt, const float *b, const float *x, int nin, float *out) {
+  enum { H = LDPC_STOP_H };
+  for (int j = 0; j < H; j += 4) {
+#if defined(OB_X86)
+    __m128 a = _mm_loadu_ps(b + j);
+    for (int k = 0; k < nin; k++) a = _mm_add_ps(a, _mm_mul_ps(_mm_loadu_ps(Wt + k * H + j), _mm_set1_ps(x[k])));
+    _mm_storeu_ps(out + j, _mm_max_ps(a, _mm_setzero_ps()));
+#elif defined(OB_NEON)
+    float32x4_t a = vld1q_f32(b + j);
+    for (int k = 0; k < nin; k++) a = vaddq_f32(a, vmulq_f32(vld1q_f32(Wt + k * H + j), vdupq_n_f32(x[k])));
+    vst1q_f32(out + j, vmaxq_f32(a, vdupq_n_f32(0)));
+#else
+    for (int l = 0; l < 4; l++) {
+      float a = b[j + l];
+      for (int k = 0; k < nin; k++) a = a + Wt[k * H + j + l] * x[k];
+      out[j + l] = a > 0 ? a : 0;
+    }
+#endif
+  }
+}
+typedef struct { int first, prev, low; long mag1; } stop_state_t;
+// after iteration it (0 based), bad > 0 checks violated, mag the posteriors' sum: 1 to give up
+static int stop_give_up(const ldpc_stop_t *n, stop_state_t *st, int bad, long mag, int it) {
+  if (it == 0) { st->first = st->prev = st->low = bad; st->mag1 = mag; }
+  if (bad < st->low) st->low = bad;
+  long g = st->mag1 > 0 ? (256 * mag) / st->mag1 : 256;
+  if (g > 65535) g = 65535;
+  const float x[6] = { (float)bad, (float)st->low, (float)st->first, (float)st->prev, (float)(it + 1), (float)g };
+  st->prev = bad;
+  float h1[LDPC_STOP_H], h2[LDPC_STOP_H];
+  stop_layer(n->W1t, n->b1, x, 6, h1);
+  stop_layer(n->W2t, n->b2, h1, LDPC_STOP_H, h2);
+  float s = n->w3[0] * h2[0];
+  for (int j = 1; j < LDPC_STOP_H; j++) s = s + n->w3[j] * h2[j];
+  return s < n->T;
+}
+
 int ldpc_decode(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter) { return ldpc_decode_stall(c, llr, out, max_iter, 0, 0); }
 
 // stall_it > 0: a block that will never decode is let go early. Such a block makes no headway at all: its count of
 // violated checks stays where the first iteration left it, while one that is merely slow has brought it down. So
 // the count after iteration stall_it is held against the count after the first, and the block is given up (-3) if
 // it is still above stall_ratio of it. The two counts replace those iterations' cleared test, so they cost nothing.
-int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter, int stall_it, float stall_ratio) {
+// stop: the learned stop in place of the stall rule (-4 when it gives up).
+static int decode_run(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter, int stall_it, float stall_ratio, const ldpc_stop_t *stop) {
   int z = c->z, zp = c->zp, mb = c->mb, used = -1, first = 0;
+  stop_state_t st = { 0, 0, 0, 0 };
   int16_t *L = c->wl, *Q = c->wq;
 #ifdef OB_LDPC_W4
   const int four = c->w4 && c->wide != -1;
@@ -1071,6 +1137,16 @@ int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_
       layer_scatter(c, r, Q);
     }
 #ifdef OB_LDPC_W4
+    if (four && stop) {
+      // the learned stop: the violated checks counted whole every iteration, the posteriors' sum from w4's third copy
+      // (the data columns, past 2z, never stale) and wl (the parity)
+      const int bad = layers_parity_w4(c, vw, 1, 0);
+      if (!bad) { used = it + 1; break; }
+      long mag = stop_mag(c->wl + c->k, c->m);
+      for (int j = 0; j < c->kb; j++) mag += stop_mag(c->w4 + (size_t)j * 4 * z + 2 * z, z);
+      if (it + 1 < max_iter && stop_give_up(stop, &st, bad, mag, it)) { used = -4; break; }
+      continue;
+    }
     if (four) {
       // ai: The stop, as the scalar path's below: the checks tested after every iteration (the layers in the order the
       // ai: iteration updated them), a word whose every check holds stops there; at stall_it the violated checks are
@@ -1085,7 +1161,11 @@ int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_
       continue;
     }
 #endif
-    if (stall_it > 0 && (it == 0 || it == stall_it - 1)) {
+    if (stop) {
+      const int bad = layers_unsat(c, Q);
+      if (!bad) { used = it + 1; break; }
+      if (it + 1 < max_iter && stop_give_up(stop, &st, bad, stop_mag(L, c->n), it)) { used = -4; break; }
+    } else if (stall_it > 0 && (it == 0 || it == stall_it - 1)) {
       int bad = layers_unsat(c, Q);
       if (!bad) { used = it + 1; break; }
       if (it == 0) first = bad;
@@ -1115,6 +1195,10 @@ int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_
   for (int chk = 0; chk < c->m; chk++) out[c->k + chk] = L[c->k + (chk % mb) * z + chk / mb] < 0;
   return used;
 }
+int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter, int stall_it, float stall_ratio) {
+  return decode_run(c, llr, out, max_iter, stall_it, stall_ratio, 0);
+}
+int ldpc_decode_stop(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter) { return decode_run(c, llr, out, max_iter, 0, 0, stop_for(c)); }
 
 // The code's shape and its block-row tables, for a decoder running somewhere else (gpu/back/ldpc.mjs).
 // dims: n, k, m, z, zp, mb, kb, norm, slots_max, slots_total, edges. lay: lay_ptr[mb + 1], then lay_col and

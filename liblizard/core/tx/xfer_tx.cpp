@@ -206,7 +206,7 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, int 
     : size_(size_t{1} << pickLog2(length, sbLog2)), length_(length), data_(data) {
   sbLog2 = pickLog2(length, sbLog2);
   xfer_header_t h{};
-  if (xfer_header_init(&h, length, sbLog2)) throw std::runtime_error("the file is too large for 2^" + std::to_string(sbLog2) + " chunks");
+  if (xfer_header_init(&h, length, sbLog2)) throw std::runtime_error("the file is too large for source blocks of 2^" + std::to_string(sbLog2) + " bytes");
   const uint32_t C = static_cast<uint32_t>((length + size_ - 1) / size_);
   sourceBlocks_ = C;
   len_.resize(C); K_.resize(C); enc_.resize(C); key_.assign(C, 0); cnt_.assign(C, 0);

@@ -84,8 +84,6 @@ class Store {
   };
   virtual std::unique_ptr<Source> source(uint32_t c) { (void)c; return nullptr; }
   virtual std::shared_ptr<Out> output() { return nullptr; }
-  // ai: a failure found off the receiving end's thread (a solver's write), reported as the store's
-  void failWith(const std::string& s) { fail(s); }
   // ai: the output verified: its path for a file store, "" for memory (the bytes then in data()); a failure sets error
   virtual std::string finish(const std::string& name) = 0;
   // ai: the finished file's bytes where the store keeps them in memory, else null

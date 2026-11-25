@@ -1,5 +1,5 @@
 // ai: The camera's frames as VideoFrames for the receiver's CPU pool (recv.mjs sendPoolFrame): the page hands a worker the
-// ai: frame with the crop it would have grabbed, and the worker copies the crop to luma (recv-worker.mjs lumaOf), so no
+// ai: frame with the crop it would have grabbed, and the worker copies the crop to luma (lumaOf, below, run by recv-worker.mjs), so no
 // ai: canvas is drawn or read back on the page. frameTap is the page's half, lumaOf the worker's. No top-level await:
 // ai: workers import it.
 
@@ -112,7 +112,7 @@ function resample(plane, po, ps, pw, ph, u0, du, v0, dv, w, h) {
   return out;
 }
 
-// ai: The grey range a frame arrived with (both decode workers, every 32nd frame): the 5th to 95th percentile's width,
+// ai: The grey range a frame arrived with (the decode worker, every 32nd frame): the 5th to 95th percentile's width,
 // ai: the median and the shares pinned at 255 and 0, over the middle half (every second pixel of every second row), so
 // ai: the surround and the frame do not vote. step: bytes a pixel (4 for RGBA, the first byte read).
 export function greyLevels(px, w, h, step) {

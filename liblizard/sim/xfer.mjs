@@ -210,9 +210,8 @@ export class XferSender {
   // given): source blocks, every source block made (makeSourceBlock's results), or cvs, every source block's chaining value, the source blocks then coming
   // one at a time (add) while frames go. Their fountains held by remote: its fetch(ids) gives a Map of id to block for
   // the ids of those source blocks, its free() lets them go.
-  // STREAMING (2026-11-06; the native sender's, core/tx/xfer_tx.h): with cvs the root and the header are made at once; until the last source block is added a frame carries the header (where it has more than one
-  // slot, or nothing is in yet, or every other frame of one) and the source blocks added so far in turn, fresh symbols each
-  // (warm); then the carousel, the symbols going on. A receiver solves each source block as its symbols come in.
+  // STREAMING (2026-11-06; the native sender's, core/tx/xfer_tx.h): with cvs the root and the header are made at once; until the last source block is added every slot is the header
+  // (warm), so every source block starts the carousel level; then the carousel, the symbols going on. A receiver solves each source block as its symbols come in.
   // SEED (2026-11-14, the native sender's): each source block's first symbol, each round's order of the source blocks, each frame's
   // shuffle and the session's TOI (sessionToi) drawn from `seed` (random where none is given; reseed before the first
   // frame), so no send repeats another's ids or their places, and a send repeated with its seed is the same session.
@@ -236,7 +235,7 @@ export class XferSender {
     this.sourceBlocks = C; this.sbLog2 = sbLog2; this.size = size; this.length = length; this.Encoder = Encoder;
     this.len = Array.from({ length: C }, (_, c) => Math.min(size, length - c * size));
     this.K = new Uint32Array(C); this.enc = new Array(C).fill(null);
-    this.ready = new Uint8Array(C); this.made = 0; this.cvs = C >= 2 ? new Uint8Array(32 * C) : null; this.remote = remote;
+    this.made = 0; this.cvs = C >= 2 ? new Uint8Array(32 * C) : null; this.remote = remote;
     let ks = null;
     if (cvs) this.cvs.set(cvs);
     else {
@@ -258,7 +257,7 @@ export class XferSender {
     // ai: description always fits its session header
     this.nm = W.nameCut(name);
     this.hp = { root: W.put(root), out: M._malloc(PAYLOAD) };
-    this.carousel = null; this.key = new Uint32Array(C); this.cnt = new Float64Array(C); this.since = Infinity; this.frame = 0; this.turn = 0;
+    this.carousel = null; this.key = new Uint32Array(C); this.cnt = new Float64Array(C); this.since = Infinity; this.frame = 0;
     this.seedWith(seed ?? randomSeed());
     if (ks) ks.forEach((k, c) => this.add(c, k));
     if (!C) this.schedule();
@@ -268,7 +267,7 @@ export class XferSender {
   add(c, k) {
     if (!this.hp) return;   // let go (free) while a pool still made it
     this.K[c] = k.K; this.enc[c] = k.enc ?? null;
-    this.ready[c] = 1; this.made++;
+    this.made++;
     if (this.made === this.sourceBlocks) this.schedule();
   }
   // ai: The session header (src/xfer.h): the file's description (its own map), under the session's TOI (the seed's,
@@ -344,20 +343,10 @@ export class XferSender {
     this.frame++;
     return out;
   }
-  // A frame before every source block is in: the header (where it has more than one slot, or nothing is in yet, or every other
-  // frame of one), the rest the source blocks in so far in turn, each its next symbol; with none in, every slot the header
-  // (as the native sender's: core/tx/xfer_tx.cpp warm).
-  warm(B, out) {
-    const ready = [];
-    for (let c = 0; c < this.sourceBlocks; c++) if (this.ready[c]) ready.push(c);
-    let k = 0;
-    if (B > 1 || !ready.length || !(this.frame & 1)) out[k++] = ID_HEADER;
-    for (; k < B; k++) {
-      if (!ready.length) { out[k] = ID_HEADER; continue; }
-      const c = ready[this.turn++ % ready.length];
-      out[k] = idOf(c, esiOf(this.key[c], this.cnt[c]++));
-    }
-  }
+  // A frame before every source block is in: every slot the header, as the native sender's (core/tx/xfer_tx.cpp warm):
+  // source blocks sent as they were made would run the first made ahead for the whole transfer while the file waited on
+  // the last.
+  warm(B, out) { out.fill(ID_HEADER); }
 
   // What block `id` carries (an id of this sender's lists): 460 bytes into out.
   block(id, out) {

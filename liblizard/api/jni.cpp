@@ -254,7 +254,7 @@ void rxFree(JNIEnv*, jclass, jlong v) { liz_rx_free(h<liz_rx>(v)); }
 void rxFrame(JNIEnv* e, jclass, jlong v, jbyteArray blocks, jint count, jintArray out) {
   if (!holds(e, blocks, int64_t(count) * LIZ_BLOCK, "blocks") || !holds(e, out, 5, "out")) return;
   liz_verdict d{};
-  // ai: copied out first: the frame may solve a chunk and write the file, too long a time to hold a critical region
+  // ai: copied out first: the frame may solve a source block and write the file, too long a time to hold a critical region
   std::vector<uint8_t> b(size_t(count) * LIZ_BLOCK);
   if (count) e->GetByteArrayRegion(blocks, 0, jsize(b.size()), reinterpret_cast<jbyte*>(b.data()));
   const int rc = liz_rx_frame(h<liz_rx>(v), b.data(), count, &d);
@@ -495,8 +495,8 @@ extern "C" LIZ_API jint JNI_OnLoad(JavaVM* vm, void*) {
   gLizardExceptionInit = e->GetMethodID(gLizardException, "<init>", "(ILjava/lang/String;)V");
   if (!gLizardExceptionInit) return JNI_ERR;
   if (e->RegisterNatives(native, METHODS, sizeof METHODS / sizeof *METHODS) != JNI_OK) return JNI_ERR;
-  // ai: the receive session's (dev.lizard.SessionNative, jni_session.cpp), the same methods the desktop app's library
-  // ai: registers
+  // ai: the receive session's (dev.lizard.SessionNative, jni_session.cpp), the same methods the apps' own libraries
+  // ai: register
   if (!lizard::jni::registerSession(e)) return JNI_ERR;
   return JNI_VERSION_1_6;
 }

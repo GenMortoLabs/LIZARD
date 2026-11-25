@@ -141,14 +141,15 @@ static int replay(const std::string& run, int want, int threads, std::string mod
     ms.push_back(r.ms);
   }
   // ai: LIZ_PERFRAME=1: a line a frame, in frame order after the run, in lizard_gpu_check's form for the fields the C has
-  // ai: ("frame <index> found <0|1> ring <r> version <v> blocks <n> word <v>", word 0 where none read, then "count <a>
-  // ai: <t> <c>", the word's 6/7, 2/3 and 1/2 blocks), so one run of many cells
+  // ai: ("frame <index> found <0|1> ring <r> version <v> blocks <n> word <v>", word 0 where none read, then the pilots'
+  // ai: readings "r <r> sd <sd> r2 <r2> sd2 <sd2> psubch <n>" (codec.h pilot_*, psubch 0 where none were read), then
+  // ai: "count <a> <b> <t> <c>", the word's 6/7, 3/4, 2/3 and 1/2 blocks), so one run of many cells
   // ai: splits by frame (scripts/gpu/native/peaks.mjs readFrames)
   if (envOr("LIZ_PERFRAME", "") == "1")
     for (int i = 0; i < frames; i++) {
       const auto& r = res[(size_t)i];
-      printf("frame %d found %d ring %d version %d blocks %d word %d count %d %d %d\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.got, r.fr.word ? r.fr.version : 0,
-             r.fr.count[0], r.fr.count[1], r.fr.count[2]);
+      printf("frame %d found %d ring %d version %d blocks %d word %d r %g sd %g r2 %g sd2 %g psubch %d count %d %d %d %d\n", i, r.fr.found != 0, r.fr.ring, r.fr.version, r.got,
+             r.fr.word ? r.fr.version : 0, r.fr.pilot_r[0], r.fr.pilot_sd[0], r.fr.pilot_r[1], r.fr.pilot_sd[1], r.fr.pilot_subch, r.fr.count[0], r.fr.count[1], r.fr.count[2], r.fr.count[3]);
     }
   std::sort(ms.begin(), ms.end());
   std::sort(passMs.begin(), passMs.end());
@@ -164,8 +165,8 @@ static int replay(const std::string& run, int want, int threads, std::string mod
   if (threads == 1) {
     // ai: cpu/codec.h CPU_PROF_*, in their order
     const double per = 1.0 / frames;
-    printf("  stages, ms a frame: binarize %.2f, mesh %.2f, finder (points %.2f, turn %.2f, fit %.2f, score %.2f, marks %.2f, track %.2f), sample %.2f, detrend %.2f, transform %.2f, LLR %.2f, LDPC %.2f\n",
-           prof[0] * per, prof[1] * per, prof[2] * per, prof[3] * per, prof[4] * per, prof[5] * per, prof[6] * per, prof[7] * per, prof[8] * per, prof[9] * per, prof[10] * per, prof[11] * per, prof[12] * per);
+    printf("  stages, ms a frame: finder (grey marks %.2f, traced border %.2f, its lens %.2f, score %.2f, track %.2f), mesh %.2f, sample %.2f, detrend %.2f, transform %.2f, LLR %.2f, LDPC %.2f\n",
+           prof[0] * per, prof[2] * per, prof[3] * per, prof[4] * per, prof[5] * per, prof[1] * per, prof[6] * per, prof[7] * per, prof[8] * per, prof[9] * per, prof[10] * per);
   }
   return 0;
 }

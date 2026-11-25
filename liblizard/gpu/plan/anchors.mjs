@@ -1,4 +1,4 @@
-// ai: The anchors' constants and uniform (glsl/anchors.mjs ANCH_FIND, ANCH_PREDICT, ANCH_REFIT, ANCH_FIT; SPEC 6.13).
+// ai: The anchors' constants and uniform (slang/anchors.mjs ANCH_FIND, ANCH_PREDICT, ANCH_REFIT, ANCH_FIT; SPEC 6.13).
 import { RING_COUNT } from "./finder.mjs";
 import { ANCH_SIDE, ANCH_K, ANCH_REC, ANCH_SURF } from "./back_transform.mjs";
 

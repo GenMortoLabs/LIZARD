@@ -45,14 +45,14 @@ std::vector<uint32_t> spirv(const std::string& path) {
   return w;
 }
 
-// ai: JPEG-LS's median predictor (rx/lizfile.h), as zstd_med.comp
+// ai: JPEG-LS's median predictor (rx/lizfile.h), as zstd_med.slang
 inline int med(int a, int b, int c) {
   const int mx = a > b ? a : b, mn = a < b ? a : b;
   return c >= mx ? mn : c <= mn ? mx : a + b - c;
 }
 
 // ai: A block's plan from its counts: RLE (one value), raw, or Huffman with its code (an entry a value: its bits | its
-// ai: length << 16, as zstd_huf.comp takes it) and the table's description
+// ai: length << 16, as zstd_huf.slang takes it) and the table's description
 struct Plan {
   uint32_t mode = MODE_RAW, rle = 0;
   uint32_t code[256] = {};
@@ -131,7 +131,7 @@ struct Frame {
 // ai: a square's frame's bound: its residuals, each block's header and its literals' header (raw never past it)
 size_t frameBound(uint32_t n, uint32_t nb) { return size_t(n) + 16ull * nb + 64; }
 
-// ai: a stream's bits as zstd_huf.comp writes them: its symbols from the last to the first, each code least significant
+// ai: a stream's bits as zstd_huf.slang writes them: its symbols from the last to the first, each code least significant
 // ai: bit first, then the end mark; its bytes
 uint32_t streamCpu(const uint8_t* sym, uint32_t len, const uint32_t code[256], uint8_t* out) {
   uint64_t pos = 0;
@@ -344,7 +344,7 @@ void GpuZstd::codes(int set, std::mutex& devMu) {
   x.stage = 2;
 }
 
-// ai: a square's frame from its blocks' streams in the readback (p null: counted), as zstd_huf.comp placed them
+// ai: a square's frame from its blocks' streams in the readback (p null: counted), as zstd_huf.slang placed them
 void GpuZstd::assemble(Set& x, size_t q, uint8_t* p, size_t& bytes, std::string& bad) const {
   const uint32_t nb = nb_;
   const uint8_t* out = x.out_host;

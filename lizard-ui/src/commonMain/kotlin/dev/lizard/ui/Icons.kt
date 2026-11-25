@@ -9,9 +9,9 @@ import androidx.compose.ui.unit.dp
 
 // ai: The icons: Feather's (MIT) on a 24 grid, 2 px strokes, round caps and joins, as the web pages draw them
 // ai: (lizard-web/ui.mjs ICONS); and LIZARD's mark (lizard-web/icon.svg: the corner marks, the dark ring between them,
-// ai: a grey picture, on white), the bar's and the desktop window's. One set for both apps (2026-10-31; the Android app's
-// ai: vector drawables and the desktop's Parts.kt before). The Android launcher's icon and its shortcuts' stay
-// ai: resources (res/drawable), which the launcher reads.
+// ai: a lizard's scales in greys, on white), the bar's, with its desktop form (appIcon) the desktop window's. One set for
+// ai: both apps (2026-10-31; the Android app's vector drawables and the desktop's Parts.kt before). The Android
+// ai: launcher's icon and its shortcuts' stay resources (res/drawable), which the launcher reads.
 object Icons {
     private fun stroked(name: String, vararg d: String) = ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f).apply {
         for (p in d) addPath(addPathNodes(p), stroke = SolidColor(Fg), strokeLineWidth = 2f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round)

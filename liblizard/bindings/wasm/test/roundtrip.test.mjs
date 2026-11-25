@@ -19,12 +19,12 @@ test("version and vector paths", () => {
   assert.match(liz.version(), /^\d+\.\d+\.\d+$/);
   // ai: sizes 0 to 3 and past LIZARD-1024 are no format (LIZARD-64, size 4, the smallest), and a ring past the three is none
   assert.throws(() => liz.geometry({ blocks: 0 }));
-  assert.throws(() => liz.geometry({ blocks: 3 }));
   assert.throws(() => new liz.Encoder({ blocks: liz.MAX_BLOCKS + 1 }));
   assert.throws(() => liz.geometry({ blocks: 4, ring: liz.RINGS }));
   assert.equal(liz.blocksFor(0), 0);
   assert.equal(liz.blocksFor(liz.MAX_BLOCKS + 1), 0);
-  assert.equal(liz.blocksFor(3), 0);
+  assert.equal(liz.blocksFor(1), 2);
+  assert.equal(liz.blocksFor(3), 6);
   assert.equal(liz.blocksFor(4), 7);
   assert.equal(liz.simd(), BUILD !== "mvp", BUILD === "mvp" ? "the MVP build's scalar paths" : "the codec's vector paths in the wasm build");
 });
@@ -51,7 +51,7 @@ test("the format arithmetic is the web sender's", { skip: noSim }, async () => {
         for (let h = 200; h <= 2200; h += 211) {
           const gf = codes > 1 ? ((codes - 1) * 12) / (MODULES(256, r) + 2 * OB_QUIET) : 0;
           const room = Math.max(64, Math.min(w / (codes + gf), h));
-          assert.equal(liz.pick(w, h, { codes, ring: r }), pickVersion(room, 1024, r).subch / 16, `pick ${w} x ${h}`);
+          assert.equal(liz.pick(w, h, { codes, ring: r }), pickVersion(room, 16 * liz.MAX_BLOCKS, r).subch / 16, `pick ${w} x ${h}`);
           rows++;
         }
   // ai: every size in every ring, then 22 widths by 10 heights, one code and two, in every ring

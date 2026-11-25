@@ -69,7 +69,7 @@ import androidx.compose.ui.unit.dp
 // ai: library. The web's pages are the same shell (lizard-web/index.html, recv.html, send.html) and the words the same
 // ai: (Readout.kt). The camera runs on Receive alone, from entering it (or a resume there) to leaving it (or a pause, or
 // ai: Stop); the receive session (ReceiveState, the engine's), and a transfer partly in, outlives it as it
-// ai: outlives Stop. The launcher opens Home; `--es screen receive` (tools/phone/live.sh, arms.sh) and the launcher
+// ai: outlives Stop. The launcher opens Home; `--es screen receive` (am start over adb) and the launcher
 // ai: shortcut (publishShortcut) open Receive with the camera, in this activity when it runs (singleTop, onNewIntent).
 // ai: Received files land in Downloads (Received.kt, since 2026-10-31; the app's own library before).
 // ai: the phone's target size: buttons, fields and icon buttons 48 dp, the web's under a finger

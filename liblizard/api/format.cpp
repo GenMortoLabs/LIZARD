@@ -16,14 +16,14 @@ namespace liz {
 static constexpr int OB_MARGIN = 15;   // ai: the border's depth in modules (the 12-module corner mark and LIZARD_CP's 3)
 static constexpr double T_DISPLAY_CYCLE = 2.7, PI = 3.14159265358979323846;
 
-int ringIndex(int ring) {
+static int ringIndex(int ring) {
   if (ring == LIZ_RING_DEFAULT) return LIZARD_RING_DEFAULT;
   need(ring >= 0 && ring < LIZARD_RINGS, "ring is 0 to " + std::to_string(LIZARD_RINGS - 1) + " or LIZ_RING_DEFAULT, not " + std::to_string(ring));
   return ring;
 }
 static int spanOf(int r) { return 2 * LIZARD_RING[r]; }
 static int modulesOf(int r) { return spanOf(r) + 2 * OB_MARGIN; }
-static void needBlocks(int blocks) { need(blocks >= LIZ_MIN_BLOCKS && blocks <= LIZ_MAX_BLOCKS, "blocks is " + std::to_string(LIZ_MIN_BLOCKS) + " to " + std::to_string(LIZ_MAX_BLOCKS) + " (LIZARD-32 to LIZARD-1024), not " + std::to_string(blocks)); }
+static void needBlocks(int blocks) { need(blocks >= LIZ_MIN_BLOCKS && blocks <= LIZ_MAX_BLOCKS, "blocks is " + std::to_string(LIZ_MIN_BLOCKS) + " to " + std::to_string(LIZ_MAX_BLOCKS) + " (LIZARD-16 to LIZARD-1072), not " + std::to_string(blocks)); }
 
 liz_geometry geometryOf(const liz_format& f) {
   needBlocks(f.blocks);

@@ -1,5 +1,5 @@
 // ai: The sender's transfer made by a pool of workers (2026-11-06; the native sender's prepare across cores,
-// ai: liblizard/core/tx/xfer_tx.cpp). No source block reads another, so each worker (source block-worker.mjs) takes the next source block as it
+// ai: liblizard/core/tx/xfer_tx.cpp). No source block reads another, so each worker (source-block-worker.mjs) takes the next source block as it
 // ai: comes free and makes it whole (its fountain, its chaining value); the encoders' solves run in parallel too,
 // ai: as each worker keeps the fountains it made (a wasm heap's state cannot move to another), and so the fountains
 // ai: spread over the workers' heaps (one heap holds 2 GiB at most). A frame's blocks are fetched from the workers that
@@ -29,7 +29,8 @@ function link(w) {
 // ai: faster than 16, at twice the memory, about 30 MiB a worker), a core of its own about 2. A round first warms every
 // ai: worker (its codec loaded, its heap grown). A MiB, not a whole source block: still past a core's cache, at a quarter of
 // ai: the cost (whole source blocks took 1.16 s for 256 MiB that then took 0.57 s). Found once a page (the send worker's
-// ai: module lives as long), and only where it decides anything: more source blocks than half the threads.
+// ai: module lives as long), and only where it decides anything: more source blocks than half the threads. found: the
+// ai: workers kept, null until timed.
 let found = null;
 async function timeCores(calls, sample, sbLog2) {
   const n = calls.length, half = n >> 1;
@@ -38,10 +39,9 @@ async function timeCores(calls, sample, sbLog2) {
     await Promise.all(calls.slice(0, k).map((call) => call({ type: "trial", buf: sample, sbLog2 })));
     return performance.now() - t;
   };
-  const t0 = performance.now();
   await round(n);
   const a = half / await round(half), b = n / await round(n);
-  return { cores: b >= 1.5 * a ? n : half, half: a, all: b, ms: Math.round(performance.now() - t0) };
+  return b >= 1.5 * a ? n : half;
 }
 
 // ai: The file's transfer (XferSender's options in opts; the source block size src/xfer.h xfer_sb_log2_for's unless given),
@@ -50,13 +50,13 @@ async function timeCores(calls, sample, sbLog2) {
 // ai: throws "cancelled" (the source blocks made behind the return are the transfer's, never stopped so).
 export async function makeXfer(bytes, opts, { M, Encoder, workers = null, stopped = () => false }) {
   const sbLog2 = opts.sbLog2 ?? M._xfer_sb_log2_of(bytes.length), size = 2 ** sbLog2, C = Math.ceil(bytes.length / size);
-  if (sbLog2 < 0) throw new Error(`${bytes.length} B is more than the transfer carries (16,383 chunks of 16 MiB)`);
+  if (sbLog2 < 0) throw new Error(`${bytes.length} B is more than the transfer carries (65,535 chunks of 16 MiB)`);
   opts = { ...opts, sbLog2 };
   const n = navigator.hardwareConcurrency || 1, timed = workers == null && found == null && n >= 4 && C > n >> 1;
-  let P = Math.min(C, workers ?? found?.cores ?? n);
+  let P = Math.min(C, workers ?? found ?? n);
   if (P < 2) return new XferSender(bytes, { ...opts, M, Encoder });
   const ws = Array.from({ length: timed ? n : P }, () => new Worker(new URL("./source-block-worker.mjs", import.meta.url), { type: "module" }));
-  const calls = ws.map(link), owner = new Int32Array(C), meta = new Array(C);
+  const calls = ws.map(link), owner = new Int32Array(C);
   const free = () => { ws.forEach((w) => w.terminate()); calls.forEach((call) => call.end()); };
   try {
     const part = (c) => bytes.slice(c * size, Math.min(bytes.length, (c + 1) * size));
@@ -81,9 +81,7 @@ export async function makeXfer(bytes, opts, { M, Encoder, workers = null, stoppe
         return got;
       },
       free,
-      workers: P,
-      timing: timed ? found : null,   // ai: the cores' timing where this transfer made it (source blocks a second at half, at all)
-      made: null,                     // ai: settles once every source block is in xs (or a worker failed)
+      made: null,   // ai: settles once every source block is in xs (or a worker failed)
     };
     xs = new XferSender(null, { ...opts, M, Encoder, cvs, length: bytes.length, remote });
     // ai: the cores timed after the header (every thread's worker hashed: a short pass), the extra workers let go before
@@ -91,14 +89,13 @@ export async function makeXfer(bytes, opts, { M, Encoder, workers = null, stoppe
     const cores = async () => {
       if (!timed) return;
       found = await timeCores(calls, bytes.slice(0, Math.min(size, 2 ** 20)), sbLog2);
-      P = Math.min(C, found.cores);
+      P = Math.min(C, found);
       ws.splice(P).forEach((w) => w.terminate());
       calls.splice(P);
-      Object.assign(remote, { workers: P, timing: found });
     };
     remote.made = cores().then(() => pass(async (call, i, c) => {
       const plain = part(c), k = await call({ type: "make", c, sbLog2, buf: plain.buffer }, [plain.buffer]);
-      meta[c] = k; owner[c] = i;
+      owner[c] = i;
       xs.add(c, k);
     }));
     remote.made.catch(() => {});   // ai: the caller's to read; a transfer let go before it is whole ends it so

@@ -9,8 +9,8 @@
 //   registers, no block survives FEC  empty ~= processed    the channel
 //   registers, every block a repeat   repeat ~= processed   the picture is not changing
 //
-// Every result increments exactly one of withNew, repeat and empty (recv.mjs onResult), so
-// decodedFps + repeatFps + emptyFps === processedFps and the shares below are exact.
+// ai: Every result increments exactly one of withNew, repeat and empty (recv.mjs take), so
+// ai: decodedFps + repeatFps + emptyFps === processedFps and the shares below are exact.
 //
 // Pure, and takes only a stats row, so it runs over recorded rows in a test (scripts/exp/verdict_check.mjs).
 

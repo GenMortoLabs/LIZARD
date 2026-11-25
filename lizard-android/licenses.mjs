@@ -10,6 +10,7 @@ const NOTICES = [
   ["", "LICENSE"],
   ["", "NOTICE"],
   ["Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option", "liblizard/vendor/zstd/LICENSE"],
+  ["RaptorQ's constants (liblizard/src/rq_tables.h), from RFC 6330, under the Simplified BSD License of the IETF Trust's Legal Provisions", "liblizard/src/rq_tables.LICENSE"],
   ["volk (liblizard/core/third_party/volk)", "liblizard/core/third_party/volk/LICENSE.md"],
   ["JSON for Modern C++ (liblizard/core/third_party/json.hpp)", "liblizard/core/third_party/json.LICENSE.MIT"],
   ["BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option", "liblizard/vendor/blake3/LICENSE_A2"],

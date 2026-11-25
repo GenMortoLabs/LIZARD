@@ -1,7 +1,7 @@
 // ai: A camera frame in a format the decoders do not read as it is (2026-10-27, the Android app's Format: P010, RAW16,
 // ai: RAW10, RAW12), and its development to the 8-bit luma they read. One arithmetic, run in two places: on the CPU
 // ai: (developLuma: the C decoder's frames, and any receiver without a GPU develop), and on the GPU decoder's device
-// ai: inside its batch (stageRaw here, develop.comp there: the crop's samples staged as they are, developed into the
+// ai: inside its batch (stageRaw here, develop.slang there: the crop's samples staged as they are, developed into the
 // ai: slot's layer), byte for byte alike.
 // ai:
 // ai: P010: each sample's top byte (its 10 bits sit in the top of a little-endian 16-bit sample). RAW16, RAW10, RAW12:
@@ -42,7 +42,7 @@ void rawScales(const RawFrame& r, float k[4]);
 // ai: The developed frame's w x h from (ox, oy) into out, rows outStride apart (the CPU's develop).
 void developLuma(const RawFrame& r, uint32_t ox, uint32_t oy, uint32_t w, uint32_t h, uint8_t* out, size_t outStride);
 
-// ai: The GPU's develop (develop.comp) reads a staging buffer of a header of RAW_STAGE_HEADER words, then the rows of
+// ai: The GPU's develop (develop.slang) reads a staging buffer of a header of RAW_STAGE_HEADER words, then the rows of
 // ai: the plane about the crop, each `pitch` bytes (a multiple of 4), its first sample an even column of the plane.
 // ai: The header, in u32 words: the format's kind (0 P010, 1 RAW16, 2 RAW10, 3 RAW12), w, h, bin, pitch, pixelStride,
 // ai: the crop's first sample in a staged row, the CFA row of the first staged row (0 or 1), the black levels (4

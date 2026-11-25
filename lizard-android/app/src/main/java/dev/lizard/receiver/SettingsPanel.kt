@@ -66,7 +66,7 @@ internal fun MainActivity.devReadout(): String {
                 ", chunks ${file.int("sourceBlocksVerified")} of ${file.int("sourceBlocks")} verified${if (file.flag("verified")) ", whole" else ""}"
         })
     }
-    // ai: the phase lock (the session's, lock.h: PhaseLock.State's fields; NaN as null), or why it is off
+    // ai: the phase lock (the session's, liblizard/core/rx/phase_lock.h: PhaseLock::State's fields; NaN as null), or why it is off
     receive.lock?.let { p ->
         val real = { k: String -> (p[k] as? JsonPrimitive)?.doubleOrNull ?: Double.NaN }
         if ("off" in p) put("lock", "off: ${p.str("off")}")

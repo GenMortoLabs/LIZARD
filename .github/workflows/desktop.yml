@@ -1,5 +1,5 @@
 # The desktop app (Home, Send and Receive) built from a clean checkout for Linux (.deb), Windows (.msi) and macOS on
-# Apple Silicon (.dmg). On Linux once: the codec (Emscripten), wgsl2spv (naga) and glslang, the GPU tree (the painter's
+# Apple Silicon (.dmg). On Linux once: the codec (Emscripten), Slang, the GPU tree (the painter's
 # and the decoder's), and Windows' native library and the receiver's tools (cam_check, lizard_receive) cross-built with
 # MinGW-w64. Then each system builds its package with jpackage, a Java runtime inside (Linux and macOS their native
 # library too, macOS with MoltenVK beside it), keeps it as an artifact, and only then runs the receiver's checks,
@@ -21,7 +21,6 @@ permissions:
 
 env:
   EMSDK_VERSION: 6.0.9
-  NDK_VERSION: 27.1.12297006
   MOLTENVK_VERSION: v1.4.2
   TURBOJPEG_VERSION: 3.2.0
 
@@ -54,19 +53,6 @@ jobs:
           ~/emsdk/emsdk install "$EMSDK_VERSION"
           ~/emsdk/emsdk activate "$EMSDK_VERSION"
 
-      - name: wgsl2spv (cached)
-        uses: actions/cache@v4
-        with:
-          path: |
-            liblizard/gen/wgsl2spv/target
-            ~/.cargo/registry
-          key: wgsl2spv-${{ runner.os }}-${{ hashFiles('liblizard/gen/wgsl2spv/Cargo.lock') }}
-
-      - name: The NDK's shader tools
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
-
       # FFmpeg for the web's file camera (liblizard/ffmpeg/build.sh wasm), which the codec's build links into
       # lizard-media.wasm and builds where it is missing; cached by the script's hash and Emscripten's version
       - name: FFmpeg for wasm (cached)
@@ -80,8 +66,8 @@ jobs:
           source ~/emsdk/emsdk_env.sh
           liblizard/build.sh
 
-      # naga's wgsl2spv, and glslang 16.6.0 for the GPU tree's GLSL modules (the release build, checked by its sha256)
-      - name: wgsl2spv and glslang
+      # slang 2026.22 for the GPU tree's modules and the engine's shaders (the release build, checked by its sha256)
+      - name: Slang
         run: lizard-android/build.sh tools
 
       - name: The GPU tree

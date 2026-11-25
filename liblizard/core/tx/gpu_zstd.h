@@ -1,7 +1,7 @@
 // ai: Stream files' frames packed on the GPU (2026-11-18): each square of each frame in the sender's ring as one zstd
 // ai: frame (RFC 8878) of its median-predictor residuals, as a .lizard's entry is (rx/lizfile.h), every block of it
 // ai: its literals alone as zstd's four Huffman streams: no match search, so any zstd decoder reads it and the GPU does
-// ai: the work. On the GPU (zstd_med.comp, zstd_hist.comp, zstd_huf.comp): the residuals, each 128 KiB block's
+// ai: the work. On the GPU (zstd_med.slang, zstd_hist.slang, zstd_huf.slang): the residuals, each 128 KiB block's
 // ai: counts, then its four streams by the code built here; here, each block's code from its counts (zstd's own
 // ai: Huffman builder, lengths at most 11 bits, and its table's description), and the frames put together from the
 // ai: streams. A block of one value is an RLE block, a block the code would not shrink (or a short last one) a raw one.

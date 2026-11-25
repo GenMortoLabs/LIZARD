@@ -7,7 +7,7 @@
 // ai: end of the first cycle, and the file would otherwise be held in memory twice over. The header comes from the light
 // ai: alone, and the page's config names only the store (?store=memory).
 // ai: Every block names its file by its TOI (src/xfer.h, 2026-11-19; 0 none, a block under it ignored), and the receiver holds
-// ai: several transfers at once, a TOI each, from a header block or a directory's entry (SPEC 7.11): a data block of a
+// ai: several transfers at once, a TOI each, from its session header (the one control block): a data block of a
 // ai: TOI it holds goes to it; any other waits in the receiver (sim/xfer.mjs HOLD_BLOCKS, 0.5 MB) until a header of its
 // ai: TOI is read (it waited here until 2026-11-19). Every file it finishes is filed (offer).
 import { init as initRq, Decoder } from "../liblizard/sim/fountain.mjs";

@@ -10,14 +10,14 @@ import dev.lizard.ui.*
 // ai: default (the kept ones neither read nor written: Prefs.forget), the ones named applied; sending starts once the
 // ai: code area has a size, and after secs (8 unless named) of presenting the last presenter and sender stats are
 // ai: printed to stdout as one JSON line {"present": {...}, "sender": {...}} and the app exits 0. Any failure prints
-// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 4 to 67 (Pick.VERSION_MIN to VERSION_MAX); fps 1 to
+// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 1 to 67 (Pick.VERSION_MIN to VERSION_MAX); fps 1 to
 // ai: 60; size 25 to 100 (%); spacing 4 to 68 and margin 2 to 34 (modules); ring auto, 64, 128 or 256; full 0 or 1 (the
 // ai: window manager's full screen); vsync 0 or 1 (1 unless named); file=<path>[:<path>...] (files or folders in place
 // ai: of the test stream, as a pick or a drop gives them: one file as itself, else one tar, 2026-10-16; the paths split
 // ai: on the platform's separator, ';' on Windows); steps (2026-10-04, the app's own controls, which only a hand had
 // ai: moved): comma separated <seconds>:<action>, from when the presenter first presents, each as the control does it:
 // ai: full (Fullscreen, F11), max (the window maximized), pause, resume, stop, start, size=N, spacing=N, margin=N,
-// ai: codes=N, blocks=N (4 to 64) (each a slider's release), fps=N (any 1 to 60, a chip's or the
+// ai: codes=N, blocks=N (1 to 67) (each a slider's release), fps=N (any 1 to 60, a chip's or the
 // ai: slider's), vsync=0|1, enc=auto|gpu|cpu, rail, over (in full screen the column over the code, 2026-11-13), and the
 // ai: selection's (2026-10-23):
 // ai: add=<path>[:<path>...] (as a pick adds; ';' on Windows), remove=<an item's name> (its Remove), clear (Clear),
@@ -26,7 +26,7 @@ import dev.lizard.ui.*
 // ai: presenter stats go to stderr as "present: {...}"; steps fold=<FoldKey>, shot=<path.png>, source=files|stream,
 // ai: export=0|1, hide=0|1 (2026-11-18; hide mid-export switches the screen at once), test=0|1 (Control's Test stream, not
 // ai: saved; 2026-11-19). Stream (2026-11-18): stream=<path>
-// ai: (Source Stream, the stream file played), export=0|1, cycles=<1 to 5>, hide=0|1 (Export, Laps, Hide codes; with hide=1 the run is waited
+// ai: (Source Stream, the stream file played), export=0|1, laps=<1 to 5>, hide=0|1 (Export, Laps, Hide codes; with hide=1 the run is waited
 // ai: on to its end, at most START_SECS + secs, and the line is {"export": {...}}); the last line's "export" the run's
 // ai: export state (null none).
 class SenderTest private constructor(private val secs: Double, private val kv: Map<String, String>) {

@@ -145,12 +145,15 @@ abstract class LicenseText : DefaultTask() {
 }
 val licenseText by tasks.registering(LicenseText::class) {
     val lib = rootDir.resolve("../liblizard")
-    titles.set(listOf("", "", "volk (liblizard/core/third_party/volk)",
-        "JSON for Modern C++ (liblizard/core/third_party/json.hpp)", "BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option",
+    titles.set(listOf("", "", "Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option",
+        "RaptorQ's constants (liblizard/src/rq_tables.h), from RFC 6330, under the Simplified BSD License of the IETF Trust's Legal Provisions",
+        "volk (liblizard/core/third_party/volk)", "JSON for Modern C++ (liblizard/core/third_party/json.hpp)",
+        "Vulkan headers (liblizard/core/third_party/vulkan-headers)", "BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option",
         "Skia (in Compose's skiko, which draws the window)", "Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1",
         "JetBrains Mono (liblizard/vendor/fonts/jetbrains-mono), under the SIL Open Font License 1.1"))
-    parts.from(rootDir.resolve("../LICENSE"), rootDir.resolve("../NOTICE"),
-        lib.resolve("core/third_party/volk/LICENSE.md"), lib.resolve("core/third_party/json.LICENSE.MIT"), lib.resolve("vendor/blake3/LICENSE_A2"),
+    parts.from(rootDir.resolve("../LICENSE"), rootDir.resolve("../NOTICE"), lib.resolve("vendor/zstd/LICENSE"), lib.resolve("src/rq_tables.LICENSE"),
+        lib.resolve("core/third_party/volk/LICENSE.md"), lib.resolve("core/third_party/json.LICENSE.MIT"),
+        lib.resolve("core/third_party/vulkan-headers/LICENSE.md"), lib.resolve("vendor/blake3/LICENSE_A2"),
         project.file("packaging/skia.LICENSE"), lib.resolve("vendor/fonts/inter/LICENSE.txt"), lib.resolve("vendor/fonts/jetbrains-mono/OFL.txt"))
     // ai: macOS: MoltenVK's (Apache 2.0), carried beside the library; its release's LICENSE at build/native
     if (onMac) { titles.add("MoltenVK (Vulkan over Metal, macOS)"); parts.from(rootDir.resolve("build/native/MoltenVK.LICENSE")) }

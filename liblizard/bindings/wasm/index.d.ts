@@ -12,7 +12,7 @@ export declare class LizardError extends Error {
   readonly code: number;
 }
 
-export declare const BLOCK: 472, ID_BYTES: 12, PAYLOAD: 460, MIN_BLOCKS: 4, MAX_BLOCKS: 64, RINGS: 3, RING_DEFAULT: -1, GAP_MODULES: 12;
+export declare const BLOCK: 472, ID_BYTES: 12, PAYLOAD: 460, MIN_BLOCKS: 1, MAX_BLOCKS: 67, RINGS: 3, RING_DEFAULT: -1, GAP_MODULES: 12;
 export type PixelFormat = "grey" | "rgbx" | "rgba" | "bgra";
 
 export declare function version(): string;
@@ -20,7 +20,7 @@ export declare function version(): string;
 export declare function simd(): boolean;
 
 export interface Format {
-  /** The format's size, 4 to 64 (LIZARD-64 to LIZARD-1024, 16 x the size); a symbol carries the rate profile's blocks
+  /** The format's size, 1 to 67 (LIZARD-16 to LIZARD-1072, 16 x the size); a symbol carries the rate profile's blocks
    *  (frameBlocks over codes). */
   blocks: number;
   /** 0 to 2 (the 64, 128 or 256 ring), -1 the default (the 128). */
@@ -58,8 +58,6 @@ export interface Decoded {
   n: number;
   word: boolean;
   blocksPerSymbol: number;
-  fps: number;
-  heldUsed: boolean;
   total: number;
   /** Corners in the image: x y x y ..., top left, top right, bottom right, bottom left. */
   quad: number[];
@@ -69,17 +67,15 @@ export interface ImageLike { data: Uint8Array | Uint8ClampedArray; width: number
 export declare class Decoder {
   constructor(nmax?: number);
   readonly maxBlocks: number;
-  /** The held word: the size (Format.blocks) the last word read names (0 none). */
-  held: number;
   decode(px: Uint8Array | Uint8ClampedArray | ImageLike, w?: number, h?: number,
-         options?: { fmt?: PixelFormat; stride?: number; held?: { held: number } }): Decoded;
+         options?: { fmt?: PixelFormat; stride?: number }): Decoded;
   free(): void;
 }
 export declare function layoutRects(w: number, h: number, layout?: 1 | 2): { x: number; y: number; w: number; h: number }[];
 export declare function streamFill(id: number): Uint8Array;
 
 export interface TxInfo {
-  test: boolean; length: number; chunks: number; lap: number; root: string;
+  test: boolean; length: number; sourceBlocks: number; cycle: number; root: string;
 }
 export declare class Tx {
   static file(bytes: Uint8Array, name?: string, zstd?: boolean): Tx;
@@ -92,13 +88,14 @@ export declare class Tx {
 export interface Verdict { seen: number; bad: number; judged: number; fresh: number; test: boolean }
 export interface Progress {
   header: boolean; done: boolean; length: number; bytesIn: number; fraction: number;
-  chunks: number; verified: number; rejected: number; solveMs: number;
+  sourceBlocks: number; verified: number; rejected: number; solveMs: number;
 }
 export declare class Rx {
   constructor(options?: { maxBytes?: number });
   frame(blocks: Uint8Array): Verdict;
   readonly progress: Progress;
-  readonly chunks: Uint8Array;
+  /** Each source block: 0 to 99 the share of its source symbols in, 255 verified. */
+  readonly sourceBlocks: Uint8Array;
   readonly name: string;
   readonly root: string;
   readonly error: string;

@@ -11,9 +11,11 @@ This product includes third-party software, each under its own license, kept bes
 
 - BLAKE3 (liblizard/vendor/blake3), Copyright the BLAKE3 authors: Apache License 2.0 or CC0 1.0, at the user's option
   (LICENSE_A2, LICENSE_CC0, LICENSE_A2LLVM).
-- RaptorQ's constants (liblizard/src/rq_tables.h) are the values of RFC 6330, "RaptorQ Forward Error Correction
-  Scheme for Object Delivery" (IETF, 2011), sections 5.3.5.2, 5.5, 5.6 and 5.7; RaptorQ's encoder and decoder
-  (liblizard/src/rq.c) are LIZARD's own.
+- RaptorQ's constants (liblizard/src/rq_tables.h) are Code Components of RFC 6330, "RaptorQ Forward Error Correction
+  Scheme for Object Delivery" (IETF, 2011), sections 5.3.5.2, 5.5, 5.6 and 5.7, Copyright (c) 2011 IETF Trust and the
+  persons identified as authors of the code: the Simplified BSD License of Section 4.c of the IETF Trust's Legal
+  Provisions Relating to IETF Documents (rq_tables.LICENSE). RaptorQ's encoder and decoder (liblizard/src/rq.c) are
+  LIZARD's own.
 - Zstandard (liblizard/vendor/zstd, version 1.5.7 as one source file), Copyright (c) Meta Platforms, Inc. and
   affiliates: BSD 3-Clause (LICENSE), or GPLv2 (COPYING), at the user's option; taken under BSD.
 - volk (liblizard/core/third_party/volk), Copyright (c) 2018-2023 Arseny Kapoulkine: MIT (LICENSE.md).

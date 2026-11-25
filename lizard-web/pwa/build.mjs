@@ -141,6 +141,7 @@ writeFileSync(join(OUT, "_headers"), "/assets/*\n  Cache-Control: public, max-ag
 // ai: strips every comment.
 const NOTICES = [["", "LICENSE"], ["", "NOTICE"],
   ["Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option", "liblizard/vendor/zstd/LICENSE"],
+  ["RaptorQ's constants (liblizard/src/rq_tables.h), from RFC 6330, under the Simplified BSD License of the IETF Trust's Legal Provisions", "liblizard/src/rq_tables.LICENSE"],
   ["BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option", "liblizard/vendor/blake3/LICENSE_A2"],
   ["", "liblizard/build/ffmpeg/wasm/licenses/ffmpeg.txt"], ["", "liblizard/build/ffmpeg/wasm/licenses/zlib.txt"],
   ["Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1", "liblizard/vendor/fonts/inter/LICENSE.txt"],

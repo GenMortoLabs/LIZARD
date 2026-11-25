@@ -3,7 +3,7 @@
 # ai: (the decoder's transform against the definition), crc_check.c (the CRC-64 by PMULL folding against the bit loop),
 # ai: mesh_neon.c (the registration mesh, built with its NEON forms and with the scalar twins: each its own hash, the
 # ai: NEON reads within their bound of sample()),
-# ai: finder_neon.c (binarize, shrink2 and the corner marks' scan, likewise; the column walks against the byte loop), built
+# ai: finder_neon.c (the grey pyramid, the grey marks' dense pass, peaks and candidates, the traced border's quads: one hash), built
 # ai: with the NDK, pushed to /data/local/tmp/lizard_kernels/, run pinned to cpu7 (a prime core on the S26) under the
 # ai: phone lock, the screen woken first (a dozing phone parks its cores). Exit 1 on any failure.
 # ai:   liblizard/test/neon_kernels.sh   (from anywhere; about 1 min; NDK, LIZ_PHONE_LOCK, CORE as in neon_check.sh)
@@ -36,7 +36,7 @@ for t in mesh_neon mesh_scalar; do
 done 2>&1
 echo "== finder_neon, finder_scalar"
 fv=$(adb shell "input keyevent KEYCODE_WAKEUP; taskset $CORE $P/finder_neon; echo exit \$?" | tee -a /dev/stderr)
-fs=$(adb shell "taskset $CORE $P/finder_scalar" | tee -a /dev/stderr | grep 'finder hash')
+fs=$(adb shell "taskset $CORE $P/finder_scalar" | tee -a /dev/stderr | grep -o '^finder [0-9a-f]*')
 echo "$fv" | grep -q 'exit 0' || fail=1
-[ -n "$fs" ] && [ "$(echo "$fv" | grep 'finder hash')" = "$fs" ] || { echo "the finder's NEON forms and scalar twins differ"; fail=1; }
+[ -n "$fs" ] && [ "$(echo "$fv" | grep -o '^finder [0-9a-f]*')" = "$fs" ] || { echo "the finder's NEON forms and scalar twins differ"; fail=1; }
 exit $fail

@@ -171,8 +171,7 @@ private fun SideEdge(e: Edge, modifier: Modifier) {
     val state = rememberDraggableState { dx -> e.drag(with(density) { dx.toDp() }) }
     val hover = remember { MutableInteractionSource() }
     val hovered by hover.collectIsHoveredAsState()
-    val over = hovered
-    LaunchedEffect(over) { if (over) { delay(300); e.hoverLit = true } else e.hoverLit = false }
+    LaunchedEffect(hovered) { if (hovered) { delay(300); e.hoverLit = true } else e.hoverLit = false }
     val on = e.hoverLit || e.held
     val thick by animateDpAsState(if (on) 4.dp else 1.dp, tween(120))
     val colour by animateColorAsState(if (on) Pressed else Line, tween(120))
@@ -195,7 +194,7 @@ private fun SideEdge(e: Edge, modifier: Modifier) {
 // ai: canvas, so the edge's whole strip is Compose's); `roomFill`: the main area's colour beside it, the margin's.
 @Composable
 fun ToolLandscape(title: String, collapsed: Boolean, onCollapse: () -> Unit, onHome: () -> Unit, swap: (@Composable () -> Unit)?,
-                  width: ColumnWidth, floor: Dp, mainPadding: Dp = 16.dp, onResized: () -> Unit = {}, room: Dp = EdgeRoom, roomFill: Color = Bg, bare: Boolean = false,
+                  width: ColumnWidth, floor: Dp, mainPadding: Dp = 16.dp, room: Dp = EdgeRoom, roomFill: Color = Bg, bare: Boolean = false,
                   mainModifier: Modifier = Modifier,
                   rail: @Composable () -> Unit, side: @Composable () -> Unit, main: @Composable BoxWithConstraintsScope.() -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Bg).safeDrawingPadding()) {
@@ -204,7 +203,7 @@ fun ToolLandscape(title: String, collapsed: Boolean, onCollapse: () -> Unit, onH
         val sash = width.sash
         val shown = if (collapsed) RailWidth else sideW
         val edge = rememberEdge(shown, screen, floor, sash, collapsed, onSnap = onCollapse, onStart = { width.dragging = true },
-            onDrag = { width.dp = it.value }, onDone = { width.dragging = false; width.save(); onResized() })
+            onDrag = { width.dp = it.value }, onDone = { width.dragging = false; width.save() })
         Row(Modifier.fillMaxSize()) {
             if (!bare) {
                 if (collapsed) Rail(onClick = onCollapse, foot = { Square { IconBtn(Icons.back, "Home", onClick = onHome) } }) { rail() }

@@ -85,7 +85,7 @@ if(EMSCRIPTEN)
       _lizard_blocks _lizard_blocks_max _lizard_layout_set _lizard_clock_set _lizard_side _lizard_cell _lizard_quiet _lizard_fmt_rx_ptr _lizard_parity_set
       _lizard_pilot_get _lizard_any_pilot_get _lizard_align_get _lizard_tx _lizard_tx_rgba _lizard_rs_geom _lizard_rx _lizard_dbg
       _lizard_dbg_sym _lizard_dbg_coef _lizard_blk_its _lizard_blk_est _ob_heap_top
-      _ob_last _ob_prof _ob_prof_reset _ob_luma_strip _ob_test_binarize _ob_test_sample _ob_test_marks
+      _ob_last _ob_prof _ob_prof_reset _ob_luma_strip _ob_test_sample _ob_test_marks
       _ob_test_mesh_tables_out _ob_test_fmt_plan _ob_test_fmt_cells _ob_test_thin_plan _ob_test_thin_score_out
       _ob_test_finder_out _lizard_rx_acquire _lizard_rx_acquire_quad _lizard_rx_finish _lizard_shape _lizard_pos_ptr
       _lizard_tables_out _lizard_rx_ldpc _lizard_block_runs _lizard_ldpc_tables _lizard_tiers_for _lizard_set_axis
@@ -95,7 +95,7 @@ if(EMSCRIPTEN)
       _xfer_sb_cv _xfer_b3_hash _xfer_b3_sub _xfer_sb_log2_of _xfer_same_file_of
       _xfer_desc_write_of _xfer_name_cut_of _xfer_toi_of_wasm
       _lizard_zstd_bound _lizard_zstd_compress _lizard_zstd_decompress _lizard_zstd_frame_content _lizard_zstd_frame_bytes
-      _rq_symbols _rq_enc_new _rq_enc_symbol _rq_enc_free _rq_dec_new _rq_dec_add _rq_dec_count _rq_dec_recover _rq_dec_free
+      _rq_symbols _rq_enc_new _rq_enc_symbol _rq_enc_free _rq_dec_new _rq_dec_add _rq_dec_recover _rq_dec_free
       _malloc _free)
   string(REPLACE ";" "," LIZ_WASM_EXPORTS "${LIZ_WASM_EXPORTS}")
   set_target_properties(lizard PROPERTIES SUFFIX ".mjs" RUNTIME_OUTPUT_DIRECTORY ${LIZ_WASM_DIST})

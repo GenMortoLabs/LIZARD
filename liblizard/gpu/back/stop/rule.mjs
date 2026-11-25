@@ -1,7 +1,7 @@
 // ai: The learned LDPC stop rule for the decoder (scripts/gpu/back/stop/README.md; the trainer is scripts/gpu/back/stop/fit.py): its weights file read and checked
 // ai: (readStop, loadStop), folded into the form the kernel runs exactly as scripts/gpu/back/stop/net.py fold() folds it (the same float64
 // ai: operations in the same order, then one rounding to float32), the words the kernel reads (netWords, laid out for
-// ai: gpu/glsl/back_tiers.mjs tldpc), and that form's arithmetic in float32 (scoreF32, which
+// ai: gpu/slang/back_tiers.mjs tldpc), and that form's arithmetic in float32 (scoreF32, which
 // ai: scripts/gpu/back/stop/check_rule.mjs holds the folded form to). The rule: after iteration t (1 to 29), with x = (bad, low, first, prev, t, grow) (the violated
 // ai: checks now, their running minimum, after iteration 1, after the iteration before, t, and the posteriors' growth:
 // ai: the sum over the n posteriors of min(|L|, 1016) now over the same after iteration 1, in 256ths, an integer;

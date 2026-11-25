@@ -1,5 +1,5 @@
 /* ai: The C API end to end, through lizard.h alone (2026-10-03):
- * ai:   1. every format (61 sizes, LIZ_MIN_BLOCKS to LIZ_MAX_BLOCKS, x LIZ_RINGS rings x 1 or 2 codes): an encoder
+ * ai:   1. every format (67 sizes, LIZ_MIN_BLOCKS to LIZ_MAX_BLOCKS, x LIZ_RINGS rings x 1 or 2 codes): an encoder
  * ai:      made, its geometry the arithmetic's; a size of 0 or past LIZ_MAX_BLOCKS refused;
  * ai:   2. the picker and the room against the web's (a table tests/pick_ref.mjs printed from sim/lizard_pick.mjs), when
  * ai:      its path is given;
@@ -55,7 +55,7 @@ static void formats(void) {
   liz_format bad = {0, 0, 60, 1};
   CHECK(!liz_encoder_new(&bad) && liz_last_error()[0], "a format of 0 blocks refused, with a message");
   liz_format past = {LIZ_MAX_BLOCKS + 1, 0, 60, 1};
-  CHECK(!liz_encoder_new(&past) && liz_last_error()[0], "a format past LIZARD-1024 refused, with a message");
+  CHECK(!liz_encoder_new(&past) && liz_last_error()[0], "a format past LIZARD-1072 refused, with a message");
   CHECK(liz_blocks_for(0) == 0 && liz_blocks_for(LIZ_MIN_BLOCKS - 1) == 0 && liz_blocks_for(LIZ_MAX_BLOCKS + 1) == 0 && liz_room_for(LIZ_MIN_BLOCKS - 1, 0) < 0 && liz_pick(4000, 4000, 1, 0, LIZ_MIN_BLOCKS - 1) < 0,
         "sizes 0 to LIZ_MIN_BLOCKS - 1 and past LIZ_MAX_BLOCKS are no format");
   printf("formats: %d encoders made, their geometry the arithmetic's\n", made);
@@ -205,13 +205,12 @@ static void file(liz_decoder *d, int codes, const char *dir, size_t bytes) {
       free(back);
     }
   }
-  printf("file: %zu B, %u chunks, %d code%s, %s store: %s after %d frames (%d blocks missed), root %s\n", bytes, info.source_blocks,
+  printf("file: %zu B, %u source blocks, %d code%s, %s store: %s after %d frames (%d blocks missed), root %s\n", bytes, info.source_blocks,
          codes, codes > 1 ? "s" : "", dir ? "directory" : "memory", p.done ? "whole" : "NOT whole", frames, lost, want);
   free(in); free(frame); free(verified); free(canvas); free(data);
   liz_rx_free(rx); liz_encoder_free(enc); liz_tx_free(tx);
 }
 
-/* ai: dir and the folders above it, made where missing (mkdir -p; a failure shows as the frames' writes failing) */
 /* ai: Layer 5 where it is built (else LIZ_E_UNSUPPORTED, said and skipped): a session on a folder of its own, no camera
  * ai: opened: its stats say idle, nothing kept, nothing unfinished; while it holds the folder an unfinished transfer
  * ai: is not deleted from outside it, and is once it is freed; a decoder it does not know refused. */
@@ -245,6 +244,7 @@ static void session(const char *dir) {
   printf("session: stats, kept, partials and the folder's lock as lizard.h says\n");
 }
 
+/* ai: dir and the folders above it, made where missing (mkdir -p; a failure shows as the frames' writes failing) */
 static void make_dirs(const char *dir) {
   char p[1024];
   snprintf(p, sizeof p, "%s", dir);
@@ -274,7 +274,7 @@ static int dump(const char *dir) {
       liz_tx_free(tx); liz_encoder_free(enc);
     }
   if (faults) printf("%d FAILED\n", faults);
-  else printf("dumped 8 frames into %s\n", dir);
+  else printf("dumped %d frames into %s\n", 2 * LIZ_RINGS, dir);
   return faults ? 1 : 0;
 }
 

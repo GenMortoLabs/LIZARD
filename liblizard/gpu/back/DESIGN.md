@@ -8,7 +8,7 @@ their CRC-64 against the truth stream, on ms a frame at batch B (the iGPU's; the
 negative control; never on parity with the C. The tables named below come from the wasm codec (`init()` from
 `sim/ob.mjs`, section 8).
 
-Every block is 472 payload bytes, the first 12 the block id (its 64-bit word LE). The pictures are 384, 512, 768, 1024, 1152, 1280 and
+Every block is 472 payload bytes, the first 12 the block id (the 40-bit bare id, the 48-bit TOI and a reserved byte). The pictures are 384, 512, 768, 1024, 1152, 1280 and
 1536 (`plan/common.mjs` `SIZES`, the sizes of `sim/lizard_pick.mjs` `PICTURE_SIZES` a format has; tops 80, 128, 320,
 560, 720, 880 and 1024 sub-channels). The code
 rate follows the
@@ -18,7 +18,7 @@ and 1/2 of 7680 (n 7680, 30 block rows), every code at z = 128, the blocks packe
 first data slot whatever the sub-channels, the slots past the last block padded (the whitening alone). The pilots are
 apart from the blocks: in every sub-channel coefficient 0 is a count pilot and coefficient 160 a reference pilot, and
 the blocks take the other 318 coefficients in order (636 data slots a sub-channel; `src/lizard_phy.c` `pb_fcoef`). The soft values and the LDPC are the rule stage (`back/tiers.mjs`;
-the kernels `glsl/back_tiers.mjs`, TAB's layout and the codes' shapes `plan/back_tiers.mjs`): a frame's profile is a row of its table by the frame's version, and the arithmetic of sections
+the kernels `slang/back_tiers.mjs`, TAB's layout and the codes' shapes `plan/back_tiers.mjs`): a frame's profile is a row of its table by the frame's version, and the arithmetic of sections
 1 and 4 to 7 runs a code at a time, each code with its own block rows and its own learned stop. Where a section gives
 one code's numbers, they are the 3/4 code's.
 
@@ -49,7 +49,7 @@ every constant of the detrend is divided the same way at the store.
   and breaks the fused sampler, which has no picture to pre-pass.
 - **B soft values**, per sub-channel j of the frame over its 320 coefficients y_s = S at pos[320 j + s]: m2 = mean |y|^2, m4 = mean |y|^4,
   a2 = sqrt(max(2 m2^2 - m4, 0)), nv = max(m2 - a2, 0.02 m2), k = 0.7 * 2 sqrt(2 a2) / nv, LLR = clamp(k y, -10, 10)
-  per axis, int8 = round half to even (WGSL `round`, the C's `nearbyintf`) of 8 LLR; out[2 s] the real axis,
+  per axis, int8 = round half to even (`roundEven`, the C's `nearbyintf`) of 8 LLR; out[2 s] the real axis,
   out[2 s + 1] the imaginary: slot order, the C's `ext_llr`. est_j = J(a2 / nv), J(g) = (1 - 2^(-0.3073 (2 sqrt
   g)^1.7870))^1.1064 for g > 0, else 0. blk_est = the block's sub-channels' est, each by the slots of the block it
   holds, over the block's slots (a block's slots run across sub-channels as they fall: the C's `lizard_finish_ext`). f32
@@ -82,18 +82,19 @@ decision-directed second pass and burst accumulation. The GPU reads every frame 
 ## 2. Buffers between stages
 
 Frame f of a batch of B (frames may differ in picture size; every stage reads `sel[f]` and `frames[f].valid` as
-the sampler does). `sel[f]` is a vec4u: (ring, 1 + version, picture slot, 0). PICK (F6) writes (ring, found, 0, 0);
-F8 (`gpu/glsl/word.mjs`) then (ring, 1 + g, slot, 0) for the configuration g its own word states (the version and
-the block counts), else y 0. A frame is sampled and listed when y >= 2; z indexes the picture sizes.
+the sampler does). `sel[f]` is a vec4u: (ring, 1 + configuration's first word, picture slot, its 1/2 count). PICK (F6)
+writes (ring, found, 0, 0); F8 (`gpu/slang/word.mjs`) then (ring, 1 + g.x, slot, g.y) for the configuration g its own
+word states (`slang/src/lib/cfg.slang`: g.x the version << 24 | the 6/7, 3/4 and 2/3 counts, g.y the 1/2 count), else y
+0. A frame is sampled and listed when y >= 2; z indexes the picture sizes.
 
 | name | writer -> reader | element and order |
 |---|---|---|
-| LISTS, ARGS | gate -> all | u32 [SLOTS sizes][1 + B] (SLOTS = 8, `plan/common.mjs`): count, then frame indices, then each frame's (w, h), each frame's configuration (the one F8 read in sel.y = 1 + g; a frame without one is not listed; the rule stage runs its layout), each frame's row count (`listsRows`: the disc rows that count takes, section 3 "Rows a frame"), then each frame's ring (`listsRing`), then every listed frame (`listsAll`); u32 [SLOTS][12] indirect args, (x, y, z) for pass 1, reduce, pass 2 (the most rows a listed frame of the size takes) and tsoft (the chunks of the size's most listed version; talign and tblocks on reduce's), then u32 [4][3] each code's LDPC (`argsLdpc`: the code's most blocks over the listed frames' versions, the listed frames, 1); (SLOTS (1 + B) + 6 B) words, `listsWords`; 432 B, `argsWords` |
+| LISTS, ARGS | gate -> all | u32 [SLOTS sizes][1 + B] (SLOTS = 7, the picture sizes, `plan/common.mjs`): count, then frame indices, then each frame's (w, h), each frame's configuration (the one F8 read in sel.y = 1 + g; a frame without one is not listed; the rule stage runs its layout), each frame's row count (`listsRows`: the disc rows that count takes, section 3 "Rows a frame"), then each frame's ring (`listsRing`), then every listed frame (`listsAll`), then each frame's 1/2 count, its configuration's second word (`listsHalf`); u32 [SLOTS][12] indirect args, (x, y, z) for pass 1, reduce, pass 2 (the most rows a listed frame of the size takes) and tsoft (the chunks of the size's most listed version; talign and tblocks on reduce's), then u32 [4][3] each code's LDPC (`argsLdpc`: the code's most blocks over the listed frames' versions, the listed frames, 1); (SLOTS (1 + B) + 7 B) words, `listsWords`; 96 words (384 B), `argsWords` |
 | PART | A1 -> reduce, A2 | f32 [n][4] a column: (sum z, sum z cx[y], sum z qx[y], the column mean) |
 | COEF | reduce -> A2 | f32 [8]: px, py, pxy, pxx, pyy, 0, 0, 0 |
 | Y | A1 -> A2 | complex, v major: (v, x) at (v - 1) n + x, 1 <= v < V; f16x2 (f32x2 on the 4090); V rows of room a frame |
 | S | A2 -> B | the disc, one entry a used coefficient, row compact (section 3); f16x2 or f32x2 |
-| L | B -> C | int8 [subch][640] packed 4 a u32, slot order (the C's `ext_llr`) |
+| L | B -> C | int8 [subch][636] packed 4 a u32 (159 words a sub-channel, `dims.lStride`), data-slot order (the C's `ext_llr`) |
 | EP, BLK | tsoft -> tblocks -> tldpc | EP (est, count pilot, reference, 0) a sub-channel; BLK a block: (f32 est, u32 declined) |
 | PILOT | soft -> host | four f32 a frame, its readings (r, its standard error, r2, its standard error); then two f32 a frame, its grid shift |
 | V, ITS | C -> host | one 32-bit word a block each, at f * blocksMax + b: u32 verdict (0 not run, 1 verified, 2 declined, 3 stall or cap, 4 CRC), i32 iterations (the C's codes) |
@@ -101,7 +102,7 @@ the block counts), else y 0. A frame is sampled and listed when y >= 2; z indexe
 | BCOUNTS | all -> host | u32 [B][8]: columns transformed, rows transformed (the frame's rows), coefficients stored, blocks tried, verified, records, sub-channels quantised, iterations run |
 
 S holds subch * 320 entries exactly (verified against `npos`), under the C's half plane (vblocks * n * 64). V and
-ITS are a word a block, since WGSL has no byte store (section 7), and a frame's rows sit at the largest built size's
+ITS are a word a block, since a shader has no portable byte store (section 7), and a frame's rows sit at the largest built size's
 blocksMax. The host copies the whole of REC in the batch's one readback, because the count is known only on the
 device (section 9).
 ## 3. The transform
@@ -129,7 +130,7 @@ through workgroup memory a stage, no ping-pong buffer. Threads a pair = n / 8. S
 8 8 2 3 3 and 1280 = 8 8 4 5; the decoder reads both pictures at 1024 (section 10). Workgroup memory a pair: n * 8 B in f32, n * 4 B in f16. A workgroup takes 4 adjacent picture
 columns (2 pairs). Pass 1 writes Y with x contiguous in runs of 4 (the L2 merges neighbouring workgroups' partial
 lines). Pass 2 reads a row of Y contiguous (the v = 0 row from Y0 as f32) and writes its compact disc row. A pipeline
-a pass for each of the eight n, dispatched indirectly from ARGS over LISTS; a workgroup for a frame of another size
+a pass for each of the seven n, dispatched indirectly from ARGS over LISTS; a workgroup for a frame of another size
 returns before its first barrier.
 
 Rows a frame. Every size is built at its top (`gpu/tables.mjs` PICTURES) and a frame decodes the version its word
@@ -145,7 +146,7 @@ returns on a row past the frame's before its first barrier (LISTS is read-only t
 its indirect dispatch takes the most rows any listed frame of the size needs. S past a frame's rows is left stale:
 the soft stage reads only its own blocks' coefficients, all inside them. Every frame decodes on its own, with no
 memory across frames or batches, so the word is the only source: a frame whose word is not read is not listed. irows and ipic (the sender's inverse transforms,
-`wgsl/inverse.mjs`, the sender's) run the size's V: a symbol's rows past its version are zero.
+`slang/src/send_irows.slang`, the sender's) run the size's V: a symbol's rows past its version are zero.
 
 Precision: f16 for Y, S and the workgroup-memory exchange where `shader-f16` exists (the iGPU, phones), f32 on
 the 4090; f32 for the butterfly arithmetic, the partials, the reduce and the detrend epilogue. Why the means
@@ -155,7 +156,7 @@ landing on bins 0 and 2^s) sits within about 25 dB of the data on the v = 0 row 
 With each column's mean taken out ahead of pass 1 and the v = 0 row kept in f32 through both passes, the f16
 floor is about 50 dB under the strongest ring, and blur takes the outer rings 20 to 30 dB down from there.
 
-As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `glsl/back_transform.mjs`, the layouts `plan/back_transform.mjs`):
+As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `slang/back_transform.mjs`, the layouts `plan/back_transform.mjs`):
 - Per frame strides are the largest built size's: `t.sStride` (S entries), `t.yStride` (Y entries, V n), `t.partStride`
   (the column means ride in PART's w, so there is no Y0); `t.cbytes` is 4 (f16x2) or 8 (f32x2). Frame f's disc starts
   at `f * t.sStride` entries into the lane's S; row v of it at `tables[size].off[v]`, entry e of the row is u = e for
@@ -187,28 +188,40 @@ As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `glsl/back_transfor
   capture spanning about 650 pixels read at 768 a third of the blocks it reads at 1024.
 ## 4. Soft values
 
-Formula and moments: section 1. The rule stage's soft pass, a dispatch a picture slot each (`glsl/back_tiers.mjs`):
+Formula and moments: section 1. The rule stage's soft pass, a dispatch a picture slot each (`slang/back_tiers.mjs`):
+- **tnoise**, a workgroup an 8-sub-channel chunk of a frame (tsoft's grid), 32 lanes a sub-channel, lane l the
+  coefficients l + 32 k (k 0 to 9): the second and fourth moments of |y|^2 over the sub-channel's 320 coefficients
+  (a turn and the whitening leave |y|), reduced over the 32 lanes; a2 = sqrt(max(2 m2^2 - m4, 0)), N = m2 - a2, at
+  least 0.02 m2; into EP: est (jinfo(a2 / N)), the soft values' scale k (0.7 x 2 sqrt(2 a2) / N) and 1 / N, each 0
+  where N is 0. Each coefficient is taken times n first (S is T / n^2, its largest about 1e-3, so |y|^4 is near
+  1e-13): a product with a value made at run time keeps the squares in f32 on every driver (one read dot(y, y) of
+  values converted from f16 at half precision, where they underflow), and est and the weights' ratios do not move
+  with the scale (k takes it back).
 - **talign**, a workgroup a frame, 160 threads over its sub-channels (j = t, t + 160, ...): the grid's shift by the
   pilots (every sub-channel's two against their whitening; the count's sign cancels in every term; zi = k zr (u dx + v
-  dy) fitted by least squares twice, kept wherever the fit stands, 8 pilots or more; each pilot unweighted, where the C
-  weights it by 1 / N of its sub-channel), to the end of PILOT. The first fit is about a zero shift, the second about
-  the first's answer (the pilots turned); each fit's seven sums over the 160 threads on 16 threads, then one.
+  dy) fitted by least squares twice, kept wherever the fit stands, 8 pilots or more; each pilot's terms weighted by
+  1 / N of its sub-channel, tnoise's, as the C's `pilot_align`), to the end of PILOT. The first fit is about a zero
+  shift, the second about the first's answer (the pilots turned); each fit's seven sums over the 160 threads on 16
+  threads, then one. Unweighted, a sub-channel swollen by a capture's glare (the innermost, where a smooth blob's
+  spectrum lies) carries the fit.
 - **tsoft**, a workgroup an 8-sub-channel chunk of a frame, 256 threads = 8 sub-channels x 32 lanes x 10
   coefficients: gather a sub-channel's 320 coefficients from S through the UV table (u32 an entry, the S index of
-  pos[i]; subch * 320 entries), each turned back by the frame's shift through UC, reduce m2 and m4, compute a2, nv,
-  k and est, quantise every data coefficient to two int8 into L; est and the two pilots' values (the turned value
-  against its whitening, x + y) to EP. Lane l takes the data coefficient pairs 2 p, 2 p + 1 for p = l + 32 k (k 0 to
-  4), each through its frame coefficient (`fcoefIn`, past the pilots), so a pair is one L word; the last lane's last
-  pair (p 159) is the sub-channel's two pilots, read into the moments and EP and not stored, so the moments run over
-  all 320 coefficients as the C's. The kernel is straight-line (every index load, then every S load, then the turn under
-  one branch on the frame's shift). Each value takes its frame slot's whitening, so L holds the whitened values, in
+  pos[i]; subch * 320 entries), each turned back by the frame's shift through UC, quantise every data coefficient at
+  tnoise's scale (EP's second float, read by every lane before one barrier) to two int8 into L; the two pilots' values
+  (the turned value against its whitening, x + y) to EP's second and third floats after the barrier, and the scale to
+  its fourth (talign has read tnoise's 1 / N there), the pilots' weight in tblocks' readings. Lane l takes the
+  data coefficient pairs 2 p, 2 p + 1 for p = l + 32 k (k 0 to 4), each through its frame coefficient (`fcoefIn`, past
+  the pilots), so a pair is one L word; the last lane's last pair (p 159) is the sub-channel's two pilots, read into EP
+  and not stored. The kernel is straight-line but for the barrier (every index load, then every S load, then the turn
+  under one branch on the frame's shift). Each value takes its frame slot's whitening, so L holds the whitened values, in
   data-slot order (159 words a sub-channel). Dispatched (chunks of the
   slot's top, 1, B); a workgroup past the frame's chunks (two a version) returns before its first barrier.
 - **tblocks**, a workgroup a frame: a block's estimate (its sub-channels' est, each by the data slots of the block
   it holds, 636 a sub-channel, over the block's slots), its decline under its code's bar (section 5), to BLK; then the
-  frame's two readings over its sub-channels (`src/lizard_phy.c` `lizard_pilot`): r_g = sum c_j / (sum ref k_g / k)
-  over the sub-channels j = g mod 2, its standard error by the delta method (the root of the sum of (c_j - r_g
-  ref_j)^2 over |the denominator|), NaN where a parity has none, to PILOT's first four floats a frame.
+  frame's two readings over its sub-channels (`src/lizard_phy.c` `lizard_pilot`), each sub-channel's pilots by its
+  soft values' scale w (EP's fourth float, tsoft's): r_g = (sum w c_j / W_g) / (sum w ref / W) over the sub-channels
+  j = g mod 2, W_g and W the weights' sums, its standard error by the delta method (the root of the sum of (w (c_j -
+  r_g ref_j))^2 over |the denominator|), NaN where a parity has none, to PILOT's first four floats a frame.
 
 L stays in the C's data-slot order, whitened: L[slot] = (white[slot] ? -1 : 1) * llr[slot], WHITE a bit a slot of the
 frame over 1024 sub-channels in TAB. The LDPC reads the bit map at its gather, from TAB: a code's INV (codeword bit
@@ -224,7 +237,7 @@ which the shape rules allow. The gate is a format decoder rule the C sets, measu
 captures the iterations it saves are among the LDPC's largest costs.
 ## 6. LDPC
 
-The rate profile's kernel (`tldpcSource`, `glsl/back_tiers.mjs`; a dispatch a code: (the code's most blocks in a
+The rate profile's kernel (`tldpcSource`, `slang/back_tiers.mjs`; a dispatch a code: (the code's most blocks in a
 served version, frames)) runs layered min-sum a code at a time: the code's n, k, z and slots are the module's
 constants, its block rows (unequal at 2/3 and 1/2) and data slots (col | shift << 16) come from its uniform, its bit
 map from TAB over L whitened (section 4), the bits past the 472-byte payload and its CRC (3,840: at 6/7 alone) are known zeros at
@@ -297,15 +310,15 @@ against float64, nor under a compiler that fuses each multiply-add; the flips si
 ## 7. CRC-64, compaction, the result record
 
 On a clear syndrome the workgroup packs the systematic bits (a posterior < 0 is a 1) MSB first into the 120 words of
-`packw`. The CRC-64 is split over 118 lanes (`glsl/back_tiers.mjs`, as the sender's paint's `wgsl/back_ldpc.mjs` `CRC_SPLIT`; `back/ref_ldpc.mjs` `crcPowers`),
+`packw`. The CRC-64 is split over 118 lanes (`slang/back_tiers.mjs`, as the sender's paint's, both `slang/src/lib/crc64.slang`; `back/ref_ldpc.mjs` `crcPowers`),
 a 64-bit value as two u32 (high, low): lane w runs the reflected CRC over its 4-byte chunk from a zero state, multiplies
 by x^(8 * bytes after it) mod P (a 64-step carry-less multiply against a 240-word table in the code's uniform, two words
 a chunk) and XORs into two workgroup atomics; the initial state's term and the final inversion are one folded constant.
 It is compared with bytes 472..479 (words 118 and 119) read as a big endian u64. Equal: verdict 1, `atomicAdd` on
 REC.count claims a slot, lanes 0..119 write the record's 120 words.
 Unequal: verdict 4.
-- **V and ITS are one word a block**, u32 verdict and i32 iterations, at `f * blocksMax + b` (WGSL has no byte
-  stores). Verdict 0 not run, 1 verified, 2 declined, 3 stall, cap or given up by the stop, 4 CRC; ITS the iterations,
+- **V and ITS are one word a block**, u32 verdict and i32 iterations, at `f * blocksMax + b` (a shader has no portable
+  byte store). Verdict 0 not run, 1 verified, 2 declined, 3 stall, cap or given up by the stop, 4 CRC; ITS the iterations,
   or the C's codes: -2 declined, -3 stall or given up, -1 cap. The gate zeroes both and REC's count.
 - **REC** is u32 count then 480-byte records at 4 + 480 r: word 0 = frame + 65536 block, word 1 = iterations as i32,
   words 2 to 119 the 472 payload bytes. Its cap is B x blocksMax records; a verified block past the
@@ -359,17 +372,17 @@ const bh = await BackHalf.build(device, { B, sizes, precision, picture, log }); 
 // bind groups), encodeBack (the six dispatches), and the readback: REC, V, ITS, BCOUNTS, PILOT, bh.readBytes a batch
 //   records: { frame, block, its, id, payload (472 B, id first) }, the verified blocks only
 //   a frame: verdict, its (blocksMax each), counts (COUNT: columns, rows, stored, tried, verified, records, subch,
-//   iterations), pilots (a block's pilot reading), shift (the grid's)
+//   iterations), pilots (the frame's two readings and their errors), shift (the grid's)
 ```
 
-- `sizes`: the decoder's eight, at the size index `sel[f].z`, each `{ n, subch }` (the picture at its top) or null for a
-  size not built. blocksMax, and with it every stride and the readback, is the largest built size's: 128 8-sub-channel
-  chunks with the 1536 picture built (the rate profile's most, 124 blocks, fit under it).
+- `sizes`: the decoder's seven, at the size index `sel[f].z`, each `{ n, subch }` (the picture at its top) or null for a
+  size not built. blocksMax, and with it every stride and the readback, is the largest built size's: the most blocks a layout of
+  its sub-channels may state (`back/dims.mjs`, `sim/lizard_pick.mjs` `blocksMaxFor`; 149 at 1072 sub-channels).
 - `picture`: the front half's rings, `[{ span, margin, lattice }]`, from which PIC holds each ring's grid for a picture
   and its lattice.
 - `arecBuf`: the front half's anchors records, which pass 1 reads (section 10).
 - A size whose pass 1 needs more workgroup memory than the device offers is left unbuilt, and the build logs it. The gate leaves a frame off every list when its size is not built, its `sel[f].z` is
-  `SLOTS` or more, its `sel[f].y` is under 2 (not found, or no version from its word or the held one), or its
+  `SLOTS` or more, its `sel[f].y` is under 2 (not found, or no configuration from its own word), or its
   `frames[f].valid` is 0.
 - The host clears nothing. The gate zeroes BCOUNTS, V, ITS and REC's count at the head of the chain, so the chain can go
   inside an open pass. Every dispatch after the gate is indirect from the gate's ARGS, over the frames it lists (the
@@ -388,36 +401,34 @@ Strides are the largest built size's; cbytes is 4 for f16 and 8 for f32.
 |---|---|---|
 | frames, sel | the front half's; read only | (not the back half's) |
 | LISTS | gate; every stage | 4 (SLOTS (1 + B) + 6 B) |
-| ARGS | gate; indirect dispatch of pass 1, reduce, pass 2, the soft stage and the LDPC | 432 |
+| ARGS | gate; indirect dispatch of pass 1, reduce, pass 2, the soft stage and the LDPC | 384 |
 | PART, COEF | pass 1, reduce; reduce, pass 2 (PART's w is the column mean) | 16 partStride + 32 a frame |
 | Y | pass 1; pass 2 | cbytes V n a frame (V - 1 rows written by pass 1) |
 | S | pass 2; soft | cbytes 320 subch a frame |
-| L, EP, BLK | soft; LDPC | 640 subchMax + 8 subchMax + 8 blocksMax a frame |
-| PILOT | soft; host | 4 blocksMax + 8 a frame |
+| L, EP, BLK | soft; LDPC | 636 subchMax + 16 subchMax + 8 blocksMax a frame |
+| PILOT | soft; host | 16 + 8 a frame (the readings, then the shift) |
 | V, ITS | LDPC; host | 4 blocksMax each a frame |
-| REC | LDPC; host | 4 + 484 recCap a batch |
+| REC | LDPC; host | 4 + 480 recCap a batch |
 | BCOUNTS | gate (zeroes), transform, rule stage; host | 32 a frame |
 
 The shared tables are built once, not per lane: the transform's twiddles, detrend basis, rows uniform, PIC and the
 gate's uniform; the UV and UC table, 4 B an entry each; the rule stage's TAB (every version's row, each code's INV,
 WHITE, the learned stops' words) and each code's uniform (its block rows, data slots and the CRC powers).
 
-`bh.readBytes` a batch = (4 + 484 recCap) + 2 (4 B blocksMax) + 32 B + (4 B blocksMax + 8 B) a frame, rounded up to 8.
-REC goes over whole because its count exists only on the device; reading count x 484 instead would take a second
+`bh.readBytes` a batch = (4 + 480 recCap) + (2 (4 B blocksMax) + 32 B + 24 B) a frame, rounded up to 8.
+REC goes over whole because its count exists only on the device; reading count x 480 instead would take a second
 round trip.
 
 ## 10. The fused pass 1
 
 Pass 1 samples each picture itself: no grid is written or read.
 
-- Each sample: module (g0 + x step, g0 + y step) through `toImage` (`glsl/common.mjs` MAP,
-  the lens about the camera's axis included), plus the Coons patch of F7's residuals, read by `bilinH` (`glsl/common.mjs`
-  LUMH: one fetch through the texture unit's linear filter, the position clamped to the frame's outer texel centres, so
-  a read past the frame takes its edge texel as `bilin0`'s clamp to the frame's own w, h does; the weights the device's
-  fixed point), in the same order a thread loads its 8 rows of a column quad. The patch
-  is `glsl/sample.mjs` COONS, the one copy of it. A side's curve depends on one coordinate
-  only, so the pass takes the top and bottom curves and the weight across once a column and the left and right curves
-  and the weight down once a row: 24 curves a thread for its 32 samples, where a sample at a time evaluates 128.
+- Each sample: module (g0 + x step, g0 + y step) through `toImage` (`slang/src/lib/map.slang`: REFIT's homography), plus
+  the lens about the camera's axis (`slang/register.mjs` LENS, ANCH_REFIT's record) and the anchors' mesh, read by
+  `bilinH` (`slang/src/lib/lumh.slang`: one fetch through the texture unit's linear filter, the position clamped to the
+  frame's outer texel centres, so a read past the frame takes its edge texel as `bilin0`'s clamp to the frame's own w, h
+  does; the weights the device's fixed point), in the same order a thread loads its 8 rows of a column quad. (Until
+  2026-11-24 a Coons patch of F7's side curves was added too, `glsl/sample.mjs`; the map is the C's model since.)
 - Bindings: 8 storage buffers (LISTS, twiddles, PART, Y, BCOUNTS, maps, resid, and the anchors' records), the frame
   texture and the linear sampler its bilinear reads go through (binding 11: one filtered fetch a sample, the position
   clamped to the frame's outer texel centres), and two uniforms:

@@ -49,7 +49,7 @@ bool win32IsFullscreen(void* hwnd);
 
 // ai: Scaling (Send's Performance, 2026-11-17): how the picture is brought to its place. Bilinear, the expand kernel into an
 // ai: RGBA image and the blit's linear filter (the presenter's stretch before 2026-11-17, the default); Lanczos, Lanczos-3
-// ai: on the grey picture in two passes (liblizard/core/tx/scale_h.comp, scale_v.comp; a code in Colours coloured in the
+// ai: on the grey picture in two passes (liblizard/core/tx/scale_h.slang, scale_v.slang; a code in Colours coloured in the
 // ai: last pass, its colours the line from its ink to its paper; about 3.6 against 1.2 ms a picture on the 9950X's two-CU
 // ai: iGPU at 2:1 on a 1080p panel); None, the picture at its own pixels, centred, its middle where the place is smaller
 // ai: (Size and Margin then only pick the format). The values are the JNI's and present_check's.

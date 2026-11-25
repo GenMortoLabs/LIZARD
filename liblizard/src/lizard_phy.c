@@ -33,10 +33,11 @@ struct lizard_ws {
   double sw_b[SW_TILES][6], sw_a[SW_TILES], sw_r[SW_TILES], sw_s[SW_TILES];
   unsigned char sw_d[SW_TILES];
   uint8_t *bits, *data;
-  // ai: The last decode's soft values for every slot of the frame (subch x 640, pos order), each sub-channel's
-  // ai: information estimate, and its rms axis value sqrt(m2 / 2) (0 where it read nothing): a block reads its
-  // ai: slots, its estimate and its pilots from these whatever sub-channels its slots fall in.
-  int8_t *llrf; double *sub_est;
+  // ai: The last decode's soft values for every slot of the frame (subch x 640, pos order) and each sub-channel's
+  // ai: information estimate: a block reads its slots and its estimate from these whatever sub-channels its slots fall
+  // ai: in (the pilots' readings are pil_c and pil_r, below); and each sub-channel's soft values' scale (sub_scale), its
+  // ai: pilots' weight in the readings (lizard_pilot).
+  int8_t *llrf; double *sub_est, *sub_w;
   // The bit map (lizard_phy.h LIZARD_BITMAP): the whitening bit of every slot of the frame, one a byte in pos order, two
   // slots a coefficient; each tier's slot to codeword bit permutation; and the slot-order and codeword-order
   // buffers the map is applied between.
@@ -92,12 +93,10 @@ static double axis_info(double g) { return g > 0 ? pow(1 - pow(2, -0.3073 * pow(
 #define STRIP_HALF (LIZARD_STRIP / 2)
 
 #define LIZARD_DECLINE 0.2f
-#define LIZARD_STALL_IT 9
-#define LIZARD_STALL_RATIO 0.95f
 
 typedef struct { int r2, u, v; } coef_t;
 
-// Slots block b is sent on (two a coefficient), and the most any block of the frame is.
+// Slots block b is sent on (two a coefficient).
 static int block_bits(const lizard_t *f, int b) { return f->tier[f->block_tier[b]].slots; }
 // ai: The pilots (SPEC 7.3), apart from the blocks: in every sub-channel coefficient 0 is a count pilot (both axes the
 // ai: whitening XOR bit j & 1 of the painted count, j the sub-channel) and coefficient PB_REF a reference pilot (the
@@ -108,6 +107,7 @@ static int block_bits(const lizard_t *f, int b) { return f->tier[f->block_tier[b
 #define PB_DSUB (LIZARD_SUB - 2)
 #define OB_DSUB2 (2 * PB_DSUB)
 static inline int pb_fcoef(int dc) { const int j = dc / PB_DSUB, r = dc % PB_DSUB; return j * LIZARD_SUB + (r < PB_REF - 1 ? 1 + r : 2 + r); }
+// ai: the slots the longest block of the frame is sent on
 static int max_bits(const lizard_t *f) { int m = 0; for (int t = 0; t < f->tiers; t++) if (f->tier[t].slots > m) m = f->tier[t].slots; return m; }
 static int max_k(const lizard_t *f) { int m = 0; for (int t = 0; t < f->tiers; t++) if (f->code[t].k > m) m = f->code[t].k; return m; }
 // ai: the longest codeword among the tiers: more than its block's slots where a code has bits never sent (ldpc.h np)
@@ -137,14 +137,12 @@ static void perm_fill(int *perm, int n) {
   while (gcd(P, n) != 1) P++;
   for (int i = 0; i < n; i++) perm[i] = (int)((long)i * P % n);
 }
-// A block's codeword onto its slots: slot i = codeword bit perm[i], whitened; the slots past the codeword carry a
-// ai: bit of the painted picture's count (the pilots, lizard_parity: bit 0 on an even block b, bit 1 on an odd one;
-// ai: the count 0 before 2026-09-30, one bit for every block until 2026-10-01), whitened too. first is the block's
-// first coefficient (its first slot over 2: every block's slots are even).
-static void map_out(const lizard_t *f, const struct lizard_ws *w, int t, int b, int first, int nb, const uint8_t *cw, uint8_t *slot) {
+// A block's codeword onto its slots: slot i = codeword bit perm[i], whitened. A block's slots are its code's sent bits
+// ai: (nt; the pilots are apart from the blocks, lizard_parity). first is the block's first data coefficient (its first
+// ai: data slot over 2: every block's slots are even).
+static void map_out(const lizard_t *f, const struct lizard_ws *w, int t, int first, const uint8_t *cw, uint8_t *slot) {
   const ldpc_t *c = &f->code[t];
   const int nt = c->nt, *perm = w->perm[t];
-  const uint8_t q = (uint8_t)((f->parity >> (b & 1)) & 1);
   const uint8_t *wh = w->dwhite + 2 * (size_t)first;
   int i = 0;
 #ifdef OB_NEON
@@ -172,7 +170,7 @@ static void map_out(const lizard_t *f, const struct lizard_ws *w, int t, int b, 
     _mm_storeu_si128((__m128i *)(void *)(slot + i), _mm_xor_si128(g, _mm_loadu_si128((const __m128i *)(const void *)(wh + i))));
   }
 #endif
-  for (; i < nb; i++) slot[i] = (uint8_t)((i < nt ? cw[perm[i]] : q) ^ wh[i]);
+  for (; i < nt; i++) slot[i] = (uint8_t)(cw[perm[i]] ^ wh[i]);
 }
 // The soft values the other way: slot order in, codeword order out, the whitening taken back off by sign; the bits
 // never sent come in as 0 here (the 6/7 code's known zeros, which the caller then sets known with the block's others).
@@ -391,6 +389,7 @@ static int ws_init(lizard_t *f) {
   w->bits = malloc(nc); w->data = malloc((size_t)max_k(f) + 8);
   w->slot = malloc(nc); w->llr2 = malloc(nc); w->white = malloc((size_t)f->subch * LIZARD_SUB * 2);
   w->llrf = malloc((size_t)f->subch * LIZARD_SUB * 2); w->sub_est = malloc((size_t)f->subch * sizeof(double));
+  w->sub_w = malloc((size_t)f->subch * sizeof(double));
   w->blk_its = calloc((size_t)f->blocks_max, 1); w->blk_est = calloc((size_t)f->blocks_max, sizeof(float));
   w->rot = malloc((size_t)2 * ALIGN_TURNS * sizeof(float));
   if (w->rot) for (int i = 0; i < ALIGN_TURNS; i++) { const double th = 2.0 * 3.14159265358979323846 * i / ALIGN_TURNS; w->rot[2 * i] = (float)cos(th); w->rot[2 * i + 1] = (float)sin(th); }
@@ -399,7 +398,7 @@ static int ws_init(lizard_t *f) {
   w->fmt_bytes = ob_fmt_bytes(side_mod, f->frame.reserve);
   w->fmt_q = w->fmt_cells ? malloc((size_t)4 * w->fmt_cells * sizeof(float)) : 0;
   double *e = malloc((size_t)2 * n * sizeof(double));
-  if (!w->tre || !w->tim || !w->wre || !w->wim || !tab || !w->bits || !w->data || !e || !w->blk_its || !w->blk_est || (w->fmt_cells && !w->fmt_q) || !w->slot || !w->llr2 || !w->white || !w->llrf || !w->sub_est) { free(tab); free(e); return -1; }
+  if (!w->tre || !w->tim || !w->wre || !w->wim || !tab || !w->bits || !w->data || !e || !w->blk_its || !w->blk_est || (w->fmt_cells && !w->fmt_q) || !w->slot || !w->llr2 || !w->white || !w->llrf || !w->sub_est || !w->sub_w) { free(tab); free(e); return -1; }
   whiten_fill(w->white, f->subch * LIZARD_SUB * 2);
   {
     const int nd = f->subch * PB_DSUB;
@@ -475,13 +474,12 @@ static int ws_init(lizard_t *f) {
 // The word restates this lizard_t rather than being handed to us, so it cannot come to disagree with what is
 // painted: the version and the layout's counts are the codec's (lizard_layout), the clock the sender's (lizard_clock).
 // The fountain's header is payload. A configuration the word cannot express (a sub-channel count that is not a multiple of
-// 16, LIZARD_STEP, or 3/4 blocks other than the rest of the frame holds, which only lizard_init_tiers makes) blanks the
+// 16, LIZARD_STEP, which only lizard_init_tiers makes) blanks the
 // band instead: a receiver that finds nothing there knows it was told nothing, where one that finds a lie does not.
 static void fmt_paint(lizard_t *f) {
   f->fmt.version = f->subch / LIZARD_STEP;
-  int m = -1;
   const int fb = ob_fmt_bytes(f->frame.w < f->frame.h ? f->frame.w : f->frame.h, f->frame.reserve);
-  const int stated = f->subch % LIZARD_STEP == 0 && ob_fmt_layout(f->fmt.version, f->fmt.count, &m) && m == f->tier[OB_TIER_34].blocks;
+  const int stated = f->subch % LIZARD_STEP == 0 && ob_fmt_layout(f->fmt.version, f->fmt.count);
   if (!stated || !fb || ob_fmt_encode(&f->fmt, f->fmt_cw, fb)) memset(f->fmt_cw, 0, sizeof f->fmt_cw);
   ob_layout_set_fmt(&f->frame, f->fmt_cw);
 }
@@ -502,21 +500,25 @@ int lizard_pilot(const lizard_t *f, float r[2], float sd[2]) {
   int all = 0;
   // ai: bit g from the sub-channels j = g mod 2, every one: their count pilots over the references of every sub-channel
   // ai: (the two halves interleave over the same frequencies, so all the references scale each bit: half the
-  // ai: reference's noise), and the standard error by the delta method (the residuals c - r ref, each sub-channel's own);
+  // ai: reference's noise), each sub-channel's pilots in its soft values' scale (sub_w, 2 sqrt(2 A^2) / N times 0.7:
+  // ai: the matched filter's weight, A / N), so the pilots read as the decoder reads its data: a sub-channel a smooth
+  // ai: interference swells (a glare's blob in the innermost; no constant modulus there, A^2 near 0, N large) counts
+  // ai: little, and one past what the camera resolves (A near 0) adds its noise and no bias. Weighted by 1 / N alone,
+  // ai: the noise-only sub-channels, whose N the moments read low about half the time, carried the readings under
+  // ai: blur. The standard error by the delta method (the residuals c - r ref, each sub-channel's own, by its weight);
   // ai: a parity with none read reads NaN, not a zero a caller would take for an even mix (soft values made elsewhere,
   // ai: lizard_finish_ext)
-  double ra = 0;
-  int ka = 0;
-  for (int j = 0; j < f->subch; j++) if (w->pil_r[j] == w->pil_r[j]) { ra += w->pil_r[j]; ka++; }
+  double ra = 0, wa = 0;
+  for (int j = 0; j < f->subch; j++) if (w->pil_r[j] == w->pil_r[j]) { ra += w->sub_w[j] * w->pil_r[j]; wa += w->sub_w[j]; }
   for (int g = 0; g < 2; g++) {
-    double sc = 0;
+    double sc = 0, wg = 0;
     int k = 0;
-    for (int j = g; j < f->subch; j += 2) if (w->pil_r[j] == w->pil_r[j]) { sc += w->pil_c[j]; k++; }
-    const double sr = ka ? ra * k / ka : 0;
+    for (int j = g; j < f->subch; j += 2) if (w->pil_r[j] == w->pil_r[j]) { sc += w->sub_w[j] * w->pil_c[j]; wg += w->sub_w[j]; k++; }
+    const double sr = wa > 0 ? ra * wg / wa : 0;
     if (!k || sr == 0) { if (r) r[g] = NAN; if (sd) sd[g] = NAN; continue; }
     const double rg = sc / sr;
     double e2 = 0;
-    for (int j = g; j < f->subch; j += 2) if (w->pil_r[j] == w->pil_r[j]) { const double e = w->pil_c[j] - rg * w->pil_r[j]; e2 += e * e; }
+    for (int j = g; j < f->subch; j += 2) if (w->pil_r[j] == w->pil_r[j]) { const double e = w->sub_w[j] * (w->pil_c[j] - rg * w->pil_r[j]); e2 += e * e; }
     if (r) r[g] = (float)rg;
     if (sd) sd[g] = (float)(sqrt(e2) / fabs(sr));
     all += k;
@@ -539,7 +541,7 @@ static int set_layout(lizard_t *f, const int blocks[OB_TIERS]) {
     f->tier[t].blocks = blocks[t];
     for (int q = 0; q < blocks[t]; q++, b++, at += f->tier[t].slots) { f->block_tier[b] = t; f->block_slot[b] = at; f->used = at + f->tier[t].slots; }
   }
-  f->fmt.count[0] = blocks[OB_TIER_67]; f->fmt.count[1] = blocks[OB_TIER_23]; f->fmt.count[2] = blocks[OB_TIER_12];
+  for (int t = 0; t < OB_TIERS; t++) f->fmt.count[t] = blocks[t];
   fmt_paint(f);
   return 0;
 }
@@ -552,12 +554,11 @@ int lizard_clock(lizard_t *f, int fps, int delay) {
   return 0;
 }
 
-int lizard_layout(lizard_t *f, const int count[3]) {
-  int m;
-  if (f->subch % LIZARD_STEP || !ob_fmt_layout(f->subch / LIZARD_STEP, count, &m)) return -1;
-  if (f->tier[OB_TIER_34].blocks == m && f->fmt.count[0] == count[0] && f->fmt.count[1] == count[1] && f->fmt.count[2] == count[2] && f->blocks) return 0;
-  const int b[OB_TIERS] = { count[0], m, count[1], count[2] };
-  return set_layout(f, b);
+int lizard_layout(lizard_t *f, const int count[OB_TIERS]) {
+  if (f->subch % LIZARD_STEP || !ob_fmt_layout(f->subch / LIZARD_STEP, count)) return -1;
+  int same = f->blocks > 0;
+  for (int t = 0; t < OB_TIERS; t++) same = same && f->tier[t].blocks == count[t];
+  return same ? 0 : set_layout(f, count);
 }
 
 static int init(lizard_t *f, int n, int subch, const int blocks[OB_TIERS], int span) {
@@ -658,43 +659,41 @@ static int init(lizard_t *f, int n, int subch, const int blocks[OB_TIERS], int s
 
 const int LIZARD_RING[LIZARD_RINGS] = { 64, 128, 256 };
 
-// ai: lizard_phy.h: a block's slots, its code's sent bits and its pilots (16 at 6/7, 32 at 3/4, none at 2/3 and 1/2)
+// ai: lizard_phy.h: a block's slots, its code's sent bits (the pilots apart from the blocks)
 int lizard_block_slots(int rate) { return ob_block_slots(rate); }
 
-// ai: The default senders' layout: each of the 6/7, 2/3 and 1/2 counts its target thousandths of the frame's slots
-// ai: (LIZARD_TIER_IN, LIZARD_TIER_23, LIZARD_TIER_OUT) in whole blocks, rounded half up; the 1/2, then the 2/3, then the
-// ai: 6/7 trimmed a block at a time until one 3/4 block fits; the 3/4 filling the rest, its remainder padded. A sender's
-// ai: choice alone (a frame's word states its counts). Until 2026-11-19 a least-squares search over every count, which
-// ai: gave these counts at every version.
+// ai: The default senders' layout: each of the 3/4, 2/3 and 1/2 counts its target thousandths of the frame's slots
+// ai: (LIZARD_TIER_34, LIZARD_TIER_23, LIZARD_TIER_OUT) in whole blocks, rounded half up; the 1/2, then the 2/3, then the
+// ai: 3/4 trimmed a block at a time until one 6/7 block fits; the 6/7 filling the rest, its remainder padded. A sender's
+// ai: choice alone (a frame's word states its counts). The shares the 3/4 filling's (2026-11-19 to 11-23: 6/7 390, 2/3
+// ai: 150 and 1/2 200 stated, the 3/4 the rest), the rounding now the 6/7's: 47 of the 67 versions move a block between
+// ai: the two, LIZARD-48 a 6/7 pair for a 1/2 block (research/build/fill67-2026-11-23/model.py). Until 2026-11-19 a
+// ai: least-squares search over every count.
 int lizard_tiers_for(int subch, lizard_tier_t tier[LIZARD_TIERS]) {
   if (subch < LIZARD_STEP * OB_FMT_VERSION_MIN || subch % LIZARD_STEP || subch > LIZARD_STEP * OB_FMT_VERSION_MAX) return 0;
-  // ai: the tiers in order 6/7, 3/4 (filling), 2/3, 1/2
-  static const int RATE[LIZARD_TIERS] = { 6, LIZARD_RATE, 3, 2 }, TGT[LIZARD_TIERS] = { LIZARD_TIER_IN, 0, LIZARD_TIER_23, LIZARD_TIER_OUT };
-  static const int TRIM[3] = { 3, 2, 0 };
+  // ai: the tiers in order 6/7 (filling), 3/4, 2/3, 1/2
+  static const int RATE[LIZARD_TIERS] = { LIZARD_RATE, 4, 3, 2 }, TGT[LIZARD_TIERS] = { 0, LIZARD_TIER_34, LIZARD_TIER_23, LIZARD_TIER_OUT };
+  static const int TRIM[3] = { 3, 2, 1 };
   const long long all = (long long)subch * OB_DSUB2;
   int slots[LIZARD_TIERS], cnt[LIZARD_TIERS] = { 0 };
   for (int q = 0; q < LIZARD_TIERS; q++) {
     slots[q] = lizard_block_slots(RATE[q]);
-    if (q != 1) cnt[q] = (int)((2 * TGT[q] * all + 1000LL * slots[q]) / (2000LL * slots[q]));
+    if (q) cnt[q] = (int)((2 * TGT[q] * all + 1000LL * slots[q]) / (2000LL * slots[q]));
   }
-  long long used = (long long)cnt[0] * slots[0] + (long long)cnt[2] * slots[2] + (long long)cnt[3] * slots[3];
-  for (int i = 0; all - used < slots[1];) {
+  long long used = (long long)cnt[1] * slots[1] + (long long)cnt[2] * slots[2] + (long long)cnt[3] * slots[3];
+  for (int i = 0; all - used < slots[0];) {
     while (i < 3 && !cnt[TRIM[i]]) i++;
     if (i == 3) return 0;
     cnt[TRIM[i]]--;
     used -= slots[TRIM[i]];
   }
-  cnt[1] = (int)((all - used) / slots[1]);
+  cnt[0] = (int)((all - used) / slots[0]);
   int t = 0;
   for (int q = 0; q < LIZARD_TIERS; q++) if (cnt[q]) tier[t++] = (lizard_tier_t){ RATE[q], cnt[q], slots[q] };
   return t;
 }
-int lizard_blocks_max_for(int subch) {
-  const long long all = (long long)subch * OB_DSUB2, s7 = lizard_block_slots(OB_TIER_RATE[OB_TIER_67]), s3 = lizard_block_slots(OB_TIER_RATE[OB_TIER_34]);
-  int most = 0;
-  for (int a = 0; a <= OB_FMT_COUNT67_MAX && a * s7 + s3 <= all; a++) { const int k = a + (int)((all - a * s7) / s3); if (k > most) most = k; }
-  return most;
-}
+// ai: the 6/7 blocks alone: the smallest block and the filling one, so no stated count adds a block it does not cost a 6/7
+int lizard_blocks_max_for(int subch) { return (int)((long long)subch * OB_DSUB2 / lizard_block_slots(OB_TIER_RATE[OB_TIER_67])); }
 int lizard_blocks_for(int subch) {
   lizard_tier_t tier[LIZARD_TIERS];
   const int n = lizard_tiers_for(subch, tier);
@@ -810,7 +809,7 @@ void lizard_free(lizard_t *f) {
   struct lizard_ws *w = f->ws;
   if (w) { ob_fbufs_free(&w->fbufs); free(w->tre); free(w->wre); free(w->wim); free(w->cx); free(w->bits); free(w->data); free(w->fmt_q); free(w->blk_its); free(w->blk_est);
     free(w->dwhite); free(w->dllr); free(w->pil_c); free(w->pil_r);
-    free(w->rot); free(w->dbg_sym); free(w->dbg_coef); free(w->white); free(w->slot); free(w->llr2); free(w->llrf); free(w->sub_est); free(w->rs_i0); free(w->rs_w); free(w->rs_hb); free(w->rs_hw); free(w->rs_pic); free(w->rs_tmp); for (int t = 0; t < LIZARD_TIERS; t++) free(w->perm[t]);
+    free(w->rot); free(w->dbg_sym); free(w->dbg_coef); free(w->white); free(w->slot); free(w->llr2); free(w->llrf); free(w->sub_est); free(w->sub_w); free(w->rs_i0); free(w->rs_w); free(w->rs_hb); free(w->rs_hw); free(w->rs_pic); free(w->rs_tmp); for (int t = 0; t < LIZARD_TIERS; t++) free(w->perm[t]);
 #if defined(OB_NEON) || defined(OB_X86)
     free(w->dkeep);
 #endif
@@ -1262,7 +1261,7 @@ void lizard_encode(const lizard_t *f, const uint8_t *blocks, float *drive) {
   memset(w->tre, 0, tn * sizeof(float)); memset(w->tim, 0, tn * sizeof(float));
   for (int b = 0; b < f->blocks; b++) {
     const uint8_t *src = blocks + (size_t)b * f->block_bytes;
-    // nb: the slots the block is sent on. first: its first coefficient, in pos order.
+    // nb: the slots the block is sent on. first: its first data coefficient (pb_fcoef: its frame coefficient).
     const int nb = block_bits(f, b), first = f->block_slot[b] / 2;
     memset(bits, 0, (size_t)nb);
     const ldpc_t *code = &f->code[f->block_tier[b]];
@@ -1296,7 +1295,7 @@ void lizard_encode(const lizard_t *f, const uint8_t *blocks, float *drive) {
     for (int i = 8 * i0; i < B * 8; i++) data[i] = (src[i >> 3] >> (7 - (i & 7))) & 1;
     for (int i = 0; i < 64; i++) data[B * 8 + i] = (uint8_t)((crc >> (63 - i)) & 1);
     ldpc_encode(code, data, bits);            // code.nt == nb, a block's slots its sent bits
-    map_out(f, w, f->block_tier[b], b, first, nb, bits, w->slot); memcpy(bits, w->slot, (size_t)nb);
+    map_out(f, w, f->block_tier[b], first, bits, w->slot); memcpy(bits, w->slot, (size_t)nb);
     // Gray QPSK, unit magnitude: bit pair (i, q) picks the sign of each axis. Only the upper half-plane is filled.
     // The lower is its conjugate reflection, so the picture is twice the real part of this half's transform,
     // and the factor of two goes the way of every other scale, into the clipping level.
@@ -1519,7 +1518,8 @@ static void sub_scaled(float *tr, float *ti, const float *xr, const float *xi, f
 }
 
 // ai: Sub-channel j's soft value scale from its moments' sums over its LIZARD_SUB coefficients (m2 of |y|^2, m4 of
-// ai: |y|^4): its information estimate set (sub_est), the scale returned.
+// ai: |y|^4): its information estimate (sub_est) and the scale, its pilots' weight in the readings too (sub_w), set,
+// ai: the scale returned.
 static float sub_scale(struct lizard_ws *w, int j, double m2, double m4) {
   m2 /= LIZARD_SUB; m4 /= LIZARD_SUB;
   double a2 = 2 * m2 * m2 - m4;
@@ -1528,7 +1528,9 @@ static float sub_scale(struct lizard_ws *w, int j, double m2, double m4) {
   if (nv < 0.02 * m2) nv = 0.02 * m2;
   w->sub_est[j] = axis_info(a2 / nv);
   // Per axis: amplitude sqrt(a2 / 2), noise variance nv / 2, so LLR = 2 sqrt(2 a2) y / nv.
-  return (float)(0.7 * 2 * sqrt(2 * a2) / nv);
+  const float k = (float)(0.7 * 2 * sqrt(2 * a2) / nv);
+  w->sub_w[j] = k;
+  return k;
 }
 #ifdef OB_NEON
 // ai: arm64: the soft values of sub-channels j to j + 3 (lizard_finish_ext's loop over sub-channels, four at once):
@@ -1685,8 +1687,8 @@ int lizard_acquire_quad(const lizard_t *f, const uint8_t *img, int iw, int ih, f
 // ai: step is more than 1.5 times the last and n / 2R stays between 1.5 and 2.24; the powers of two alone put
 // ai: LIZARD-144 at 1024 (2.99). 1152 and 1280 (since 2026-10-29) split the step from 1024 to 1536: LIZARD-576 to -720
 // ai: and -736 to -880 paint and read 0.56 and 0.69 of 1536's samples, the CPU painter and the C's sampler and transform
-// ai: the cheaper by that. 384 is the smallest: 256 held only versions 1 and 2, which are no formats, and left the list
-// ai: (2026-11-06). A receiver reads n off the word's version through this.
+// ai: the cheaper by that. 384 is the smallest: 256 held only versions 1 and 2, and left the list (2026-11-06); they and
+// ai: version 3 paint at 384. A receiver reads n off the word's version through this.
 const int LIZARD_PICTURES[LIZARD_NPICTURES] = { 384, 512, 768, 1024, 1152, 1280, 1536 };
 int lizard_n_for(int subch) {
   const double r = sqrt(2.0 * LIZARD_SUB * subch / 3.14159265358979323846);
@@ -1710,7 +1712,7 @@ static void drop_hold(const lizard_t *f) {
 // ai: scores each ring's track). Its word says what is inside, and nothing checks it against the ring: any ring may
 // ai: carry any picture (since 2026-09-27). Until then a codec held each picture size
 // ai: at its own side count, a registration the word did not confirm was tried again at the other counts, and one
-// ai: with no word stood at the count's picture; a receiver now holds the last word itself (wasm.c lizard_any_rx).
+// ai: with no word stood at the count's picture; a frame whose word does not read is now not finished (any.c).
 int lizard_acquire_ring(const lizard_t *const *rings, int k, const uint8_t *img, int iw, int ih, float gamma, ob_result_t *res, int *which) {
   const ob_layout_t *Ls[LIZARD_RINGS];
   *which = -1;
@@ -1754,7 +1756,7 @@ static int acquire_hold(const lizard_t *f, const image_t *pim, ob_reg_t *reg_in,
   w->fmt_rx_ok = 0;
   w->fmt_read = w->fmt_cells && ob_thin_read_fmt(&f->frame, &im, &reg, w->fmt_q, w->fmt_cells);
   if (w->fmt_read) w->fmt_rx_ok = ob_fmt_decode(w->fmt_q, w->fmt_cells, w->fmt_bytes, &w->fmt_rx) == 0;
-  // ai: the frame is finished at the layout its own static word states, where the word names this codec's version
+  // ai: the frame is finished at the layout its own word states, where the word names this codec's version
   // ai: (2026-11-18: the word is read before the frame, the inside decoded by it). The layout is the frame's state, as
   // ai: the workspace is: a codec belongs to one thread at a time (lizard_phy.h), so it is set through the const here.
   if (w->fmt_rx_ok && w->fmt_rx.version * LIZARD_STEP == f->subch) lizard_layout((lizard_t *)f, w->fmt_rx.count);
@@ -2035,8 +2037,8 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
 }
 
 // ai: The blocks from the frame's soft values (lizard_finish_ext): made here from the spectrum (the pilots' turn, each
-// ai: sub-channel's moments) or handed in (ext_llr, ext_est); then each block's pilots, the decline gate, the LDPC and
-// ai: the CRC, the same either way. t0: when the decode's back half began, for res->ms_sample.
+// ai: sub-channel's moments) or handed in (ext_llr, ext_est); then the pilots' readings (none from soft values handed
+// ai: in), each block's decline gate, LDPC and CRC, the same either way. t0: when the decode's back half began, for res->ms_sample.
 static int frame_blocks(const lizard_t *f, struct lizard_ws *w, const int8_t *ext_llr, const float *ext_est, uint8_t *blocks, uint8_t *ok, ob_result_t *res, double t0) {
   const int n = f->n, bw = f->bw;
   const int armed = ob_debug_hash != 0;
@@ -2125,19 +2127,19 @@ static int frame_blocks(const lizard_t *f, struct lizard_ws *w, const int8_t *ex
       w->blk_est[b] = (float)(info / nb); w->blk_its[b] = 0;
       if (armed) hsh = fnv(hsh, llr, (size_t)nb);
       ob_prof_ms[PROF_F_LLR] += ob_now_ms() - tb; tb = ob_now_ms();
-      // A failed block used to burn all 30 iterations, up to 44% of a hard frame's decode. Two ways out, both set on
-      // 78 000 blocks over 17 conditions and 5 configurations, so that not one block that
-      // decodes is lost: a block whose sub-channels hold next to nothing is not tried (the estimate runs low on
-      // outer rings at low resolution, hence a bar far under the code rate: the lowest decoded block was at 0.33 of
-      // its rate), and one still at its first count of violated checks after 9 iterations is let go (slow blocks
-      // that decoded were at 0.91 of it or under by then). Together 45 to 60% of the iterations.
+      // A block that will not clear would burn every iteration to the cap. Two ways out: a block whose sub-channels hold
+      // next to nothing is not tried (the estimate runs low on outer rings at low resolution, hence a bar far under the
+      // code rate: the lowest decoded block was at 0.33 of its rate; set on 78 000 blocks over 17 conditions and 5
+      // configurations so that not one block that decodes is lost), and the LDPC's learned stop (ldpc.c, ldpc_stop.h)
+      // gives up on one going nowhere after any iteration, which lets the cap be 60 (LDPC_STOP_CAP): every block that
+      // clears by 60, at about half the iterations the 9-iteration stall rule took at a cap of 30.
       if (w->blk_est[b] < LIZARD_DECLINE * (float)code->k / (float)code->nt) { w->blk_its[b] = -2; ob_prof_ms[PROF_F_LDPC] += ob_now_ms() - tb; continue; }
       // Slot order to codeword order through the bit map, whitening off, and only for a block that is tried. From
       // here on the soft values are the code's (the bits never sent at 0).
       int8_t *cl = w->llr2;
       map_in(f, w, f->block_tier[b], first, llr, cl);
       for (int i = (f->block_bytes + LIZARD_CRC) * 8; i < code->k; i++) cl[i] = 127;   // the zeros past the block in its code's k: known, and said so
-      const int its = ldpc_decode_stall(code, cl, bits, 30, LIZARD_STALL_IT, LIZARD_STALL_RATIO);
+      const int its = ldpc_decode_stop(code, cl, bits, LDPC_STOP_CAP);
       w->blk_its[b] = (int8_t)its;
       ob_prof_ms[PROF_F_LDPC] += ob_now_ms() - tb;
       if (its < 0) continue;

@@ -32,7 +32,7 @@ object SendRows {
     // ai: rate the pictures shown carry, "" while paused or not yet measured) and with Show statistics on Compressed (the
     // ai: bytes that go), Pass and Pass time (a pass's data blocks, cycle, over the blocks a second); the test stream its
     // ai: name and Speed. Every row from Start, a value "" until known, so the block does not move. Both apps'; the
-    // ai: web's twin is send.mjs sendDetails.
+    // ai: web's twin is send.mjs showDetails.
     fun details(name: String, test: Boolean, preparing: Boolean, size: Long, sent: Long, files: Int, speedKBs: Double,
                 pass: Double, cycle: Double, stats: Boolean): Details {
         val speed = if (speedKBs > 0) Readout.rate(speedKBs) else ""

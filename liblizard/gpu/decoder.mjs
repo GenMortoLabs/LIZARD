@@ -1,6 +1,6 @@
 // The GPU decoder's setup: the device objects every native host builds (../core/dec/: setup.cpp builds them, front.cpp
 // runs the batches), made here by FrontHalf.create on the recording device of ../gen/mockgpu.mjs and written out by
-// ../gen/gen.mjs. Every stage is GLSL (glsl/), its constants, tables and plans plain JS (plan/).
+// ../gen/gen.mjs. Every stage is Slang (slang/), its constants, tables and plans plain JS (plan/).
 //
 // A batch is up to B frames, each a layer of one texture. Everything a batch does is encoded into one command
 // buffer and comes back in one readback; nothing in between waits on the host. Frames in a batch may differ in
@@ -11,13 +11,13 @@
 // ai: The WebGPU run-time half that ran these on a browser's device (lanes, ensure, plan, the Batcher, the ring,
 // ai: run and batch, the int8 twins' measurement, the self-test's probe) and the WGSL twins of every stage are in
 // ai: archive/webgpu-decoder/ (2026-10-31): the native host is its port, name for name.
-import { PYRAMID } from "./glsl/pyramid.mjs";
-import { VOTE, GATHER, COMPLETE, SCORE, PICK, REDO, PEAKS, TRACE } from "./glsl/finder.mjs";
-import { SELECT } from "./glsl/bank.mjs";
-import { NODES, REFIT, REFIT_POST, nodesSource } from "./glsl/register.mjs";
-import { WORD } from "./glsl/word.mjs";
-import { ANCH_FIND, ANCH_PREDICT, ANCH_REFIT, ANCH_FIT, ANCH_SUMS } from "./glsl/anchors.mjs";
-import { classifySource } from "./glsl/classify.mjs";
+import { PYRAMID } from "./slang/pyramid.mjs";
+import { VOTE, GATHER, COMPLETE, SCORE, PICK, REDO, PEAKS, TRACE } from "./slang/finder.mjs";
+import { SELECT } from "./slang/bank.mjs";
+import { NODES, REFIT, nodesSource } from "./slang/register.mjs";
+import { WORD } from "./slang/word.mjs";
+import { ANCH_FIND, ANCH_PREDICT, ANCH_REFIT, ANCH_FIT, ANCH_SUMS } from "./slang/anchors.mjs";
+import { classifySource } from "./slang/classify.mjs";
 import { SLOTS } from "./plan/common.mjs";
 import { RING_COUNT } from "./plan/finder.mjs";
 import { ROUND, ANCH_ROUND, NODES_MAX, LIGHT_MAX, WINDOW, SUB, ringOrder } from "./plan/register.mjs";
@@ -39,8 +39,8 @@ export { LEVELS, TAU };
 // F6: the track score a frame's best hypothesis must reach (src/acquire.c accepts a mark quad at 0.15).
 export const TAU_TRACK = 0.15;
 // ai: The host's constants the native port (core/dec/front.cpp) reads from the generated setup (../gen/gen.mjs).
-export const RESULT = 32;   // floats a frame in the finder's result record (glsl/finder.mjs PICK)
-// ai: sel a frame: (ring, 1 + the version it decodes at, picture slot, 0), vec4u (glsl/word.mjs).
+export const RESULT = 32;   // floats a frame in the finder's result record (slang/finder.mjs PICK)
+// ai: sel a frame: (ring, 1 + the version it decodes at, picture slot, 0), vec4u (slang/word.mjs).
 export const SEL_WORDS = 4;
 export const TS_MAX = 80;   // timestamps a batch's readback has room for: 40 profiled stages
 export const TS_PLAIN = 2;   // ai: an unprofiled batch's one compute pass: its pair at 0, 1
@@ -100,12 +100,12 @@ async function int8Twin(doc, strict, log) {
 
 export class FrontHalf {
   // cap: peaks a frame F3 keeps for F4.
-  // ai: weights: F4's network (glsl/classify.mjs), a weights file's document (cnn/netfile.mjs), packed here for
+  // ai: weights: F4's network (slang/classify.mjs), a weights file's document (cnn/netfile.mjs), packed here for
   // ai: `precision` (or already packed by plan/classify_gemm.mjs packWeights / packWeightsF16). Required: every stage
   // ai: that finds is a trained net since 2026-09-26.
   // precision: "f16" stores the network's weights and activations as f16 where the adapter has shader-f16; without
   // it the classifier runs in f32 and the log says so.
-  // ai: "int8" runs the proposer (bank fcn2) on int8 codes (glsl/bank_fcn2.mjs, the contract in cnn/q8.mjs); a q8
+  // ai: "int8" runs the proposer (bank fcn2) on int8 codes (slang/bank_fcn2.mjs, the contract in cnn/q8.mjs); a q8
   // ai: classifier file (arch.quant, the contract in cnn/q8c.mjs) runs on the classifier's int8 form; everything
   // ai: else, the back half, the proposer and a float classifier file, runs in fh.floatPrecision: f16 where the
   // ai: adapter has shader-f16, else f32 ("f32" asked keeps f32 everywhere). A q8 classifier file at f16 or f32 is
@@ -121,7 +121,7 @@ export class FrontHalf {
   // ai: plan/classify.mjs INT8_TWINS). "measure" (the default under B "auto"): both forms built, the host timing them on
   // ai: its first stream batch and keeping the faster (front.cpp measureTwins); "int8": the twin, unmeasured; "off"
   // ai: (the default at a fixed B): the file as given.
-  // ai: The anchors (SPEC 6.13; glsl/anchors.mjs) always: ANCH_FIND, ANCH_PREDICT, the border's second search,
+  // ai: The anchors (SPEC 6.13; slang/anchors.mjs) always: ANCH_FIND, ANCH_PREDICT, the border's second search,
   // ai: ANCH_REFIT and ANCH_FIT after F7, pass 1 reading their records.
   static async create(adapter, tables, { B = "auto", cap = CAP, log = () => {}, weights = null, precision = "f32", backN = 1024, subgroups = true, twins = null } = {}) {
     if (tables?.rings?.length !== RING_COUNT || tables.pictures?.length !== SLOTS) throw new Error(`tables: gpu/tables.mjs formatTables(), ${RING_COUNT} rings and ${SLOTS} pictures`);
@@ -207,10 +207,10 @@ export class FrontHalf {
     }) });
   }
 
-  // ai: A stage's pipeline from its GLSL (pipeline.mjs computePipeline) on a layout of these entries.
-  async pipeline(glsl, entries) {
+  // ai: A stage's pipeline from its source (pipeline.mjs computePipeline) on a layout of these entries.
+  async pipeline(src, entries) {
     const bgl = this.layout(entries);
-    const p = await computePipeline(this.device, { code: { glsl }, layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }) });
+    const p = await computePipeline(this.device, { code: src, layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }) });
     return { p, bgl };
   }
 
@@ -235,14 +235,14 @@ export class FrontHalf {
     // ai: activations stored as halves (under 18,692 B; WebGPU promises only 16 KB) gets its FitError: no GPU decoder
     // ai: there, and the receiver decodes with the C.
     const bank = (async () => { this.bank = await import("./bank_fcn2.mjs"); await this.bank.build(this); })();
-    const [pyramid, large, twinLarge, vote, gather, complete, score, pick, redo, nodesP, refit, refitPost, wordP, select, peaks, trace] = await Promise.all([
-      // ai: The pyramid in one kernel (glsl/pyramid.mjs): the layer, the frame records, levels
+    const [pyramid, large, twinLarge, vote, gather, complete, score, pick, redo, nodesP, refit, wordP, select, peaks, trace] = await Promise.all([
+      // ai: The pyramid in one kernel (slang/pyramid.mjs): the layer, the frame records, levels
       // ai: 1 to 4, the levels' dims.
       P(PYRAMID, ["tex", "ro", "rw", "rw", "rw", "rw", "uniform"]),
       this.netForm(this.weights),
       // ai: The twin waiting to be measured, built beside the float form: { pipe, buf, w, plan }.
       tf ? this.netForm(tf.large) : null,
-      // ai: F5 (glsl/finder.mjs): VOTE a lane a reading into the accumulator, then GATHER a workgroup a frame, its
+      // ai: F5 (slang/finder.mjs): VOTE a lane a reading into the accumulator, then GATHER a workgroup a frame, its
       // ai: centre peaks (cand) and their quads.
       P(VOTE, ["ro", "ro", "rw", "uniform"]),
       P(GATHER, ["ro", "ro", "ro", "rw", "rw", "uniform", "ro", "rw"]),
@@ -254,20 +254,18 @@ export class FrontHalf {
       P(REDO, ["ro", "ro", "rw", "rw", "rw", "rw", "rw", "uniform", "rw", "uniform"]),
       P(NODES, [...LV, "ro", "ro", "ro", "ro", "rw", "uniform"]),
       P(REFIT, ["ro", "ro", "ro", "ro", "rw", "rw", "uniform"]),
-      // ai: F7's last step after the last round's REFIT (glsl/register.mjs REFIT_POST), on REFIT's bindings
-      P(REFIT_POST, ["ro", "ro", "ro", "ro", "rw", "rw", "uniform"]),
-      // ai: F8 (glsl/word.mjs): the levels, then maps, sel (read-write: sel.y = 1 + the configuration the frame decodes
+      // ai: F8 (slang/word.mjs): the levels, then maps, sel (read-write: sel.y = 1 + the configuration the frame decodes
       // ai: at, sel.z its picture), resid, the word plan's points, the finder's results, the word code and the lattice.
       P(WORD, [...LV, "ro", "rw", "ro", "ro", "rw", "uniform", "uniform"]),
-      // ai: F3 (glsl/bank.mjs SELECT)
+      // ai: F3 (slang/bank.mjs SELECT)
       P(SELECT, ["ro", "ro", "rw", "rw", "uniform"]),
-      // ai: F5b (glsl/finder.mjs PEAKS): a lane a cell, the merged rings' peaks into the frame's list
+      // ai: F5b (slang/finder.mjs PEAKS): a lane a cell, the merged rings' peaks into the frame's list
       P(PEAKS, ["ro", "ro", "rw", "rw", "uniform"]),
-      // ai: TRACE (glsl/finder.mjs): each quad's bend, a workgroup a (frame, quad): the levels, then quads
+      // ai: TRACE (slang/finder.mjs): each quad's bend, a workgroup a (frame, quad): the levels, then quads
       P(TRACE, [...LV, "rw"]),
       bank,
     ]);
-    Object.assign(this, { pyramid, vote, gather, complete, score, pick, redo, nodesP, refit, refitPost, wordP, select, peaks, trace });
+    Object.assign(this, { pyramid, vote, gather, complete, score, pick, redo, nodesP, refit, wordP, select, peaks, trace });
     this.classify = large.pipe;
     this.weightsBuf = large.buf;
     this.arch = large.plan.name;
@@ -295,13 +293,13 @@ export class FrontHalf {
     const p4 = new Uint32Array([this.cap, 0, 0, 0]);
     this.p4Uni = d.createBuffer({ size: 16, usage: U.UNIFORM | U.COPY_DST });
     d.queue.writeBuffer(this.p4Uni, 0, p4);
-    // ai: PICK's uniform (glsl/finder.mjs PICK's): the accept line and the rings' module counts, the same every batch.
+    // ai: PICK's uniform (slang/finder.mjs PICK's): the accept line and the rings' module counts, the same every batch.
     const pickAb = new ArrayBuffer(32);
     new Float32Array(pickAb)[0] = TAU_TRACK; new Float32Array(pickAb).set(this.modules, 4);
     this.pickUni = d.createBuffer({ size: pickAb.byteLength, usage: U.UNIFORM | U.COPY_DST });
     d.queue.writeBuffer(this.pickUni, 0, pickAb);
     // ai: F7's tables. Per ring: the border nodes in ring order, each with its window of the border as painted
-    // (glsl/register.mjs NODES).
+    // (slang/register.mjs NODES).
     const nodes = [], tmpl = [], count = new Uint32Array(4), nbase = new Uint32Array(4);
     rings.forEach((t, si) => {
       const nx = t.nodeX.length, M = t.modules;
@@ -334,7 +332,7 @@ export class FrontHalf {
     this.wordLatUni = d.createBuffer({ size: wl.byteLength, usage: U.UNIFORM | U.COPY_DST });
     d.queue.writeBuffer(this.wordLatUni, 0, wl);
     // Rounds of the node search: +-3 modules at half a module, one template sample a module; then +-0.6 at a
-    // ai: fifth, all four. Each with every node's count of the light samples it takes (glsl/register.mjs Round's light).
+    // ai: fifth, all four. Each with every node's count of the light samples it takes (slang/register.mjs Round's light).
     if (nodes.length / 4 > LIGHT_MAX) throw new Error(`${nodes.length / 4} nodes over the rings, room for ${LIGHT_MAX}`);
     // ai: a round's uniform (steps, stride, step), kept as a maker for the anchors' own round (buildAnchors)
     this.roundOf = ([steps, stride, step]) => {
@@ -359,8 +357,8 @@ export class FrontHalf {
     await this.buildAnchors();
   }
 
-  // ai: The anchors' stages (glsl/anchors.mjs), once, from build(): ANCH_FIND, ANCH_PREDICT, the border's second search
-  // ai: (nodesC: glsl/register.mjs nodesSource centred, on NODES' layout, with its own round, anchRound), ANCH_REFIT (ANCH_PREDICT
+  // ai: The anchors' stages (slang/anchors.mjs), once, from build(): ANCH_FIND, ANCH_PREDICT, the border's second search
+  // ai: (nodesC: slang/register.mjs nodesSource centred, on NODES' layout, with its own round, anchRound), ANCH_REFIT (ANCH_PREDICT
   // ai: on its layout, so its group serves both), ANCH_FIT, their uniform (anchUni: each ring's knots, a, span and
   // ai: margin, then each ring's inverse of the squares' fill's normal matrix).
   async buildAnchors() {
@@ -368,14 +366,14 @@ export class FrontHalf {
     const P = (code, entries) => this.pipeline(code, entries);
     // ai: 0 to 6 the same in both: the frame texture, frames, maps, sel, resid, the lattice (F8's wordLatUni), anchUni;
     // ai: then ANCH_FIND's anch (rw), ANCH_FIT's anch (ro), arec and result (rw)
-    // ai: ANCH_REFIT between them, on REFIT_POST's first seven (frames, nodes, sel, meas, maps, resid, fitUni; meas and
+    // ai: ANCH_REFIT between them, on REFIT's seven (frames, nodes, sel, meas, maps, resid, fitUni; meas and
     // ai: maps written too), the anchors' records (rw), the lattice and anchUni
     const [anchFind, anchFit, anchRefit] = await Promise.all([
       P(ANCH_FIND, ["tex", "ro", "ro", "ro", "ro", "uniform", "uniform", "rw"]),
       P(ANCH_FIT, ["tex", "ro", "ro", "ro", "ro", "uniform", "uniform", "ro", "rw", "rw"]),
       P(ANCH_REFIT, ["ro", "ro", "ro", "rw", "rw", "rw", "uniform", "rw", "uniform", "uniform"]),
     ]);
-    const on = async (glsl, bgl) => ({ p: await computePipeline(this.device, { code: { glsl }, layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }) }), bgl });
+    const on = async (src, bgl) => ({ p: await computePipeline(this.device, { code: src, layout: this.device.createPipelineLayout({ bindGroupLayouts: [bgl] }) }), bgl });
     // ai: the border's second search (plan/register.mjs ANCH_ROUND), its kernel built for its round: a quarter of the
     // ai: template a pass and 256 (offset, group) pairs, 15.0 KB of workgroup memory
     const nodesCOpts = { centred: true, round: ANCH_ROUND, chunk: 144, items: 256 };

@@ -131,7 +131,7 @@ LIZ_API liz_rx* liz_rx_new(const liz_store* store) {
   return guardNew<liz_rx>([&] {
     auto r = std::make_unique<liz_rx>();
     std::unique_ptr<lizard::Store> s;
-    // ai: a folder's own subfolder, as the app's receiver keeps it: only that folder is emptied
+    // ai: a folder's own subfolder, as the app's receiver keeps it: nothing outside it is removed (lizard.h liz_store)
     if (store && store->dir) s = lizard::fileStore(std::string(store->dir) + "/lizard-xfer");
     else s = lizard::memoryStore(store ? store->max_bytes : 0);
     if (!s->error.empty()) throw Error(LIZ_E_IO, s->error);
@@ -167,7 +167,7 @@ LIZ_API int liz_rx_progress(liz_rx* r, liz_progress* out) {
 
 LIZ_API int liz_rx_source_blocks(liz_rx* r, uint8_t* per, int cap) {
   return guard([&] {
-    need(r && (per || cap <= 0), "a receiver and a place for its chunks");
+    need(r && (per || cap <= 0), "a receiver and a place for its source blocks");
     r->core->progress(r->p, true);
     const int n = int(r->p.per.size());
     if (cap > 0) std::memcpy(per, r->p.per.data(), size_t(std::min(n, cap)));

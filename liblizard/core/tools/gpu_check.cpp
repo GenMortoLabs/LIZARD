@@ -3,12 +3,12 @@
 //
 //   lizard_gpu_check info                         the device, its features, and the variants it can run
 //   lizard_gpu_check build [variant] [B]          every pipeline and buffer of a variant built, timed
-//   lizard_gpu_check selftest [variant]           the web self-test's 8 frames (research/build/gpu_selftest_frames) in
-//                                                 one batch, each frame's finder, word and blocks against the web's
+//   lizard_gpu_check selftest [variant]           the self-test's 8 frames (research/build/gpu_selftest_frames) in
+//                                                 one batch, each frame's finder, word and blocks against the 4090's
 //                                                 reference at its tolerances (research/build/gpu_selftest_ref.json, or
 //                                                 _int8.json for an int8 variant); exit 1 on a difference
 //   lizard_gpu_check replay <run> [frames] [variant]   a recording (research/replays/real/<run>.lizard) through the
-//                                                 decoder as the web's replay runs it (batches of the batcher's size,
+//                                                 decoder as the apps' receivers run it (batches of the batcher's size,
 //                                                 two in flight, each frame on its own word): frames
 //                                                 found, words, verified blocks, GPU ms a frame
 //   lizard_gpu_check xcheck <run> [frames] [variant]   the replay with every LDPC form of the tree run again on each
@@ -46,8 +46,8 @@
 // ai: a stage the same whichever language gen compiled it from.
 //
 // ai: info needs only a Vulkan device, build and compile gen's tree too (LIZ_OUT); bench out/spv/bench_dot.spv, which no
-// ai: build step makes: from the root, liblizard/.tools/glslang/bin/glslang -V --target-env vulkan1.3
-// ai: liblizard/core/tools/bench_dot.comp -o liblizard/out/spv/bench_dot.spv (glslang 16, placed there by hand).
+// ai: build step makes: from the root, liblizard/.tools/slang/bin/slangc liblizard/core/tools/bench_dot.slang -target
+// ai: spirv -profile spirv_1_3 -entry main -stage compute -O2 -o liblizard/out/spv/bench_dot.spv (placed there by hand).
 // ai: selftest and dump read the self-test's frames and references, replay and receive a recording, ingest (Android)
 // ai: either: the lab's research/ (LIZ_BARCODE), which is not published. A recording is a .lizard (rx/lizfile.h; tools/
 // ai: recording.h): <LIZ_BARCODE>/replays/real/<run>.lizard, or the path given where <run> has a '/'.
@@ -59,7 +59,7 @@
 // ai: frame and replay's totals line ends with them; LIZ_PERFRAME=1 (replay): a
 // ai: line a frame as it comes back, "frame <index> found <0|1> ring <r> version <v> blocks <n> anchors <k>
 // ai: word <v> bad <n> r <r> sd <sd> r2 <r2> sd2 <sd2> psubch <n> count <a> <t> <c>" (word:
-// ai: the version F8 read, 0 none; count a static word's three counts, 2026-11-19, as lizard_cpu_check's line; bad:
+// ai: the version F8 read, 0 none; count the word's three counts, as lizard_cpu_check's line; bad:
 // ai: verified blocks of a test-stream frame that are not the stream's, the receiver's judge, XferJudge; their sum the
 // ai: "judge:" line; r to psubch the pilots, FrameOut's, nan where none), then "finder <index> score <s> orient <o>
 // ai: corners <x0 y0 .. x3 y3> depths <d0 .. d3>", the finder's result words 1, 3 and 17 to 28 off the lane.
@@ -157,7 +157,7 @@ static int dump(Ctx& c, std::string v, const std::string& dir) {
   for (size_t i = 0; i < ln.level.size(); i++) bufs.push_back({"level" + std::to_string(i + 1), ln.level[i].buf});
   for (size_t i = 0; i < ln.fcn2Levels.size(); i++) if (ln.fcn2Levels[i].plane) bufs.push_back({"plane" + std::to_string(i + 1), ln.fcn2Levels[i].plane});
   auto& b = *ln.back;
-  for (auto& [k, x] : std::initializer_list<std::pair<const char*, BufP>>{{"lists", b.lists}, {"args", b.args}, {"part", b.part}, {"coef", b.coef}, {"y", b.y}, {"s", b.s}, {"bcounts", b.counts}, {"L", b.L}, {"BLK", b.BLK}, {"V", b.V}, {"ITS", b.ITS}}) bufs.push_back({k, x});
+  for (auto& [k, x] : std::initializer_list<std::pair<const char*, BufP>>{{"lists", b.lists}, {"args", b.args}, {"part", b.part}, {"coef", b.coef}, {"y", b.y}, {"s", b.s}, {"bcounts", b.counts}, {"L", b.L}, {"BLK", b.BLK}, {"V", b.V}, {"ITS", b.ITS}, {"EP", b.EP}, {"PILOT", b.PILOT}}) bufs.push_back({k, x});
   for (auto& [name, bp] : bufs) {
     if (!bp) continue;
     auto data = readBack(*c.dev, *bp);
@@ -181,9 +181,9 @@ static void writeFile(const std::string& path, const void* p, size_t n) {
 // ai: selftest_ref.mjs writes the job and reads what this writes into the reference's summaries, as the page's probe
 // ai: did). job.json:
 // ai: { "dir": the frames' folder, "frames": [{ name, w, h }] as a reference lists them }. The frames go through the
-// ai: decoder as the self-test page ran them (scripts/pages/gpu_selftest.mjs runOnce): batches of the batcher's size,
+// ai: decoder as the archived WebGPU self-test page ran them: batches of the batcher's size,
 // ai: one at a time, each frame on its own word. After each batch, before another runs on its lane,
-// ai: the lane buffers its stages left (liblizard/gpu/probe.mjs's parts, less SCORE's rerun: levels, counts, peaks,
+// ai: the lane buffers its stages left (the archived page's probe parts, less SCORE's rerun: levels, counts, peaks,
 // ai: readings, acc, cand, quads, score, result, maps, meas, resid, anch, arec; and the back half's V, ITS and
 // ai: BCOUNTS) are written whole, B frame strides each, to <dir>/batch<k>/<name>.bin, each frame as the ring held it to
 // ai: input-<i>.gray, and <dir>/probe.json: the device, the variant and its nets, each batch's lane shape (B, W, H, gx,
@@ -642,7 +642,7 @@ static int receive(Ctx& c, const std::string& run, double fps, const std::string
 }
 
 // ai: bench: the packed int8 dot product today's int8 kernels use, a kernel of multiply-adds in registers
-// ai: (core/tools/bench_dot.comp), timed by timestamps: its ceiling on the device; then what a dispatch costs.
+// ai: (core/tools/bench_dot.slang), timed by timestamps: its ceiling on the device; then what a dispatch costs.
 static int bench(Ctx& c) {
   auto& d = *c.dev;
   auto bgl = d.createBindGroupLayout({wg::Bind::RW, wg::Bind::RW});
@@ -709,7 +709,7 @@ static int bench(Ctx& c) {
   return 0;
 }
 
-// ai: The self-test: the eight frames in one batch, as the web's page runs them, against its reference.
+// ai: The self-test: the eight frames in one batch, as the archived WebGPU page ran them, against the reference.
 static int selftest(Ctx& c, std::string v) {
   auto fh = open(c, v);
   const bool int8 = v.rfind("int8", 0) == 0;
@@ -764,8 +764,8 @@ static int selftest(Ctx& c, std::string v) {
   return bad ? 1 : 0;
 }
 
-// ai: A recording through the decoder as the web's replay runs it (scripts/exp/gpu_captures.mjs): the frames in capture
-// ai: order, batches of the batcher's size, two in flight, each launched with the last word read so far.
+// ai: A recording through the decoder as the apps' receivers run it: the frames in capture
+// ai: order, batches of the batcher's size, two in flight, each frame decoded at its own word.
 // ai: LIZ_RAW=raw16|raw10|raw12|p010 (2026-10-27, the develop: ingest/develop.h), LIZ_RAW_BIN=1|2 (1): each frame
 // ai: made into that format (synthRaw) and staged by enqueueRaw, its batch keeping it, and the layer the GPU developed
 // ai: held to the CPU's develop of the same samples byte for byte (the line "develop:"); LIZ_RAW_CPU=1 the CPU's
@@ -823,6 +823,19 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
   const std::string peaksPath = env("LIZ_PEAKS");
   std::ofstream peaksOut;
   if (!peaksPath.empty()) { peaksOut.open(peaksPath, std::ios::binary | std::ios::trunc); if (!peaksOut) throw wg::Error("cannot write " + peaksPath); }
+  // ai: LIZ_FINDER=<file> (2026-11-23, the front half's survival ladder: research/build/rewrite-2026-11-23/ladder/): a
+  // ai: record a frame, read off the lane once its batch is in, as LIZ_PEAKS's: u32 tag, u32 0x31465a4c, u32 n (the
+  // ai: kept peaks, SELECT's list as the classifier read them, min(kept, cap)), u32 round 1 copied (1; 0 where none);
+  // ai: then f32: round 1's quads (K x 5 vec4: four corners x, y, centre depth, module size (0: none), then the ring
+  // ai: GATHER voted for, the quad's module size, its traced bend, its corner count, 5 where COMPLETE completed it),
+  // ai: scores (HYP) and result (RESULT) as round 1's PICK left them (front.cpp r1Buf); the same three at the batch's end;
+  // ai: u32 x 4 the frame's second-round record (w, h, axis, valid: 1 the second round ran, 2 round 1 found it); n
+  // ai: readings (3 vec4 each: x, y, module size, turn; the mark probability; form, response, level, 1); the final map
+  // ai: (16), the lens record (RESID vec4, REFIT's none, ANCH_REFIT's) and ANCH_FIT's (ANCH_REC vec4); then the proposer's raw list
+  // ai: before SELECT's cap: u32 m and m records (u32 slot, f32 x, y, sigma, response) of the slots holding a response
+  const std::string finderPath = env("LIZ_FINDER");
+  std::ofstream finderOut;
+  if (!finderPath.empty()) { finderOut.open(finderPath, std::ios::binary | std::ios::trunc); if (!finderOut) throw wg::Error("cannot write " + finderPath); }
   // ai: the per-frame line's bad: the receiver's judge of the test stream (a frame of another stream judges none)
   XferJudge judge;
   long bad = 0, testFrames = 0;
@@ -840,6 +853,40 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
         const uint32_t head[4] = {(uint32_t)fo.tag, fo.counts.size() > 1 ? fo.counts[1] : 0, kept, n};
         peaksOut.write((const char*)head, sizeof head);
         peaksOut.write((const char*)pk.data() + stride * i, (std::streamsize)(16ull * n));
+      }
+    }
+    if (finderOut.is_open()) {
+      const auto& K = fh->C;
+      const auto r1 = lane->r1Buf ? readBack(*c.dev, *lane->r1Buf) : std::vector<uint8_t>();
+      const auto qd = readBack(*c.dev, *lane->quadsBuf), sc = readBack(*c.dev, *lane->scoreBuf), rs = readBack(*c.dev, *lane->resultBuf);
+      const auto rd = readBack(*c.dev, *lane->readingsBuf), f2 = readBack(*c.dev, *lane->frames2Buf), mp = readBack(*c.dev, *lane->mapsBuf);
+      const auto rz = readBack(*c.dev, *lane->residBuf), ar = readBack(*c.dev, *lane->arecBuf), rw = readBack(*c.dev, *lane->rawBuf);
+      const uint64_t LB = lane->B, qs = 16ull * 5 * K.K, ss = 4ull * K.HYP, rr = 4ull * K.RESULT;
+      const std::vector<uint8_t> zero(qs + ss + rr, 0);
+      auto put = [&](const std::vector<uint8_t>& v, uint64_t o, uint64_t n) { finderOut.write((const char*)v.data() + o, (std::streamsize)n); };
+      for (size_t i = 0; i < out.frames.size(); i++) {
+        const auto& fo = out.frames[i];
+        if (fo.empty) continue;
+        const uint32_t kept = fo.counts.size() > 2 ? fo.counts[2] : 0, n = std::min<uint32_t>(kept, (uint32_t)fh->cap);
+        const uint32_t head[4] = {(uint32_t)fo.tag, 0x31465a4cu, n, r1.empty() ? 0u : 1u};
+        finderOut.write((const char*)head, sizeof head);
+        if (r1.empty()) put(zero, 0, qs + ss + rr);
+        else { put(r1, qs * i, qs); put(r1, qs * LB + ss * i, ss); put(r1, qs * LB + ss * LB + rr * i, rr); }
+        put(qd, qs * i, qs); put(sc, ss * i, ss); put(rs, rr * i, rr);
+        put(f2, 16ull * i, 16);
+        put(rd, 48ull * fh->cap * i, 48ull * n);
+        put(mp, 64ull * i, 64); put(rz, 16ull * K.RESID * i, 16ull * K.RESID); put(ar, 16ull * K.ANCH_REC * i, 16ull * K.ANCH_REC);
+        // ai: the proposer's raw list before SELECT's cap (the lane's slots a frame, cleared each batch): u32 m, then m
+        // ai: records of u32 slot and 4 f32 (x, y, sigma, response), the slots holding a response
+        std::vector<uint8_t> raw;
+        const float* rp = (const float*)(rw.data() + 16ull * lane->slots * i);
+        for (uint32_t s = 0; s < lane->slots; s++) if (rp[4 * s + 3] > 0) {
+          raw.insert(raw.end(), (const uint8_t*)&s, (const uint8_t*)&s + 4);
+          raw.insert(raw.end(), (const uint8_t*)(rp + 4 * s), (const uint8_t*)(rp + 4 * s + 4));
+        }
+        const uint32_t m = (uint32_t)(raw.size() / 20);
+        finderOut.write((const char*)&m, 4);
+        finderOut.write((const char*)raw.data(), (std::streamsize)raw.size());
       }
     }
     // ai: the finder's result words off the lane, for the per-frame line (as LIZ_PEAKS reads the peaks: before another
@@ -864,11 +911,11 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
       const FrameVerdict jv = judge.frame(packed.data(), fo.records.size(), [](const uint8_t*) {});
       bad += jv.bad; testFrames += jv.test;
       if (perFrame) {
-        printf("frame %llu found %d ring %d version %d blocks %zu anchors %d word %d bad %d r %g sd %g r2 %g sd2 %g psubch %d count %d %d %d fps %d delay %d\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version,
+        printf("frame %llu found %d ring %d version %d blocks %zu anchors %d word %d bad %d r %g sd %g r2 %g sd2 %g psubch %d count %d %d %d %d fps %d delay %d\n", (unsigned long long)fo.tag, fo.finder.found == 1 ? 1 : 0, fo.ring, fo.version,
                fo.records.size(), fo.anchors, fo.hasWord ? fo.word.version : 0, jv.bad,
                fo.pilotSubch ? fo.pilotR : NAN, fo.pilotSubch ? fo.pilotSd : NAN, fo.pilotSubch ? fo.pilotR2 : NAN, fo.pilotSubch ? fo.pilotSd2 : NAN, fo.pilotSubch,
-               fo.word.count[0], fo.word.count[1], fo.word.count[2], fo.word.fps, fo.word.delay);
-        // ai: the back half's counts (BCOUNTS, glsl/back_tiers.mjs): codewords the LDPC ran (blocks not declined), their
+               fo.word.count[0], fo.word.count[1], fo.word.count[2], fo.word.count[3], fo.word.fps, fo.word.delay);
+        // ai: the back half's counts (BCOUNTS, slang/back_tiers.mjs): codewords the LDPC ran (blocks not declined), their
         // ai: iterations, verified by the CRC (2026-11-08)
         if (fo.backCounts.size() > 7) printf("back %llu ldpc %u its %u verified %u\n", (unsigned long long)fo.tag, fo.backCounts[3], fo.backCounts[7], fo.backCounts[4]);
         // ai: LIZ_BLOCKS=1 (2026-11-08): each verified block's iterations by its index in the frame, and the blocks of the

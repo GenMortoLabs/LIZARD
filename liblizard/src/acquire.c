@@ -1,5 +1,6 @@
-// Registration: find the border (its corner marks, or its line), fix orientation by the timing track, hang a mesh on
-// the border's nodes. The binarizer serves the border's search alone; data cells are never thresholded.
+// Registration: find the border (its corner marks, or its ring traced), fix orientation by the timing track, hang a mesh
+// on the border's nodes. Nothing is thresholded: the finder reads the grey picture (2026-11-24; the border's search
+// binarized the capture before).
 #include "internal.h"
 #include "fmt.h"
 #include <stdlib.h>
@@ -60,11 +61,6 @@ void ob_image_init(image_t *im, const uint8_t *px, int w, int h, float gamma) {
 
 // ---------------------------------------------------------------- finder search
 
-// Dark where a pixel sits below the mean of the 5 x 5 blocks around it. Only the finder search
-// reads this, and a finder's rings are at least three camera px wide wherever the data is
-// readable, so a plain local mean is enough.
-enum { BLK = 8 };
-
 #include "simd.h"
 
 // RGBA to luma, (77 r + 150 g + 29 b + 128) >> 8. The weights sum to 256, so the sum fits 16 bits
@@ -88,18 +84,6 @@ void ob_luma(const uint8_t *rgba, int n, uint8_t *out) {
   for (; i < n; i++) out[i] = (uint8_t)((77 * rgba[4 * i] + 150 * rgba[4 * i + 1] + 29 * rgba[4 * i + 2] + 128) >> 8);
 }
 
-// A block's threshold: the mean of the block means within two blocks of it, as many as the image has, less 3.
-static inline int bin_threshold(const int *mean, int bw, int bh, int bx, int by) {
-  int s = 0, n = 0;
-  for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) {
-    int yy = by + dy, xx = bx + dx;
-    if (yy < 0 || xx < 0 || yy >= bh || xx >= bw) continue;
-    s += mean[yy * bw + xx]; n++;
-  }
-  const int t = s / n - 3;
-  return t < 0 ? 0 : t;   // a pixel is never below 0, so a negative threshold and 0 mark the same (nothing)
-}
-
 // ai: an acquisition's buffer slot of n bytes (internal.h ob_fbufs_t): on arm64 and x86-64 the workspace's, grown where it
 // ai: is short (its old bytes not kept), and frame_buf_done leaves it there; with no workspace, or elsewhere, a fresh
 // ai: allocation frame_buf_done frees
@@ -115,229 +99,6 @@ static void frame_buf_done(ob_fbufs_t *fb, void *p) { if (!fb) free(p); }
 #define frame_buf_done(fb, p) ((void)(fb), free(p))
 #endif
 void ob_fbufs_free(ob_fbufs_t *fb) { for (int k = 0; k < OB_FB_SLOTS; k++) { free(fb->p[k]); fb->p[k] = NULL; fb->cap[k] = 0; } }
-#if defined(OB_NEON) || defined(OB_X86)
-// ai: arm64 and x86-64: the binarized image's columns as bits (the corner marks' column walks, cb_run), 32 rows a word: word
-// ai: (y >> 5) w + x holds column x's rows y & ~31 on, bit y & 31 its pixel (rows past h 0). binarize makes them as it
-// ai: compares: a block row's eight rows' bytes (0 or 1) into one by shift-inserts (SLI), a band's four of those
-// ai: interleaved into words by ST4; this fills band b's words from column x0 on from the bytes, where that cannot run
-// ai: (the columns past the last sixteen, the last band where h is not a multiple of 32)
-static void col_bits_band(const uint8_t *bin, int w, int h, int b, int x0, uint32_t *cb) {
-  const int y0 = 32 * b, rows = h - y0 < 32 ? h - y0 : 32;
-  for (int x = x0; x < w; x++) {
-    uint32_t m = 0;
-    for (int r = 0; r < rows; r++) m |= (uint32_t)(bin[(size_t)(y0 + r) * w + x] != 0) << r;
-    cb[(size_t)b * w + x] = m;
-  }
-}
-#endif
-// Three passes: 8 x 8 block means, a 5 x 5 mean of those less 3 as each block's threshold, then the
-// compare. The vector paths cover whole blocks; a ragged right or bottom edge takes the scalar one.
-// ai: cb: on arm64 and x86-64, the column bits made as well where not NULL ((h + 31) / 32 w words); NULL elsewhere. fb:
-// ai: frame_buf's
-static void binarize(const uint8_t *img, int w, int h, uint8_t *bin, uint32_t *cb, ob_fbufs_t *fb) {
-  int bw = (w + BLK - 1) / BLK, bh = (h + BLK - 1) / BLK;
-  int *mean = frame_buf(fb, OB_FB_MEAN, (size_t)bw * bh * sizeof(int));
-  uint8_t *trow = malloc((size_t)bw * BLK + 16);
-  uint16_t *col = malloc(((size_t)bw * BLK + 16) * sizeof(uint16_t));
-#if defined(OB_NEON) || defined(OB_X86)
-  int *vsum = malloc(((size_t)bw + 4) * sizeof(int));   // a block row's sums down five block rows
-  const int bands = h / 32;                             // the whole bands, whose words the compare makes
-  uint8_t *planes = cb ? malloc((size_t)4 * w + 16) : NULL;   // a band's four block rows' bytes of bits
-#else
-  (void)cb;
-#endif
-  for (int by = 0; by < bh; by++) {
-    int bx = 0;
-#ifdef OB_NEON
-    // ai: arm64: four whole blocks a step: each image row's pixel pairs accumulated into 16-bit lanes (UADALP, 8 x 510
-    // ai: at most), the pairs added to fours (ADDP, 8,160 at most) and the fours to eights in 32-bit lanes (UADDLP):
-    // ai: the integer sums of the loop below, so the same means
-    if (by < h / BLK) {
-      const uint8_t *p = img + (size_t)by * BLK * w;
-      for (; (bx + 4) * BLK <= w; bx += 4) {
-        uint16x8_t a = vdupq_n_u16(0), b = a;
-        for (int r = 0; r < BLK; r++) { a = vpadalq_u8(a, vld1q_u8(p + (size_t)r * w + bx * BLK)); b = vpadalq_u8(b, vld1q_u8(p + (size_t)r * w + bx * BLK + 16)); }
-        vst1q_s32(mean + by * bw + bx, vreinterpretq_s32_u32(vshrq_n_u32(vpaddlq_u16(vpaddq_u16(a, b)), 6)));
-      }
-    }
-#elif defined(OB_X86)
-    // ai: x86-64: four whole blocks a step: each image row's eight-pixel groups summed by PSADBW (2,040 at most), the
-    // ai: eight rows' added in 32-bit lanes, two blocks' to a vector: the integer sums of the loop below, so the same means
-    if (by < h / BLK) {
-      const uint8_t *p = img + (size_t)by * BLK * w;
-      const __m128i z = _mm_setzero_si128();
-      for (; (bx + 4) * BLK <= w; bx += 4) {
-        __m128i a = z, b = z;
-        for (int r = 0; r < BLK; r++) {
-          const uint8_t *q = p + (size_t)r * w + bx * BLK;
-          a = _mm_add_epi32(a, _mm_sad_epu8(_mm_loadu_si128((const __m128i *)q), z)); b = _mm_add_epi32(b, _mm_sad_epu8(_mm_loadu_si128((const __m128i *)(q + 16)), z));
-        }
-        const __m128i s4 = _mm_castps_si128(_mm_shuffle_ps(_mm_castsi128_ps(a), _mm_castsi128_ps(b), _MM_SHUFFLE(2, 0, 2, 0)));
-        _mm_storeu_si128((__m128i *)(mean + by * bw + bx), _mm_srli_epi32(s4, 6));
-      }
-    }
-#elif defined(OB_SIMD)
-    const int fw = w / BLK, fh = h / BLK;   // whole blocks
-    if (by < fh) {
-      // Column sums of the block row's eight image rows (2040 at most, so 16 bits), then eight columns to a block.
-      int x = 0;
-      for (; x + 16 <= fw * BLK; x += 16) {
-        v128_t lo = wasm_i16x8_splat(0), hi = lo;
-        for (int r = 0; r < BLK; r++) { v128_t p = wasm_v128_load(img + (by * BLK + r) * w + x); lo = wasm_i16x8_add(lo, wasm_u16x8_extend_low_u8x16(p)); hi = wasm_i16x8_add(hi, wasm_u16x8_extend_high_u8x16(p)); }
-        wasm_v128_store(col + x, lo); wasm_v128_store(col + x + 8, hi);
-      }
-      for (; bx < x / BLK; bx++) {
-        v128_t q = wasm_u32x4_extadd_pairwise_u16x8(wasm_v128_load(col + bx * BLK));
-        int s = wasm_i32x4_extract_lane(q, 0) + wasm_i32x4_extract_lane(q, 1) + wasm_i32x4_extract_lane(q, 2) + wasm_i32x4_extract_lane(q, 3);
-        mean[by * bw + bx] = s >> 6;
-      }
-    }
-#endif
-    for (; bx < bw; bx++) {
-      int s = 0, n = 0;
-      for (int y = by * BLK; y < (by + 1) * BLK && y < h; y++) for (int x = bx * BLK; x < (bx + 1) * BLK && x < w; x++) { s += img[y * w + x]; n++; }
-      mean[by * bw + bx] = s / n;
-    }
-  }
-  for (int by = 0; by < bh; by++) {
-    int bx = 0;
-#ifdef OB_NEON
-    // ai: arm64: a block row with two rows of blocks above and below, its blocks from the third to the third from the
-    // ai: end four a step: the five rows' sums, then five of those, all 25 blocks there (n = 25), s / 25 as
-    // ai: (s * 5243) >> 17 (exact for every s to 25 x 255 = 6,375), the threshold's byte spread over its block's 8
-    if (by >= 2 && by + 2 < bh && vsum) {
-      const int *m0 = mean + (by - 2) * bw;
-      int x = 0;
-      for (; x + 4 <= bw; x += 4) {
-        int32x4_t s = vld1q_s32(m0 + x);
-        for (int d = 1; d < 5; d++) s = vaddq_s32(s, vld1q_s32(m0 + d * bw + x));
-        vst1q_s32(vsum + x, s);
-      }
-      for (; x < bw; x++) { int s = 0; for (int d = 0; d < 5; d++) s += m0[d * bw + x]; vsum[x] = s; }
-      static const uint8_t SPREAD[32] = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3 };
-      const uint8x16_t lo = vld1q_u8(SPREAD), hi = vld1q_u8(SPREAD + 16);
-      for (bx = 2; bx + 4 <= bw - 2; bx += 4) {
-        const int32x4_t s = vaddq_s32(vaddq_s32(vaddq_s32(vld1q_s32(vsum + bx - 2), vld1q_s32(vsum + bx - 1)), vaddq_s32(vld1q_s32(vsum + bx), vld1q_s32(vsum + bx + 1))), vld1q_s32(vsum + bx + 2));
-        const uint32x4_t q = vshrq_n_u32(vmulq_u32(vreinterpretq_u32_s32(s), vdupq_n_u32(5243)), 17);
-        const uint16x4_t t = vmovn_u32(vreinterpretq_u32_s32(vmaxq_s32(vsubq_s32(vreinterpretq_s32_u32(q), vdupq_n_s32(3)), vdupq_n_s32(0))));
-        const uint8x16_t t8 = vcombine_u8(vmovn_u16(vcombine_u16(t, t)), vdup_n_u8(0));
-        vst1q_u8(trow + bx * BLK, vqtbl1q_u8(t8, lo)); vst1q_u8(trow + bx * BLK + 16, vqtbl1q_u8(t8, hi));
-      }
-      for (int e = 0; e < 2; e++) memset(trow + e * BLK, bin_threshold(mean, bw, bh, e, by), BLK);
-    }
-#elif defined(OB_X86)
-    // ai: x86-64: arm64's form (above): the five rows' sums, then five of those, s / 25 as (s * 5243) >> 17, the
-    // ai: thresholds packed to bytes and each spread over its block's 8 by PSHUFB
-    if (by >= 2 && by + 2 < bh && vsum) {
-      const int *m0 = mean + (by - 2) * bw;
-      int x = 0;
-      for (; x + 4 <= bw; x += 4) {
-        __m128i s4 = _mm_loadu_si128((const __m128i *)(m0 + x));
-        for (int d = 1; d < 5; d++) s4 = _mm_add_epi32(s4, _mm_loadu_si128((const __m128i *)(m0 + d * bw + x)));
-        _mm_storeu_si128((__m128i *)(vsum + x), s4);
-      }
-      for (; x < bw; x++) { int s = 0; for (int d = 0; d < 5; d++) s += m0[d * bw + x]; vsum[x] = s; }
-      const __m128i lo = _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1), hi = _mm_setr_epi8(2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
-#define VSUM(o) _mm_loadu_si128((const __m128i *)(vsum + bx + (o)))
-      for (bx = 2; bx + 4 <= bw - 2; bx += 4) {
-        const __m128i s4 = _mm_add_epi32(_mm_add_epi32(_mm_add_epi32(VSUM(-2), VSUM(-1)), _mm_add_epi32(VSUM(0), VSUM(1))), VSUM(2));
-        const __m128i q = _mm_srli_epi32(_mm_mullo_epi32(s4, _mm_set1_epi32(5243)), 17);
-        const __m128i t = _mm_max_epi32(_mm_sub_epi32(q, _mm_set1_epi32(3)), _mm_setzero_si128());
-        const __m128i t8 = _mm_packus_epi16(_mm_packus_epi32(t, t), _mm_setzero_si128());
-        _mm_storeu_si128((__m128i *)(trow + bx * BLK), _mm_shuffle_epi8(t8, lo)); _mm_storeu_si128((__m128i *)(trow + bx * BLK + 16), _mm_shuffle_epi8(t8, hi));
-      }
-#undef VSUM
-      for (int e = 0; e < 2; e++) memset(trow + e * BLK, bin_threshold(mean, bw, bh, e, by), BLK);
-    }
-#endif
-    for (; bx < bw; bx++) memset(trow + bx * BLK, bin_threshold(mean, bw, bh, bx, by), BLK);
-#ifdef OB_NEON
-    // ai: a block row of a whole band: its eight rows compared sixteen columns at a time (the same bytes as below),
-    // ai: their bytes shifted into one plane of bits; a band's fourth block row stores the four planes as words
-    if (planes && by < 4 * bands) {
-      const uint8_t *s0 = img + (size_t)by * BLK * w;
-      uint8_t *d0 = bin + (size_t)by * BLK * w, *pl = planes + (size_t)(by & 3) * w;
-      const uint8x16_t one = vdupq_n_u8(1);
-      int x = 0;
-      for (; x + 16 <= w; x += 16) {
-        const uint8x16_t t = vld1q_u8(trow + x);
-        uint8x16_t b, v;
-#define BIN_ROW(r) b = vandq_u8(vcltq_u8(vld1q_u8(s0 + (size_t)(r) * w + x), t), one); vst1q_u8(d0 + (size_t)(r) * w + x, b);
-        BIN_ROW(0) v = b;
-        BIN_ROW(1) v = vsliq_n_u8(v, b, 1); BIN_ROW(2) v = vsliq_n_u8(v, b, 2); BIN_ROW(3) v = vsliq_n_u8(v, b, 3);
-        BIN_ROW(4) v = vsliq_n_u8(v, b, 4); BIN_ROW(5) v = vsliq_n_u8(v, b, 5); BIN_ROW(6) v = vsliq_n_u8(v, b, 6);
-        BIN_ROW(7) v = vsliq_n_u8(v, b, 7);
-#undef BIN_ROW
-        vst1q_u8(pl + x, v);
-      }
-      for (int r = 0; r < BLK; r++) for (int c = x; c < w; c++) d0[(size_t)r * w + c] = s0[(size_t)r * w + c] < trow[c];
-      if ((by & 3) == 3) {
-        uint32_t *o = cb + (size_t)(by >> 2) * w;
-        int c = 0;
-        for (; c + 16 <= w; c += 16) {
-          const uint8x16x4_t q = { { vld1q_u8(planes + c), vld1q_u8(planes + w + c), vld1q_u8(planes + 2 * (size_t)w + c), vld1q_u8(planes + 3 * (size_t)w + c) } };
-          vst4q_u8((uint8_t *)(o + c), q);
-        }
-        col_bits_band(bin, w, h, by >> 2, c, cb);
-      }
-      continue;
-    }
-#elif defined(OB_X86)
-    // ai: x86-64: arm64's form (above): a block row of a whole band compared sixteen columns at a time (the bytes'
-    // ai: order made signed by flipping their top bits), each row's mask kept to its own bit of the plane's byte; a
-    // ai: band's fourth block row interleaves the four planes into words by two rounds of unpacks
-    if (planes && by < 4 * bands) {
-      const uint8_t *s0 = img + (size_t)by * BLK * w;
-      uint8_t *d0 = bin + (size_t)by * BLK * w, *pl = planes + (size_t)(by & 3) * w;
-      const __m128i one = _mm_set1_epi8(1), flip = _mm_set1_epi8((char)0x80);
-      int x = 0;
-      for (; x + 16 <= w; x += 16) {
-        const __m128i t = _mm_xor_si128(_mm_loadu_si128((const __m128i *)(trow + x)), flip);
-        __m128i v = _mm_setzero_si128();
-        for (int r = 0; r < BLK; r++) {
-          const __m128i lt = _mm_cmplt_epi8(_mm_xor_si128(_mm_loadu_si128((const __m128i *)(s0 + (size_t)r * w + x)), flip), t);
-          _mm_storeu_si128((__m128i *)(d0 + (size_t)r * w + x), _mm_and_si128(lt, one));
-          v = _mm_or_si128(v, _mm_and_si128(lt, _mm_set1_epi8((char)(1 << r))));
-        }
-        _mm_storeu_si128((__m128i *)(pl + x), v);
-      }
-      for (int r = 0; r < BLK; r++) for (int c = x; c < w; c++) d0[(size_t)r * w + c] = s0[(size_t)r * w + c] < trow[c];
-      if ((by & 3) == 3) {
-        uint32_t *o = cb + (size_t)(by >> 2) * w;
-        int c = 0;
-        for (; c + 16 <= w; c += 16) {
-          const __m128i p0 = _mm_loadu_si128((const __m128i *)(planes + c)), p1 = _mm_loadu_si128((const __m128i *)(planes + w + c));
-          const __m128i p2 = _mm_loadu_si128((const __m128i *)(planes + 2 * (size_t)w + c)), p3 = _mm_loadu_si128((const __m128i *)(planes + 3 * (size_t)w + c));
-          const __m128i l01 = _mm_unpacklo_epi8(p0, p1), h01 = _mm_unpackhi_epi8(p0, p1), l23 = _mm_unpacklo_epi8(p2, p3), h23 = _mm_unpackhi_epi8(p2, p3);
-          _mm_storeu_si128((__m128i *)(o + c), _mm_unpacklo_epi16(l01, l23)); _mm_storeu_si128((__m128i *)(o + c + 4), _mm_unpackhi_epi16(l01, l23));
-          _mm_storeu_si128((__m128i *)(o + c + 8), _mm_unpacklo_epi16(h01, h23)); _mm_storeu_si128((__m128i *)(o + c + 12), _mm_unpackhi_epi16(h01, h23));
-        }
-        col_bits_band(bin, w, h, by >> 2, c, cb);
-      }
-      continue;
-    }
-#endif
-    for (int y = by * BLK; y < (by + 1) * BLK && y < h; y++) {
-      const uint8_t *src = img + y * w;
-      uint8_t *dst = bin + y * w;
-      int x = 0;
-#ifdef OB_SIMD
-      const v128_t one = wasm_i8x16_splat(1);
-      for (; x + 16 <= w; x += 16) wasm_v128_store(dst + x, wasm_v128_and(wasm_u8x16_lt(wasm_v128_load(src + x), wasm_v128_load(trow + x)), one));
-#endif
-      for (; x < w; x++) dst[x] = src[x] < trow[x];
-    }
-  }
-#if defined(OB_NEON) || defined(OB_X86)
-  // ai: the last band where h is not a multiple of 32, or every band where the planes could not be had
-  if (cb) for (int b = planes ? bands : 0; b < (h + 31) / 32; b++) col_bits_band(bin, w, h, b, 0, cb);
-  free(vsum); free(planes);
-#endif
-  frame_buf_done(fb, mean); free(trow); free(col);
-}
-
-void ob_test_binarize(const uint8_t *img, int w, int h, uint8_t *bin) { binarize(img, w, h, bin, NULL, NULL); }
-
 // ai: The node templates read a blurred image (box_blur) whenever the box has a radius, r = floor(mpx / 2) pixels,
 // ai: so from a module of 2 px (2026-09-29: the threshold of 2.0 px this replaced was exactly r >= 1, the same
 // ai: bytes). The fifteen recorded phone runs (scripts/exp/capture_check.mjs) had tried later starts: every threshold from 2
@@ -539,77 +300,9 @@ static void msh_blur_rect(const uint8_t *src, uint8_t *out, int w, int h, int r,
 }
 #endif
 
-typedef struct { float x, y, unit; int hits; } cand_t;
-enum { MAX_CAND = 1024 };
-#if defined(OB_NEON) || defined(OB_X86)
-// ai: arm64 and x86-64: a candidate list's x and y side by side past its MAX_CAND entries (x at mark_xy(c)[k], y at
-// ai: mark_xy(c)[MAX_CAND + k]), which mark_note's scan reads as plain vectors (LD4 over the entries read twice the
-// ai: bytes, in more operations: the marks 4 to 18% faster on the S26); kept in step with the entries by mark_note and
-// ai: mark_candidates' prune, and read nowhere else. A list is allocated MAX_CAND entries and CAND_XY bytes.
-enum { CAND_XY = 2 * MAX_CAND * sizeof(float) };
-static inline float *mark_xy(cand_t *c) { return (float *)(c + MAX_CAND); }
-#else
-enum { CAND_XY = 0 };
-#endif
+typedef struct { float x, y, unit; int hits; } cand_t;   // ai: a corner mark candidate: centre, module size (px), support
 
 static float cross2(const cand_t *a, const cand_t *b, const cand_t *c) { return (b->x - a->x) * (c->y - a->y) - (b->y - a->y) * (c->x - a->x); }
-
-#if defined(OB_NEON) || defined(OB_X86)
-// ai: arm64 and x86-64: a four-pixel group's boundaries, as the bits of its lanes (bit i: lane i differs from the pixel
-// ai: before it), packed to the front, and how many there are
-static const int32_t RUN_PACK[16][4] = {
-  { 0, 0, 0, 0 }, { 0, 0, 0, 0 }, { 1, 0, 0, 0 }, { 0, 1, 0, 0 }, { 2, 0, 0, 0 }, { 0, 2, 0, 0 }, { 1, 2, 0, 0 }, { 0, 1, 2, 0 },
-  { 3, 0, 0, 0 }, { 0, 3, 0, 0 }, { 1, 3, 0, 0 }, { 0, 1, 3, 0 }, { 2, 3, 0, 0 }, { 0, 2, 3, 0 }, { 1, 2, 3, 0 }, { 0, 1, 2, 3 } };
-static const uint8_t RUN_COUNT[16] = { 0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4 };
-#endif
-// Run boundaries of one row, sixteen pixels to a compare: pos[2k] is where dark run k starts and
-// pos[2k + 1] where it ends. The pixel left of the row counts as light, and a dark run that reaches
-// the right edge ends there. Returns the number of boundaries, always even.
-static int run_edges(const uint8_t *row, int w, int *pos) {
-  int np = 0, x = 1;
-  if (row[0]) pos[np++] = 0;
-#ifdef OB_NEON
-  // ai: arm64: a chunk's sixteen compares weighted 1, 2, 4, 8 within each four and added pairwise twice (ADDP), which
-  // ai: leaves the four groups' bits in four bytes; each group's positions are one table row plus x and one store of
-  // ai: four, np moved on by the group's count: four stores where the loop below makes sixteen. A store writes past
-  // ai: np by at most three, never past x + 15.
-  const uint8x16_t wt = { 1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8, 1, 2, 4, 8 };
-  for (; x + 16 <= w; x += 16) {
-    const uint8x16_t bits = vbicq_u8(wt, vceqq_u8(vld1q_u8(row + x), vld1q_u8(row + x - 1))), b2 = vpaddq_u8(bits, bits);
-    const uint32_t g = vgetq_lane_u32(vreinterpretq_u32_u8(vpaddq_u8(b2, b2)), 0);
-    if (!g) continue;
-    for (int q = 0; q < 4; q++) {
-      const unsigned k = (g >> 8 * q) & 15;
-      vst1q_s32(pos + np, vaddq_s32(vld1q_s32(RUN_PACK[k]), vdupq_n_s32(x + 4 * q)));
-      np += RUN_COUNT[k];
-    }
-  }
-#elif defined(OB_X86)
-  // ai: x86-64: arm64's form (above), the chunk's sixteen boundaries as PMOVMSKB's bits, four to a group: each group's
-  // ai: positions one table row plus x and one store of four, np moved on by the group's count
-  for (; x + 16 <= w; x += 16) {
-    const unsigned g = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(_mm_loadu_si128((const __m128i *)(row + x)), _mm_loadu_si128((const __m128i *)(row + x - 1)))) ^ 0xffffu;
-    if (!g) continue;
-    for (int q = 0; q < 4; q++) {
-      const unsigned k = (g >> 4 * q) & 15;
-      _mm_storeu_si128((__m128i *)(pos + np), _mm_add_epi32(_mm_loadu_si128((const __m128i *)RUN_PACK[k]), _mm_set1_epi32(x + 4 * q)));
-      np += RUN_COUNT[k];
-    }
-  }
-#elif defined(OB_SIMD)
-  for (; x + 16 <= w; x += 16) {
-    const unsigned m = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_ne(wasm_v128_load(row + x), wasm_v128_load(row + x - 1)));
-    if (!m) continue;
-    // ai: every position written and the count moved on by its bit, with no branch a boundary: a binarized picture
-    // ai: has one about every other pixel, and a loop over the set bits mispredicted its exit once a chunk (2026-11-01,
-    // ai: a third of the finder's time on the S26). np never passes x + k + 1, so pos's w + 2 entries hold every write.
-    for (int k = 0; k < 16; k++) { pos[np] = x + k; np += (int)(m >> k) & 1; }
-  }
-#endif
-  for (; x < w; x++) if (row[x] != row[x - 1]) pos[np++] = x;
-  if (np & 1) pos[np++] = w;
-  return np;
-}
 
 // ---------------------------------------------------------------- geometry
 
@@ -2033,14 +1726,15 @@ static int anchor_model_free(const homo_t *H, int iw, int ih, anchor_t *A, lensm
 // ai: round, kept 82.4% of the exact map's blocks on the hard cells against this rule's 85.6%: a misplaced corner bends
 // ai: it.) Then the anchors' model about H (anchor_model) for the border's search. 0 where fewer than OB_ANCH_MIN
 // ai: anchors were found (a round's homography takes four, its lens model five: lensm_fit's 2 n - 9 > 0).
-static int anchor_register(const ob_layout_t *L, const image_t *im, const image_t *rim, homo_t *H, int iw, int ih, float mpx, float *quad, node_t *nodes, anchor_t *A, lensm_t *m) {
+// ai: seed: the finder's lens as the first round's model (find_frame's, a traced quad's), NULL for none
+static int anchor_register(const ob_layout_t *L, const image_t *im, const image_t *rim, homo_t *H, int iw, int ih, float mpx, float *quad, node_t *nodes, anchor_t *A, lensm_t *m, const lensm_t *seed) {
   enum { NA = OB_ANCH_K * OB_ANCH_K };
   homo_t Ha = *H;
   lensm_t mf;
   int have = 0, nf = 0;
   for (int k = 0; k < NA; k++) A[k].ok = 0;
   for (int round = 0; round < ANCH_ROUNDS; round++) {
-    const int now = anchor_find(L, im, &Ha, have ? &mf : 0, A);
+    const int now = anchor_find(L, im, &Ha, have ? &mf : seed, A);
     if (now == nf || now < 4) break;
     nf = now;
     homo_t Hn;
@@ -2397,1158 +2091,24 @@ static void border_fill_anchors(const ob_layout_t *L, const homo_t *H, int iw, i
   free(mx); free(my); free(qx); free(qy); free(dx); free(dy); free(isb); free(drop); free(at); free(pu); free(pv);
 }
 
-// ---------------------------------------------------------------- thin frame: four lines
-//
-// The thin frame has no finder. What a receiver looks for is its solid line: a dark run a few
-// pixels wide with light on both sides, at about the same place in row after row. Every scanned
-// row gives the first few such runs from the left and from the right, every scanned column the
-// same from the top and the bottom, and a robust line fit per side picks the border out of
-// whatever else qualified. The corners are where the lines meet. A long line collects far more
-// signal than a finder does, and it needs no margin.
-
-#ifdef OB_VERIFY_POINTS
-#include <stdio.h>
-#endif
-typedef struct { float along, across; int rank; } fpt_t;   // rank: which candidate of its scan line this is, counted from the outside
-typedef struct { float a, b; int n; float c, mid; } fline_t;   // across = c (along - mid)^2 + a * along + b
-// SIDE_K was 4 until a page of clutter round the symbol was measured (2026-09-21). A scan line
-// stops at SIDE_K, so every dark run the clutter puts between the edge of the frame and the border
-// costs one slot, and fit_lines draws its triples WITHIN one rank: the border's rank then varies
-// along the side and no rank holds the twelve points a fit needs. Frames registered of 6 at 64 and
-// 160 shapes: 1 and 1 at four, 4 and 5 at eight, 3 and 4 at sixteen. Sixteen is worse than eight
-// because the slots past the border fill with clutter and the 120 RANSAC iterations go to it, so
-// this is a plateau and not a knob to keep turning. It costs 0.5 to 0.7 ms of a 1.7 to 2.5 ms
-// detect, and it is worth that outside clutter too: the phone cell gains 7% of its payload.
-enum { SIDE_K = 8, SIDE_LINES = 3, EDGE_REACH = 6 };
-
-// A candidate is the INNER edge of a dark run: where, going into the picture, dark turns to light
-// with real contrast. Not the run's middle. A symbol shown full screen sits against the monitor's
-// bezel, and from a distance the module of light between them blurs away, so bezel and line become
-// one thick run whose middle is nowhere useful; its inner edge is still the line's inner edge. For
-// the same reason a run's thickness plays no part: it is the line's, or the line's plus a bezel's.
-// The contrast test is what keeps out the specks a flat light surround binarizes into (anything a
-// little under the local mean is dark): the darkest pixel of the run's last few against the
-// brightest of the light run's first few.
-// g is the grey row, read at g[x * sx]. inner: +1 when going into the picture means rising x.
-static int edge_contrast(const uint8_t *g, int sx, int edge, int inner, int dark_len, int light_len) {
-  int dark = 255, light = 0;
-  if (dark_len > EDGE_REACH) dark_len = EDGE_REACH;
-  if (light_len > EDGE_REACH) light_len = EDGE_REACH;
-  for (int k = 1; k <= dark_len; k++) { int v = g[(inner > 0 ? edge - k : edge + k - 1) * sx]; if (v < dark) dark = v; }
-  for (int k = 0; k < light_len; k++) { int v = g[(inner > 0 ? edge + k : edge - k - 1) * sx]; if (v > light) light = v; }
-  return light - dark;
-}
-
-// Darkest and brightest pixel of every BLK x BLK block, at mn[by * bs + bx]. What lets the scans below pass over
-// a flat surround: it binarizes into specks by the ten thousand, every one of them a dark run to be refused.
-#ifdef OB_X86
-// ai: x86-64: arm64's pairwise minimum and maximum of bytes (UMINP, UMAXP): a's pairs (2k, 2k + 1) to bytes 0 to 7,
-// ai: b's to 8 to 15, as the even bytes against the odd ones packed side by side
-static inline __m128i x86_pmin_u8(__m128i a, __m128i b) {
-  const __m128i lo = _mm_set1_epi16(0xff);
-  return _mm_min_epu8(_mm_packus_epi16(_mm_and_si128(a, lo), _mm_and_si128(b, lo)), _mm_packus_epi16(_mm_srli_epi16(a, 8), _mm_srli_epi16(b, 8)));
-}
-static inline __m128i x86_pmax_u8(__m128i a, __m128i b) {
-  const __m128i lo = _mm_set1_epi16(0xff);
-  return _mm_max_epu8(_mm_packus_epi16(_mm_and_si128(a, lo), _mm_and_si128(b, lo)), _mm_packus_epi16(_mm_srli_epi16(a, 8), _mm_srli_epi16(b, 8)));
-}
-#endif
-static void block_range(const uint8_t *img, int w, int h, uint8_t *mn, uint8_t *mx, int bs) {
-  int bw = (w + BLK - 1) / BLK, bh = (h + BLK - 1) / BLK;
-  for (int by = 0; by < bh; by++) {
-    int y0 = by * BLK, y1 = y0 + BLK > h ? h : y0 + BLK, bx = 0;
-#ifdef OB_NEON
-    // ai: arm64: eight blocks a step, a row's 64 pixels in four vectors, the blocks' extremes then by pairwise
-    // ai: minima and maxima (UMINP, UMAXP) three times over: the same bytes
-    for (; (bx + 8) * BLK <= w; bx += 8) {
-      uint8x16_t l0 = vdupq_n_u8(255), l1 = l0, l2 = l0, l3 = l0, h0 = vdupq_n_u8(0), h1 = h0, h2 = h0, h3 = h0;
-      for (int y = y0; y < y1; y++) {
-        const uint8_t *q = img + (size_t)y * w + bx * BLK;
-        const uint8x16_t a = vld1q_u8(q), b = vld1q_u8(q + 16), c = vld1q_u8(q + 32), d = vld1q_u8(q + 48);
-        l0 = vminq_u8(l0, a); l1 = vminq_u8(l1, b); l2 = vminq_u8(l2, c); l3 = vminq_u8(l3, d);
-        h0 = vmaxq_u8(h0, a); h1 = vmaxq_u8(h1, b); h2 = vmaxq_u8(h2, c); h3 = vmaxq_u8(h3, d);
-      }
-      const uint8x16_t lq = vpminq_u8(vpminq_u8(l0, l1), vpminq_u8(l2, l3)), hq = vpmaxq_u8(vpmaxq_u8(h0, h1), vpmaxq_u8(h2, h3));
-      vst1_u8(mn + by * bs + bx, vpmin_u8(vget_low_u8(lq), vget_high_u8(lq)));
-      vst1_u8(mx + by * bs + bx, vpmax_u8(vget_low_u8(hq), vget_high_u8(hq)));
-    }
-#elif defined(OB_X86)
-    // ai: x86-64: arm64's form (above), the pairwise steps by x86_pmin_u8 and x86_pmax_u8: the same bytes
-    for (; (bx + 8) * BLK <= w; bx += 8) {
-      __m128i l0 = _mm_set1_epi8(-1), l1 = l0, l2 = l0, l3 = l0, h0 = _mm_setzero_si128(), h1 = h0, h2 = h0, h3 = h0;
-      for (int y = y0; y < y1; y++) {
-        const uint8_t *q = img + (size_t)y * w + bx * BLK;
-        const __m128i a = _mm_loadu_si128((const __m128i *)q), b = _mm_loadu_si128((const __m128i *)(q + 16)), c = _mm_loadu_si128((const __m128i *)(q + 32)), d = _mm_loadu_si128((const __m128i *)(q + 48));
-        l0 = _mm_min_epu8(l0, a); l1 = _mm_min_epu8(l1, b); l2 = _mm_min_epu8(l2, c); l3 = _mm_min_epu8(l3, d);
-        h0 = _mm_max_epu8(h0, a); h1 = _mm_max_epu8(h1, b); h2 = _mm_max_epu8(h2, c); h3 = _mm_max_epu8(h3, d);
-      }
-      const __m128i lq = x86_pmin_u8(x86_pmin_u8(l0, l1), x86_pmin_u8(l2, l3)), hq = x86_pmax_u8(x86_pmax_u8(h0, h1), x86_pmax_u8(h2, h3));
-      _mm_storel_epi64((__m128i *)(mn + by * bs + bx), x86_pmin_u8(lq, lq));
-      _mm_storel_epi64((__m128i *)(mx + by * bs + bx), x86_pmax_u8(hq, hq));
-    }
-#endif
-#ifdef OB_SIMD
-    for (; (bx + 2) * BLK <= w; bx += 2) {
-      v128_t lo = wasm_u8x16_splat(255), hi = wasm_u8x16_splat(0);
-      for (int y = y0; y < y1; y++) { const v128_t v = wasm_v128_load(img + (size_t)y * w + bx * BLK); lo = wasm_u8x16_min(lo, v); hi = wasm_u8x16_max(hi, v); }
-      // Each half of sixteen down to one value: neighbours, then pairs, then fours.
-      lo = wasm_u8x16_min(lo, wasm_i8x16_shuffle(lo, lo, 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14)); hi = wasm_u8x16_max(hi, wasm_i8x16_shuffle(hi, hi, 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14));
-      lo = wasm_u8x16_min(lo, wasm_i8x16_shuffle(lo, lo, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13)); hi = wasm_u8x16_max(hi, wasm_i8x16_shuffle(hi, hi, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13));
-      lo = wasm_u8x16_min(lo, wasm_i8x16_shuffle(lo, lo, 4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11)); hi = wasm_u8x16_max(hi, wasm_i8x16_shuffle(hi, hi, 4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11));
-      mn[by * bs + bx] = (uint8_t)wasm_u8x16_extract_lane(lo, 0); mn[by * bs + bx + 1] = (uint8_t)wasm_u8x16_extract_lane(lo, 8);
-      mx[by * bs + bx] = (uint8_t)wasm_u8x16_extract_lane(hi, 0); mx[by * bs + bx + 1] = (uint8_t)wasm_u8x16_extract_lane(hi, 8);
-    }
-#endif
-    for (; bx < bw; bx++) {
-      int x0 = bx * BLK, x1 = x0 + BLK > w ? w : x0 + BLK, lo = 255, hi = 0;
-      for (int y = y0; y < y1; y++) for (int x = x0; x < x1; x++) { int v = img[(size_t)y * w + x]; if (v < lo) lo = v; if (v > hi) hi = v; }
-      mn[by * bs + bx] = (uint8_t)lo; mx[by * bs + bx] = (uint8_t)hi;
-    }
-  }
-}
-
-// What the candidate scans know about the image. mn, mx: the block map, bs to a row, with a margin of blocks that
-// hold nothing (mn 255, mx 0) all round, so a window over it needs no edge cases.
-// rskip[by * chunks + j]: no edge in pixels 16 j .. 16 j + 15 of a row of block row by can pass, nor one in the block
-// either side. cskip[by * bw + bx]: the same for a column's pixels in block (bx, by) and the blocks above and below.
-typedef struct { const uint8_t *grey, *mn, *mx, *rskip, *cskip; int w, h, bs, bw, chunks, min_con; uint8_t *buf; } edge_ctx_t;
-_Static_assert(BLK == 8, "the scans take a block for half of a sixteen-pixel compare");
-enum { MAP_PAD_X = 4, MAP_PAD_Y = 2 };
-
-// ai: fb: frame_buf's (the map's buffer, c->buf, given back by frame_buf_done)
-static int edge_ctx_init(edge_ctx_t *c, const uint8_t *grey, int w, int h, int min_con, ob_fbufs_t *fb) {
-  int bw = (w + BLK - 1) / BLK, bh = (h + BLK - 1) / BLK, bs = bw + 24, chunks = (w + 15) / 16;
-  size_t map = (size_t)bs * (bh + 2 * MAP_PAD_Y);
-  uint8_t *buf = frame_buf(fb, OB_FB_EDGE, 2 * map + (size_t)bh * chunks + (size_t)bh * bw + 2 * (size_t)bs);
-  if (!buf) return -1;
-  memset(buf, 255, map); memset(buf + map, 0, map);
-  uint8_t *mn = buf + MAP_PAD_Y * bs + MAP_PAD_X, *mx = mn + map, *rskip = buf + 2 * map, *cskip = rskip + (size_t)bh * chunks, *tmp = cskip + (size_t)bh * bw;
-  block_range(grey, w, h, mn, mx, bs);
-  for (int by = 0; by < bh; by++) {
-    // Blocks b - 2 .. b + 3 along the row for the row scans (a sixteen-pixel unit is blocks b and b + 1), and
-    // blocks by - 2 .. by + 2 down the column for the column scans: flat means their extremes are under min_con apart.
-    const uint8_t *n0 = mn + by * bs, *x0 = mx + by * bs;
-    uint8_t *flat = tmp, *cs = cskip + (size_t)by * bw;
-    int b = 0;
-#ifdef OB_SIMD
-    const v128_t need = wasm_u8x16_splat((uint8_t)min_con);
-    for (; b < bw; b += 16) {
-      v128_t lo = wasm_v128_load(n0 + b - 2), hi = wasm_v128_load(x0 + b - 2), vlo = wasm_v128_load(n0 + b - 2 * bs), vhi = wasm_v128_load(x0 + b - 2 * bs);
-      for (int o = -1; o <= 3; o++) { lo = wasm_u8x16_min(lo, wasm_v128_load(n0 + b + o)); hi = wasm_u8x16_max(hi, wasm_v128_load(x0 + b + o)); }
-      for (int o = -1; o <= 2; o++) { vlo = wasm_u8x16_min(vlo, wasm_v128_load(n0 + b + o * bs)); vhi = wasm_u8x16_max(vhi, wasm_v128_load(x0 + b + o * bs)); }
-      wasm_v128_store(flat + b, wasm_u8x16_lt(wasm_u8x16_sub_sat(hi, lo), need));
-      uint8_t t[16];
-      wasm_v128_store(t, wasm_u8x16_lt(wasm_u8x16_sub_sat(vhi, vlo), need));
-      for (int q = 0; q < 16 && b + q < bw; q++) cs[b + q] = t[q] & 1;
-    }
-#else
-    for (; b < bw; b++) {
-      int lo = 255, hi = 0, vlo = 255, vhi = 0;
-      for (int o = -2; o <= 3; o++) { if (n0[b + o] < lo) lo = n0[b + o]; if (x0[b + o] > hi) hi = x0[b + o]; }
-      for (int o = -2; o <= 2; o++) { if (n0[b + o * bs] < vlo) vlo = n0[b + o * bs]; if (x0[b + o * bs] > vhi) vhi = x0[b + o * bs]; }
-      flat[b] = (hi > lo ? hi - lo : 0) < min_con; cs[b] = (vhi > vlo ? vhi - vlo : 0) < min_con;
-    }
-#endif
-    for (int j = 0; j < chunks; j++) rskip[(size_t)by * chunks + j] = 16 * j + 16 <= w && flat[2 * j] != 0;   // whole units only
-  }
-  *c = (edge_ctx_t){ grey, mn, mx, rskip, cskip, w, h, bs, bw, chunks, min_con, buf };
-  return 0;
-}
-
-#ifdef OB_NEON
-// ai: arm64: edge_contrast over the pixels edge - EDGE_REACH .. edge + EDGE_REACH - 1 of the line held in one vector
-// ai: (a row's in one load of sixteen, a column's twelve by lane loads), the dark run's and the light run's lanes
-// ai: picked by masks on the lane number: the same darkest and brightest pixel, without a branch on either length.
-// ai: The caller keeps the pixels read inside the line (a row's load of sixteen reads four past the twelve).
-static inline int edge_contrast_n(const uint8_t *g, int sx, int edge, int inner, int dark_len, int light_len) {
-  static const uint8_t LANE[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
-  dark_len = dark_len < 0 ? 0 : dark_len > EDGE_REACH ? EDGE_REACH : dark_len;
-  light_len = light_len < 0 ? 0 : light_len > EDGE_REACH ? EDGE_REACH : light_len;
-  const uint8_t *b = g + (ptrdiff_t)(edge - EDGE_REACH) * sx;
-  uint8x16_t v;
-  if (sx == 1) v = vld1q_u8(b);
-  else {
-    v = vdupq_n_u8(0);
-    v = vld1q_lane_u8(b, v, 0); v = vld1q_lane_u8(b + sx, v, 1); v = vld1q_lane_u8(b + 2 * sx, v, 2); v = vld1q_lane_u8(b + 3 * sx, v, 3);
-    v = vld1q_lane_u8(b + 4 * sx, v, 4); v = vld1q_lane_u8(b + 5 * sx, v, 5); v = vld1q_lane_u8(b + 6 * sx, v, 6); v = vld1q_lane_u8(b + 7 * sx, v, 7);
-    v = vld1q_lane_u8(b + 8 * sx, v, 8); v = vld1q_lane_u8(b + 9 * sx, v, 9); v = vld1q_lane_u8(b + 10 * sx, v, 10); v = vld1q_lane_u8(b + 11 * sx, v, 11);
-  }
-  // ai: going into the picture with rising position the dark run ends below edge and the light run starts at it;
-  // ai: the other way the light run is below and the dark run from edge on
-  const int below = inner > 0 ? dark_len : light_len, above = inner > 0 ? light_len : dark_len;
-  const uint8x16_t lane = vld1q_u8(LANE);
-  const uint8x16_t lo = vandq_u8(vcgeq_u8(lane, vdupq_n_u8((uint8_t)(EDGE_REACH - below))), vcltq_u8(lane, vdupq_n_u8(EDGE_REACH)));
-  const uint8x16_t hi = vandq_u8(vcgeq_u8(lane, vdupq_n_u8(EDGE_REACH)), vcltq_u8(lane, vdupq_n_u8((uint8_t)(EDGE_REACH + above))));
-  const uint8x16_t dm = inner > 0 ? lo : hi, lm = inner > 0 ? hi : lo;
-  return (int)vmaxvq_u8(vandq_u8(v, lm)) - (int)vminvq_u8(vornq_u8(v, dm));
-}
-#elif defined(OB_X86)
-// ai: x86-64: arm64's edge_contrast_n (above) in SSE4.1: a column's twelve pixels by PINSRB, the masks by signed compares
-// ai: on the lane number, the darkest pixel by PHMINPOSUW over the pairs' minima and the brightest as 255 less the
-// ai: complement's darkest: the same darkest and brightest pixel
-static inline int x86_hmin_u8(__m128i v) { return _mm_cvtsi128_si32(_mm_minpos_epu16(_mm_min_epu8(v, _mm_srli_epi16(v, 8)))) & 0xffff; }
-static inline int edge_contrast_n(const uint8_t *g, int sx, int edge, int inner, int dark_len, int light_len) {
-  dark_len = dark_len < 0 ? 0 : dark_len > EDGE_REACH ? EDGE_REACH : dark_len;
-  light_len = light_len < 0 ? 0 : light_len > EDGE_REACH ? EDGE_REACH : light_len;
-  const uint8_t *b = g + (ptrdiff_t)(edge - EDGE_REACH) * sx;
-  __m128i v;
-  if (sx == 1) v = _mm_loadu_si128((const __m128i *)b);
-  else {
-    v = _mm_setzero_si128();
-    v = _mm_insert_epi8(v, b[0], 0); v = _mm_insert_epi8(v, b[sx], 1); v = _mm_insert_epi8(v, b[2 * sx], 2); v = _mm_insert_epi8(v, b[3 * sx], 3);
-    v = _mm_insert_epi8(v, b[4 * sx], 4); v = _mm_insert_epi8(v, b[5 * sx], 5); v = _mm_insert_epi8(v, b[6 * sx], 6); v = _mm_insert_epi8(v, b[7 * sx], 7);
-    v = _mm_insert_epi8(v, b[8 * sx], 8); v = _mm_insert_epi8(v, b[9 * sx], 9); v = _mm_insert_epi8(v, b[10 * sx], 10); v = _mm_insert_epi8(v, b[11 * sx], 11);
-  }
-  const int below = inner > 0 ? dark_len : light_len, above = inner > 0 ? light_len : dark_len;
-  const __m128i lane = _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15), mid = _mm_set1_epi8(EDGE_REACH);
-  // ai: lane >= k is not k > lane
-  const __m128i lo = _mm_andnot_si128(_mm_cmpgt_epi8(_mm_set1_epi8((char)(EDGE_REACH - below)), lane), _mm_cmpgt_epi8(mid, lane));
-  const __m128i hi = _mm_andnot_si128(_mm_cmpgt_epi8(mid, lane), _mm_cmpgt_epi8(_mm_set1_epi8((char)(EDGE_REACH + above)), lane));
-  const __m128i dm = inner > 0 ? lo : hi, lm = inner > 0 ? hi : lo, ones = _mm_set1_epi8(-1);
-  return (255 - x86_hmin_u8(_mm_xor_si128(_mm_and_si128(v, lm), ones))) - x86_hmin_u8(_mm_or_si128(v, _mm_xor_si128(dm, ones)));
-}
-#endif
-
-// edge_contrast(...) >= min_con for an edge of scan line `line` (a row, or with axis 1 a column). The test reads
-// pixels edge - EDGE_REACH .. edge + EDGE_REACH - 1 of the line at most, so where the blocks under those hold no
-// such contrast between them the answer is no, and no pixel is read.
-static inline int edge_passes(const edge_ctx_t *c, int axis, int line, int edge, int inner, int dark_len, int light_len) {
-#if defined(OB_NEON) || defined(OB_X86)
-  // ai: arm64 and x86-64: where the window lies inside the line its pixels are read at once; the blocks' test below is only a
-  // ai: shortcut to the same no (light - dark is never more than the blocks' range), so the answer is the same
-  if (edge >= EDGE_REACH && edge + (axis ? EDGE_REACH : 16 - EDGE_REACH) <= (axis ? c->h : c->w))
-    return edge_contrast_n(axis ? c->grey + line : c->grey + (size_t)line * c->w, axis ? c->w : 1, edge, inner, dark_len, light_len) >= c->min_con;
-#endif
-  int len = axis ? c->h : c->w, lo = edge - EDGE_REACH < 0 ? 0 : edge - EDGE_REACH, hi = edge + EDGE_REACH - 1 >= len ? len - 1 : edge + EDGE_REACH - 1, mn = 255, mx = 0;
-  for (int b = lo / BLK; b <= hi / BLK; b++) { int k = axis ? b * c->bs + line / BLK : (line / BLK) * c->bs + b; if (c->mn[k] < mn) mn = c->mn[k]; if (c->mx[k] > mx) mx = c->mx[k]; }
-  if (mx - mn < c->min_con) return 0;
-  return edge_contrast(axis ? c->grey + line : c->grey + (size_t)line * c->w, axis ? c->w : 1, edge, inner, dark_len, light_len) >= c->min_con;
-}
-
-// A scan of one line for candidates, from one end. A dark run becomes a candidate once the light run past it is
-// known, so it waits for the next boundary (or the line's end). Going forwards `open` is where the dark run the
-// scan is inside began, going backwards where it ends; -1 in light. pa, pb: the finished run in waiting (pb -1: none).
-typedef struct { int open, pa, pb, got; } scan_t;
-
-// A boundary at p (pixel p differs from pixel p - 1), met going forwards. dark: pixel p is dark.
-static inline void near_edge(scan_t *s, int p, int dark, const edge_ctx_t *c, int axis, int line, fpt_t *out) {
-  if (!dark) { s->pa = s->open; s->pb = p; s->open = -1; return; }
-  if (s->pb >= 0) { if (edge_passes(c, axis, line, s->pb, 1, s->pb - s->pa, p - s->pb)) { out[s->got] = (fpt_t){ (float)line, (float)s->pb, s->got }; s->got++; } s->pb = -1; }
-  s->open = p;
-}
-// The same boundary met going backwards: a light pixel p is the end of a dark run being entered, a dark one the start of the run being left.
-static inline void far_edge(scan_t *s, int p, int dark, const edge_ctx_t *c, int axis, int line, fpt_t *out) {
-  if (dark) { s->pa = p; s->pb = s->open; s->open = -1; return; }
-  if (s->pb >= 0) { if (edge_passes(c, axis, line, s->pa, -1, s->pb - s->pa, s->pa - p)) { out[s->got] = (fpt_t){ (float)line, (float)s->pa, s->got }; s->got++; } s->pb = -1; }
-  s->open = p;
-}
-// The line's end: a run in waiting has the rest of the line as its light run. One still open touches the edge and has none.
-static inline void near_end(scan_t *s, int len, const edge_ctx_t *c, int axis, int line, fpt_t *out) {
-  if (s->pb >= 0 && edge_passes(c, axis, line, s->pb, 1, s->pb - s->pa, len - s->pb)) { out[s->got] = (fpt_t){ (float)line, (float)s->pb, s->got }; s->got++; }
-}
-static inline void far_end(scan_t *s, const edge_ctx_t *c, int axis, int line, fpt_t *out) {
-  if (s->pb >= 0 && s->pa >= 1 && edge_passes(c, axis, line, s->pa, -1, s->pb - s->pa, s->pa)) { out[s->got] = (fpt_t){ (float)line, (float)s->pa, s->got }; s->got++; }
-}
-
-// A scan can pass over a stretch where rskip / cskip says nothing can pass, without following its boundaries, and
-// come out in the state it would have had, as far as any later test can tell:
-//   a run in waiting is settled on the way in. If its edge is EDGE_REACH or more back, its light run is already
-//     known to be as long as the test reads. If it is nearer, it lies in the block before the stretch, where
-//     nothing can pass either;
-//   on the way out only whether the scan is inside a dark run matters, not where the run began: the next edge that
-//     could pass is a block or more further on, and the test reads no more than EDGE_REACH of a run.
-#define ACCEPT(s, out, line, at) { (out)[(s)->got] = (fpt_t){ (float)(line), (float)(at), (s)->got }; (s)->got++; }
-
-#ifdef OB_NEON
-// ai: arm64: which of the sixteen pixels at p differ from those at q, as bit 4 i for pixel i (the equal bytes' mask
-// ai: narrowed to a nibble a byte by SHRN, its low bits cleared where equal)
-static inline uint64_t bounds16(const uint8_t *p, const uint8_t *q) {
-  const uint8x16_t eq = vceqq_u8(vld1q_u8(p), vld1q_u8(q));
-  return ~vget_lane_u64(vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(eq), 4)), 0) & 0x1111111111111111ull;
-}
-#elif defined(OB_X86)
-// ai: x86-64: which of the sixteen pixels at p differ from those at q, as bit i for pixel i (the equal bytes' PMOVMSKB,
-// ai: inverted)
-static inline unsigned bounds16(const uint8_t *p, const uint8_t *q) {
-  return ~(unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(_mm_loadu_si128((const __m128i *)p), _mm_loadu_si128((const __m128i *)q))) & 0xffffu;
-}
-#endif
-
-// Candidates of the left border (near) and the right (far) from every second row: the first SIDE_K from each end.
-// Inside the picture nearly every dark run qualifies, so a scan is over a few runs past the border, and the
-// middle of the row, where most of the boundaries are, is never looked at.
-static void row_points(const uint8_t *bin, int w, int h, const edge_ctx_t *c, fpt_t *near, int *nn, fpt_t *far, int *nf) {
-  const int chunks = c->chunks;
-  *nn = *nf = 0;
-  for (int y = 1; y < h; y += 2) {
-    const uint8_t *row = bin + (size_t)y * w, *skip = c->rskip + (size_t)(y / BLK) * chunks;
-    scan_t s = { row[0] ? 0 : -1, 0, -1, 0 };
-    fpt_t *out = near + *nn;
-    for (int j = 0; j < chunks && s.got < SIDE_K; j++) {
-      const int u0 = 16 * j, u1 = u0 + 16 > w ? w : u0 + 16;
-      if (skip[j]) {
-        if (s.pb >= 0) { if (u0 - s.pb >= EDGE_REACH && edge_passes(c, 0, y, s.pb, 1, s.pb - s.pa, u0 - s.pb)) ACCEPT(&s, out, y, s.pb); s.pb = -1; }
-        s.open = row[u1 - 1] ? u0 : -1;
-        continue;
-      }
-#ifdef OB_NEON
-      // ai: arm64: the sixteen boundaries as a nibble each (SHRN), bit 4 i for pixel u0 + i
-      if (u0 && u1 == u0 + 16) {
-        for (uint64_t m = bounds16(row + u0, row + u0 - 1); m && s.got < SIDE_K; m &= m - 1) { int p = u0 + (__builtin_ctzll(m) >> 2); near_edge(&s, p, row[p], c, 0, y, out); }
-        continue;
-      }
-#elif defined(OB_X86)
-      if (u0 && u1 == u0 + 16) {
-        for (unsigned m = bounds16(row + u0, row + u0 - 1); m && s.got < SIDE_K; m &= m - 1) { int p = u0 + __builtin_ctz(m); near_edge(&s, p, row[p], c, 0, y, out); }
-        continue;
-      }
-#elif defined(OB_SIMD)
-      if (u0 && u1 == u0 + 16) {
-        for (unsigned m = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_ne(wasm_v128_load(row + u0), wasm_v128_load(row + u0 - 1))); m && s.got < SIDE_K; m &= m - 1) { int p = u0 + __builtin_ctz(m); near_edge(&s, p, row[p], c, 0, y, out); }
-        continue;
-      }
-#endif
-      for (int x = u0 ? u0 : 1; x < u1 && s.got < SIDE_K; x++) if (row[x] != row[x - 1]) near_edge(&s, x, row[x], c, 0, y, out);
-    }
-    if (s.got < SIDE_K) near_end(&s, w, c, 0, y, out);
-    *nn += s.got;
-    s = (scan_t){ row[w - 1] ? w : -1, 0, -1, 0 };
-    out = far + *nf;
-    for (int j = chunks - 1; j >= 0 && s.got < SIDE_K; j--) {
-      const int u0 = 16 * j, u1 = u0 + 16 > w ? w : u0 + 16;
-      if (skip[j]) {
-        if (s.pb >= 0) { if (s.pa - (u1 - 1) >= EDGE_REACH && edge_passes(c, 0, y, s.pa, -1, s.pb - s.pa, s.pa - (u1 - 1))) ACCEPT(&s, out, y, s.pa); s.pb = -1; }
-        s.open = u0 && row[u0 - 1] ? u1 : -1;
-        continue;
-      }
-#ifdef OB_NEON
-      if (u0 && u1 == u0 + 16) {
-        for (uint64_t m = bounds16(row + u0, row + u0 - 1); m && s.got < SIDE_K; ) { int b = 63 - __builtin_clzll(m), p = u0 + (b >> 2); m ^= 1ull << b; far_edge(&s, p, row[p], c, 0, y, out); }
-        continue;
-      }
-#elif defined(OB_X86)
-      if (u0 && u1 == u0 + 16) {
-        for (unsigned m = bounds16(row + u0, row + u0 - 1); m && s.got < SIDE_K; ) { int i = 31 - __builtin_clz(m), p = u0 + i; m &= ~(1u << i); far_edge(&s, p, row[p], c, 0, y, out); }
-        continue;
-      }
-#elif defined(OB_SIMD)
-      if (u0 && u1 == u0 + 16) {
-        for (unsigned m = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_ne(wasm_v128_load(row + u0), wasm_v128_load(row + u0 - 1))); m && s.got < SIDE_K; ) { int i = 31 - __builtin_clz(m), p = u0 + i; m &= ~(1u << i); far_edge(&s, p, row[p], c, 0, y, out); }
-        continue;
-      }
-#endif
-      for (int x = u1 - 1; x >= (u0 ? u0 : 1) && s.got < SIDE_K; x--) if (row[x] != row[x - 1]) far_edge(&s, x, row[x], c, 0, y, out);
-    }
-    if (s.got < SIDE_K) far_end(&s, c, 0, y, out);
-    *nf += s.got;
-  }
-}
-
-#if defined(OB_NEON) || defined(OB_X86)
-// ai: arm64 and x86-64: col_points' boundaries m of row y in chunk c (bit i: column 16 c + i), in column order
-static inline void col_bounds(scan_t *st, fpt_t *slot, const edge_ctx_t *ctx, int dir, int y, const uint8_t *r1, int c, unsigned m, uint16_t *active, int *live) {
-  for (; m; m &= m - 1) {
-    int i = __builtin_ctz(m), x = 16 * c + i;
-    scan_t *sc = &st[x >> 1];
-    if (dir) far_edge(sc, y, r1[x], ctx, 1, x, slot + (size_t)(x >> 1) * SIDE_K); else near_edge(sc, y, r1[x], ctx, 1, x, slot + (size_t)(x >> 1) * SIDE_K);
-    if (sc->got == SIDE_K) { active[c] &= (uint16_t)~(1u << i); (*live)--; }
-  }
-}
-#endif
-
-// The same for the top border (near) and the bottom (far), from every second column, without turning the image
-// over: all the columns are scanned at once, a row at a time. Comparing a row with the one before it gives the
-// columns that have a boundary there, sixteen to a compare, and a column drops out of the compare once it has its
-// SIDE_K candidates, or for as long as it runs through blocks where nothing can pass. Sixteen columns with none
-// left in the compare cost nothing, which is most of them: the surround sleeps, and a few rows into the picture
-// the columns that cross it are done.
-static void col_points(const uint8_t *bin, int w, int h, const edge_ctx_t *ctx, fpt_t *near, int *nn, fpt_t *far, int *nf) {
-  int nc = w / 2, chunks = ctx->chunks;
-  scan_t *st = malloc((size_t)nc * sizeof(scan_t));
-  fpt_t *slot = malloc((size_t)nc * SIDE_K * sizeof(fpt_t));
-#if defined(OB_NEON) || defined(OB_X86)
-  // ai: arm64 and x86-64: the masks padded to whole groups of eight chunks, the padding never active, for the group test
-  // ai: below
-  const int cpad = (chunks + 7) & ~7;
-  uint16_t *active = calloc((size_t)cpad * 2, sizeof(uint16_t)), *asleep = active + cpad;
-#else
-  uint16_t *active = malloc((size_t)chunks * 2 * sizeof(uint16_t)), *asleep = active + chunks;
-#endif
-  *nn = *nf = 0;
-  for (int dir = 0; dir < 2 && st && slot && active; dir++) {
-    int live = nc, cur = -1;
-    for (int i = 0; i < nc; i++) st[i] = (scan_t){ bin[(size_t)(dir ? h - 1 : 0) * w + 2 * i + 1] ? (dir ? h : 0) : -1, 0, -1, 0 };
-    for (int c = 0; c < chunks; c++) { unsigned m = 0; for (int i = 1; i < 16 && 16 * c + i < w; i += 2) m |= 1u << i; active[c] = (uint16_t)m; asleep[c] = 0; }
-    for (int k = 1; k < h && live; k++) {
-      int y = dir ? h - k : k, by = y / BLK;
-      if (by != cur) {
-        // A new row of blocks: which columns fall asleep in it, and which wake. first, last: its rows. at: the row a
-        // waker stands on, having followed no boundary since it fell asleep: its pixel says if it wakes inside a dark run.
-        const int first = by * BLK, last = first + BLK > h ? h - 1 : first + BLK - 1, at = dir ? last : first - 1;
-        cur = by;
-        for (int c = 0; c < chunks; c++) {
-          if (!active[c]) continue;
-          unsigned sm = (ctx->cskip[by * ctx->bw + 2 * c] ? 0x00ffu : 0) | (2 * c + 1 < ctx->bw && ctx->cskip[by * ctx->bw + 2 * c + 1] ? 0xff00u : 0);
-          for (unsigned a = sm & ~asleep[c] & active[c]; a; a &= a - 1) {
-            int i = __builtin_ctz(a), x = 16 * c + i;
-            scan_t *sc = &st[x >> 1];
-            fpt_t *out = slot + (size_t)(x >> 1) * SIDE_K;
-            if (sc->pb < 0) continue;
-            if (dir) { if (sc->pa - last >= EDGE_REACH && edge_passes(ctx, 1, x, sc->pa, -1, sc->pb - sc->pa, sc->pa - last)) ACCEPT(sc, out, x, sc->pa); }
-            else if (first - sc->pb >= EDGE_REACH && edge_passes(ctx, 1, x, sc->pb, 1, sc->pb - sc->pa, first - sc->pb)) ACCEPT(sc, out, x, sc->pb);
-            sc->pb = -1;
-            if (sc->got == SIDE_K) { active[c] &= (uint16_t)~(1u << i); live--; }
-          }
-          for (unsigned a = asleep[c] & ~sm & active[c]; a; a &= a - 1) {
-            int x = 16 * c + __builtin_ctz(a);
-            st[x >> 1].open = bin[(size_t)at * w + x] ? at + dir : -1; st[x >> 1].pb = -1;
-          }
-          asleep[c] = (uint16_t)sm;
-        }
-      }
-      const uint8_t *r1 = bin + (size_t)y * w, *r0 = r1 - w;
-#ifdef OB_NEON
-      // ai: arm64: eight chunks at a time: a group with no column awake passed over whole; a whole group's sixteen-bit
-      // ai: boundary masks made together (each byte's bit of its place in its half, then pairwise adds three times over,
-      // ai: ADDP: chunk k's two bytes are lane k), masked by the columns awake; then each chunk in order as the plain
-      // ai: loop takes it (a chunk's own boundaries change only its own mask), the group's last chunks one by one
-      for (int c0 = 0; c0 < chunks; c0 += 8) {
-        const uint16x8_t aw = vbicq_u16(vld1q_u16(active + c0), vld1q_u16(asleep + c0));
-        if (!vmaxvq_u16(aw)) continue;
-        if (16 * c0 + 128 <= w) {
-          static const uint8_t BIT[16] = { 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
-          const uint8x16_t bit = vld1q_u8(BIT);
-          uint8x16_t b[8];
-          for (int k = 0; k < 8; k++) b[k] = vbicq_u8(bit, vceqq_u8(vld1q_u8(r1 + 16 * (c0 + k)), vld1q_u8(r0 + 16 * (c0 + k))));
-          const uint8x16_t q = vpaddq_u8(vpaddq_u8(vpaddq_u8(b[0], b[1]), vpaddq_u8(b[2], b[3])), vpaddq_u8(vpaddq_u8(b[4], b[5]), vpaddq_u8(b[6], b[7])));
-          const uint16x8_t m8 = vandq_u16(vreinterpretq_u16_u8(q), aw);
-          if (!vmaxvq_u16(m8)) continue;
-          uint16_t ms[8];
-          vst1q_u16(ms, m8);
-          for (int k = 0; k < 8; k++) if (ms[k]) col_bounds(st, slot, ctx, dir, y, r1, c0 + k, ms[k], active, &live);
-          continue;
-        }
-        for (int c = c0; c < chunks; c++) {
-          const unsigned awake = active[c] & ~(unsigned)asleep[c];
-          if (!awake) continue;
-          unsigned m = 0;
-          if (16 * c + 16 <= w) m = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_ne(wasm_v128_load(r1 + 16 * c), wasm_v128_load(r0 + 16 * c))) & awake;
-          else for (unsigned a = awake; a; a &= a - 1) { int i = __builtin_ctz(a); m |= (unsigned)(r1[16 * c + i] != r0[16 * c + i]) << i; }
-          col_bounds(st, slot, ctx, dir, y, r1, c, m, active, &live);
-        }
-      }
-#elif defined(OB_X86)
-      // ai: x86-64: arm64's groups of eight chunks (above): a group with no column awake passed over whole (PTEST); in a
-      // ai: group each chunk's boundary mask by PMOVMSKB where the chunk is whole, masked by the columns the group's test
-      // ai: found awake (a chunk's own boundaries change only its own mask), each chunk in order as the plain loop takes it
-      for (int c0 = 0; c0 < chunks; c0 += 8) {
-        const __m128i aw = _mm_andnot_si128(_mm_loadu_si128((const __m128i *)(asleep + c0)), _mm_loadu_si128((const __m128i *)(active + c0)));
-        if (_mm_testz_si128(aw, aw)) continue;
-        uint16_t a8[8];
-        _mm_storeu_si128((__m128i *)a8, aw);
-        for (int k = 0; k < 8 && c0 + k < chunks; k++) {
-          const int c = c0 + k;
-          if (!a8[k]) continue;
-          unsigned m = 0;
-          if (16 * c + 16 <= w) m = ~(unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(_mm_loadu_si128((const __m128i *)(r1 + 16 * c)), _mm_loadu_si128((const __m128i *)(r0 + 16 * c)))) & a8[k];
-          else for (unsigned a = a8[k]; a; a &= a - 1) { int i = __builtin_ctz(a); m |= (unsigned)(r1[16 * c + i] != r0[16 * c + i]) << i; }
-          if (m) col_bounds(st, slot, ctx, dir, y, r1, c, m, active, &live);
-        }
-      }
-#else
-      for (int c = 0; c < chunks; c++) {
-        const unsigned awake = active[c] & ~(unsigned)asleep[c];
-        if (!awake) continue;
-        unsigned m = 0;
-#ifdef OB_SIMD
-        if (16 * c + 16 <= w) m = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_ne(wasm_v128_load(r1 + 16 * c), wasm_v128_load(r0 + 16 * c))) & awake;
-        else
-#endif
-        for (unsigned a = awake; a; a &= a - 1) { int i = __builtin_ctz(a); m |= (unsigned)(r1[16 * c + i] != r0[16 * c + i]) << i; }
-        for (; m; m &= m - 1) {
-          int i = __builtin_ctz(m), x = 16 * c + i;
-          scan_t *sc = &st[x >> 1];
-          if (dir) far_edge(sc, y, r1[x], ctx, 1, x, slot + (size_t)(x >> 1) * SIDE_K); else near_edge(sc, y, r1[x], ctx, 1, x, slot + (size_t)(x >> 1) * SIDE_K);
-          if (sc->got == SIDE_K) { active[c] &= (uint16_t)~(1u << i); live--; }
-        }
-      }
-#endif
-    }
-    fpt_t *out = dir ? far : near;
-    int n = 0;
-    for (int i = 0; i < nc; i++) {
-      int x = 2 * i + 1;
-      if (st[i].got < SIDE_K) { if (dir) far_end(&st[i], ctx, 1, x, slot + (size_t)i * SIDE_K); else near_end(&st[i], h, ctx, 1, x, slot + (size_t)i * SIDE_K); }
-      for (int k = 0; k < st[i].got; k++) out[n++] = slot[(size_t)i * SIDE_K + k];
-    }
-    *(dir ? nf : nn) = n;
-  }
-  free(st); free(slot); free(active);
-}
-#undef ACCEPT
-
-#ifdef OB_VERIFY_POINTS
-// The scan these two replaced, kept for a build that runs both and compares: every run boundary of every scanned
-// line, and for the columns a transposed copy of the whole image.
-// grey is read at grey[row * sy + x * sx], so the same code serves the transposed pass.
-static void side_points(const uint8_t *bin, int w, int h, const uint8_t *grey, int sx, int sy, int min_con, int *pos, fpt_t *near, int *nn, fpt_t *far, int *nf) {
-  *nn = *nf = 0;
-  for (int y = 1; y < h; y += 2) {
-    const uint8_t *g = grey + (size_t)y * sy;
-    int np = run_edges(bin + y * w, w, pos), runs = np / 2, got = 0;
-    for (int k = 0; k < runs && got < SIDE_K; k++) {
-      int a = pos[2 * k], b = pos[2 * k + 1], gap = (k + 1 < runs ? pos[2 * k + 2] : w) - b;
-      if (gap < 1 || edge_contrast(g, sx, b, 1, b - a, gap) < min_con) continue;
-      near[(*nn)++] = (fpt_t){ (float)y, (float)b, got }; got++;
-    }
-    got = 0;
-    for (int k = runs - 1; k >= 0 && got < SIDE_K; k--) {
-      int a = pos[2 * k], b = pos[2 * k + 1], gap = a - (k ? pos[2 * k - 1] : 0);
-      if (gap < 1 || edge_contrast(g, sx, a, -1, b - a, gap) < min_con) continue;
-      far[(*nf)++] = (fpt_t){ (float)y, (float)a, got }; got++;
-    }
-  }
-}
-
-#endif
-
+// ---------------------------------------------------------------- thin frame: a side's curve
+// ai: A traced side's curve (the finder's tr_fit): across = c (along - mid)^2 + a along + b, along x on the top and bottom
+// ai: sides and y on the right and left
+typedef struct { float a, b; int n; float c, mid; } fline_t;
 static inline float line_at(const fline_t *l, float along) { float d = along - l->mid; return l->c * d * d + l->a * along + l->b; }
-
-// The fits test the same points against curve after curve, so the points are kept as two plain arrays and tested
-// four at a time. in4: which of four points lie within tol of the curve, as a bit each.
-#if defined(OB_SIMD) && !defined(OB_NEON) && !defined(OB_X86)
-static inline v128_t curve_in4(const fline_t *l, v128_t al, v128_t ac, v128_t tol) {
-  const v128_t d = wasm_f32x4_sub(al, wasm_f32x4_splat(l->mid));
-  const v128_t at = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_mul(wasm_f32x4_splat(l->c), d), d), wasm_f32x4_mul(wasm_f32x4_splat(l->a), al)), wasm_f32x4_splat(l->b));
-  return wasm_f32x4_le(wasm_f32x4_abs(wasm_f32x4_sub(ac, at)), tol);
-}
-#endif
-#ifdef OB_NEON
-// ai: arm64: curve_in4's test in NEON's own instructions, the same float operations in the same order (FABD is the
-// ai: rounded difference made positive, as fabsf of it): a lane all ones where the point is within tol
-typedef struct { float32x4_t mid, c, a, b, tol; } curve4_t;
-static inline curve4_t curve4_of(const fline_t *l, float tol) {
-  return (curve4_t){ vdupq_n_f32(l->mid), vdupq_n_f32(l->c), vdupq_n_f32(l->a), vdupq_n_f32(l->b), vdupq_n_f32(tol) };
-}
-static inline uint32x4_t curve_in4n(const curve4_t *k, float32x4_t al, float32x4_t ac) {
-  const float32x4_t d = vsubq_f32(al, k->mid);
-  const float32x4_t at = vaddq_f32(vaddq_f32(vmulq_f32(vmulq_f32(k->c, d), d), vmulq_f32(k->a, al)), k->b);
-  return vcleq_f32(vabdq_f32(ac, at), k->tol);
-}
-#elif defined(OB_X86)
-// ai: x86-64: the same test with the curve's terms splatted once (curve4_t), the same float operations in the same
-// ai: order (the difference made positive by clearing its sign): a lane all ones where the point is within tol
-typedef struct { __m128 mid, c, a, b, tol; } curve4_t;
-static inline curve4_t curve4_of(const fline_t *l, float tol) {
-  return (curve4_t){ _mm_set1_ps(l->mid), _mm_set1_ps(l->c), _mm_set1_ps(l->a), _mm_set1_ps(l->b), _mm_set1_ps(tol) };
-}
-static inline __m128 curve_in4x(const curve4_t *k, __m128 al, __m128 ac) {
-  const __m128 d = _mm_sub_ps(al, k->mid);
-  const __m128 at = _mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_mul_ps(k->c, d), d), _mm_mul_ps(k->a, al)), k->b);
-  return _mm_cmple_ps(_mm_and_ps(_mm_sub_ps(ac, at), _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff))), k->tol);
-}
-#endif
-// How many of m points lie within tol of the curve, and the stretch of `along` they cover (lo > hi when none do).
-static int curve_support(const fline_t *l, const float *al, const float *ac, int m, float tol, float *plo, float *phi) {
-  float lo = 1e9f, hi = -1e9f;
-  int n = 0, k = 0;
-#ifdef OB_NEON
-  // ai: arm64: eight points a step; the count in lanes (a passing lane's all-ones subtracted), the stretch by
-  // ai: FMIN / FMAX over the passing lanes' along (a line number, whole and positive, so no NaN or signed zero for
-  // ai: them to treat otherwise than the compare-and-select), each order-free, so the same n, lo and hi
-  {
-    const curve4_t K = curve4_of(l, tol);
-    const float32x4_t big = vdupq_n_f32(lo), small = vdupq_n_f32(hi);
-    uint32x4_t c0 = vdupq_n_u32(0), c1 = c0;
-    float32x4_t lo0 = big, lo1 = big, hi0 = small, hi1 = small;
-    for (; k + 8 <= m; k += 8) {
-      const float32x4_t a0 = vld1q_f32(al + k), a1 = vld1q_f32(al + k + 4);
-      const uint32x4_t in0 = curve_in4n(&K, a0, vld1q_f32(ac + k)), in1 = curve_in4n(&K, a1, vld1q_f32(ac + k + 4));
-      c0 = vsubq_u32(c0, in0); c1 = vsubq_u32(c1, in1);
-      lo0 = vminq_f32(lo0, vbslq_f32(in0, a0, big)); lo1 = vminq_f32(lo1, vbslq_f32(in1, a1, big));
-      hi0 = vmaxq_f32(hi0, vbslq_f32(in0, a0, small)); hi1 = vmaxq_f32(hi1, vbslq_f32(in1, a1, small));
-    }
-    for (; k + 4 <= m; k += 4) {
-      const float32x4_t a0 = vld1q_f32(al + k);
-      const uint32x4_t in0 = curve_in4n(&K, a0, vld1q_f32(ac + k));
-      c0 = vsubq_u32(c0, in0);
-      lo0 = vminq_f32(lo0, vbslq_f32(in0, a0, big)); hi0 = vmaxq_f32(hi0, vbslq_f32(in0, a0, small));
-    }
-    n = (int)vaddvq_u32(vaddq_u32(c0, c1)); lo = vminvq_f32(vminq_f32(lo0, lo1)); hi = vmaxvq_f32(vmaxq_f32(hi0, hi1));
-  }
-#elif defined(OB_X86)
-  // ai: x86-64: arm64's form (above): eight points a step, the count in lanes, the stretch by MINPS / MAXPS over the
-  // ai: passing lanes' along (BLENDVPS; whole and positive, so no NaN or signed zero), each order-free: the same n, lo, hi
-  {
-    const curve4_t K = curve4_of(l, tol);
-    const __m128 big = _mm_set1_ps(lo), small = _mm_set1_ps(hi);
-    __m128i c0 = _mm_setzero_si128(), c1 = c0;
-    __m128 lo0 = big, lo1 = big, hi0 = small, hi1 = small;
-    for (; k + 8 <= m; k += 8) {
-      const __m128 a0 = _mm_loadu_ps(al + k), a1 = _mm_loadu_ps(al + k + 4);
-      const __m128 in0 = curve_in4x(&K, a0, _mm_loadu_ps(ac + k)), in1 = curve_in4x(&K, a1, _mm_loadu_ps(ac + k + 4));
-      c0 = _mm_sub_epi32(c0, _mm_castps_si128(in0)); c1 = _mm_sub_epi32(c1, _mm_castps_si128(in1));
-      lo0 = _mm_min_ps(lo0, _mm_blendv_ps(big, a0, in0)); lo1 = _mm_min_ps(lo1, _mm_blendv_ps(big, a1, in1));
-      hi0 = _mm_max_ps(hi0, _mm_blendv_ps(small, a0, in0)); hi1 = _mm_max_ps(hi1, _mm_blendv_ps(small, a1, in1));
-    }
-    for (; k + 4 <= m; k += 4) {
-      const __m128 a0 = _mm_loadu_ps(al + k), in0 = curve_in4x(&K, a0, _mm_loadu_ps(ac + k));
-      c0 = _mm_sub_epi32(c0, _mm_castps_si128(in0));
-      lo0 = _mm_min_ps(lo0, _mm_blendv_ps(big, a0, in0)); hi0 = _mm_max_ps(hi0, _mm_blendv_ps(small, a0, in0));
-    }
-    __m128i c = _mm_add_epi32(c0, c1);
-    __m128 l4 = _mm_min_ps(lo0, lo1), h4 = _mm_max_ps(hi0, hi1);
-    c = _mm_add_epi32(c, _mm_shuffle_epi32(c, _MM_SHUFFLE(1, 0, 3, 2))); c = _mm_add_epi32(c, _mm_shuffle_epi32(c, _MM_SHUFFLE(2, 3, 0, 1)));
-    l4 = _mm_min_ps(l4, _mm_shuffle_ps(l4, l4, _MM_SHUFFLE(1, 0, 3, 2))); l4 = _mm_min_ps(l4, _mm_shuffle_ps(l4, l4, _MM_SHUFFLE(2, 3, 0, 1)));
-    h4 = _mm_max_ps(h4, _mm_shuffle_ps(h4, h4, _MM_SHUFFLE(1, 0, 3, 2))); h4 = _mm_max_ps(h4, _mm_shuffle_ps(h4, h4, _MM_SHUFFLE(2, 3, 0, 1)));
-    n = _mm_cvtsi128_si32(c); lo = _mm_cvtss_f32(l4); hi = _mm_cvtss_f32(h4);
-  }
-#elif defined(OB_SIMD)
-  v128_t vlo = wasm_f32x4_splat(lo), vhi = wasm_f32x4_splat(hi);
-  const v128_t vtol = wasm_f32x4_splat(tol);
-  for (; k + 4 <= m; k += 4) {
-    const v128_t a = wasm_v128_load(al + k), in = curve_in4(l, a, wasm_v128_load(ac + k), vtol);
-    n += __builtin_popcount((unsigned)wasm_i32x4_bitmask(in));
-    vlo = wasm_f32x4_pmin(vlo, wasm_v128_bitselect(a, vlo, in)); vhi = wasm_f32x4_pmax(vhi, wasm_v128_bitselect(a, vhi, in));
-  }
-  float t[4];
-  wasm_v128_store(t, vlo); for (int q = 0; q < 4; q++) if (t[q] < lo) lo = t[q];
-  wasm_v128_store(t, vhi); for (int q = 0; q < 4; q++) if (t[q] > hi) hi = t[q];
-#endif
-  for (; k < m; k++) if (fabsf(ac[k] - line_at(l, al[k])) <= tol) { n++; if (al[k] < lo) lo = al[k]; if (al[k] > hi) hi = al[k]; }
-  *plo = lo; *phi = hi;
-  return n;
-}
-
-// Least-squares polish of a sampled parabola, over the points it holds. Same reach as the sampling
-// stage and two passes only: anything wider or longer lets the curve walk onto the track where the
-// border's own points run out near a corner.
-static void refit_curve(const float *al, const float *ac, int n, float tol, fline_t *l) {
-  float lo, hi;
-  curve_support(l, al, ac, n, tol, &lo, &hi);
-  if (hi <= lo) return;
-  // Re-centre without moving the curve: c d^2 + a x + b with d = x - mid is c e^2 + (a + 2 c (m - mid)) x + const with e = x - m.
-  { float m = 0.5f * (lo + hi), at = line_at(l, m); l->a += 2 * l->c * (m - l->mid); l->mid = m; l->b = at - l->a * m; }
-  float half = 0.5f * (hi - lo);
-  for (int pass = 0; pass < 2; pass++) {
-    // across = c u^2 + a' u + b' in u = (along - mid) / half, which keeps the normal equations well scaled.
-    double S[3][4] = { { 0 } }; int m = 0, i = 0;
-    #define TAKE(i) { double u = (al[i] - l->mid) / half, f[3] = { u * u, u, 1 }; \
-      for (int r = 0; r < 3; r++) { for (int q = 0; q < 3; q++) S[r][q] += f[r] * f[q]; S[r][3] += f[r] * ac[i]; } m++; }
-#ifdef OB_NEON
-    // ai: arm64: the test eight points a step, a step with none passing left at one compare; u four a step (FDIV,
-    // ai: the same float division); the sums in their order but only the distinct ones, in pairs of lanes: with
-    // ai: f = (u u, u, 1), S[0][0] sums f0 f0 and S[0][1] = S[1][0] f0 u; S[0][2], S[2][0] and S[1][1] all sum f0
-    // ai: (f0 1, 1 f0 and u u are each f0 itself); S[1][2] = S[2][1] sums u, S[2][2] the count; S[r][3] sums f[r] ac,
-    // ai: S[2][3] ac. The same addends in the same order, so the same sums
-    {
-      const curve4_t K = curve4_of(l, tol);
-      const float32x4_t vmid = vdupq_n_f32(l->mid), vhalf = vdupq_n_f32(half);
-      float64x2_t s01 = vdupq_n_f64(0), s02 = s01, s03 = s01;
-      double s23 = 0;
-      float u4[8];
-      #define TAKE2(u, acv) { const double u_ = (u), ac_ = (acv); const float64x2_t f_ = { u_ * u_, u_ }; \
-        s01 = vaddq_f64(s01, vmulq_f64(f_, vdupq_n_f64(f_[0]))); s02 = vaddq_f64(s02, f_); s03 = vaddq_f64(s03, vmulq_f64(f_, vdupq_n_f64(ac_))); s23 += ac_; m++; }
-      for (; i + 8 <= n; i += 8) {
-        const float32x4_t a0 = vld1q_f32(al + i), a1 = vld1q_f32(al + i + 4);
-        const uint32x4_t in0 = curve_in4n(&K, a0, vld1q_f32(ac + i)), in1 = curve_in4n(&K, a1, vld1q_f32(ac + i + 4));
-        uint64_t bits = vget_lane_u64(vreinterpret_u64_u8(vmovn_u16(vcombine_u16(vmovn_u32(in0), vmovn_u32(in1)))), 0);
-        if (!bits) continue;
-        vst1q_f32(u4, vdivq_f32(vsubq_f32(a0, vmid), vhalf)); vst1q_f32(u4 + 4, vdivq_f32(vsubq_f32(a1, vmid), vhalf));
-        for (bits &= 0x0101010101010101ull; bits; bits &= bits - 1) { const int j = __builtin_ctzll(bits) >> 3; TAKE2(u4[j], ac[i + j]); }
-      }
-      for (; i < n; i++) if (fabsf(ac[i] - line_at(l, al[i])) <= tol) TAKE2((al[i] - l->mid) / half, ac[i]);
-      #undef TAKE2
-      const double f0 = vgetq_lane_f64(s02, 0), f1 = vgetq_lane_f64(s02, 1);
-      const double T[3][4] = { { vgetq_lane_f64(s01, 0), vgetq_lane_f64(s01, 1), f0, vgetq_lane_f64(s03, 0) },
-                               { vgetq_lane_f64(s01, 1), f0, f1, vgetq_lane_f64(s03, 1) }, { f0, f1, (double)m, s23 } };
-      memcpy(S, T, sizeof S);
-    }
-#elif defined(OB_X86)
-    // ai: x86-64: arm64's form (above): the test eight points a step (its bits by MOVMSKPS), u four a step (DIVPS, the
-    // ai: same float division), the distinct sums in pairs of double lanes (SSE2, a multiply then an add), in order: the
-    // ai: same addends in the same order, so the same sums
-    {
-      const curve4_t K = curve4_of(l, tol);
-      const __m128 vmid = _mm_set1_ps(l->mid), vhalf = _mm_set1_ps(half);
-      __m128d s01 = _mm_setzero_pd(), s02 = s01, s03 = s01;
-      double s23 = 0;
-      float u4[8];
-      #define TAKE2(u, acv) { const double u_ = (u), ac_ = (acv), f0_ = u_ * u_; const __m128d f_ = _mm_setr_pd(f0_, u_); \
-        s01 = _mm_add_pd(s01, _mm_mul_pd(f_, _mm_set1_pd(f0_))); s02 = _mm_add_pd(s02, f_); s03 = _mm_add_pd(s03, _mm_mul_pd(f_, _mm_set1_pd(ac_))); s23 += ac_; m++; }
-      for (; i + 8 <= n; i += 8) {
-        const __m128 a0 = _mm_loadu_ps(al + i), a1 = _mm_loadu_ps(al + i + 4);
-        unsigned bits = (unsigned)_mm_movemask_ps(curve_in4x(&K, a0, _mm_loadu_ps(ac + i))) | (unsigned)_mm_movemask_ps(curve_in4x(&K, a1, _mm_loadu_ps(ac + i + 4))) << 4;
-        if (!bits) continue;
-        _mm_storeu_ps(u4, _mm_div_ps(_mm_sub_ps(a0, vmid), vhalf)); _mm_storeu_ps(u4 + 4, _mm_div_ps(_mm_sub_ps(a1, vmid), vhalf));
-        for (; bits; bits &= bits - 1) { const int j = __builtin_ctz(bits); TAKE2(u4[j], ac[i + j]); }
-      }
-      for (; i < n; i++) if (fabsf(ac[i] - line_at(l, al[i])) <= tol) TAKE2((al[i] - l->mid) / half, ac[i]);
-      #undef TAKE2
-      const double a00 = _mm_cvtsd_f64(s01), a01 = _mm_cvtsd_f64(_mm_unpackhi_pd(s01, s01)), f0 = _mm_cvtsd_f64(s02), f1 = _mm_cvtsd_f64(_mm_unpackhi_pd(s02, s02));
-      const double a03 = _mm_cvtsd_f64(s03), a13 = _mm_cvtsd_f64(_mm_unpackhi_pd(s03, s03));
-      const double T[3][4] = { { a00, a01, f0, a03 }, { a01, f0, f1, a13 }, { f0, f1, (double)m, s23 } };
-      memcpy(S, T, sizeof S);
-    }
-#elif defined(OB_SIMD)
-    // The test four at a time, the sums over those that pass one at a time and in order, so they round as ever.
-    const v128_t vtol = wasm_f32x4_splat(tol);
-    for (; i + 4 <= n; i += 4) for (unsigned in = (unsigned)wasm_i32x4_bitmask(curve_in4(l, wasm_v128_load(al + i), wasm_v128_load(ac + i), vtol)); in; in &= in - 1) TAKE(i + __builtin_ctz(in));
-#endif
-    for (; i < n; i++) if (fabsf(ac[i] - line_at(l, al[i])) <= tol) TAKE(i);
-    #undef TAKE
-    if (m < 12) return;
-    for (int col = 0; col < 3; col++) {
-      int piv = col;
-      for (int r = col + 1; r < 3; r++) if (fabs(S[r][col]) > fabs(S[piv][col])) piv = r;
-      if (fabs(S[piv][col]) < 1e-9) return;
-      for (int q = 0; q < 4; q++) { double tmp = S[col][q]; S[col][q] = S[piv][q]; S[piv][q] = tmp; }
-      for (int r = 0; r < 3; r++) if (r != col) { double g = S[r][col] / S[col][col]; for (int q = col; q < 4; q++) S[r][q] -= g * S[col][q]; }
-    }
-    double c = S[0][3] / S[0][0], a1 = S[1][3] / S[1][1], b1 = S[2][3] / S[2][2];
-    l->c = (float)(c / ((double)half * half)); l->a = (float)(a1 / half); l->b = (float)(b1 - a1 * l->mid / half); l->n = m;
-  }
-}
 
 // ---------------------------------------------------------------- thin frame: the corner marks
 //
-// The marks are found DIRECTLY IN THE IMAGE here, not out of the line scan's candidate lists, and that is the
-// whole point of this pass. Measured on a noisy surround (2026-09-21): it costs the thin frame everything, a quiet zone
-// does not buy it back at any width, and cropping the capture to the symbol restores all of it. Everything that
-// works from the line scan's lists fails for one reason: a scan STOPS after SIDE_K candidates, so when noise
-// supplies that many before the border, the border was never recorded and nothing downstream can recover it.
-// Raising the budget records it and still does not return the payload, at several times the detect time.
-//
-// So this is a LOCAL finder, in the sense QR's is: one place in the image, judged on its own evidence, with
-// nothing to crowd out. A gapped mark's cross-section is the same whichever way the scan crosses it, because
-// the mark is symmetric about its diagonal: the border line's OB_THIN_LINE modules, the gap's OB_RING_DEEP, then
-// the core, each bounded by light. That is a run-length ratio, so it is scale-free and the module size falls out
-// of it rather than having to be known. Filled marks have no such cross-section (the line and the core are one
-// run) and are not detectable, which is no loss: they cost half the payload at 720.
-enum { MARK_MIN_CORE = 3 };
+// A LOCAL finder, in the sense QR's is: one place in the image, judged on its own evidence, with nothing to crowd out.
+// ai: The marks are proposed from the grey picture (find_frame's gray_cands, 2026-11-24); the binarized scan before it
+// ai: (mark_candidates, 2026-09-21 to 2026-11-24) read each mark's cross-section as a run-length ratio. What stays here
+// ai: is what both share: the marks' geometry, and four candidates as a quad.
 
 // The core's modules, and where its centre sits in layout coordinates. thin_corner paints the core from the end
 // of the gap band to the mark's light rim, so it spans [OB_THIN_TRACK, S - 1) and its middle is the two averaged. A
 // corner mark borrows the border's line and gap for two of its sides.
 static inline int mark_core(const ob_layout_t *L) { return L->corner - 1 - OB_THIN_TRACK; }
 static inline float mark_mid(const ob_layout_t *L) { return (OB_THIN_TRACK + L->corner - 1) / 2.0f; }
-
-// line, gap and core in pixels against the ratio OB_THIN_LINE : OB_RING_DEEP : core. `unit` comes back as the
-// module size the three of them agree on.
-// ai: arm64 and x86-64 take it for 64 pairs at once, in their own operations (mark_pairs64)
-#if !defined(OB_NEON) && !defined(OB_X86)
-static int mark_ratio(int line, int gap, int core_px, int core, float *unit) {
-  const int total = line + gap + core_px;
-  if (core_px < MARK_MIN_CORE || total < OB_THIN_LINE + OB_RING_DEEP + core) return 0;
-  const float u = (float)total / (OB_THIN_LINE + OB_RING_DEEP + core), tol = 0.6f * u + 0.5f;
-  if (fabsf(line - OB_THIN_LINE * u) > tol || fabsf(gap - OB_RING_DEEP * u) > tol) return 0;
-  if (fabsf(core_px - core * u) > 1.5f * tol * core / 2) return 0;
-  *unit = u;
-  return 1;
-}
-#endif
-
-#if defined(OB_NEON) || defined(OB_X86)
-// ai: how many pixels of column x from row y on, down (dir 1) or up (-1), are want (0 light, 1 dark) before one is not
-// ai: or the image ends, at most cap: the count the byte loops below take (0 where y is outside the image)
-static inline int cb_run(const uint32_t *cb, int w, int h, int x, int y, int dir, int want, int cap) {
-  if (cap <= 0) return 0;
-  const uint32_t flip = want ? 0 : ~0u;
-  int n = 0;
-  while (n < cap && y >= 0 && y < h) {
-    const uint32_t word = cb[(size_t)(y >> 5) * w + x] ^ flip;   // ones where the pixel is want
-    int t, avail;
-    if (dir > 0) {
-      const uint32_t s = ~(word >> (y & 31));
-      t = s ? __builtin_ctz(s) : 32; avail = 32 - (y & 31); if (avail > h - y) avail = h - y;
-    } else {
-      const uint32_t s = ~(word << (31 - (y & 31)));
-      t = s ? __builtin_clz(s) : 32; avail = (y & 31) + 1;
-    }
-    if (t > avail) t = avail;
-    n += t; y += dir * t;
-    if (t < avail) break;
-  }
-  return n < cap ? n : cap;
-}
-#endif
-// A light run then a dark run, walked from `at` along `dir`: the gap and the line on one side of a core. This is
-// what tells a mark from any other dark square in the picture, and it has to hold on the corner side only.
-#if defined(OB_NEON) || defined(OB_X86)
-// ai: mark_flank on the column bits: the same walks, the same test
-static int mark_flank_cb(const uint32_t *cb, int w, int h, int x, int at, int dir, float u) {
-  const int cap = (int)((2 + OB_THIN_LINE + OB_RING_DEEP) * u) + 4;
-  const int gap = cb_run(cb, w, h, x, at, dir, 0, cap), line = cb_run(cb, w, h, x, at + dir * gap, dir, 1, cap), i = at + dir * (gap + line);
-  if (i < 0 || i >= h || (cb[(size_t)(i >> 5) * w + x] >> (i & 31) & 1)) return 0;   // the line must end in light, not run off or run on
-  const float tol = 0.6f * u + 0.5f;
-  return fabsf(gap - OB_RING_DEEP * u) <= tol && fabsf(line - OB_THIN_LINE * u) <= tol;
-}
-#else
-static int mark_flank(const uint8_t *bin, int len, int stride, int at, int dir, float u) {
-  int gap = 0, line = 0, i = at;
-  const int cap = (int)((2 + OB_THIN_LINE + OB_RING_DEEP) * u) + 4;
-  while (i >= 0 && i < len && !bin[i * stride] && gap < cap) { gap++; i += dir; }
-  while (i >= 0 && i < len && bin[i * stride] && line < cap) { line++; i += dir; }
-  if (i < 0 || i >= len || bin[i * stride]) return 0;   // the line must end in light, not run off or run on
-  const float tol = 0.6f * u + 0.5f;
-  return fabsf(gap - OB_RING_DEEP * u) <= tol && fabsf(line - OB_THIN_LINE * u) <= tol;
-}
-#endif
-
-// A candidate core found on a row, confirmed down the column through it: the same extent, within what
-// perspective does to a square, and the gap and line on one side of it vertically too.
-// ai: cb: the column bits (binarize's) on arm64 and x86-64, which its walks read; NULL elsewhere
-static int mark_cross(const uint8_t *bin, const uint32_t *cb, int w, int h, int cx, int cy, int core, float uh, float *centre, float *uv) {
-  const int cap = (int)(3 * core * uh) + 8;
-  int up = 0, dn = 0;
-#if defined(OB_NEON) || defined(OB_X86)
-  up = cb_run(cb, w, h, cx, cy - 1, -1, 1, cap); dn = cb_run(cb, w, h, cx, cy + 1, 1, 1, cap);
-#else
-  (void)cb;
-  while (cy - up - 1 >= 0 && bin[(cy - up - 1) * w + cx] && up < cap) up++;
-  while (cy + dn + 1 < h && bin[(cy + dn + 1) * w + cx] && dn < cap) dn++;
-#endif
-  const int ext = up + dn + 1;
-  const float u = (float)ext / core;
-  // A screen seen from the side is squeezed along one axis, so the two crossings of one mark can differ a lot.
-  // 2.5 is what the finder path allows, about 65 degrees.
-  if (u > 2.5f * uh || uh > 2.5f * u) return 0;
-#if defined(OB_NEON) || defined(OB_X86)
-  if (!mark_flank_cb(cb, w, h, cx, cy - up - 1, -1, u) && !mark_flank_cb(cb, w, h, cx, cy + dn + 1, 1, u)) return 0;
-#else
-  if (!mark_flank(bin + cx, h, w, cy - up - 1, -1, u) && !mark_flank(bin + cx, h, w, cy + dn + 1, 1, u)) return 0;   // + cx: the walk is down THIS column
-#endif
-  // Solid, not ragged: a picture blob can cross one column correctly and still be full of holes.
-  const float my = cy - up + (ext - 1) / 2.0f, r = 0.3f * ext;
-  for (int k = 0; k < 4; k++) {
-    const int sx = cx + (int)((k & 1 ? r : -r) * uh / u), sy = (int)(my + 0.5f + (k & 2 ? r : -r));   // my indexes pixels; the point is my + 0.5
-    if (sx < 0 || sx >= w || sy < 0 || sy >= h || !bin[sy * w + sx]) return 0;
-  }
-  *centre = my + 0.5f;   // my indexes pixels and sample() puts pixel i's middle at i + 0.5
-  *uv = u;
-  return 1;
-}
-
-// The same mark with its gap CLOSED, which is how blur shows it. binarize calls a pixel dark when it is under its
-// 40 px neighbourhood's mean, so the one-module light gap between the line and the core, blurred to mid grey
-// with white all round it, goes dark, and line, gap and core become one solid square of S - 2 modules. Traced
-// at 1.5 px of defocus: the three-run cross-section above matches NOTHING (0 supported candidates against 4 with
-// 7 to 12 hits on a sharp capture), and the line path dies of the same closure at the same moment, so without
-// this form a blurred symbol has no anchor at all. A solid square has no ratio inside it to be scale-free by;
-// what keeps it honest is mark_quad, where four of them have to agree on a module size and sit the known number
-// of modules apart.
-static int mark_cross_merged(const uint8_t *bin, const uint32_t *cb, int w, int h, int cx, int cy, int sq, float uh, float *centre, float *uv) {
-  const int cap = (int)(3 * sq * uh) + 8;
-  int up = 0, dn = 0;
-#if defined(OB_NEON) || defined(OB_X86)
-  up = cb_run(cb, w, h, cx, cy - 1, -1, 1, cap); dn = cb_run(cb, w, h, cx, cy + 1, 1, 1, cap);
-#else
-  (void)cb;
-  while (cy - up - 1 >= 0 && bin[(cy - up - 1) * w + cx] && up < cap) up++;
-  while (cy + dn + 1 < h && bin[(cy + dn + 1) * w + cx] && dn < cap) dn++;
-#endif
-  if (up >= cap || dn >= cap || cy - up - 1 < 0 || cy + dn + 1 >= h) return 0;   // not bounded by light: a bar, or the frame's edge
-  const int ext = up + dn + 1;
-  const float u = (float)ext / sq;
-  if (u > 2.5f * uh || uh > 2.5f * u) return 0;
-  // Probes 1.5 modules out from the middle of a square of S - 2, capped so they stay half a module inside the
-  // core: the square's middle is module S / 2, the core starts at OB_THIN_TRACK, so the cap is sq / 2 minus that.
-  // Further out lands on the gap's own corner, where its two arms meet and the LAST pixel closes: traced at 1.5 px
-  // of defocus, one light pixel there refused a plain mark on every row that crossed it. A deeper gap pushes the
-  // core in and the cap down (0.5 modules at S = 12, OB_RING_DEEP = 2), which leaves this test weak and
-  // mark_quads, where four of them must agree on a module size and a spacing, carrying the weight.
-  const float d = fminf(1.5f, sq / 2.0f - (OB_THIN_TRACK - 0.5f)), my = cy - up + (ext - 1) / 2.0f, r = (d > 0 ? d : 0) * u;
-  for (int k = 0; k < 4; k++) {
-    const int sx = cx + (int)((k & 1 ? r : -r) * uh / u), sy = (int)(my + 0.5f + (k & 2 ? r : -r));   // my indexes pixels; the point is my + 0.5
-    if (sx < 0 || sx >= w || sy < 0 || sy >= h || !bin[sy * w + sx]) return 0;
-  }
-  *centre = my + 0.5f;   // my indexes pixels and sample() puts pixel i's middle at i + 0.5
-  *uv = u;
-  return 1;
-}
-
-// Every corner mark in the image, by its own cross-section. Every second row, run boundaries sixteen pixels to a
-// compare, then each pair of dark runs sharing a light gap is tried both ways round, because the core lies on
-// the far side of the line from the corner and the corner can be to either side.
-//
-// One form a call. The merged form is any solid dark square bounded by light, which is also exactly what a grain
-// of background noise is: scanned alongside the gapped form and set against it on spacing, it took amp 1 grain 2
-// from 83% to 17% and grain 4 from 100% to 0%, at three times the detect time. So it is scanned only when the
-// gapped form settled nothing (find_frame), and a sharp capture never pays for it.
-static void mark_note(cand_t *out, int *n, float fx, float fy, float u) {
-  int c = 0;
-#ifdef OB_NEON
-  // ai: arm64: eight candidates a step from the list's x and y side by side (mark_xy), the same compares (FABD is
-  // ai: fabsf of the difference; both under the limit is their larger under it, and a NaN fails either way); the step
-  // ai: holding the first that is near stops it, and the loop below finds that one
-  const float32x4_t vx = vdupq_n_f32(fx), vy = vdupq_n_f32(fy), lim = vdupq_n_f32(u * 2);
-  const float *const sx = mark_xy(out), *const sy = sx + MAX_CAND;
-  for (; c + 8 <= *n; c += 8) {
-    const float32x4_t dp = vmaxq_f32(vabdq_f32(vld1q_f32(sx + c), vx), vabdq_f32(vld1q_f32(sy + c), vy));
-    const float32x4_t dq = vmaxq_f32(vabdq_f32(vld1q_f32(sx + c + 4), vx), vabdq_f32(vld1q_f32(sy + c + 4), vy));
-    if (vmaxvq_u32(vorrq_u32(vcltq_f32(dp, lim), vcltq_f32(dq, lim)))) break;
-  }
-#elif defined(OB_X86)
-  // ai: x86-64: arm64's scan (above), each coordinate's distance (the difference with its sign cleared) under the limit
-  // ai: by a compare of its own (MAXPS would give its other operand back on a NaN, where the loop below fails)
-  const __m128 vx = _mm_set1_ps(fx), vy = _mm_set1_ps(fy), lim = _mm_set1_ps(u * 2), sgn = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
-  const float *const sx = mark_xy(out), *const sy = sx + MAX_CAND;
-#define NEAR4(k) _mm_and_ps(_mm_cmplt_ps(_mm_and_ps(_mm_sub_ps(_mm_loadu_ps(sx + (k)), vx), sgn), lim), _mm_cmplt_ps(_mm_and_ps(_mm_sub_ps(_mm_loadu_ps(sy + (k)), vy), sgn), lim))
-  for (; c + 8 <= *n; c += 8) if (_mm_movemask_ps(_mm_or_ps(NEAR4(c), NEAR4(c + 4)))) break;
-#undef NEAR4
-#endif
-  for (; c < *n; c++) if (fabsf(out[c].x - fx) < u * 2 && fabsf(out[c].y - fy) < u * 2) break;
-  if (c < *n) {
-    out[c].x = (out[c].x * out[c].hits + fx) / (out[c].hits + 1);
-    out[c].y = (out[c].y * out[c].hits + fy) / (out[c].hits + 1);
-    out[c].unit = (out[c].unit * out[c].hits + u) / (out[c].hits + 1);
-    out[c].hits++;
-#if defined(OB_NEON) || defined(OB_X86)
-    mark_xy(out)[c] = out[c].x; mark_xy(out)[MAX_CAND + c] = out[c].y;
-#endif
-  } else if (*n < MAX_CAND) {
-#if defined(OB_NEON) || defined(OB_X86)
-    mark_xy(out)[*n] = fx; mark_xy(out)[MAX_CAND + *n] = fy;
-#endif
-    out[(*n)++] = (cand_t){ fx, fy, u, 1 };
-  }
-}
-// The gapped form at dark runs k - 1 and k of row y (pos as run_edges leaves it): each way round, the line then
-// the core. noted: the core this row has counted, which met second in one pair is met first in the next.
-#if defined(OB_NEON) || defined(OB_X86)
-// ai: arm64 and x86-64: mark_pair with mark_ratio's answers for the pair already taken (mark_pairs64): pass bit 0 side 0's, bit
-// ai: 1 side 1's, and u the module size both sides share (line, gap and core sum to the same total either way round)
-static inline void mark_pair_v(const uint8_t *bin, const uint32_t *cb, int w, int h, int y, int core, const int *pos, int k, unsigned pass, float u, int *noted, cand_t *out, int *n) {
-  const int a0 = pos[2 * k - 2], a1 = pos[2 * k - 1], b0 = pos[2 * k], b1 = pos[2 * k + 1];
-  if (a0 == 0 || b1 >= w) return;            // a run touching either end of the row has no light outside it
-  for (int side = 0; side < 2; side++) {
-    const int cx0 = side ? a0 : b0, cx1 = side ? a1 : b1;
-    float uv, fy;
-    if (!(pass >> side & 1) || cx0 == *noted) continue;
-    const int cx = (cx0 + cx1) >> 1;
-    if (!mark_cross(bin, cb, w, h, cx, y, core, u, &fy, &uv)) continue;
-    mark_note(out, n, (cx0 + cx1) / 2.0f, fy, 0.5f * (u + uv));   // the run is [cx0, cx1) in sample()'s coordinates
-    *noted = cx0;
-    break;
-  }
-}
-#else
-static inline void mark_pair(const uint8_t *bin, const uint32_t *cb, int w, int h, int y, int core, const int *pos, int k, int *noted, cand_t *out, int *n) {
-  const int a0 = pos[2 * k - 2], a1 = pos[2 * k - 1], b0 = pos[2 * k], b1 = pos[2 * k + 1];
-  if (a0 == 0 || b1 >= w) return;            // a run touching either end of the row has no light outside it
-  const int first = a1 - a0, gap = b0 - a1, second = b1 - b0;
-  for (int side = 0; side < 2; side++) {
-    // side 0: the corner is to the left, so the line is met first and the core second.
-    const int line = side ? second : first, cpx = side ? first : second;
-    const int cx0 = side ? a0 : b0, cx1 = side ? a1 : b1;
-    float uh, uv, fy;
-    if (cx0 == *noted) continue;
-    if (!mark_ratio(line, gap, cpx, core, &uh)) continue;
-    const int cx = (cx0 + cx1) >> 1;
-    if (!mark_cross(bin, cb, w, h, cx, y, core, uh, &fy, &uv)) continue;
-    mark_note(out, n, (cx0 + cx1) / 2.0f, fy, 0.5f * (uh + uv));   // the run is [cx0, cx1) in sample()'s coordinates
-    *noted = cx0;
-    break;
-  }
-}
-#endif
-// The merged form at dark run k of row y: one dark run with light at both ends that is a square of S - 2 modules
-// down its column.
-static inline void mark_square(const uint8_t *bin, const uint32_t *cb, int w, int h, int y, int sq, const int *pos, int k, cand_t *out, int *n) {
-  const int a0 = pos[2 * k], a1 = pos[2 * k + 1], run = a1 - a0;
-  if (a0 == 0 || a1 >= w || run < 8 || run > w / 3) return;
-  const float uh = (float)run / sq;
-  float uv, fy;
-  if (!mark_cross_merged(bin, cb, w, h, (a0 + a1) >> 1, y, sq, uh, &fy, &uv)) return;
-  mark_note(out, n, (a0 + a1) / 2.0f, fy, 0.5f * (uh + uv));
-}
-#ifdef OB_NEON
-// ai: arm64: of the pairs of runs k0 - 1, k0 to k0 + 62, k0 + 63 in pos (runs to nr), the bits of those mark_ratio
-// ai: passes on side 0 (the return) and on side 1 (*one), and u[g] each pair's module size (g = k - k0), four pairs a
-// ai: step on mark_ratio's own float operations in its order (FABD is fabsf of the difference, the halving a multiply
-// ai: by 0.5, the same value), so its answers. Reads pos to 2 nr + 5.
-static uint64_t mark_pairs64(const int *pos, int k0, int nr, int core, uint64_t *one, float *uk) {
-  const float32x4_t den = vdupq_n_f32((float)(OB_THIN_LINE + OB_RING_DEEP + core)), fl = vdupq_n_f32((float)OB_THIN_LINE), fg = vdupq_n_f32((float)OB_RING_DEEP), fc = vdupq_n_f32((float)core);
-  const int32x4_t tmin = vdupq_n_s32(OB_THIN_LINE + OB_RING_DEEP + core), cmin = vdupq_n_s32(MARK_MIN_CORE);
-  const uint32x4_t bit = { 1, 2, 4, 8 };
-  uint64_t m = 0, m1 = 0;
-  for (int g = 0; g < 64 && k0 + g < nr; g += 4) {
-    const int32x4x2_t a = vld2q_s32(pos + 2 * (k0 + g) - 2), b = vld2q_s32(pos + 2 * (k0 + g));   // starts, ends of runs k - 1 and k
-    const int32x4_t first = vsubq_s32(a.val[1], a.val[0]), gap = vsubq_s32(b.val[0], a.val[1]), second = vsubq_s32(b.val[1], b.val[0]);
-    const int32x4_t total = vaddq_s32(vaddq_s32(first, gap), second);
-    const float32x4_t ff = vcvtq_f32_s32(first), gf = vcvtq_f32_s32(gap), sf = vcvtq_f32_s32(second);
-    const float32x4_t u = vdivq_f32(vcvtq_f32_s32(total), den), tol = vaddq_f32(vmulq_f32(vdupq_n_f32(0.6f), u), vdupq_n_f32(0.5f));
-    const float32x4_t lu = vmulq_f32(fl, u), cu = vmulq_f32(fc, u), ctol = vmulq_f32(vmulq_f32(vmulq_f32(vdupq_n_f32(1.5f), tol), fc), vdupq_n_f32(0.5f));
-    const uint32x4_t both = vandq_u32(vcgeq_s32(total, tmin), vcleq_f32(vabdq_f32(gf, vmulq_f32(fg, u)), tol));
-    const uint32x4_t s0 = vandq_u32(vandq_u32(vcgeq_s32(second, cmin), vcleq_f32(vabdq_f32(ff, lu), tol)), vcleq_f32(vabdq_f32(sf, cu), ctol));
-    const uint32x4_t s1 = vandq_u32(vandq_u32(vcgeq_s32(first, cmin), vcleq_f32(vabdq_f32(sf, lu), tol)), vcleq_f32(vabdq_f32(ff, cu), ctol));
-    m |= (uint64_t)vaddvq_u32(vandq_u32(vandq_u32(both, s0), bit)) << g;
-    m1 |= (uint64_t)vaddvq_u32(vandq_u32(vandq_u32(both, s1), bit)) << g;
-    vst1q_f32(uk + g, u);
-  }
-  const uint64_t keep = nr - k0 < 64 ? (1ull << (nr - k0)) - 1 : ~0ull;
-  *one = m1 & keep;
-  return m & keep;
-}
-// ai: arm64: of runs k0 to k0 + 63 (to nr), the bits of those 8 to w / 3 pixels long, which mark_square tests
-static uint64_t mark_runs64(const int *pos, int k0, int nr, int w) {
-  const int32x4_t lo = vdupq_n_s32(8), hi = vdupq_n_s32(w / 3);
-  const uint32x4_t bit = { 1, 2, 4, 8 };
-  uint64_t m = 0;
-  for (int g = 0; g < 64 && k0 + g < nr; g += 4) {
-    const int32x4x2_t r = vld2q_s32(pos + 2 * (k0 + g));
-    const int32x4_t run = vsubq_s32(r.val[1], r.val[0]);
-    m |= (uint64_t)vaddvq_u32(vandq_u32(vandq_u32(vcgeq_s32(run, lo), vcleq_s32(run, hi)), bit)) << g;
-  }
-  return nr - k0 < 64 ? m & ((1ull << (nr - k0)) - 1) : m;
-}
-#elif defined(OB_X86)
-// ai: x86-64: arm64's mark_pairs64 and mark_runs64 (above) in SSE4.1. The runs' starts and ends taken apart by SHUFPS;
-// ai: four pairs a step on mark_ratio's own float operations in its order (a difference made positive by clearing its
-// ai: sign, the halving a multiply by 0.5, the same values), so its answers, each test's four bits by MOVMSKPS. Reads
-// ai: pos to 2 nr + 5, as arm64's.
-static uint64_t mark_pairs64(const int *pos, int k0, int nr, int core, uint64_t *one, float *uk) {
-  const __m128 den = _mm_set1_ps((float)(OB_THIN_LINE + OB_RING_DEEP + core)), fl = _mm_set1_ps((float)OB_THIN_LINE), fg = _mm_set1_ps((float)OB_RING_DEEP), fc = _mm_set1_ps((float)core);
-  const __m128 sgn = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff)), k06 = _mm_set1_ps(0.6f), half = _mm_set1_ps(0.5f), k15 = _mm_set1_ps(1.5f);
-  const __m128i tmin = _mm_set1_epi32(OB_THIN_LINE + OB_RING_DEEP + core - 1), cmin = _mm_set1_epi32(MARK_MIN_CORE - 1);
-#define ABD(a, b) _mm_and_ps(_mm_sub_ps(a, b), sgn)
-#define EVEN(lo, hi) _mm_castps_si128(_mm_shuffle_ps(_mm_castsi128_ps(lo), _mm_castsi128_ps(hi), _MM_SHUFFLE(2, 0, 2, 0)))
-#define ODD(lo, hi) _mm_castps_si128(_mm_shuffle_ps(_mm_castsi128_ps(lo), _mm_castsi128_ps(hi), _MM_SHUFFLE(3, 1, 3, 1)))
-  uint64_t m = 0, m1 = 0;
-  for (int g = 0; g < 64 && k0 + g < nr; g += 4) {
-    const int *p = pos + 2 * (k0 + g);   // starts and ends of runs k - 1 from p - 2, of runs k from p
-    const __m128i a0 = _mm_loadu_si128((const __m128i *)(p - 2)), a1 = _mm_loadu_si128((const __m128i *)(p + 2));
-    const __m128i b0 = _mm_loadu_si128((const __m128i *)p), b1 = _mm_loadu_si128((const __m128i *)(p + 4));
-    const __m128i as = EVEN(a0, a1), ae = ODD(a0, a1), bs = EVEN(b0, b1), be = ODD(b0, b1);
-    const __m128i first = _mm_sub_epi32(ae, as), gap = _mm_sub_epi32(bs, ae), second = _mm_sub_epi32(be, bs);
-    const __m128i total = _mm_add_epi32(_mm_add_epi32(first, gap), second);
-    const __m128 ff = _mm_cvtepi32_ps(first), gf = _mm_cvtepi32_ps(gap), sf = _mm_cvtepi32_ps(second);
-    const __m128 u = _mm_div_ps(_mm_cvtepi32_ps(total), den), tol = _mm_add_ps(_mm_mul_ps(k06, u), half);
-    const __m128 lu = _mm_mul_ps(fl, u), cu = _mm_mul_ps(fc, u), ctol = _mm_mul_ps(_mm_mul_ps(_mm_mul_ps(k15, tol), fc), half);
-    const __m128 both = _mm_and_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(total, tmin)), _mm_cmple_ps(ABD(gf, _mm_mul_ps(fg, u)), tol));
-    const __m128 s0 = _mm_and_ps(_mm_and_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(second, cmin)), _mm_cmple_ps(ABD(ff, lu), tol)), _mm_cmple_ps(ABD(sf, cu), ctol));
-    const __m128 s1 = _mm_and_ps(_mm_and_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(first, cmin)), _mm_cmple_ps(ABD(sf, lu), tol)), _mm_cmple_ps(ABD(ff, cu), ctol));
-    m |= (uint64_t)_mm_movemask_ps(_mm_and_ps(both, s0)) << g;
-    m1 |= (uint64_t)_mm_movemask_ps(_mm_and_ps(both, s1)) << g;
-    _mm_storeu_ps(uk + g, u);
-  }
-  const uint64_t keep = nr - k0 < 64 ? (1ull << (nr - k0)) - 1 : ~0ull;
-  *one = m1 & keep;
-  return m & keep;
-}
-static uint64_t mark_runs64(const int *pos, int k0, int nr, int w) {
-  const __m128i lo = _mm_set1_epi32(7), hi = _mm_set1_epi32(w / 3);
-  uint64_t m = 0;
-  for (int g = 0; g < 64 && k0 + g < nr; g += 4) {
-    const __m128i r0 = _mm_loadu_si128((const __m128i *)(pos + 2 * (k0 + g))), r1 = _mm_loadu_si128((const __m128i *)(pos + 2 * (k0 + g) + 4));
-    const __m128i run = _mm_sub_epi32(ODD(r0, r1), EVEN(r0, r1));
-    m |= (uint64_t)_mm_movemask_ps(_mm_castsi128_ps(_mm_andnot_si128(_mm_cmpgt_epi32(run, hi), _mm_cmpgt_epi32(run, lo)))) << g;
-  }
-  return nr - k0 < 64 ? m & ((1ull << (nr - k0)) - 1) : m;
-}
-#undef ABD
-#undef EVEN
-#undef ODD
-#endif
-static int mark_candidates(const ob_layout_t *L, const uint8_t *bin, const uint32_t *cb, int w, int h, int merged, cand_t *out) {
-  const int core = mark_core(L), sq = L->corner - 2;
-  // ai: pos: run_edges' w + 2 boundaries and the vector filters' reads past them (calloc: those reads are of written memory)
-  int n = 0, *pos = calloc((size_t)w + 8, sizeof(int)), minc = merged ? sq : core;
-  if (!pos) return 0;
-  for (int y = 1; y < h; y += 2) {
-    const int np = run_edges(bin + y * w, w, pos);
-    int noted = -1;
-#if defined(OB_NEON) || defined(OB_X86)
-    // ai: arm64 and x86-64: the pairs (or runs) the vector filters keep, in the order the loops below meet them
-    for (int k0 = 1; !merged && k0 < np / 2; k0 += 64) {
-      uint64_t m1;
-      float uk[64];
-      const uint64_t m0 = mark_pairs64(pos, k0, np / 2, core, &m1, uk);
-      for (uint64_t m = m0 | m1; m; m &= m - 1) {
-        const int g = __builtin_ctzll(m);
-        mark_pair_v(bin, cb, w, h, y, core, pos, k0 + g, (unsigned)(m0 >> g & 1) | (unsigned)(m1 >> g & 1) << 1, uk[g], &noted, out, &n);
-      }
-    }
-    for (int k0 = 0; merged && k0 < np / 2; k0 += 64)
-      for (uint64_t m = mark_runs64(pos, k0, np / 2, w); m; m &= m - 1) mark_square(bin, cb, w, h, y, sq, pos, k0 + __builtin_ctzll(m), out, &n);
-#else
-    for (int k = 1; !merged && 2 * k + 1 < np; k++) mark_pair(bin, cb, w, h, y, core, pos, k, &noted, out, &n);
-    for (int k = 0; merged && 2 * k + 1 < np; k++) mark_square(bin, cb, w, h, y, sq, pos, k, out, &n);
-#endif
-    // No budget. A blurred picture offers about a thousand one-row blobs, and a list that fills before the scan
-    // reaches the bottom marks has not recorded them, which is the failure SIDE_K has and the reason this finder
-    // exists. A mark is crossed by every scan row through it, so a candidate the scan has left behind with fewer
-    // hits than its size guarantees was never one, and dropping those keeps the list at the few dozen that matter.
-    if (n > MAX_CAND / 4) {
-      int m = 0;
-      for (int c = 0; c < n; c++) {
-        // Rows that must cross the smallest mark this call accepts, at this candidate's size: three, or fewer for a small core.
-        int need = (int)(minc * out[c].unit) / 2;
-        need = need > 3 ? 3 : need < 1 ? 1 : need;
-        if (out[c].hits >= need || out[c].y + L->corner * out[c].unit > y) {
-#if defined(OB_NEON) || defined(OB_X86)
-          mark_xy(out)[m] = mark_xy(out)[c]; mark_xy(out)[MAX_CAND + m] = mark_xy(out)[MAX_CAND + c];
-#endif
-          out[m++] = out[c];
-        }
-      }
-      n = m;
-    }
-  }
-  free(pos);
-  // Every merged candidate once more, as a whole square at its accumulated middle: bounded along the row, the
-  // column, both diagonals and the four directions between, within a factor of 3.2. A square turned any amount has its
-  // four extents between its side and its side times root two; a straight dark band does not, since along its own
-  // direction it runs on. The row and column tests alone cannot tell them apart once the band is turned: the
-  // symbol's own border, blurred to one dark band at 1.9 px a module and turned 30 degrees, passed as a square on
-  // every scan row along it, and those crowded the four real marks out of mark_quads' pool (ranked about 140th
-  // where the pool keeps 24; 4th to 13th unturned). Here and not per row: under heavy blur a merged mark is joined
-  // to the border line on two sides, a row-by-row test turns away the rows on those sides, and the middle the rest
-  // average to moved half a pixel inwards, enough at 2.5 px of defocus to fail the track's contrast gate.
-  //
-  // The module size comes from here too, the four extents' geometric mean: the row and column overstate a turned
-  // square by 1 / cos of the turn, up to root two at 45 degrees, which put the real quad's spacing that far off;
-  // the mean of four directions 45 degrees apart is 1.08 to 1.19 of the side at any turn, within 5% over 1.13. Not
-  // the shortest extent, which picks the foreshortened axis of a screen seen from the side (at 30 degrees of yaw
-  // the near and far marks came out more than two to one, which mark_quads refuses).
-  if (merged) {
-    int m = 0;
-    // Eight directions through the middle, a band's own direction never more than 13 degrees from one of them:
-    // 0, 45, 90, 135 and the four between on steps of (2, 1). The first four give the module size.
-    static const int DIR[8][2] = { { 1, 0 }, { 0, 1 }, { 1, 1 }, { 1, -1 }, { 2, 1 }, { 1, 2 }, { -1, 2 }, { -2, 1 } };
-    static const float LEN[8] = { 1, 1, 1.41421356f, 1.41421356f, 2.23606798f, 2.23606798f, 2.23606798f, 2.23606798f };
-    for (int k = 0; k < n; k++) {
-      const int x = (int)out[k].x, y = (int)out[k].y, cap = (int)(3 * sq * out[k].unit) + 8;
-      float ext[8];
-      int ok = x >= 0 && x < w && y >= 0 && y < h && bin[y * w + x];
-      for (int d = 0; ok && d < 8; d++) {
-        int run = 1;
-        for (int sgn = -1; ok && sgn <= 1; sgn += 2) {
-          int t = 0, px = x, py = y;
-          for (;;) {
-            const int nx = px + sgn * DIR[d][0], ny = py + sgn * DIR[d][1];
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) { ok = 0; break; }   // ran off the frame, not into light
-            if (!bin[ny * w + nx]) break;
-            if (++t * LEN[d] >= cap) { ok = 0; break; }                      // runs on: a band, not a square
-            px = nx; py = ny;
-          }
-          run += t;
-        }
-        ext[d] = run * LEN[d];
-      }
-      if (!ok) continue;
-      float lo = ext[0], hi = ext[0];
-      for (int d = 1; d < 8; d++) { lo = fminf(lo, ext[d]); hi = fmaxf(hi, ext[d]); }
-      // A band's extents are 4.2 or more apart at any turn; a square's are root two apart, and a mark blurred into
-      // the prefix beside it into a lopsided blob came to about three (2.8 on four directions, traced at 2.5 px).
-      if (hi > 3.2f * lo) continue;
-      out[k].unit = sqrtf(sqrtf(ext[0] * ext[1] * ext[2] * ext[3])) / (1.13f * sq);
-      out[m++] = out[k];
-    }
-    n = m;
-  }
-  return n;
-}
 
 // Four marks chosen the way zxing chooses finder patterns: not by where they are but by whether they AGREE with
 // each other (zxing's QR detector rejects a triple of finder patterns on size ratio, leg ratio, implied module count
@@ -3565,11 +2125,11 @@ static int mark_candidates(const ob_layout_t *L, const uint8_t *bin, const uint3
 //
 // Which quad is RIGHT is not decided here. Spacing ranks them; the track read in find_frame is what believes one,
 // the way zxing walks its pattern sets until one decodes. So the best few come back, not the best one.
-// form: 0 gapped, 1 merged, 2 the merged scan's squares read as a sharp mark's core (find_frame). A core's middle
-// is the gapped middle, since the core is what the gapped form's cross-section is centred on.
+// form: 1 the merged square, 2 the core (find_frame reads each grey candidate both ways, gray_form); 0, the gapped
+// cross-section the binarized scan read until 2026-11-24, is centred as the core is.
 static float mark_form_mid(const ob_layout_t *L, int form) { return form == 1 ? L->corner / 2.0f : mark_mid(L); }
 
-// The mark geometry a finder outside the codec needs to be scale-free the way mark_ratio and mark_quads are
+// The mark geometry a finder outside the codec needs to be scale-free the way mark_quads is
 // (gpu/tables.mjs, scripts/exp/fmt_word.mjs). Nothing in the decoder calls this. A blob detector measures a mark in PIXELS and has
 // no module size of its own, so it has to get one the way this file does: divide the blob by the mark's known
 // module count, then check that four of them sit the known number of modules apart. Both forms are given
@@ -3634,22 +2194,28 @@ static int mark_quads(const ob_layout_t *L, const mpool_t *P, int merged, mquad_
   // rat: a side's length over the module size its two ends report, as a share of the known count, or -1 where
   // the two cannot be adjacent marks at all.
   float rat[MARK_POOL][MARK_POOL];
-  // ai: adj[a]: bit b where rat[a][b] >= 0, so the walk below takes each next corner from a mask, in the same order
-  uint32_t adj[MARK_POOL] = { 0 };
+  // ai: adj[a]: bit b where rat[a][b] >= 0, so the walk below takes each next corner from a mask, in the same order.
+  // ai: one[a]: bit b where a and b may be marks of one symbol, neither unit more than four times the other's (one
+  // ai: symbol, one module size, within what perspective and a wide lens's stretch do to it; twice cost the lens set's
+  // ai: 64 ring blocks, 2026-11-24): a quad needs all six of its pairs so, so each corner is taken only from the ones
+  // ai: every corner before it allows, and a quad that would fail it is never walked
+  uint32_t adj[MARK_POOL] = { 0 }, one[MARK_POOL] = { 0 };
   _Static_assert(MARK_POOL <= 32, "a corner's neighbours are the bits of one word");
   for (int a = 0; a < n; a++) for (int b = a; b < n; b++) {
     const float mods = P->mods[a][b];
-    const int can = a != b && mods >= 0.6f * want && mods <= 1.5f * want;   // unit shrinks with the same tilt, so a squeezed side reads 2cos / (1 + cos): 0.6 is about 65 degrees
+    const int can = a != b && mods >= 0.65f * want && mods <= 1.5f * want;   // unit shrinks with the same tilt, so a squeezed side reads 2cos / (1 + cos): 0.65 is about 61 degrees
     rat[a][b] = rat[b][a] = can ? mods / want : -1;
     if (can) { adj[a] |= 1u << b; adj[b] |= 1u << a; }
+    const float ua = c[a].unit, ub = c[b].unit;
+    if (!(ua > 4 * ub) && !(ub > 4 * ua)) { one[a] |= 1u << b; one[b] |= 1u << a; }
   }
   // a is the cycle's lowest index and b < e, so each cycle is met once and not again backwards. No corner is its own
   // neighbour, so d != b and e != d hold of the masks.
-  for (int a = 0; a < n; a++) for (uint32_t mb = adj[a] & (~1u << a); mb; mb &= mb - 1) {
+  for (int a = 0; a < n; a++) for (uint32_t mb = adj[a] & one[a] & (~1u << a); mb; mb &= mb - 1) {
     const int b = __builtin_ctz(mb);
-    for (uint32_t md = adj[b] & (~1u << a); md; md &= md - 1) {
+    for (uint32_t md = adj[b] & one[a] & one[b] & (~1u << a); md; md &= md - 1) {
       const int d = __builtin_ctz(md);
-      for (uint32_t me = adj[d] & adj[a] & (~1u << b); me; me &= me - 1) {
+      for (uint32_t me = adj[d] & adj[a] & one[a] & one[b] & one[d] & (~1u << b); me; me &= me - 1) {
         const int e = __builtin_ctz(me);
         // The gapped form reads its module size from a ratio of line, gap and core, which a threshold that shaves
         // dark runs leaves alone, so its sides are scored on their distance from the count. The two square forms
@@ -3667,9 +2233,6 @@ static int mark_quads(const ob_layout_t *L, const mpool_t *P, int merged, mquad_
                                    : fabsf(r4[0] - 1) + fabsf(r4[1] - 1) + fabsf(r4[2] - 1) + fabsf(r4[3] - 1);
         if (nq == MARK_QUADS && out[MARK_QUADS - 1].score <= score) continue;
         int id[4] = { a, b, d, e };
-        float umin = 1e9f, umax = 0;
-        for (int k = 0; k < 4; k++) { umin = fminf(umin, c[id[k]].unit); umax = fmaxf(umax, c[id[k]].unit); }
-        if (umax > 2 * umin) continue;   // one symbol, one module size, within what perspective does to it
         int pos = 0, neg = 0;
         for (int k = 0; k < 4; k++) { const float x = cross2(&c[id[k]], &c[id[(k + 1) & 3]], &c[id[(k + 2) & 3]]); pos += x > 0; neg += x < 0; }
         if (pos != 4 && neg != 4) continue;   // convex
@@ -3708,16 +2271,6 @@ int ob_test_mesh_tables(const ob_layout_t *L, int32_t *dims, float *nodeX, float
   for (int k = 0; k < L->nx * L->ny; k++) mark[k] = L->node_mark[k];
   return 1;
 }
-// Every mark of one form in a binarized image at 1 / scale of the capture, in the capture's own coordinates. The
-// candidates depend on the mark's design alone, never on how many modules the symbol has, so one scan serves every
-// layout a receiver is looking for.
-// ai: cb: the image's column bits on arm64 and x86-64 (binarize's), NULL elsewhere
-static int mark_scan(const ob_layout_t *L, const uint8_t *bin, const uint32_t *cb, int bw, int bh, int scale, int merged, cand_t *c) {
-  const int n = mark_candidates(L, bin, cb, bw, bh, merged, c);
-  for (int k = 0; k < n; k++) { c[k].x *= scale; c[k].y *= scale; c[k].unit *= scale; }
-  return n;
-}
-
 // The mark centres of one form as quads, best spacing first, and the rectangle they make in layout modules.
 static int mark_rect(const ob_layout_t *L, const mpool_t *P, int n, int iw, int ih, int merged, float *src, mquad_t *quads) {
   if (n < 4) return 0;
@@ -3733,84 +2286,6 @@ static int mark_rect(const ob_layout_t *L, const mpool_t *P, int n, int iw, int 
   return keep;
 }
 
-// Up to SIDE_LINES curves, best supported first. A bezel's inner edge is a long straight edge too
-// and is met first, and the frame's own track runs two modules inside the line; the caller tells
-// them apart by reading the track.
-//
-// The model is a shallow parabola from the start, through three points. A straight line cannot do
-// it: a lens bows the border by more than any tolerance tight enough to keep out a line that merely
-// crosses it, and then the border scores no better than the crossing. The bow is bounded (1.5% of
-// the span and a pixel), which throws out most random triples before they are scored.
-//
-// Triples are drawn within one rank. Border points are under a fifth of a side's candidates, so a
-// triple drawn from all of them is all border less than once in a hundred; but along a side the
-// border is the same candidate from the outside nearly everywhere (first, or second behind a
-// bezel), so within its rank nearly every triple is good. Support is counted over every point.
-//
-// A noisy surround destroys that invariant, and a pass over every point at once, ignoring rank, with
-// five times the draws, was tried and does NOT get it back (the noisy-surround cells, unchanged in every
-// cell). The reason is upstream of the fit: a scan STOPS after SIDE_K candidates, so when noise
-// supplies eight before the border the border's points were never recorded, and no draw over what
-// was recorded can find them. Raising SIDE_K does record them, and then the frame registers and the
-// payload still does not come back, at three to eight times the detect time and at the cost of clean
-// captures (SIDE_K 64: 1080 falls to 67%, detect 2.6 ms to 20). Neither is the answer.
-static int fit_lines(const fpt_t *p, int n, float tol, float min_span, fline_t *out) {
-  fline_t cand[SIDE_K];
-  int nc = 0, *idx = malloc((size_t)n * sizeof(int)), third = n / 3 + 1, m3[3] = { 0, 0, 0 };
-  // The points as plain arrays, whole and as the three every-third subsets the hypotheses are ranked on.
-  float *soa = malloc(((size_t)2 * n + 6 * third) * sizeof(float)), *al = soa, *ac = soa + n, *al3[3], *ac3[3];
-  for (int k = 0; k < 3; k++) { al3[k] = soa + 2 * n + 2 * k * third; ac3[k] = al3[k] + third; }
-  for (int k = 0; k < n; k++) { al[k] = p[k].along; ac[k] = p[k].across; al3[k % 3][m3[k % 3]] = p[k].along; ac3[k % 3][m3[k % 3]++] = p[k].across; }
-  uint32_t s = 12345u;
-  #define RND(m) (s = s * 1664525u + 1013904223u, (int)((s >> 8) % (uint32_t)(m)))
-#if defined(OB_NEON) || defined(OB_X86)
-  // ai: arm64 and x86-64: every rank's points in one pass, each rank's indices in their order (a counting sort on rank)
-  int rank_at[SIDE_K + 1] = { 0 };
-  for (int k = 0; k < n; k++) rank_at[p[k].rank + 1]++;
-  for (int r = 0; r < SIDE_K; r++) rank_at[r + 1] += rank_at[r];
-  { int fill[SIDE_K]; memcpy(fill, rank_at, sizeof fill); for (int k = 0; k < n; k++) idx[fill[p[k].rank]++] = k; }
-#endif
-  for (int rank = 0; rank < SIDE_K; rank++) {
-#if defined(OB_NEON) || defined(OB_X86)
-    const int *ix = idx + rank_at[rank], m = rank_at[rank + 1] - rank_at[rank];
-#else
-    int m = 0;
-    const int *ix = idx;
-    for (int k = 0; k < n; k++) if (p[k].rank == rank) idx[m++] = k;
-#endif
-    if (m < 12) continue;
-    fline_t best = { 0, 0, 0, 0, 0 };
-    for (int it = 0; it < 120; it++) {
-      int i0 = ix[RND(m)], i1 = ix[RND(m)], i2 = ix[RND(m)];
-      if (p[i0].along > p[i1].along) { int q = i0; i0 = i1; i1 = q; }
-      if (p[i1].along > p[i2].along) { int q = i1; i1 = i2; i2 = q; }
-      if (p[i0].along > p[i1].along) { int q = i0; i0 = i1; i1 = q; }
-      float d0 = p[i0].along - p[i1].along, d2 = p[i2].along - p[i1].along, span = d2 - d0;
-      if (span < min_span || -d0 < 0.2f * span || d2 < 0.2f * span) continue;
-      float c = ((p[i2].across - p[i1].across) / d2 - (p[i0].across - p[i1].across) / d0) / span, a = (p[i2].across - p[i1].across) / d2 - c * d2;
-      if (fabsf(a) > 1 || fabsf(c) * 0.25f * span * span > 0.015f * span + 1) continue;
-      fline_t h = { a, p[i1].across - a * p[i1].along, 0, c, p[i1].along };
-      float lo, hi;
-      // Every third point: enough to rank hypotheses, and not a multiple of SIDE_K, which would show each one a single rank.
-      h.n = curve_support(&h, al3[it % 3], ac3[it % 3], m3[it % 3], tol, &lo, &hi);
-      if (h.n > best.n && hi - lo >= min_span) best = h;
-    }
-    if (best.n < 4) continue;
-    refit_curve(al, ac, n, tol, &best);
-    if (best.n < 12) continue;
-    // Two ranks often find the same curve (the border is second behind a bezel on one stretch and first on another).
-    int dup = 0;
-    for (int k = 0; k < nc; k++) if (fabsf(line_at(&cand[k], best.mid) - line_at(&best, best.mid)) < 2 * tol) { dup = 1; if (best.n > cand[k].n) cand[k] = best; }
-    if (!dup) cand[nc++] = best;
-  }
-  #undef RND
-  free(idx); free(soa);
-  for (int i = 0; i < nc; i++) for (int j = i + 1; j < nc; j++) if (cand[j].n > cand[i].n) { fline_t q = cand[i]; cand[i] = cand[j]; cand[j] = q; }
-  if (nc > SIDE_LINES) nc = SIDE_LINES;
-  for (int i = 0; i < nc; i++) out[i] = cand[i];
-  return nc;
-}
-
 // Where a near-vertical side (x from y) meets a near-horizontal one (y from x). Both are nearly
 // straight, so stepping from one to the other settles in a few rounds.
 static void meet(const fline_t *v, const fline_t *hz, float *x, float *y) {
@@ -3819,28 +2294,20 @@ static void meet(const fline_t *v, const fline_t *hz, float *x, float *y) {
   for (int it = 0; it < 4; it++) { *x = line_at(v, *y); *y = line_at(hz, *x); }
 }
 
-// The depth the fitted curves run at. They follow the inner edge of the FIRST DARK RUN a scan meets, and which run
-// that is depends on the blur: the solid line alone (depth 1 + OB_THIN_LINE) while the one-module light gap inside
-// it survives, or line, track and ring merged into one (depth OB_THIN, the picture's edge) once it does not. binarize
-// marks a pixel dark when it is under its 40 px neighbourhood's mean, so a gap blurred to mid grey closes as soon
-// as that neighbourhood is bright, which a border wider than six modules makes it (traced at 1.5 px of defocus:
-// every fitted side 2.5 to 3.1 modules inside the truth, track score 0.01). find_frame tries both and
-// hands the pass's depth (de) to every read below that takes the curves; a read without curves places none.
+// The depth the traced border runs at (find_frame's passes): the inner edge of the dark ring while the one-module light
+// gap inside it survives (depth 1 + OB_THIN_LINE), the picture's edge once line, track and ring have merged under blur
+// (depth OB_THIN), or the ring's outer edge (depth 1). find_frame tries each and places its quad's corners there.
 
-// A point of the border pattern in the image. H places it as if the sides were straight; a lens bows
-// them, by more than the solid line is wide when the distortion is strong. The fitted curve of that
-// side says where the solid line really runs, so the point is moved across the side by the distance
-// between the curve and where H puts the solid line at the same place along the side.
-// cv[0..3]: the image's top, right, bottom and left curves. m: which of them this layout side lies on.
-#if !defined(OB_NEON) && !defined(OB_X86)   // ai: arm64's and x86-64's track readers have their own (trk_side, trk_bend)
-static void thin_point(const homo_t *H, const fline_t *const *cv, int m, float x, float y, float xs, float ys, float *u, float *v) {
-  float lu, lv;
-  project(H, x, y, u, v);
-  if (!cv) return;   // a quad from the corner marks has no fitted sides, so there is no bow to take out: H alone
-  project(H, xs, ys, &lu, &lv);
-  if (m & 1) *u += line_at(cv[m], lv) - lu; else *v += line_at(cv[m], lu) - lv;
+// ai: The finder's lens (2026-11-24): a traced quad's one radial term about the axis (find_frame's tr_lens), kr = k / R^2;
+// ai: a point the homography places at p is read at a + (p - a) (1 + kr |p - a|^2). A traced quad's track and corners
+// ai: are read through it; it took the place of the fitted sides' bow (thin_point and its forms, 2026-09 to 2026-11-24),
+// ai: whose curves came from the binarized line path. A mark quad has none (on 0).
+typedef struct { int on; float kr, ax, ay; } flens_t;
+static inline void flens_bend(const flens_t *lk, float *u, float *v) {
+  if (!lk || !lk->on) return;
+  const float dx = *u - lk->ax, dy = *v - lk->ay, s = 1 + lk->kr * (dx * dx + dy * dy);
+  *u = lk->ax + dx * s; *v = lk->ay + dy * s;
 }
-#endif
 
 // Layout coordinates on side 0..3 (top, right, bottom, left) at module t along it and depth d from the edge.
 static void side_xy(const ob_layout_t *L, int side, float t, float d, float *x, float *y) {
@@ -3861,9 +2328,9 @@ static void side_xy(const ob_layout_t *L, int side, float t, float d, float *x, 
 #if defined(OB_NEON) || defined(OB_X86)
 // ai: arm64's track reads (thin_levels, thin_score, thin_read_both, each its own form), their own floats: a
 // ai: side's map at one depth folded to u = (hu t + ku) / w, v = (hv t + kv) / w, w = hw t + kw in the module t along
-// ai: it, fused, one division for both; the bow's curve fused; the read sample4r (internal.h) at gamma 1, sample4
-// ai: otherwise. Each side's maps, curve and frame are taken into locals before its loop (through the pointers, a store
-// ai: to the reading reloaded them every step), and the bow and the side's parity are constants of the loop. Every
+// ai: it, fused, one division for both; the finder's lens where a traced quad has one; the read sample4r (internal.h)
+// ai: at gamma 1, sample4 otherwise. Each side's map, lens and frame are taken into locals before its loop (through the
+// ai: pointers, a store to the reading reloaded them every step). Every
 // ai: layout's track cells a side, B / 2, are a multiple of 4: none of these loops has a tail. x86-64 has the same forms
 // ai: in SSE4.1, each multiply-add a multiply and an add: its own floats again.
 typedef struct { float hu, ku, hv, kv, hw, kw; } trk_map_t;
@@ -3885,12 +2352,11 @@ static inline __attribute__((always_inline)) void trk_uv(const trk_map_t *p, __m
   *v = _mm_mul_ps(_mm_add_ps(_mm_set1_ps(p->kv), _mm_mul_ps(t, _mm_set1_ps(p->hv))), r);
 }
 #endif
-// a side as one depth reads it: its point's map, and the bow (thin_point): the map at the curves' depth de, the curve
-// of image side m, odd where m is (the curve gives u from v)
-typedef struct { trk_map_t pt, bw; float c, a, b, mid; int odd, bow; } trk_side_t;
-static inline trk_side_t trk_side(const ob_layout_t *L, const homo_t *H, const fline_t *cv, float de, int m, int side, float d) {
-  trk_side_t s = { .pt = trk_map(L, H, side, d), .odd = m & 1, .bow = cv != NULL };
-  if (cv) { s.bw = trk_map(L, H, side, de); s.c = cv->c; s.a = cv->a; s.b = cv->b; s.mid = cv->mid; }
+// a side as one depth reads it: its point's map, and the lens where its quad has one
+typedef struct { trk_map_t pt; flens_t lk; } trk_side_t;
+static inline trk_side_t trk_side(const ob_layout_t *L, const homo_t *H, int side, float d, const flens_t *lk) {
+  trk_side_t s = { .pt = trk_map(L, H, side, d) };
+  if (lk && lk->on) s.lk = *lk;
   return s;
 }
 // the frame as sample() reads it
@@ -3904,27 +2370,22 @@ static inline __attribute__((always_inline)) float32x4_t trk_px(const trk_img_t 
   const float32x4_t y = vminq_f32(vmaxq_f32(vsubq_f32(v, half), zero), vdupq_n_f32(g->hm));
   return sample4r(g->px, g->w, x, y);
 }
-// what the bow adds across the side (to u where odd, else to v) at t, given the curves' map's reciprocal r
-static inline __attribute__((always_inline)) float32x4_t trk_bend(const trk_side_t *s, float32x4_t t, float32x4_t r, const int odd) {
-  float32x4_t lu, lv;
-  trk_uv(&s->bw, t, r, &lu, &lv);
-  const float32x4_t at = odd ? lv : lu, dd = vsubq_f32(at, vdupq_n_f32(s->mid));
-  return vsubq_f32(vfmaq_f32(vfmaq_n_f32(vdupq_n_f32(s->b), at, s->a), vmulq_n_f32(dd, s->c), dd), odd ? lu : lv);
+// ai: the lens's bend at four points (flens_bend's operations)
+static inline __attribute__((always_inline)) void trk_lens(const flens_t *lk, float32x4_t *u, float32x4_t *v) {
+  const float32x4_t ax = vdupq_n_f32(lk->ax), ay = vdupq_n_f32(lk->ay), dx = vsubq_f32(*u, ax), dy = vsubq_f32(*v, ay);
+  const float32x4_t s = vaddq_f32(vdupq_n_f32(1), vmulq_n_f32(vaddq_f32(vmulq_f32(dx, dx), vmulq_f32(dy, dy)), lk->kr));
+  *u = vaddq_f32(ax, vmulq_f32(dx, s)); *v = vaddq_f32(ay, vmulq_f32(dy, s));
 }
-// the side's grey at four points t; bow and odd s's own, as constants
-static inline __attribute__((always_inline)) float32x4_t trk_get(const trk_side_t *s, const trk_img_t *g, float32x4_t t, const int bow, const int odd) {
-  const float32x4_t one = vdupq_n_f32(1);
+// the side's grey at four points t
+static inline __attribute__((always_inline)) float32x4_t trk_get(const trk_side_t *s, const trk_img_t *g, float32x4_t t) {
   float32x4_t u, v;
-  trk_uv(&s->pt, t, vdivq_f32(one, trk_w(&s->pt, t)), &u, &v);
-  if (bow) { const float32x4_t e = trk_bend(s, t, vdivq_f32(one, trk_w(&s->bw, t)), odd); if (odd) u = vaddq_f32(u, e); else v = vaddq_f32(v, e); }
+  trk_uv(&s->pt, t, vdivq_f32(vdupq_n_f32(1), trk_w(&s->pt, t)), &u, &v);
+  if (s->lk.on) trk_lens(&s->lk, &u, &v);
   return trk_px(g, u, v);
 }
-static inline __attribute__((always_inline)) float32x4_t trk_get_any(const trk_side_t *s, const trk_img_t *g, float32x4_t t) {
-  return !s->bow ? trk_get(s, g, t, 0, 0) : s->odd ? trk_get(s, g, t, 1, 1) : trk_get(s, g, t, 1, 0);
-}
 // a row of thin_read_both's reading: the track cells at w0 + sg pos[i] (pos: each cell's module along the side)
-static inline __attribute__((always_inline)) void trk_row(const trk_side_t *s, const trk_img_t *g, const float *pos, int npts, float32x4_t w0, float32x4_t sg, float *out, const int bow, const int odd) {
-  for (int i = 0; i < npts; i += 4) vst1q_f32(out + i, trk_get(s, g, vfmaq_f32(w0, vld1q_f32(pos + i), sg), bow, odd));
+static inline __attribute__((always_inline)) void trk_row(const trk_side_t *s, const trk_img_t *g, const float *pos, int npts, float32x4_t w0, float32x4_t sg, float *out) {
+  for (int i = 0; i < npts; i += 4) vst1q_f32(out + i, trk_get(s, g, vfmaq_f32(w0, vld1q_f32(pos + i), sg)));
 }
 #else
 // ai: x86-64: the same helpers in SSE4.1. A NaN coordinate reads pixel 0 at gamma 1 (MAXPS gives its second operand
@@ -3936,25 +2397,20 @@ static inline __attribute__((always_inline)) __m128 trk_px(const trk_img_t *g, _
   const __m128 y = _mm_min_ps(_mm_max_ps(_mm_sub_ps(v, half), zero), _mm_set1_ps(g->hm));
   return sample4r(g->px, g->w, x, y);
 }
-static inline __attribute__((always_inline)) __m128 trk_bend(const trk_side_t *s, __m128 t, __m128 r, const int odd) {
-  __m128 lu, lv;
-  trk_uv(&s->bw, t, r, &lu, &lv);
-  const __m128 at = odd ? lv : lu, dd = _mm_sub_ps(at, _mm_set1_ps(s->mid));
-  return _mm_sub_ps(_mm_add_ps(_mm_add_ps(_mm_set1_ps(s->b), _mm_mul_ps(at, _mm_set1_ps(s->a))), _mm_mul_ps(_mm_mul_ps(dd, _mm_set1_ps(s->c)), dd)), odd ? lu : lv);
+static inline __attribute__((always_inline)) void trk_lens(const flens_t *lk, __m128 *u, __m128 *v) {
+  const __m128 ax = _mm_set1_ps(lk->ax), ay = _mm_set1_ps(lk->ay), dx = _mm_sub_ps(*u, ax), dy = _mm_sub_ps(*v, ay);
+  const __m128 s = _mm_add_ps(_mm_set1_ps(1), _mm_mul_ps(_mm_add_ps(_mm_mul_ps(dx, dx), _mm_mul_ps(dy, dy)), _mm_set1_ps(lk->kr)));
+  *u = _mm_add_ps(ax, _mm_mul_ps(dx, s)); *v = _mm_add_ps(ay, _mm_mul_ps(dy, s));
 }
-static inline __attribute__((always_inline)) __m128 trk_get(const trk_side_t *s, const trk_img_t *g, __m128 t, const int bow, const int odd) {
-  const __m128 one = _mm_set1_ps(1);
+static inline __attribute__((always_inline)) __m128 trk_get(const trk_side_t *s, const trk_img_t *g, __m128 t) {
   __m128 u, v;
-  trk_uv(&s->pt, t, _mm_div_ps(one, trk_w(&s->pt, t)), &u, &v);
-  if (bow) { const __m128 e = trk_bend(s, t, _mm_div_ps(one, trk_w(&s->bw, t)), odd); if (odd) u = _mm_add_ps(u, e); else v = _mm_add_ps(v, e); }
+  trk_uv(&s->pt, t, _mm_div_ps(_mm_set1_ps(1), trk_w(&s->pt, t)), &u, &v);
+  if (s->lk.on) trk_lens(&s->lk, &u, &v);
   return trk_px(g, u, v);
 }
-static inline __attribute__((always_inline)) __m128 trk_get_any(const trk_side_t *s, const trk_img_t *g, __m128 t) {
-  return !s->bow ? trk_get(s, g, t, 0, 0) : s->odd ? trk_get(s, g, t, 1, 1) : trk_get(s, g, t, 1, 0);
-}
 // ai: w0 + pos sg: the product exact (sg is 1 or -1), so one rounding, as arm64's fused form
-static inline __attribute__((always_inline)) void trk_row(const trk_side_t *s, const trk_img_t *g, const float *pos, int npts, __m128 w0, __m128 sg, float *out, const int bow, const int odd) {
-  for (int i = 0; i < npts; i += 4) _mm_storeu_ps(out + i, trk_get(s, g, _mm_add_ps(w0, _mm_mul_ps(_mm_loadu_ps(pos + i), sg)), bow, odd));
+static inline __attribute__((always_inline)) void trk_row(const trk_side_t *s, const trk_img_t *g, const float *pos, int npts, __m128 w0, __m128 sg, float *out) {
+  for (int i = 0; i < npts; i += 4) _mm_storeu_ps(out + i, trk_get(s, g, _mm_add_ps(w0, _mm_mul_ps(_mm_loadu_ps(pos + i), sg))));
 }
 // ai: the four lanes' sum as arm64's FADDP pair takes it, (0 + 1) + (2 + 3)
 static inline float trk_sum4(__m128 a) { const __m128 t = _mm_add_ps(a, _mm_shuffle_ps(a, a, _MM_SHUFFLE(2, 3, 0, 1))); return _mm_cvtss_f32(_mm_add_ss(t, _mm_movehl_ps(t, t))); }
@@ -3972,25 +2428,22 @@ static const uint32_t *trk_signs(int side) {
   return trk_sign_tab[side];
 }
 #else
-// thin_point and the read for four points of one side, at module positions `along` and depth d: the same
-// operations in the same order as the scalar pair, so the same floats.
-static inline v128_t thin_sample4(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *cv, float de, int m, int side, v128_t along, float d) {
-  const float *h = H->h, ds = de;
+// The read for four points of one side, at module positions `along` and depth d, bent by the lens where lk has one:
+// the same operations in the same order as the scalar's (project, flens_bend, sample), so the same floats.
+static inline v128_t thin_sample4(const ob_layout_t *L, const image_t *im, const homo_t *H, const flens_t *lk, int side, v128_t along, float d) {
+  const float *h = H->h;
   const v128_t one = wasm_f32x4_splat(1);
-  v128_t x = along, y = along, xs = along, ys = along;
-  if (side == 0 || side == 2) { y = wasm_f32x4_splat(side == 0 ? d : L->h - d); ys = wasm_f32x4_splat(side == 0 ? ds : L->h - ds); }
-  else { x = wasm_f32x4_splat(side == 3 ? d : L->w - d); xs = wasm_f32x4_splat(side == 3 ? ds : L->w - ds); }
-  #define PROJ4(X, Y, U, V) { const v128_t w_ = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[6]), X), wasm_f32x4_mul(wasm_f32x4_splat(h[7]), Y)), one); \
-    U = wasm_f32x4_div(wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[0]), X), wasm_f32x4_mul(wasm_f32x4_splat(h[1]), Y)), wasm_f32x4_splat(h[2])), w_); \
-    V = wasm_f32x4_div(wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[3]), X), wasm_f32x4_mul(wasm_f32x4_splat(h[4]), Y)), wasm_f32x4_splat(h[5])), w_); }
-  v128_t u, v, lu, lv;
-  PROJ4(x, y, u, v);
-  if (!cv) return sample4(im, u, v);   // no fitted side to take a bow out of: H alone
-  PROJ4(xs, ys, lu, lv);
-  #undef PROJ4
-  const v128_t at = m & 1 ? lv : lu, dd = wasm_f32x4_sub(at, wasm_f32x4_splat(cv->mid));
-  const v128_t on = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_mul(wasm_f32x4_splat(cv->c), dd), dd), wasm_f32x4_mul(wasm_f32x4_splat(cv->a), at)), wasm_f32x4_splat(cv->b));
-  if (m & 1) u = wasm_f32x4_add(u, wasm_f32x4_sub(on, lu)); else v = wasm_f32x4_add(v, wasm_f32x4_sub(on, lv));
+  v128_t x = along, y = along;
+  if (side == 0 || side == 2) y = wasm_f32x4_splat(side == 0 ? d : L->h - d);
+  else x = wasm_f32x4_splat(side == 3 ? d : L->w - d);
+  const v128_t w_ = wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[6]), x), wasm_f32x4_mul(wasm_f32x4_splat(h[7]), y)), one);
+  v128_t u = wasm_f32x4_div(wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[0]), x), wasm_f32x4_mul(wasm_f32x4_splat(h[1]), y)), wasm_f32x4_splat(h[2])), w_);
+  v128_t v = wasm_f32x4_div(wasm_f32x4_add(wasm_f32x4_add(wasm_f32x4_mul(wasm_f32x4_splat(h[3]), x), wasm_f32x4_mul(wasm_f32x4_splat(h[4]), y)), wasm_f32x4_splat(h[5])), w_);
+  if (lk && lk->on) {
+    const v128_t ax = wasm_f32x4_splat(lk->ax), ay = wasm_f32x4_splat(lk->ay), dx = wasm_f32x4_sub(u, ax), dy = wasm_f32x4_sub(v, ay);
+    const v128_t sc = wasm_f32x4_add(one, wasm_f32x4_mul(wasm_f32x4_splat(lk->kr), wasm_f32x4_add(wasm_f32x4_mul(dx, dx), wasm_f32x4_mul(dy, dy))));
+    u = wasm_f32x4_add(ax, wasm_f32x4_mul(dx, sc)); v = wasm_f32x4_add(ay, wasm_f32x4_mul(dy, sc));
+  }
   return sample4(im, u, v);
 }
 #endif
@@ -4009,7 +2462,7 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
   int nref = 0;
   for (int side = 0; side < 4; side++) {
     const int end = (side & 1 ? L->h : L->w) - L->reserve;
-    const trk_side_t sl = trk_side(L, H, NULL, 0, side, side, dl), sp = trk_side(L, H, NULL, 0, side, side, OB_GAP_MID), st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
+    const trk_side_t sl = trk_side(L, H, side, dl, NULL), sp = trk_side(L, H, side, OB_GAP_MID, NULL), st = trk_side(L, H, side, OB_TRACK_MID, NULL);
     for (int t = L->reserve; t < end; t += 64) {
       const float32x4_t at = { t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f };
       // The pair near each of the four points, taken through the macro for the reason TRACK_AT4 gives.
@@ -4017,8 +2470,8 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
       const float32x4_t ca = { PAIR_AT(0, 0), PAIR_AT(1, 0), PAIR_AT(2, 0), PAIR_AT(3, 0) }, cb = { PAIR_AT(0, 1), PAIR_AT(1, 1), PAIR_AT(2, 1), PAIR_AT(3, 1) };
       #undef PAIR_AT
       float D[4], G[4], A[4], B[4];
-      vst1q_f32(D, trk_get_any(&sl, &g, at)); vst1q_f32(G, trk_get_any(&sp, &g, at));
-      vst1q_f32(A, trk_get_any(&st, &g, ca)); vst1q_f32(B, trk_get_any(&st, &g, cb));
+      vst1q_f32(D, trk_get(&sl, &g, at)); vst1q_f32(G, trk_get(&sp, &g, at));
+      vst1q_f32(A, trk_get(&st, &g, ca)); vst1q_f32(B, trk_get(&st, &g, cb));
       for (int l = 0; l < 4 && t + 16 * l < end; l++, nref++) { dark += D[l]; light += G[l]; trk += A[l]; trk += B[l]; }
     }
   }
@@ -4034,15 +2487,15 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
   int nref = 0;
   for (int side = 0; side < 4; side++) {
     const int end = (side & 1 ? L->h : L->w) - L->reserve;
-    const trk_side_t sl = trk_side(L, H, NULL, 0, side, side, dl), sp = trk_side(L, H, NULL, 0, side, side, OB_GAP_MID), st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
+    const trk_side_t sl = trk_side(L, H, side, dl, NULL), sp = trk_side(L, H, side, OB_GAP_MID, NULL), st = trk_side(L, H, side, OB_TRACK_MID, NULL);
     for (int t = L->reserve; t < end; t += 64) {
       const __m128 at = _mm_setr_ps(t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f);
       #define PAIR_AT(k, w) ((float)(L->reserve + OB_TRACK_AT(OB_PAIR_J(t + 16 * (k) - L->reserve) + (w))) + OB_CELL_MID)
       const __m128 ca = _mm_setr_ps(PAIR_AT(0, 0), PAIR_AT(1, 0), PAIR_AT(2, 0), PAIR_AT(3, 0)), cb = _mm_setr_ps(PAIR_AT(0, 1), PAIR_AT(1, 1), PAIR_AT(2, 1), PAIR_AT(3, 1));
       #undef PAIR_AT
       float D[4], G[4], A[4], B[4];
-      _mm_storeu_ps(D, trk_get_any(&sl, &g, at)); _mm_storeu_ps(G, trk_get_any(&sp, &g, at));
-      _mm_storeu_ps(A, trk_get_any(&st, &g, ca)); _mm_storeu_ps(B, trk_get_any(&st, &g, cb));
+      _mm_storeu_ps(D, trk_get(&sl, &g, at)); _mm_storeu_ps(G, trk_get(&sp, &g, at));
+      _mm_storeu_ps(A, trk_get(&st, &g, ca)); _mm_storeu_ps(B, trk_get(&st, &g, cb));
       for (int l = 0; l < 4 && t + 16 * l < end; l++, nref++) { dark += D[l]; light += G[l]; trk += A[l]; trk += B[l]; }
     }
   }
@@ -4063,10 +2516,10 @@ static int thin_levels(const ob_layout_t *L, const image_t *im, const homo_t *H,
                    cb = wasm_f32x4_make(PAIR_AT(0, 1), PAIR_AT(1, 1), PAIR_AT(2, 1), PAIR_AT(3, 1));
       #undef PAIR_AT
       float D[4], G[4], A[4], B[4];
-      wasm_v128_store(D, thin_sample4(L, im, H, NULL, 0, side, side, along, dl));
-      wasm_v128_store(G, thin_sample4(L, im, H, NULL, 0, side, side, along, OB_GAP_MID));
-      wasm_v128_store(A, thin_sample4(L, im, H, NULL, 0, side, side, ca, OB_TRACK_MID));
-      wasm_v128_store(B, thin_sample4(L, im, H, NULL, 0, side, side, cb, OB_TRACK_MID));
+      wasm_v128_store(D, thin_sample4(L, im, H, NULL, side, along, dl));
+      wasm_v128_store(G, thin_sample4(L, im, H, NULL, side, along, OB_GAP_MID));
+      wasm_v128_store(A, thin_sample4(L, im, H, NULL, side, ca, OB_TRACK_MID));
+      wasm_v128_store(B, thin_sample4(L, im, H, NULL, side, cb, OB_TRACK_MID));
       for (int l = 0; l < 4; l++) { dark += D[l]; light += G[l]; trk += A[l]; trk += B[l]; }
       t += 48; nref += 3;
       continue;
@@ -4110,10 +2563,10 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
   float32x4_t acc = vdupq_n_f32(0);
   for (int side = 0; side < 4; side++) {
     const int nj = ob_track_cells(side & 1 ? L->h : L->w, L->reserve);
-    const trk_side_t st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, side, OB_TRACK_MID, NULL);
     const uint32_t *fl = trk_signs(side);
     for (int j = 0; j < nj; j += 4) {
-      const float32x4_t q = vmulq_f32(vsubq_f32(rf, trk_get_any(&st, &g, vreinterpretq_f32_s32(TRACK_AT4(L, j)))), rc);
+      const float32x4_t q = vmulq_f32(vsubq_f32(rf, trk_get(&st, &g, vreinterpretq_f32_s32(TRACK_AT4(L, j)))), rc);
       acc = vaddq_f32(acc, vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(vmaxq_f32(vminq_f32(q, hi), lo)), vld1q_u32(fl + j))));
       if (!((n += 4) & 7) && vaddvq_f32(acc) + 0.5f * (total - n) < need) return beat;
     }
@@ -4131,10 +2584,10 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
   __m128 acc = _mm_setzero_ps();
   for (int side = 0; side < 4; side++) {
     const int nj = ob_track_cells(side & 1 ? L->h : L->w, L->reserve);
-    const trk_side_t st = trk_side(L, H, NULL, 0, side, side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, side, OB_TRACK_MID, NULL);
     const uint32_t *fl = trk_signs(side);
     for (int j = 0; j < nj; j += 4) {
-      const __m128 q = _mm_mul_ps(_mm_sub_ps(rf, trk_get_any(&st, &g, _mm_castsi128_ps(TRACK_AT4(L, j)))), rc);
+      const __m128 q = _mm_mul_ps(_mm_sub_ps(rf, trk_get(&st, &g, _mm_castsi128_ps(TRACK_AT4(L, j)))), rc);
       acc = _mm_add_ps(acc, _mm_xor_ps(_mm_max_ps(_mm_min_ps(q, hi), lo), _mm_castsi128_ps(_mm_loadu_si128((const __m128i *)(fl + j)))));
       if (!((n += 4) & 7) && trk_sum4(acc) + 0.5f * (total - n) < need) return beat;
     }
@@ -4153,7 +2606,7 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
     if (j + 3 < nj) {
       float Q[4];
       // The lane positions come from the macro, one per cell, never from a stride off the first (TRACK_AT4).
-      const v128_t smp = thin_sample4(L, im, H, NULL, 0, side, side, TRACK_AT4(L, j), OB_TRACK_MID);
+      const v128_t smp = thin_sample4(L, im, H, NULL, side, TRACK_AT4(L, j), OB_TRACK_MID);
       const v128_t q4 = wasm_f32x4_div(wasm_f32x4_sub(wasm_f32x4_splat(ref), smp), wasm_f32x4_splat(con));
       wasm_v128_store(Q, wasm_f32x4_pmax(wasm_f32x4_pmin(q4, wasm_f32x4_splat(0.5f)), wasm_f32x4_splat(-0.5f)));
       for (int l = 0; l < 4; l++) {
@@ -4192,27 +2645,19 @@ static float thin_score(const ob_layout_t *L, const image_t *im, const homo_t *H
 // ai: contrast has passed, each side's pairs are summed from s in the steps' order. The line and the gap four steps a
 // ai: vector, a last vector's lanes past the side's end read and dropped. The pairs were 256 of a quad's 896 reads at
 // ai: the 128 ring.
-static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float de, float *s, float *pair, int npts, int *nref) {
+static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const flens_t *lk, float *s, float *pair, int npts, int *nref) {
   const int W = L->w, end = W - L->reserve;
   const float dl = 1 + OB_THIN_LINE / 2.0f;
   const trk_img_t g = trk_img(im);
-  const float32x4_t one = vdupq_n_f32(1);
   float dark = 0, light = 0;
   int nr = 0;
   for (int side = 0; side < 4; side++) {
-    // ai: the line's point and the gap's share the bow, made once
-    const trk_side_t sl = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, dl);
-    const trk_map_t gp = trk_map(L, H, side, OB_GAP_MID);
+    const trk_side_t sl = trk_side(L, H, side, dl, lk), sp = trk_side(L, H, side, OB_GAP_MID, lk);
     for (int t = L->reserve; t < end; t += 64) {
       const float32x4_t at = { t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f };
-      const float32x4_t e = !sl.bow ? vdupq_n_f32(0) : trk_bend(&sl, at, vdivq_f32(one, trk_w(&sl.bw, at)), sl.odd);
-      float32x4_t u, v, x, y;
-      trk_uv(&sl.pt, at, vdivq_f32(one, trk_w(&sl.pt, at)), &u, &v);
-      trk_uv(&gp, at, vdivq_f32(one, trk_w(&gp, at)), &x, &y);
-      if (sl.odd) { u = vaddq_f32(u, e); x = vaddq_f32(x, e); } else { v = vaddq_f32(v, e); y = vaddq_f32(y, e); }
       float D[4], G[4];
-      vst1q_f32(D, trk_px(&g, u, v));
-      vst1q_f32(G, trk_px(&g, x, y));
+      vst1q_f32(D, trk_get(&sl, &g, at));
+      vst1q_f32(G, trk_get(&sp, &g, at));
       for (int l = 0; l < 4 && t + 16 * l < end; l++, nr++) { dark += D[l]; light += G[l]; }
     }
   }
@@ -4221,14 +2666,12 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   if (con < 0.08f) return 0;
   const float *pos = s + 8 * npts;
   for (int side = 0; side < 4; side++) {
-    const trk_side_t st = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, side, OB_TRACK_MID, lk);
     for (int dir = 0; dir < 2; dir++) {
       // ai: against the side, the cell at W - ct: W + ct * -1, rounded once as the subtraction is
       float *out = s + (dir * 4 + side) * npts;
       const float32x4_t w0 = vdupq_n_f32(dir ? (float)W : 0), sg = vdupq_n_f32(dir ? -1.0f : 1.0f);
-      if (!st.bow) trk_row(&st, &g, pos, npts, w0, sg, out, 0, 0);
-      else if (st.odd) trk_row(&st, &g, pos, npts, w0, sg, out, 1, 1);
-      else trk_row(&st, &g, pos, npts, w0, sg, out, 1, 0);
+      trk_row(&st, &g, pos, npts, w0, sg, out);
       float sum = 0;
       for (int t = L->reserve; t < end; t += 16) { const int j = OB_PAIR_J(t - L->reserve); sum += out[j]; sum += out[j + 1]; }
       pair[dir * 4 + side] = sum;
@@ -4238,26 +2681,19 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
 }
 #elif defined(OB_X86)
 // ai: x86-64: arm64's form (above), its own floats
-static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float de, float *s, float *pair, int npts, int *nref) {
+static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const flens_t *lk, float *s, float *pair, int npts, int *nref) {
   const int W = L->w, end = W - L->reserve;
   const float dl = 1 + OB_THIN_LINE / 2.0f;
   const trk_img_t g = trk_img(im);
-  const __m128 one = _mm_set1_ps(1);
   float dark = 0, light = 0;
   int nr = 0;
   for (int side = 0; side < 4; side++) {
-    const trk_side_t sl = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, dl);
-    const trk_map_t gp = trk_map(L, H, side, OB_GAP_MID);
+    const trk_side_t sl = trk_side(L, H, side, dl, lk), sp = trk_side(L, H, side, OB_GAP_MID, lk);
     for (int t = L->reserve; t < end; t += 64) {
       const __m128 at = _mm_setr_ps(t + 0.5f, t + 16 + 0.5f, t + 32 + 0.5f, t + 48 + 0.5f);
-      const __m128 e = !sl.bow ? _mm_setzero_ps() : trk_bend(&sl, at, _mm_div_ps(one, trk_w(&sl.bw, at)), sl.odd);
-      __m128 u, v, x, y;
-      trk_uv(&sl.pt, at, _mm_div_ps(one, trk_w(&sl.pt, at)), &u, &v);
-      trk_uv(&gp, at, _mm_div_ps(one, trk_w(&gp, at)), &x, &y);
-      if (sl.odd) { u = _mm_add_ps(u, e); x = _mm_add_ps(x, e); } else { v = _mm_add_ps(v, e); y = _mm_add_ps(y, e); }
       float D[4], G[4];
-      _mm_storeu_ps(D, trk_px(&g, u, v));
-      _mm_storeu_ps(G, trk_px(&g, x, y));
+      _mm_storeu_ps(D, trk_get(&sl, &g, at));
+      _mm_storeu_ps(G, trk_get(&sp, &g, at));
       for (int l = 0; l < 4 && t + 16 * l < end; l++, nr++) { dark += D[l]; light += G[l]; }
     }
   }
@@ -4266,13 +2702,11 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   if (con < 0.08f) return 0;
   const float *pos = s + 8 * npts;
   for (int side = 0; side < 4; side++) {
-    const trk_side_t st = trk_side(L, H, cv ? cv[side] : NULL, de, side, side, OB_TRACK_MID);
+    const trk_side_t st = trk_side(L, H, side, OB_TRACK_MID, lk);
     for (int dir = 0; dir < 2; dir++) {
       float *out = s + (dir * 4 + side) * npts;
       const __m128 w0 = _mm_set1_ps(dir ? (float)W : 0), sg = _mm_set1_ps(dir ? -1.0f : 1.0f);
-      if (!st.bow) trk_row(&st, &g, pos, npts, w0, sg, out, 0, 0);
-      else if (st.odd) trk_row(&st, &g, pos, npts, w0, sg, out, 1, 1);
-      else trk_row(&st, &g, pos, npts, w0, sg, out, 1, 0);
+      trk_row(&st, &g, pos, npts, w0, sg, out);
       float sum = 0;
       for (int t = L->reserve; t < end; t += 16) { const int j = OB_PAIR_J(t - L->reserve); sum += out[j]; sum += out[j + 1]; }
       pair[dir * 4 + side] = sum;
@@ -4281,10 +2715,10 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
   return con;
 }
 #else
-static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const fline_t *const *cv, float de, float *s, float *pair, int npts, int *nref) {
+static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_t *H, const flens_t *lk, float *s, float *pair, int npts, int *nref) {
   const int W = L->w;
   const float dl = 1 + OB_THIN_LINE / 2.0f;
-  float dark = 0, light = 0, u, v, x, y, xs, ys;
+  float dark = 0, light = 0, u, v, x, y;
   int nr = 0;
   for (int side = 0; side < 4; side++) {
     float *fw = pair + side, *bw = pair + 4 + side;
@@ -4297,31 +2731,28 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
         const v128_t ca = wasm_f32x4_make(PAIR_AT(0, 0), PAIR_AT(1, 0), PAIR_AT(2, 0), PAIR_AT(3, 0)),
                      cb = wasm_f32x4_make(PAIR_AT(0, 1), PAIR_AT(1, 1), PAIR_AT(2, 1), PAIR_AT(3, 1));
         #undef PAIR_AT
-        const fline_t *c = cv ? cv[side] : NULL;
         float D[4], G[4], A[4], B[4], RA[4], RB[4];
-        wasm_v128_store(D, thin_sample4(L, im, H, c, de, side, side, along, dl));
-        wasm_v128_store(G, thin_sample4(L, im, H, c, de, side, side, along, OB_GAP_MID));
-        wasm_v128_store(A, thin_sample4(L, im, H, c, de, side, side, ca, OB_TRACK_MID));
-        wasm_v128_store(B, thin_sample4(L, im, H, c, de, side, side, cb, OB_TRACK_MID));
-        wasm_v128_store(RA, thin_sample4(L, im, H, c, de, side, side, wasm_f32x4_sub(w4, ca), OB_TRACK_MID));
-        wasm_v128_store(RB, thin_sample4(L, im, H, c, de, side, side, wasm_f32x4_sub(w4, cb), OB_TRACK_MID));
+        wasm_v128_store(D, thin_sample4(L, im, H, lk, side, along, dl));
+        wasm_v128_store(G, thin_sample4(L, im, H, lk, side, along, OB_GAP_MID));
+        wasm_v128_store(A, thin_sample4(L, im, H, lk, side, ca, OB_TRACK_MID));
+        wasm_v128_store(B, thin_sample4(L, im, H, lk, side, cb, OB_TRACK_MID));
+        wasm_v128_store(RA, thin_sample4(L, im, H, lk, side, wasm_f32x4_sub(w4, ca), OB_TRACK_MID));
+        wasm_v128_store(RB, thin_sample4(L, im, H, lk, side, wasm_f32x4_sub(w4, cb), OB_TRACK_MID));
         for (int l = 0; l < 4; l++) { dark += D[l]; light += G[l]; *fw += A[l]; *fw += B[l]; *bw += RA[l]; *bw += RB[l]; }
         t += 48; nr += 3;
         continue;
       }
 #endif
-      side_xy(L, side, t + 0.5f, de, &xs, &ys);
       side_xy(L, side, t + 0.5f, dl, &x, &y);
-      thin_point(H, cv, side, x, y, xs, ys, &u, &v); dark += sample(im, u, v);
+      project(H, x, y, &u, &v); flens_bend(lk, &u, &v); dark += sample(im, u, v);
       side_xy(L, side, t + 0.5f, OB_GAP_MID, &x, &y);
-      thin_point(H, cv, side, x, y, xs, ys, &u, &v); light += sample(im, u, v);
+      project(H, x, y, &u, &v); flens_bend(lk, &u, &v); light += sample(im, u, v);
       for (int k = 0; k < 2; k++) {
         const float ct = (float)(L->reserve + OB_TRACK_AT(OB_PAIR_J(t - L->reserve) + k)) + OB_CELL_MID;
         for (int dir = 0; dir < 2; dir++) {
           const float at = dir ? W - ct : ct;
-          side_xy(L, side, at, de, &xs, &ys);
           side_xy(L, side, at, OB_TRACK_MID, &x, &y);
-          thin_point(H, cv, side, x, y, xs, ys, &u, &v);
+          project(H, x, y, &u, &v); flens_bend(lk, &u, &v);
           *(dir ? bw : fw) += sample(im, u, v);
         }
       }
@@ -4336,14 +2767,14 @@ static float thin_read_both(const ob_layout_t *L, const image_t *im, const homo_
 #ifdef OB_SIMD
       if (i + 3 < npts) {
         const v128_t at = dir ? wasm_f32x4_sub(wasm_f32x4_splat((float)W), TRACK_AT4(L, i)) : TRACK_AT4(L, i);
-        wasm_v128_store(out + i, thin_sample4(L, im, H, cv ? cv[side] : NULL, de, side, side, at, OB_TRACK_MID));
+        wasm_v128_store(out + i, thin_sample4(L, im, H, lk, side, at, OB_TRACK_MID));
         i += 3;
         continue;
       }
 #endif
       const float ct = (float)(L->reserve + OB_TRACK_AT(i)) + OB_CELL_MID, at = dir ? W - ct : ct;
-      side_xy(L, side, at, OB_TRACK_MID, &x, &y); side_xy(L, side, at, de, &xs, &ys);
-      thin_point(H, cv, side, x, y, xs, ys, &u, &v);
+      side_xy(L, side, at, OB_TRACK_MID, &x, &y);
+      project(H, x, y, &u, &v); flens_bend(lk, &u, &v);
       out[i] = sample(im, u, v);
     }
   }
@@ -4596,7 +3027,7 @@ int ob_thin_read_fmt(const ob_layout_t *L, const image_t *im, const ob_reg_t *re
 }
 
 // The image halved, each pixel the mean of four.
-// ai: fb, slot: frame_buf's (OB_FB_HALF or OB_FB_QUARTER)
+// ai: fb, slot: frame_buf's (the grey pyramid's, OB_FB_PYR1 to OB_FB_PYR4)
 static uint8_t *shrink2(const uint8_t *src, int w, int h, ob_fbufs_t *fb, int slot) {
   const int sw = w / 2, sh = h / 2;
   uint8_t *out = frame_buf(fb, slot, (size_t)sw * sh);
@@ -4637,190 +3068,1152 @@ static uint8_t *shrink2(const uint8_t *src, int w, int h, ob_fbufs_t *fb, int sl
 // ring (2026-10-04: the 32 ring's 64 cells held at 0.212 until it left the format on 2026-10-25).
 static inline int rotation_holds(float best, int orient) { return best >= 0.15f && orient < 4; }
 
-// ai: The scales (1, 2, 4: the capture, its 2 x 2 means, their 2 x 2 means) the corner marks are searched at, coarse to
-// ai: fine, in order into lv; how many. The first is s0, the coarsest scale at which a symbol of the largest layout
-// ai: searched (wmax modules a side) filling the capture's shorter side keeps 1.5 pixels a module there, the
-// ai: resolution the search holds a quad at on a scale coarser than the capture (measured on clean simulated 3840 x 2160
-// ai: captures, the three rings, scales 2 and 4: nearly every capture from 1.35 px a module at the scale, half of them
-// ai: at 1.2, few at 1.1); then the coarser scales (a nearer symbol, whose marks outgrow binarize's window at the finer
-// ai: ones), then the finer (a symbol smaller than that). Under 3 wmax pixels (1626 for the 256 ring) s0 is 1: the
-// ai: capture, then its halves and quarters. A symbol finer than s0 resolves (the 256 ring at 2 px a module in a 3840 x
-// ai: 2160 capture) pays for the coarse searches before the capture's, and the coarse scale may hold a wrong quad there.
-static int mark_levels(const ob_layout_t *const *Ls, int nL, int w, int h, int *lv) {
-  int wmax = 0, s0 = 1, k = 0;
-  for (int i = 0; i < nL; i++) if (Ls[i]->w > wmax) wmax = Ls[i]->w;
+// ---------------------------------------------------------------- the finder's grey marks
+// ai: The corner marks proposed from the grey picture (2026-11-24, from the front half's rewrite lab: research/build/
+// ai: rewrite-2026-11-23, STATUS "The new C finder in liblizard"), in place of the binarized mark scan. On a pyramid
+// ai: level (the capture's 2 x 2 means, scale s), for each box side b (3 and 4 px of the level) the mean of the b x b
+// ai: box against the mean of the frame 1 px wide round it: a dark square against a lighter surround, a corner mark's
+// ai: core (6 modules, the gap round it light) or, under blur, its merged square (10 modules). A candidate where the
+// ai: response is the largest over the sides at its place and a local maximum within 2 px; the strongest GRAY_MAX kept,
+// ai: each re-measured one level finer (gray_refine_c2f) and re-ranked by its response there; read as both forms (the
+// ai: merged square and the core) through mark_pool and mark_quads as the binarized scan's were.
+// ai: The response in integers, on one scale for both sides: K (frame mean - box mean) / 255 with K = 720 (the sides'
+// ai: 16 and 20 frame pixels and 9 and 16 box pixels all divide it): r = cf S_f - cb S_b, cf = K / (o^2 - b^2),
+// ai: cb = K / b^2, S_f and S_b the frame's and the box's sums, shifted down 2 (45,900 at most) and held at 0 below (no
+// ai: candidate takes a negative response). Row sums over b and o pixels in 16 bits, the columns' running sums in 16 bits
+// ai: (255 o^2 < 65,536). The peaks: a pixel equal to its 5 x 5's maximum and no earlier pixel of the 5 x 5 equal to it,
+// ai: in reading order. The vector forms (dense16, peaks16) are the scalar's integers lane for lane.
+// ai: Measured and dropped (the lab's README): a side of 6 at the coarsest level, the grey quantized to 4 or 2 bits, a
+// ai: float form, the re-measure carried down to the capture or searched 2s + 1 px each way there, 24 and 32 candidates.
+enum { GRAY_MAX = 64, GRING = 8, GQ_NEAR = 48 };
+typedef struct { int b, o, c, cf, cb; } gside_t;   // ai: o = b + 2 (a frame 1 px wide), c: the box's centre from its frame's corner
+static gside_t gside(int b) { gside_t s = { b, b + 2, 1 + b / 2, 0, 0 }; s.cf = 720 / (s.o * s.o - b * b); s.cb = 720 / (b * b); return s; }
+static inline unsigned g_r16(int sf, int sb, const gside_t *s) {
+  const int q = (s->cf * sf - s->cb * sb) >> 2;
+  return q <= 0 ? 0 : (unsigned)q;
+}
+
+// ai: the dense pass: R (w x h, 16 bits) the largest response over the sides at each box's centre, 0 where no box fits.
+// ai: ring: per side GRING rows of the box's and the frame's row sums (pw a row); S: per side the columns' running sums.
+static void dense16(const uint8_t *px, int w, int h, const gside_t *sd, int ns, uint16_t *R, uint16_t *ring, uint16_t *S, int pw) {
+  for (int cy = 0; cy < h; cy++) {
+    uint16_t *Rr = R + (size_t)cy * w;
+    memset(Rr, 0, (size_t)w * sizeof(uint16_t));
+    for (int si = 0; si < ns; si++) {
+      const gside_t *s = sd + si;
+      const int b = s->b, o = s->o, nx = w - o + 1, y = cy - s->c;
+      if (y < 0 || y + o > h) continue;
+      uint16_t *Hb = ring + (size_t)si * 2 * GRING * pw, *Ho = Hb + (size_t)GRING * pw;
+      uint16_t *Sb = S + (size_t)si * 2 * pw, *So = Sb + pw;
+      // ai: the rows entering: all o at y = 0, else the newest
+      for (int r = y ? y + o - 1 : 0; r < y + o; r++) {
+        const uint8_t *row = px + (size_t)r * w;
+        uint16_t *hb = Hb + (size_t)(r % GRING) * pw, *ho = Ho + (size_t)(r % GRING) * pw;
+#ifdef OB_SIMD
+        // ai: eight a step, the last vector over the one before (the same sums again)
+        for (int x = 0;; x += 8) {
+          if (x + 8 > nx) x = nx - 8;
+          v128_t vb = wasm_u16x8_load8x8(row + x + 1);
+          for (int i = 1; i < b; i++) vb = wasm_i16x8_add(vb, wasm_u16x8_load8x8(row + x + 1 + i));
+          const v128_t vo = wasm_i16x8_add(vb, wasm_i16x8_add(wasm_u16x8_load8x8(row + x), wasm_u16x8_load8x8(row + x + 1 + b)));
+          wasm_v128_store(hb + x, vb); wasm_v128_store(ho + x, vo);
+          if (x + 8 >= nx) break;
+        }
+#else
+        unsigned vb = 0, vo = 0;
+        for (int i = 0; i < b; i++) vb += row[1 + i];
+        for (int i = 0; i < o; i++) vo += row[i];
+        for (int x = 0;; x++) {
+          hb[x] = (uint16_t)vb; ho[x] = (uint16_t)vo;
+          if (x + 1 >= nx) break;
+          vb += row[x + 1 + b] - row[x + 1]; vo += row[x + o] - row[x];
+        }
+#endif
+      }
+      // ai: the columns' running sums (to whole vectors: the lanes past nx are the ring's padding, never read back)
+      const int nv = (nx + 7) & ~7;
+      if (!y) {
+        for (int x = 0; x < nv; x++) {
+          unsigned vb = 0, vo = 0;
+          for (int j = 0; j < b; j++) vb += Hb[(size_t)((1 + j) % GRING) * pw + x];
+          for (int j = 0; j < o; j++) vo += Ho[(size_t)(j % GRING) * pw + x];
+          Sb[x] = (uint16_t)vb; So[x] = (uint16_t)vo;
+        }
+      } else {
+        const uint16_t *bi = Hb + (size_t)((y + b) % GRING) * pw, *bo = Hb + (size_t)(y % GRING) * pw;
+        const uint16_t *oi = Ho + (size_t)((y + o - 1) % GRING) * pw, *oo = Ho + (size_t)((y - 1) % GRING) * pw;
+#ifdef OB_SIMD
+        for (int x = 0; x < nv; x += 8) {
+          wasm_v128_store(Sb + x, wasm_i16x8_add(wasm_v128_load(Sb + x), wasm_i16x8_sub(wasm_v128_load(bi + x), wasm_v128_load(bo + x))));
+          wasm_v128_store(So + x, wasm_i16x8_add(wasm_v128_load(So + x), wasm_i16x8_sub(wasm_v128_load(oi + x), wasm_v128_load(oo + x))));
+        }
+#else
+        for (int x = 0; x < nv; x++) { Sb[x] = (uint16_t)(Sb[x] + bi[x] - bo[x]); So[x] = (uint16_t)(So[x] + oi[x] - oo[x]); }
+#endif
+      }
+      uint16_t *Rc = Rr + s->c;
+#ifdef OB_SIMD
+      // ai: in 32 bits, cf S_f - cb S_b, shifted down 2, narrowed with negatives to 0; the last vector over the one before
+      // ai: (the maximum is idempotent)
+      const v128_t cf = wasm_i32x4_splat(s->cf), mcb = wasm_i32x4_splat(-s->cb);
+      for (int x = 0;; x += 8) {
+        if (x + 8 > nx) x = nx - 8;
+        const v128_t vb = wasm_v128_load(Sb + x), vf = wasm_i16x8_sub(wasm_v128_load(So + x), vb);
+        const v128_t lo = wasm_i32x4_add(wasm_i32x4_mul(wasm_u32x4_extend_low_u16x8(vf), cf), wasm_i32x4_mul(wasm_u32x4_extend_low_u16x8(vb), mcb));
+        const v128_t hi = wasm_i32x4_add(wasm_i32x4_mul(wasm_u32x4_extend_high_u16x8(vf), cf), wasm_i32x4_mul(wasm_u32x4_extend_high_u16x8(vb), mcb));
+        const v128_t r = wasm_u16x8_narrow_i32x4(wasm_i32x4_shr(lo, 2), wasm_i32x4_shr(hi, 2));
+        wasm_v128_store(Rc + x, wasm_u16x8_max(wasm_v128_load(Rc + x), r));
+        if (x + 8 >= nx) break;
+      }
+#else
+      for (int x = 0; x < nx; x++) { const unsigned r = g_r16((int)(So[x] - Sb[x]), (int)Sb[x], s); if (r > Rc[x]) Rc[x] = (uint16_t)r; }
+#endif
+    }
+  }
+}
+
+// ai: the peaks: the strongest maxc into (xs, ys, pr), strongest first, ties in reading order. The vector form: each
+// ai: row's 5-wide maxima kept for five rows (hm, 8 rows of w), their maximum down the column the 5 x 5's; a pixel
+// ai: equal to it and at least the list's entry bar goes to the test for an earlier equal pixel and into the list
+static void peak_put(int maxc, int *n, int *xs, int *ys, uint16_t *pr, int x, int y, unsigned r) {
+  int j = *n < maxc ? (*n)++ : maxc - 1;
+  while (j > 0 && pr[j - 1] < r) { xs[j] = xs[j - 1]; ys[j] = ys[j - 1]; pr[j] = pr[j - 1]; j--; }
+  xs[j] = x; ys[j] = y; pr[j] = (uint16_t)r;
+}
+static int peaks16(const uint16_t *R, int w, int h, int maxc, int *xs, int *ys, uint16_t *pr, uint16_t *hm) {
+  int n = 0;
+#ifdef OB_SIMD
+  int made = 0;
+  for (int y = 2; y < h - 2; y++) {
+    for (; made <= y + 2; made++) {
+      const uint16_t *Rr = R + (size_t)made * w;
+      uint16_t *o = hm + (size_t)(made & 7) * w;
+      for (int x = 2;; x += 8) {
+        if (x + 8 > w - 2) x = w - 2 - 8;
+        v128_t m = wasm_v128_load(Rr + x - 2);
+        for (int d = -1; d <= 2; d++) m = wasm_u16x8_max(m, wasm_v128_load(Rr + x + d));
+        wasm_v128_store(o + x, m);
+        if (x + 8 >= w - 2) break;
+      }
+    }
+    const uint16_t *Rr = R + (size_t)y * w;
+    int done = 2;
+    for (int x = 2;; x += 8) {
+      if (x + 8 > w - 2) x = w - 2 - 8;
+      const unsigned bar = n == maxc ? pr[maxc - 1] + 1u : 1u;
+      if (bar > 65535) break;
+      v128_t m = wasm_v128_load(hm + (size_t)((y - 2) & 7) * w + x);
+      for (int d = -1; d <= 2; d++) m = wasm_u16x8_max(m, wasm_v128_load(hm + (size_t)((y + d) & 7) * w + x));
+      const v128_t v = wasm_v128_load(Rr + x), ge = wasm_i16x8_eq(wasm_u16x8_max(v, wasm_i16x8_splat((int16_t)bar)), v);
+      unsigned mk = (unsigned)wasm_i8x16_bitmask(wasm_v128_and(wasm_i16x8_eq(v, m), ge)) & 0x5555u;
+      if (x < done) mk &= ~((1u << (2 * (done - x))) - 1u);   // ai: the last vector's lanes the one before took
+      while (mk) {
+        const int xx = x + (__builtin_ctz(mk) >> 1);
+        mk &= mk - 1;
+        const int q = y * w + xx;
+        const unsigned r = R[q];
+        if (n == maxc && r <= pr[maxc - 1]) continue;
+        int peak = 1;
+        for (int dy = -2; dy <= 0 && peak; dy++) for (int dx = -2; dx <= 2 && peak; dx++) {
+          if (dy == 0 && dx >= 0) break;
+          if (R[q + dy * w + dx] == r) peak = 0;
+        }
+        if (peak) peak_put(maxc, &n, xs, ys, pr, xx, y, r);
+      }
+      done = x + 8;
+      if (done >= w - 2) break;
+    }
+  }
+#else
+  (void)hm;
+  for (int y = 2; y < h - 2; y++) for (int x = 2; x < w - 2; x++) {
+    const int q = y * w + x;
+    const unsigned r = R[q];
+    if (!r || (n == maxc && r <= pr[maxc - 1])) continue;
+    int peak = 1;
+    for (int dy = -2; dy <= 2 && peak; dy++) for (int dx = -2; dx <= 2 && peak; dx++) {
+      if (!dx && !dy) continue;
+      const unsigned o2 = R[q + dy * w + dx];
+      if (o2 > r || (o2 == r && (dy < 0 || (dy == 0 && dx < 0)))) peak = 0;
+    }
+    if (peak) peak_put(maxc, &n, xs, ys, pr, x, y, r);
+  }
+#endif
+  return n;
+}
+
+// ai: The re-measure's sums: a local integral image of a level over a window, the response of the box of side B px at
+// ai: top-left (X, Y) against the frame B / 3 wide round it ((frame mean - box mean) / 255), -1e9 where it leaves the
+// ai: level or the window
+typedef struct { uint32_t *I; size_t cap; int x0, y0, x1, y1, w, h; } gwin_t;
+static int gwin_build(gwin_t *g, const uint8_t *img, int w, int h, double cx, double cy, int hw) {
+  int x0 = (int)floor(cx) - hw, y0 = (int)floor(cy) - hw, x1 = (int)ceil(cx) + hw, y1 = (int)ceil(cy) + hw;
+  if (x0 < 0) x0 = 0;
+  if (y0 < 0) y0 = 0;
+  if (x1 > w) x1 = w;
+  if (y1 > h) y1 = h;
+  if (x1 <= x0 || y1 <= y0) return 0;
+  const int lw = x1 - x0, lh = y1 - y0;
+  if ((size_t)(lw + 1) * (lh + 1) > g->cap) {
+    free(g->I); g->cap = (size_t)(lw + 1) * (lh + 1); g->I = malloc(g->cap * sizeof(uint32_t));
+    if (!g->I) { g->cap = 0; return 0; }
+  }
+  uint32_t *I = g->I;
+  for (int x = 0; x <= lw; x++) I[x] = 0;
+  for (int y = 0; y < lh; y++) {
+    uint32_t row = 0;
+    const uint8_t *p = img + (size_t)(y0 + y) * w + x0;
+    uint32_t *o = I + (size_t)(y + 1) * (lw + 1), *u = o - (lw + 1);
+    o[0] = 0;
+    int x = 0;
+#ifdef OB_SIMD
+    // ai: eight a step: the eight bytes' running sums in 16-bit lanes (three shifted adds, 2,040 at most), widened, plus
+    // ai: the row's sum before them (carry, every lane) and the row above: the scalar's integers
+    const v128_t z = wasm_i32x4_splat(0);
+    v128_t carry = z;
+    for (; x + 8 <= lw; x += 8) {
+      v128_t v = wasm_u16x8_load8x8(p + x);
+      v = wasm_i16x8_add(v, wasm_i8x16_shuffle(z, v, 0, 1, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29));
+      v = wasm_i16x8_add(v, wasm_i8x16_shuffle(z, v, 0, 1, 2, 3, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27));
+      v = wasm_i16x8_add(v, wasm_i8x16_shuffle(z, v, 0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23));
+      const v128_t rl = wasm_i32x4_add(wasm_u32x4_extend_low_u16x8(v), carry), rh = wasm_i32x4_add(wasm_u32x4_extend_high_u16x8(v), carry);
+      wasm_v128_store(o + x + 1, wasm_i32x4_add(rl, wasm_v128_load(u + x + 1)));
+      wasm_v128_store(o + x + 5, wasm_i32x4_add(rh, wasm_v128_load(u + x + 5)));
+      carry = wasm_i8x16_shuffle(rh, rh, 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15);
+    }
+    row = (uint32_t)wasm_i32x4_extract_lane(carry, 0);
+#endif
+    for (; x < lw; x++) { row += p[x]; o[x + 1] = u[x + 1] + row; }
+  }
+  g->x0 = x0; g->y0 = y0; g->x1 = x1; g->y1 = y1; g->w = w; g->h = h;
+  return 1;
+}
+static double gray_resp(const gwin_t *g, int X, int Y, int B) {
+  const int Wd = B / 3 > 1 ? B / 3 : 1, O = B + 2 * Wd, W1 = g->x1 - g->x0 + 1;
+  if (X - Wd < 0 || Y - Wd < 0 || X - Wd + O > g->w || Y - Wd + O > g->h || B < 2) return -1e9;
+  if (X - Wd < g->x0 || Y - Wd < g->y0 || X - Wd + O > g->x1 || Y - Wd + O > g->y1) return -1e9;
+  X -= g->x0; Y -= g->y0;
+  const uint32_t *I0 = g->I;
+  const double ai = (double)B * B, ao = (double)O * O - ai;
+  const double sin = (double)I0[(Y + B) * W1 + X + B] - I0[Y * W1 + X + B] - I0[(Y + B) * W1 + X] + I0[Y * W1 + X];
+  const double sout = (double)I0[(Y - Wd + O) * W1 + X - Wd + O] - I0[(Y - Wd) * W1 + X - Wd + O] - I0[(Y - Wd + O) * W1 + X - Wd] + I0[(Y - Wd) * W1 + X - Wd];
+  return ((sout - sin) / ao - sin / ai) / 255.0;
+}
+// ai: the vertex's offset from c's place, held within a pixel: where c is not the largest of the three the parabola
+// ai: extrapolates, by tens of pixels where it is nearly flat
+static double parab(double l, double c, double r) {
+  const double d = l - 2 * c + r, v = l > -1e8 && r > -1e8 && d < 0 ? 0.5 * (l - r) / d : 0;
+  return v > 1 ? 1 : v < -1 ? -1 : v;
+}
+// ai: the fractions at one level (scale 1 there): the centre a pixel each way, then the side a pixel either way, each
+// ai: with its parabola, then the centre again; unit comes back the side found, rc the response
+static void gray_refine(const gwin_t *g, cand_t *c, float *rc) {
+  int B = (int)lroundf(c->unit);
+  double cx = c->x, cy = c->y, best = -1e9;
+  for (int round = 0; round < 2; round++) {
+    const int x0 = (int)lround(cx - B / 2.0), y0 = (int)lround(cy - B / 2.0);
+    int bx = x0, by = y0;
+    best = -1e9;
+    for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+      const double r = gray_resp(g, x0 + dx, y0 + dy, B);
+      if (r > best) { best = r; bx = x0 + dx; by = y0 + dy; }
+    }
+    if (best <= -1e8) break;
+    cx = bx + B / 2.0 + parab(gray_resp(g, bx - 1, by, B), best, gray_resp(g, bx + 1, by, B));
+    cy = by + B / 2.0 + parab(gray_resp(g, bx, by - 1, B), best, gray_resp(g, bx, by + 1, B));
+    if (round) break;
+    int bb = B;
+    double bs = -1e9, rs[3];
+    const int lo = B - 1 > 3 ? B - 1 : 3, hi = B + 1;
+    for (int q = lo; q <= hi; q++) {
+      const double r = gray_resp(g, (int)lround(cx - q / 2.0), (int)lround(cy - q / 2.0), q);
+      rs[q - lo] = r;
+      if (r > bs) { bs = r; bb = q; }
+    }
+    B = bb;
+    c->unit = (float)(bb + (bb > lo && bb < hi ? parab(rs[bb - 1 - lo], bs, rs[bb + 1 - lo]) : 0));
+  }
+  if (best <= -1e8) return;
+  c->x = (float)cx; c->y = (float)cy; *rc = (float)best;
+}
+// ai: the centre and the side climbed together on one level: the best of the 27 neighbours (the centre a pixel each way
+// ai: and the side a pixel either way at once) until the middle is best, three moves at most. Each alone sat in a local
+// ai: best a pixel or two off a mark's middle where growing the box alone read worse (2026-11-23: a 64-ring corner mark
+// ai: of 43 px, between the levels' 32 and 48, r 0.30 there and 0.52 at its middle and side)
+static void gray_climb(const gwin_t *g, double *cx, double *cy, int *B) {
+  for (int it = 0; it < 3; it++) {
+    double best = gray_resp(g, (int)lround(*cx - *B / 2.0), (int)lround(*cy - *B / 2.0), *B), bx = *cx, by = *cy;
+    int bb = *B;
+    for (int db = -1; db <= 1; db++) for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+      const int q = *B + db;
+      if ((!db && !dx && !dy) || q < 3) continue;
+      const double x = *cx + dx, y = *cy + dy, r = gray_resp(g, (int)lround(x - q / 2.0), (int)lround(y - q / 2.0), q);
+      if (r > best) { best = r; bx = x; by = y; bb = q; }
+    }
+    if (bb == *B && bx == *cx && by == *cy) break;
+    *cx = bx; *cy = by; *B = bb;
+  }
+}
+// ai: The re-measure, coarse to fine: a candidate found at level L (scale 2^L) measured again one level finer (lv[L - 1];
+// ai: lv[0] the capture): its centre and side doubled, climbed (gray_climb), then gray_refine there for the fractions,
+// ai: back in the capture's pixels; a candidate found on the capture measured there
+static void gray_refine_c2f(gwin_t *g, const uint8_t *const *lv, int w, int h, cand_t *c, float *rc, int n, int scale) {
+  int L = 0;
+  while ((1 << L) < scale) L++;
+  const int ls = L > 0 ? L - 1 : 0;
+  for (int k = 0; k < n; k++) {
+    double cx = c[k].x / scale, cy = c[k].y / scale;
+    int B = (int)lroundf(c[k].unit / scale);
+    if (L > 0) { cx *= 2; cy *= 2; B *= 2; }
+    const int wl = w >> ls, hl = h >> ls, Bm = B + 3, Wm = Bm / 3 > 1 ? Bm / 3 : 1, hw = (Bm + 2 * Wm) / 2 + 3 + 10;
+    if (!gwin_build(g, lv[ls], wl, hl, cx, cy, hw)) continue;
+    gray_climb(g, &cx, &cy, &B);
+    cand_t t = c[k];
+    t.x = (float)cx; t.y = (float)cy; t.unit = (float)B;
+    float r = rc[k];
+    gray_refine(g, &t, &r);
+    t.x *= (float)(1 << ls); t.y *= (float)(1 << ls); t.unit *= (float)(1 << ls);
+    c[k] = t; rc[k] = r;
+  }
+}
+
+// ai: the scales the grey marks search, coarse to fine: from the first whose boxes (3 and 4 px of the level) hold the
+// ai: largest core a capture this size can show (the fewest modules a side, the 64 ring's 158, filling its shorter side:
+// ai: a core of 6 side / 158 px), down to 2 (the capture's 2 x 2 means; a candidate found there is measured on the
+// ai: capture itself); a level under 64 px a side left out. Scale 1 searched as well cost the empty frames 0.8 ms and
+// ai: read 71 more blocks of 31,658 (2026-11-23).
+static int gray_levels(int w, int h, int *lv) {
   const int side = w < h ? w : h;
-  while (s0 < 4 && 2 * side >= 3 * (2 * s0) * wmax) s0 *= 2;   // ai: side / (2 s0 wmax) >= 1.5
-  for (int s = s0; s <= 4; s *= 2) lv[k++] = s;
-  for (int s = s0 / 2; s >= 1; s /= 2) lv[k++] = s;
+  int smax = 1, k = 0;
+  while (smax < 16 && 6 * smax * 158 < 6 * side) smax *= 2;
+  for (int s = smax; s >= 2; s /= 2) if (w / s >= 64 && h / s >= 64) lv[k++] = s;
   return k;
+}
+
+// ai: The finder's workspace, a frame's: the grey pyramid (pyr[l], the capture's 2 x 2 means l times; pyr[0] the capture)
+// ai: and the grey stage's buffers, in frame_buf's slots
+typedef struct { ob_fbufs_t *fb; const uint8_t *pyr[5]; int w, h; gwin_t win; } fctx_t;
+static const uint8_t *fctx_level(fctx_t *f, int l) {
+  for (int k = 1; k <= l; k++)
+    if (!f->pyr[k] && !(f->pyr[k] = shrink2(f->pyr[k - 1], f->w >> (k - 1), f->h >> (k - 1), f->fb, OB_FB_PYR1 + k - 1))) return NULL;
+  return f->pyr[l];
+}
+static void fctx_done(fctx_t *f) {
+  for (int k = 1; k < 5; k++) if (f->pyr[k]) frame_buf_done(f->fb, (void *)f->pyr[k]);
+  free(f->win.I);
+}
+// ai: the candidates at scale s (a level of the pyramid): the dense pass, the peaks, each peak's side (the first side,
+// ai: 3 then 4, whose response there is the peak's: the dense pass keeps the first on a tie) and its place (a level
+// ai: pixel i spans [i s, (i + 1) s) of the capture; for an even side the box's middle is a pixel boundary), then the
+// ai: re-measure and the ranking by the response measured; unit the box side in capture px, rc the response
+static int gray_cands(fctx_t *f, int scale, cand_t *c, float *rc) {
+  int li = 0;
+  while ((1 << li) < scale) li++;
+  const uint8_t *px = fctx_level(f, li);
+  const int w = f->w >> li, h = f->h >> li;
+  if (!px || w < 64 || h < 64) return 0;
+  const int pw = ((w + 7) & ~7) + 16;
+  uint16_t *R = frame_buf(f->fb, OB_FB_GREY, (size_t)w * h * sizeof(uint16_t));
+  uint16_t *ring = frame_buf(f->fb, OB_FB_GRING, ((size_t)2 * 2 * GRING * pw + (size_t)2 * 2 * pw + (size_t)8 * w) * sizeof(uint16_t));
+  if (!R || !ring) { frame_buf_done(f->fb, R); frame_buf_done(f->fb, ring); return 0; }
+  uint16_t *S = ring + (size_t)2 * 2 * GRING * pw, *hm = S + (size_t)2 * 2 * pw;
+  memset(ring, 0, ((size_t)2 * 2 * GRING * pw + (size_t)2 * 2 * pw) * sizeof(uint16_t));
+  const gside_t sd[2] = { gside(3), gside(4) };
+  dense16(px, w, h, sd, 2, R, ring, S, pw);
+  int xs[GRAY_MAX], ys[GRAY_MAX];
+  uint16_t pr[GRAY_MAX];
+  const int n = peaks16(R, w, h, GRAY_MAX, xs, ys, pr, hm);
+  const float norm = 4.0f / (720.0f * 255.0f);
+  for (int j = 0; j < n; j++) {
+    int b = 3;
+    for (int si = 0; si < 2; si++) {
+      const gside_t *s = sd + si;
+      const int X = xs[j] - s->c, Y = ys[j] - s->c;
+      if (X < 0 || Y < 0 || X + s->o > w || Y + s->o > h) continue;
+      int sb = 0, so = 0;
+      for (int yy = 0; yy < s->o; yy++) for (int xx = 0; xx < s->o; xx++) {
+        const int v = px[(size_t)(Y + yy) * w + X + xx];
+        so += v;
+        if (yy >= 1 && yy < 1 + s->b && xx >= 1 && xx < 1 + s->b) sb += v;
+      }
+      if (g_r16(so - sb, sb, s) == pr[j]) { b = s->b; break; }
+    }
+    c[j].x = (float)((xs[j] - b / 2 + b / 2.0) * scale); c[j].y = (float)((ys[j] - b / 2 + b / 2.0) * scale);
+    c[j].unit = (float)(b * scale); c[j].hits = 0; rc[j] = pr[j] * norm;
+  }
+  frame_buf_done(f->fb, R); frame_buf_done(f->fb, ring);
+  gray_refine_c2f(&f->win, f->pyr, f->w, f->h, c, rc, n, scale);
+  for (int a = 1; a < n; a++) {
+    const cand_t cc = c[a];
+    const float rr = rc[a];
+    int b2 = a - 1;
+    while (b2 >= 0 && rc[b2] < rr) { c[b2 + 1] = c[b2]; rc[b2 + 1] = rc[b2]; b2--; }
+    c[b2 + 1] = cc; rc[b2 + 1] = rr;
+  }
+  return n;
+}
+// ai: the candidates read as a form, 1 the merged square (10 modules), 2 the core (6), their support the response over
+// ai: the module size, so that mark_pool's rank (support times size) is the response
+static void gray_form(const cand_t *c, const float *rc, int n, int form, cand_t *out) {
+  for (int k = 0; k < n; k++) {
+    out[k] = c[k];
+    out[k].unit = c[k].unit * (form == 1 ? 1.0f / 10.0f : 1.0f / 6.0f);
+    out[k].hits = (int)(rc[k] * 1e5f / (out[k].unit > 0 ? out[k].unit : 1));
+  }
+}
+
+// ai: The track's contrast gate over the cells within GQ_NEAR modules of a side's either end (thin_levels' samples
+// ai: there): where the four marks' homography still holds the border when it bows between them (the 256 ring: within
+// ai: 0.4 modules for 35 modules from a corner, 1.8 at mid-side, 2026-11-23); a quad's score is still thin_score's,
+// ai: the whole side
+static inline int gq_near_end(float t, int len) { return t <= GQ_NEAR || len - t <= GQ_NEAR; }
+static int thin_levels_near(const ob_layout_t *L, const image_t *im, const homo_t *H, float *ref, float *con) {
+  float dark = 0, light = 0, trk = 0, u, v, x, y, dl = 1 + OB_THIN_LINE / 2.0f;
+  int nref = 0;
+  for (int side = 0; side < 4; side++) {
+    const int len = side & 1 ? L->h : L->w;
+    for (int t = L->reserve; t < len - L->reserve; t += 16) {
+      if (!gq_near_end(t + 0.5f, len)) continue;
+      side_xy(L, side, t + 0.5f, dl, &x, &y); project(H, x, y, &u, &v); dark += sample(im, u, v);
+      side_xy(L, side, t + 0.5f, OB_GAP_MID, &x, &y); project(H, x, y, &u, &v); light += sample(im, u, v);
+      for (int k = 0; k < 2; k++) {
+        const float ct = L->reserve + OB_TRACK_AT(OB_PAIR_J(t - L->reserve) + k) + OB_CELL_MID;
+        side_xy(L, side, ct, OB_TRACK_MID, &x, &y); project(H, x, y, &u, &v); trk += sample(im, u, v);
+      }
+      nref++;
+    }
+  }
+  if (!nref) return 0;
+  *ref = 0.5f * trk / nref; *con = (light - dark) / nref;
+  return *con >= 0.08f;
+}
+
+// ---------------------------------------------------------------- the finder's traced border
+// ai: The border found by tracing its ring (2026-11-24, from the rewrite lab; the ring one closed loop through the marks
+// ai: since 2026-11-23): contours of f = grey - T, T the local mean (the capture's 2 x 2 means three times, 8 px a cell,
+// ai: read bilinearly), followed cell by cell by marching squares, so no binarized picture is made. Each cell's code (its
+// ai: corners' signs, top-left 1, top-right 2, bottom-right 4, bottom-left 8) is made a tile of TR_TILE x TR_TILE cells
+// ai: at a time the first time a contour enters it, and a step is a byte read and a table step (TR_EXIT). Traces start
+// ai: where a row scanned every h / 12 (a symbol at least TR_MIN of the picture tall is crossed by them) crosses zero
+// ai: with at least the contrast floor across the pixel pair, and follow the iso-line until it closes or leaves the
+// ai: picture (then the other way from the start). A contour the size of a symbol (its box TR_MIN of the picture each
+// ai: way) becomes a quad by its straight runs (tr_segs): a closed one, or an open one with both ends at the picture's
+// ai: edge (a symbol the picture cuts). The mean at 8 px rather than 16: at steep angles the far side's line, under a
+// ai: pixel, read above a 16-px mean that took in the dark data (2026-11-23, the 256 ring at 50 degrees).
+enum { TR_TILE = 32, TR_MAXP = 1 << 15, TR_MAXQ = 64, TR_LEVEL = 3, TR_ROWS = 12 };
+// ai: the least share of the picture each way a traced symbol takes (smaller symbols are the marks' to find). TR_ROWS,
+// ai: TR_MIN, the contrast floor's 0.35 and the quads' spacing (0.65) and size (4x) from a linear scan of the finder's
+// ai: constants on the closed-ring sets and the lens set (2026-11-24): the blocks level, the finder 10 to 15% faster
+static const float TR_MIN = 0.15f;
+typedef struct { fline_t in[4]; } tquad_t;   // ai: the image's top, right, bottom and left curves
+typedef struct {
+  const uint8_t *img; int w, h;
+  const uint8_t *lv; int lw, lh, ls;   // ai: the mean's level (2^ls px a cell)
+  const int32_t *xi; const float *ax;  // ai: a column's two level samples and the weight between them
+  const int32_t *yi; const float *ay;  // ai: and a row's
+  const float *Ly; int lw1;            // ai: every row's level rows blended (h x lw1)
+  uint8_t *cc, *tdone; int tw;         // ai: the cells' codes; a tile's codes made this frame
+  uint8_t *vis;                        // ai: a bit a cell, its contour followed
+  int32_t step[64], dir[4];            // ai: the chase's steps (tr_steps): by code << 2 | entry edge, and by exit edge
+} tctx_t;
+static signed char TR_EXIT[16][4];   // ai: the edge a code leaves by from the one it was entered across; -1 none, -2 a saddle
+static void tr_exit_init(void) {
+  static int done = 0;   // ai: the table's values never change: a race writes the same bytes
+  if (done) return;
+  for (int code = 0; code < 16; code++) {
+    const int sa = code & 1, sb = code >> 1 & 1, sc = code >> 2 & 1, sd = code >> 3 & 1;
+    const int cross[4] = { sa != sb, sb != sc, sd != sc, sa != sd }, nc = cross[0] + cross[1] + cross[2] + cross[3];
+    for (int e = 0; e < 4; e++) {
+      if (!cross[e]) { TR_EXIT[code][e] = -1; continue; }
+      if (nc == 4) { TR_EXIT[code][e] = -2; continue; }
+      for (int o = 0; o < 4; o++) if (o != e && cross[o]) TR_EXIT[code][e] = (signed char)o;
+    }
+  }
+  done = 1;
+}
+// ai: the mean at a pixel, bilinear on the level, clamped at its outer samples (each column's and row's sample and weight
+// ai: tabled once a frame: xi, ax, yi, ay)
+static inline float tr_T(const tctx_t *c, int x, int y) {
+  const float ax = c->ax[x], ay = c->ay[y];
+  const uint8_t *r0 = c->lv + (size_t)c->yi[y] * c->lw + c->xi[x], *r1 = r0 + c->lw;
+  return (1 - ay) * ((1 - ax) * r0[0] + ax * r0[1]) + ay * ((1 - ax) * r1[0] + ax * r1[1]);
+}
+static inline float tr_f(const tctx_t *c, int x, int y) { return (float)c->img[(size_t)y * c->w + x] - tr_T(c, x, y); }
+// ai: row y's level rows blended into one (Ly, lw + 1 values: the local mean down the column at that row)
+static void tr_ly(const tctx_t *c, int y, float *Ly) {
+  const float ay = c->ay[y];
+  const uint8_t *r0 = c->lv + (size_t)c->yi[y] * c->lw, *r1 = r0 + c->lw;
+  int j = 0;
+#ifdef OB_SIMD
+  // ai: sixteen a step, the bytes widened to floats exactly: the scalar's floats
+  const v128_t wa = wasm_f32x4_splat(1 - ay), wb = wasm_f32x4_splat(ay);
+  for (; j + 16 <= c->lw; j += 16) {
+    const v128_t p0 = wasm_v128_load(r0 + j), p1 = wasm_v128_load(r1 + j);
+    const v128_t l0 = wasm_u16x8_extend_low_u8x16(p0), h0 = wasm_u16x8_extend_high_u8x16(p0), l1 = wasm_u16x8_extend_low_u8x16(p1), h1 = wasm_u16x8_extend_high_u8x16(p1);
+    const v128_t g0[4] = { wasm_u32x4_extend_low_u16x8(l0), wasm_u32x4_extend_high_u16x8(l0), wasm_u32x4_extend_low_u16x8(h0), wasm_u32x4_extend_high_u16x8(h0) };
+    const v128_t g1[4] = { wasm_u32x4_extend_low_u16x8(l1), wasm_u32x4_extend_high_u16x8(l1), wasm_u32x4_extend_low_u16x8(h1), wasm_u32x4_extend_high_u16x8(h1) };
+    for (int g = 0; g < 4; g++)
+      wasm_v128_store(Ly + j + 4 * g, wasm_f32x4_add(wasm_f32x4_mul(wa, wasm_f32x4_convert_i32x4(g0[g])), wasm_f32x4_mul(wb, wasm_f32x4_convert_i32x4(g1[g]))));
+  }
+#endif
+  for (; j < c->lw; j++) Ly[j] = (1 - ay) * r0[j] + ay * r1[j];
+  Ly[c->lw] = Ly[c->lw - 1];
+}
+// ai: a tile's codes: its rows' signs from grey and the blended mean (the edgelets), a sign a byte as a mask (0 or 0xff),
+// ai: then each cell's code from its four corners' masks (1, 2, 4, 8 kept of each), so the code is ANDs and ORs. The
+// ai: vector form (2026-11-24): the signs 16 pixels a step, each aligned four sharing the level's pair of samples at the
+// ai: 1/8 level (the mean a + ax (b - a) with one a and b: the same floats as the scalar's), the compares narrowed to
+// ai: bytes; the codes 16 cells a step. The ends (the clamped columns, a picture's last tile) by the scalar form.
+static inline uint8_t tr_sign(const tctx_t *c, const float *Ly, const uint8_t *row, int x) {
+  const float a = Ly[c->xi[x]], b = Ly[c->xi[x] + 1];
+  return (float)row[x] > a + c->ax[x] * (b - a) ? 0xff : 0;
+}
+static void tr_tile(tctx_t *c, int tx, int ty) {
+  const int w = c->w, h = c->h, x0 = tx * TR_TILE, y0 = ty * TR_TILE;
+  const int x1 = x0 + TR_TILE + 1 < w ? x0 + TR_TILE + 1 : w, y1 = y0 + TR_TILE + 1 < h ? y0 + TR_TILE + 1 : h, nw = x1 - x0;
+  uint8_t sg[2][TR_TILE + 16], *sp = sg[0], *sn = sg[1];
+  for (int y = y0; y < y1; y++) {
+    const float *Ly = c->Ly + (size_t)y * c->lw1;
+    const uint8_t *row = c->img + (size_t)y * w;
+    int x = x0;
+#ifdef OB_SIMD
+    const v128_t ones = wasm_i32x4_splat(-1);
+    for (; x + 16 <= x1; x += 16) {
+      int same = 1;
+      for (int g = 0; g < 4; g++) same &= c->xi[x + 4 * g] == c->xi[x + 4 * g + 3];
+      if (!same) { for (int k = 0; k < 16; k++) sn[x + k - x0] = tr_sign(c, Ly, row, x + k); continue; }
+      const v128_t px = wasm_v128_load(row + x), lo = wasm_u16x8_extend_low_u8x16(px), hi = wasm_u16x8_extend_high_u8x16(px);
+      const v128_t gv[4] = { wasm_u32x4_extend_low_u16x8(lo), wasm_u32x4_extend_high_u16x8(lo), wasm_u32x4_extend_low_u16x8(hi), wasm_u32x4_extend_high_u16x8(hi) };
+      v128_t gt[4];
+      for (int g = 0; g < 4; g++) {
+        const int j = c->xi[x + 4 * g];
+        const float a = Ly[j], d = Ly[j + 1] - a;
+        const v128_t T = wasm_f32x4_add(wasm_f32x4_splat(a), wasm_f32x4_mul(wasm_v128_load(c->ax + x + 4 * g), wasm_f32x4_splat(d)));
+        gt[g] = wasm_v128_xor(wasm_f32x4_le(wasm_f32x4_convert_i32x4(gv[g]), T), ones);   // ai: grey > the mean, as !(<=): no NaN here
+      }
+      wasm_v128_store(sn + (x - x0), wasm_i8x16_narrow_i16x8(wasm_i16x8_narrow_i32x4(gt[0], gt[1]), wasm_i16x8_narrow_i32x4(gt[2], gt[3])));
+    }
+#endif
+    for (; x < x1; x++) sn[x - x0] = tr_sign(c, Ly, row, x);
+    if (y > y0) {
+      uint8_t *out = c->cc + (size_t)(y - 1) * w + x0;
+      int k = 0;
+#ifdef OB_SIMD
+      const v128_t m1 = wasm_u8x16_splat(1), m2 = wasm_u8x16_splat(2), m4 = wasm_u8x16_splat(4), m8 = wasm_u8x16_splat(8);
+      for (; k + 16 < nw; k += 16)
+        wasm_v128_store(out + k, wasm_v128_or(wasm_v128_or(wasm_v128_and(wasm_v128_load(sp + k), m1), wasm_v128_and(wasm_v128_load(sp + k + 1), m2)),
+                                              wasm_v128_or(wasm_v128_and(wasm_v128_load(sn + k + 1), m4), wasm_v128_and(wasm_v128_load(sn + k), m8))));
+#endif
+      for (; k + 1 < nw; k++) out[k] = (uint8_t)((sp[k] & 1) | (sp[k + 1] & 2) | (sn[k + 1] & 4) | (sn[k] & 8));
+    }
+    uint8_t *t = sp; sp = sn; sn = t;
+  }
+  c->tdone[(size_t)ty * c->tw + tx] = 1;
+}
+static const int TR_DX[4] = { 0, 1, 0, -1 }, TR_DY[4] = { -1, 0, 1, 0 };
+// ai: The chase's step table, a frame's (its offsets the row length's): for a cell's code and its entry edge, the next
+// ai: cell's offset in cells times 16, the exit edge times 4 and the next cell's entry edge (the exit's opposite), so a
+// ai: step is the code's load and this one; TR_STOP where the iso-line does not cross the cell, TR_SADDLE where the
+// ai: centre decides (dir[exit] then). The walk the table-free form's, cell for cell.
+enum { TR_STOP = INT32_MIN, TR_SADDLE = INT32_MIN + 1 };
+static void tr_steps(tctx_t *c) {
+  for (int e = 0; e < 4; e++) c->dir[e] = (TR_DY[e] * c->w + TR_DX[e]) * 16 + e * 4 + ((e + 2) & 3);
+  for (int code = 0; code < 16; code++) for (int ein = 0; ein < 4; ein++) {
+    const int e = TR_EXIT[code][ein];
+    c->step[code << 2 | ein] = e == -1 ? TR_STOP : e == -2 ? TR_SADDLE : c->dir[e];
+  }
+}
+// ai: the chase from cell (x, y) entered across ein (0 top, 1 right, 2 bottom, 3 left): each step's cell (xy, y << 16 | x)
+// ai: and exit edge (eo), the box; 1 where it closed, 0 where it left the picture or ran out of room. The cell's index
+// ai: steps by the table (tr_steps), so a step waits on two loads; x and y follow beside it for the edge, tiles and box.
+static int tr_chase(tctx_t *c, int x, int y, int ein, uint32_t *xy, uint8_t *eo, int *n, int max, int *bx) {
+  const int x0 = x, y0 = y, e0 = ein, w = c->w, tw = c->tw;
+  const unsigned wm = (unsigned)(w - 1), hm = (unsigned)(c->h - 1);
+  const uint8_t *cc = c->cc, *tdone = c->tdone;
+  uint8_t *vis = c->vis;
+  int k = *n, b0 = bx[0], b1 = bx[1], b2 = bx[2], b3 = bx[3], closed = 0;
+  ptrdiff_t i = (ptrdiff_t)y * w + x;
+  for (int steps = 0; steps < max; steps++) {
+    if ((unsigned)x >= wm || (unsigned)y >= hm) break;
+    if (!tdone[(size_t)((unsigned)y / TR_TILE) * tw + (unsigned)x / TR_TILE]) tr_tile(c, x / TR_TILE, y / TR_TILE);
+    int32_t st = c->step[cc[i] << 2 | ein];
+    if (st == TR_STOP) break;
+    if (st == TR_SADDLE) {   // ai: a saddle: the centre's sign says which corners join
+      const float a = tr_f(c, x, y), b = tr_f(c, x + 1, y), cv = tr_f(c, x + 1, y + 1), d = tr_f(c, x, y + 1);
+      static const int PAIR_AC[4] = { 1, 0, 3, 2 }, PAIR_BD[4] = { 3, 2, 1, 0 };
+      st = c->dir[((a + b + cv + d) > 0) == (a > 0) ? PAIR_AC[ein] : PAIR_BD[ein]];
+    }
+    const int eout = st >> 2 & 3;
+    vis[i >> 3] |= (uint8_t)(1u << (i & 7));
+    if (k < max) { xy[k] = (uint32_t)y << 16 | (uint32_t)x; eo[k] = (uint8_t)eout; k++; }
+    b0 = x < b0 ? x : b0; b1 = x > b1 ? x : b1; b2 = y < b2 ? y : b2; b3 = y > b3 ? y : b3;
+    i += st >> 4; x += TR_DX[eout]; y += TR_DY[eout]; ein = st & 3;
+    if (x == x0 && y == y0 && ein == e0) { closed = 1; break; }
+  }
+  *n = k; bx[0] = b0; bx[1] = b1; bx[2] = b2; bx[3] = b3;
+  return closed;
+}
+// ai: a chased contour's crossing points (image coordinates, x and y apart), from f at each exit edge's two corners
+static void tr_pts(const tctx_t *c, const uint32_t *xy, const uint8_t *eo, int n, float *qx, float *qy) {
+  for (int k = 0; k < n; k++) {
+    const int x = (int)(xy[k] & 0xffff), y = (int)(xy[k] >> 16);
+    float px, py;
+    switch (eo[k]) {
+      case 0: { const float a = tr_f(c, x, y), b = tr_f(c, x + 1, y); px = x + a / (a - b); py = (float)y; break; }
+      case 1: { const float b = tr_f(c, x + 1, y), d = tr_f(c, x + 1, y + 1); px = (float)(x + 1); py = y + b / (b - d); break; }
+      case 2: { const float d = tr_f(c, x, y + 1), e = tr_f(c, x + 1, y + 1); px = x + d / (d - e); py = (float)(y + 1); break; }
+      default: { const float a = tr_f(c, x, y), d = tr_f(c, x, y + 1); px = (float)x; py = y + a / (a - d); break; }
+    }
+    qx[k] = px + 0.5f; qy[k] = py + 0.5f;
+  }
+}
+// ai: the length of (x, y) as glibc's hypotf makes it, from double and rounded once to float: one value on every target
+// ai: (bionic's hypotf is an ulp away in about 7% of pairs) and the same in the vector form below
+static inline float tr_hyp(float x, float y) { return (float)sqrt((double)x * x + (double)y * y); }
+#if defined(OB_NEON)
+static inline v128_t tr_hyp4(v128_t x, v128_t y) {
+  const float32x4_t fx = vreinterpretq_f32_s32(x), fy = vreinterpretq_f32_s32(y);
+  const float64x2_t xl = vcvt_f64_f32(vget_low_f32(fx)), xh = vcvt_high_f64_f32(fx), yl = vcvt_f64_f32(vget_low_f32(fy)), yh = vcvt_high_f64_f32(fy);
+  const float64x2_t sl = vsqrtq_f64(vaddq_f64(vmulq_f64(xl, xl), vmulq_f64(yl, yl))), sh = vsqrtq_f64(vaddq_f64(vmulq_f64(xh, xh), vmulq_f64(yh, yh)));
+  return vreinterpretq_s32_f32(vcvt_high_f32_f64(vcvt_f32_f64(sl), sh));
+}
+#define TR_HYP4 1
+#elif defined(OB_X86)
+static inline v128_t tr_hyp4(v128_t x, v128_t y) {
+  const __m128 fx = _mm_castsi128_ps(x), fy = _mm_castsi128_ps(y);
+  const __m128d xl = _mm_cvtps_pd(fx), xh = _mm_cvtps_pd(_mm_movehl_ps(fx, fx)), yl = _mm_cvtps_pd(fy), yh = _mm_cvtps_pd(_mm_movehl_ps(fy, fy));
+  const __m128d sl = _mm_sqrt_pd(_mm_add_pd(_mm_mul_pd(xl, xl), _mm_mul_pd(yl, yl))), sh = _mm_sqrt_pd(_mm_add_pd(_mm_mul_pd(xh, xh), _mm_mul_pd(yh, yh)));
+  return _mm_castps_si128(_mm_movelh_ps(_mm_cvtpd_ps(sl), _mm_cvtpd_ps(sh)));
+}
+#define TR_HYP4 1
+#endif
+// ai: The first point of [i0, i1) farthest from the line through (ax, ay) along (ex, ey) of length en, or from the point
+// ai: (ax, ay) itself where en < 1 (no chord); its distance in *dm (-1 and -1 back for none: a NaN distance never wins).
+// ai: The vector form takes four points a step, each lane its own first maximum (a strict compare, so a lane keeps its
+// ai: earliest), then the largest of the four and the earliest place it stands: the scalar's choice exactly.
+static int tr_far(const float *qx, const float *qy, int i0, int i1, float ax, float ay, float ex, float ey, float en, float *dm) {
+  float bd = -1;
+  int at = -1, i = i0;
+  const int chord = en >= 1;
+#ifdef OB_SIMD
+#ifdef TR_HYP4
+  const int vec = 1;
+#else
+  const int vec = chord;
+#endif
+  if (vec && i + 4 <= i1) {
+    const v128_t vax = wasm_f32x4_splat(ax), vay = wasm_f32x4_splat(ay), vex = wasm_f32x4_splat(ex), vey = wasm_f32x4_splat(ey), ven = wasm_f32x4_splat(en), four = wasm_i32x4_splat(4);
+    const int32_t o[4] = { i, i + 1, i + 2, i + 3 };
+    v128_t bv = wasm_f32x4_splat(-1), bi = wasm_i32x4_splat(-1), iv = wasm_v128_load(o);
+    for (; i + 4 <= i1; i += 4) {
+      const v128_t dx = wasm_f32x4_sub(wasm_v128_load(qx + i), vax), dy = wasm_f32x4_sub(wasm_v128_load(qy + i), vay);
+      v128_t d;
+#ifdef TR_HYP4
+      if (!chord) d = tr_hyp4(dx, dy);
+      else
+#endif
+      d = wasm_f32x4_div(wasm_f32x4_abs(wasm_f32x4_sub(wasm_f32x4_mul(dx, vey), wasm_f32x4_mul(dy, vex))), ven);
+      const v128_t gt = wasm_f32x4_lt(bv, d);
+      bv = wasm_v128_bitselect(d, bv, gt); bi = wasm_v128_bitselect(iv, bi, gt);
+      iv = wasm_i32x4_add(iv, four);
+    }
+    float b[4]; int32_t ix[4];
+    wasm_v128_store(b, bv); wasm_v128_store(ix, bi);
+    for (int k = 0; k < 4; k++) if (b[k] > bd || (b[k] == bd && ix[k] >= 0 && ix[k] < at)) { bd = b[k]; at = ix[k]; }
+  }
+#endif
+  for (; i < i1; i++) {
+    const float dx = qx[i] - ax, dy = qy[i] - ay, d = chord ? fabsf(dx * ey - dy * ex) / en : tr_hyp(dx, dy);
+    if (d > bd) { bd = d; at = i; }
+  }
+  *dm = bd;
+  return at;
+}
+// ai: a side's points (along, across) to a curve, robustly: from the chord between its two corners (al0, ac0) and
+// ai: (al1, ac1), three rounds of a least-squares parabola over the points within a band of the curve so far (4 px or 3%
+// ai: of the side, then 2 px or 1%, then 1.5 px or 0.5%): a detour of the iso-line into the picture never enters, a bow
+// ai: of a few px does. u: room for n floats, each point's place along the side (-1 to 1 between the corners), made once
+// ai: for the three rounds; the normal equations' nine sums are six (u^2 serves three places, u two), in the same order.
+static int tr_fit(const float *al, const float *ac, int n, float al0, float ac0, float al1, float ac1, float *u, fline_t *l) {
+  if (n < 8 || fabsf(al1 - al0) < 4) return 0;
+  const float len = fabsf(al1 - al0), mid = 0.5f * (al0 + al1), half = 0.5f * len;
+  float cf[3] = { 0, (ac1 - ac0) / (al1 - al0) * half, 0.5f * (ac0 + ac1) };   // ai: in u = (along - mid) / half
+  static const float TB[3] = { 4, 2, 1.5f }, TF[3] = { 0.03f, 0.01f, 0.005f };
+  int i = 0;
+#ifdef OB_SIMD
+  { const v128_t vm = wasm_f32x4_splat(mid), vh = wasm_f32x4_splat(half); for (; i + 4 <= n; i += 4) wasm_v128_store(u + i, wasm_f32x4_div(wasm_f32x4_sub(wasm_v128_load(al + i), vm), vh)); }
+#endif
+  for (; i < n; i++) u[i] = (al[i] - mid) / half;
+  for (int round = 0; round < 3; round++) {
+    const float tol = fmaxf(TB[round], TF[round] * len);
+    double s00 = 0, s01 = 0, s02 = 0, s12 = 0, s22 = 0, s03 = 0, s13 = 0, s23 = 0;
+    int m = 0;
+    for (int k = 0; k < n; k++) {
+      const double ud = u[k];
+      if (fabsf((float)(cf[0] * ud * ud + cf[1] * ud + cf[2]) - ac[k]) > tol) continue;
+      const double uu = ud * ud, a = ac[k];
+      s00 += uu * uu; s01 += uu * ud; s02 += uu; s12 += ud; s22 += 1; s03 += uu * a; s13 += ud * a; s23 += a;
+      m++;
+    }
+    if (m < 6) return 0;
+    double S[3][4] = { { s00, s01, s02, s03 }, { s01, s02, s12, s13 }, { s02, s12, s22, s23 } };
+    for (int col = 0; col < 3; col++) {   // ai: Gauss-Jordan on the 3 x 3
+      int pv = col;
+      for (int r = col + 1; r < 3; r++) if (fabs(S[r][col]) > fabs(S[pv][col])) pv = r;
+      if (fabs(S[pv][col]) < 1e-12) return 0;
+      for (int q = 0; q < 4; q++) { const double t = S[col][q]; S[col][q] = S[pv][q]; S[pv][q] = t; }
+      for (int r = 0; r < 3; r++) if (r != col) { const double k = S[r][col] / S[col][col]; for (int q = col; q < 4; q++) S[r][q] -= k * S[col][q]; }
+    }
+    for (int r = 0; r < 3; r++) cf[r] = (float)(S[r][3] / S[r][r]);
+  }
+  // ai: back to fline_t's terms: c (along - mid)^2 + a along + b
+  l->c = cf[0] / (half * half); l->a = cf[1] / half; l->b = cf[2] - l->a * mid; l->mid = mid; l->n = n;
+  return 1;
+}
+// ai: A contour as a quad by its straight runs: Douglas-Peucker over its points (the tolerance 2% of its box's larger
+// ai: side, 2 px at least; a closed one from the point farthest from its centroid), neighbouring runs within 20 degrees
+// ai: joined (a bowed side), the runs at least a tenth of that side long named by the way they face from the centroid
+// ai: (top, right, bottom, left; a name taken twice keeps the longer run), each side's curve fitted to its run's points
+// ai: (tr_fit from the run's ends). Four names or none; the corners are where the curves meet, outside the picture or not.
+// ai: px, py: the n points; rx, ry: room for n + 1 each, a closed contour unrolled from its start (its first point again
+// ai: at the end), so every range is contiguous; u: room for n floats (tr_fit's).
+static int tr_segs(const float *px, const float *py, int n, int closed, int w, int h, tquad_t *o, uint8_t *keep, int *st, float *rx, float *ry, float *u) {
+  float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, gx = 0, gy = 0;
+  int i = 0;
+#ifdef OB_SIMD
+  // ai: the box four points a step (pmin and pmax keep the running value on a NaN, as fminf and fmaxf do)
+  if (n >= 4) {
+    v128_t a0 = wasm_f32x4_splat(1e9f), a1 = wasm_f32x4_splat(-1e9f), b0 = a0, b1 = a1;
+    for (; i + 4 <= n; i += 4) {
+      const v128_t vx = wasm_v128_load(px + i), vy = wasm_v128_load(py + i);
+      a0 = wasm_f32x4_pmin(a0, vx); a1 = wasm_f32x4_pmax(a1, vx); b0 = wasm_f32x4_pmin(b0, vy); b1 = wasm_f32x4_pmax(b1, vy);
+    }
+    float t[4][4];
+    wasm_v128_store(t[0], a0); wasm_v128_store(t[1], a1); wasm_v128_store(t[2], b0); wasm_v128_store(t[3], b1);
+    for (int k = 0; k < 4; k++) { x0 = fminf(x0, t[0][k]); x1 = fmaxf(x1, t[1][k]); y0 = fminf(y0, t[2][k]); y1 = fmaxf(y1, t[3][k]); }
+  }
+#endif
+  for (; i < n; i++) { x0 = fminf(x0, px[i]); x1 = fmaxf(x1, px[i]); y0 = fminf(y0, py[i]); y1 = fmaxf(y1, py[i]); }
+  if (x1 - x0 < TR_MIN * w || y1 - y0 < TR_MIN * h) return 0;
+  for (int k = 0; k < n; k++) { gx += px[k]; gy += py[k]; }
+  gx /= n; gy /= n;
+  if (!closed) {   // ai: open: both ends at the picture's edge, or it is not a cut symbol
+    const int at0 = px[0] < 2 || py[0] < 2 || px[0] > w - 2 || py[0] > h - 2, at1 = px[n - 1] < 2 || py[n - 1] < 2 || px[n - 1] > w - 2 || py[n - 1] > h - 2;
+    if (!at0 || !at1) return 0;
+  }
+  const float big = fmaxf(x1 - x0, y1 - y0), tol = fmaxf(2, 0.02f * big);
+  const int m = closed ? n + 1 : n;
+  const float *qx = px, *qy = py;
+  if (closed) {
+    float bd;
+    int s0 = tr_far(px, py, 0, n, gx, gy, 0, 0, 0, &bd);
+    if (s0 < 0) s0 = 0;
+    memcpy(rx, px + s0, (size_t)(n - s0) * sizeof(float)); memcpy(rx + n - s0, px, (size_t)s0 * sizeof(float)); rx[n] = rx[0];
+    memcpy(ry, py + s0, (size_t)(n - s0) * sizeof(float)); memcpy(ry + n - s0, py, (size_t)s0 * sizeof(float)); ry[n] = ry[0];
+    qx = rx; qy = ry;
+  }
+  memset(keep, 0, (size_t)m);
+  int sp = 0;
+  keep[0] = keep[m - 1] = 1;
+  st[sp++] = 0; st[sp++] = m - 1;
+  while (sp) {
+    const int b2 = st[--sp], a2 = st[--sp];
+    if (b2 - a2 < 2) continue;
+    const float ex = qx[b2] - qx[a2], ey = qy[b2] - qy[a2], en = tr_hyp(ex, ey);
+    float dm;
+    // ai: from the chord, or from its one point where it has none (a closed contour's first range, round to its start)
+    const int im = tr_far(qx, qy, a2 + 1, b2, qx[a2], qy[a2], ex, ey, en, &dm);
+    if (dm > tol) { keep[im] = 1; st[sp++] = a2; st[sp++] = im; st[sp++] = im; st[sp++] = b2; }
+  }
+  int vi[256], nv = 0;
+  for (int k = 0; k < m && nv < 256; k++) if (keep[k]) vi[nv++] = k;
+  int ra[256], rb[256], nr = 0;
+  for (int k = 0; k + 1 < nv; k++) {
+    if (nr) {
+      const int a0 = ra[nr - 1], a1 = rb[nr - 1], b0 = vi[k], b1 = vi[k + 1];
+      const float d1 = atan2f(qy[a1] - qy[a0], qx[a1] - qx[a0]), d2 = atan2f(qy[b1] - qy[b0], qx[b1] - qx[b0]);
+      float dd = fabsf(d1 - d2);
+      if (dd > (float)M_PI) dd = 2 * (float)M_PI - dd;
+      if (dd < 0.349f) { rb[nr - 1] = vi[k + 1]; continue; }
+    }
+    ra[nr] = vi[k]; rb[nr] = vi[k + 1]; nr++;
+  }
+  int side[4] = { -1, -1, -1, -1 }, sa[4] = { 0 }, sb[4] = { 0 };
+  float slen[4] = { 0, 0, 0, 0 };
+  for (int r = 0; r < nr; r++) {
+    const int a0 = ra[r], a1 = rb[r];
+    const float len = tr_hyp(qx[a1] - qx[a0], qy[a1] - qy[a0]);
+    if (len < 0.1f * big) continue;
+    const float mx = 0.5f * (qx[a0] + qx[a1]) - gx, my = 0.5f * (qy[a0] + qy[a1]) - gy;
+    const int nm = fabsf(mx) * (y1 - y0) > fabsf(my) * (x1 - x0) ? (mx > 0 ? 1 : 3) : (my > 0 ? 2 : 0);
+    if (len > slen[nm]) { slen[nm] = len; side[nm] = r; sa[nm] = ra[r]; sb[nm] = rb[r]; }
+  }
+  for (int k = 0; k < 4; k++) if (side[k] < 0) return 0;
+  // ai: each side's run between its corners less a twentieth at each end, read in place (x along for top and bottom)
+  int good = 1;
+  for (int k = 0; k < 4 && good; k++) {
+    const int i0 = sa[k], i1 = sb[k], cut = (i1 - i0) / 20, q0 = i0 + cut, q = i1 - cut - q0 + 1 > 0 ? i1 - cut - q0 + 1 : 0;
+    good = k & 1 ? tr_fit(qy + q0, qx + q0, q, qy[i0], qx[i0], qy[i1], qx[i1], u, &o->in[k]) : tr_fit(qx + q0, qy + q0, q, qx[i0], qy[i0], qx[i1], qy[i1], u, &o->in[k]);
+  }
+  return good;
+}
+// ai: the traced quads of a frame (at most maxq), the mean's level from the grey pyramid; min_con: the contrast floor a
+// ai: start's pixel pair must cross
+static int trace_quads(fctx_t *f, int min_con, tquad_t *out, int maxq) {
+  const int w = f->w, h = f->h;
+  int ls = 0;
+  for (int l = 1; l <= TR_LEVEL && (w >> l) >= 8 && (h >> l) >= 8; l++) ls = l;
+  const uint8_t *lv = fctx_level(f, ls);
+  if (!lv) return 0;
+  tr_exit_init();
+  const int lw = w >> ls, lh = h >> ls, lw1 = lw + 1, tw = (w + TR_TILE - 1) / TR_TILE, th = (h + TR_TILE - 1) / TR_TILE;
+  const size_t nvis = ((size_t)w * h + 7) / 8;
+  uint8_t *cc = frame_buf(f->fb, OB_FB_CODES, (size_t)w * h);
+  uint8_t *aux = frame_buf(f->fb, OB_FB_TRACE, (size_t)h * lw1 * sizeof(float) + (size_t)(w + h) * (sizeof(int32_t) + sizeof(float)) + (size_t)tw * th + nvis);
+  // ai: a chase's cells and exits; its points (x, y), the unrolled copy (TR_MAXP + 1 each) and the fits' u; keep and the stack
+  uint32_t *cidx = malloc((size_t)TR_MAXP * (sizeof(uint32_t) + 1 + 5 * sizeof(float) + 1 + 2 * sizeof(int)) + 128);
+  int nq = 0;
+  if (!cc || !aux || !cidx) goto done;
+  {
+    float *LyAll = (float *)aux, *ax = LyAll + (size_t)h * lw1, *ay = ax + w;
+    int32_t *xi = (int32_t *)(ay + h), *yi = xi + w;
+    uint8_t *tdone = (uint8_t *)(yi + h), *vis = tdone + (size_t)tw * th;
+    uint8_t *ceo = (uint8_t *)(cidx + TR_MAXP);
+    float *ptx = (float *)(((uintptr_t)(ceo + TR_MAXP) + 15) & ~(uintptr_t)15), *pty = ptx + TR_MAXP, *rx = pty + TR_MAXP, *ry = rx + TR_MAXP + 1, *uf = ry + TR_MAXP + 1;
+    uint8_t *keep = (uint8_t *)(uf + TR_MAXP);
+    int *st = (int *)(((uintptr_t)(keep + TR_MAXP + 1) + 7) & ~(uintptr_t)7);
+    tctx_t c = { f->pyr[0], w, h, lv, lw, lh, ls, xi, ax, yi, ay, LyAll, lw1, cc, tdone, tw, vis, { 0 }, { 0 } };
+    tr_steps(&c);
+    const float sc = (float)(1 << ls);
+    for (int x = 0; x < w; x++) {
+      float fx = (x + 0.5f) / sc - 0.5f;
+      if (fx < 0) fx = 0;
+      if (fx > lw - 1.001f) fx = lw - 1.001f;
+      xi[x] = (int)fx; ax[x] = fx - (int)fx;
+    }
+    for (int y = 0; y < h; y++) {
+      float fy = (y + 0.5f) / sc - 0.5f;
+      if (fy < 0) fy = 0;
+      if (fy > lh - 1.001f) fy = lh - 1.001f;
+      yi[y] = (int)fy; ay[y] = fy - (int)fy;
+    }
+    for (int y = 0; y < h; y++) tr_ly(&c, y, LyAll + (size_t)y * lw1);
+    memset(tdone, 0, (size_t)tw * th);
+    memset(vis, 0, nvis);
+    const float cmin = 0.5f * min_con;
+    const int row = h / TR_ROWS > 4 ? h / TR_ROWS : 4;
+    // ai: a start row's f (fr), and its crossings with the contrast floor across them as bits (cb, x at bit x % 64 of word x / 64)
+    const int nwd = (w + 63) / 64;
+    float *fr = malloc((size_t)w * sizeof(float) + (size_t)nwd * sizeof(uint64_t));
+    uint64_t *cb = fr ? (uint64_t *)(fr + w) : NULL;
+    for (int y = 1; fr && y + 1 < h && nq < maxq; y += row) {
+      const float *Ly = LyAll + (size_t)y * lw1;
+      const uint8_t *rw = c.img + (size_t)y * w;
+      int x = 0;
+#ifdef OB_SIMD
+      // ai: sixteen a step where each aligned four shares the level's pair (tr_tile's), the scalar's floats
+      for (; x + 16 <= w; x += 16) {
+        int same = 1;
+        for (int g = 0; g < 4; g++) same &= xi[x + 4 * g] == xi[x + 4 * g + 3];
+        if (!same) { for (int k = x; k < x + 16; k++) { const float a = Ly[xi[k]], b = Ly[xi[k] + 1]; fr[k] = (float)rw[k] - (a + ax[k] * (b - a)); } continue; }
+        const v128_t px = wasm_v128_load(rw + x), lo = wasm_u16x8_extend_low_u8x16(px), hi = wasm_u16x8_extend_high_u8x16(px);
+        const v128_t gv[4] = { wasm_u32x4_extend_low_u16x8(lo), wasm_u32x4_extend_high_u16x8(lo), wasm_u32x4_extend_low_u16x8(hi), wasm_u32x4_extend_high_u16x8(hi) };
+        for (int g = 0; g < 4; g++) {
+          const int j = xi[x + 4 * g];
+          const float a = Ly[j], d = Ly[j + 1] - a;
+          const v128_t T = wasm_f32x4_add(wasm_f32x4_splat(a), wasm_f32x4_mul(wasm_v128_load(ax + x + 4 * g), wasm_f32x4_splat(d)));
+          wasm_v128_store(fr + x + 4 * g, wasm_f32x4_sub(wasm_f32x4_convert_i32x4(gv[g]), T));
+        }
+      }
+#endif
+      for (; x < w; x++) { const float a = Ly[xi[x]], b = Ly[xi[x] + 1]; fr[x] = (float)rw[x] - (a + ax[x] * (b - a)); }
+      memset(cb, 0, (size_t)nwd * sizeof(uint64_t));
+      x = 0;
+#ifdef OB_SIMD
+      // ai: four pixel pairs a step: the signs differ ((a <= 0) != (b <= 0): no NaN in f) and |a - b| reaches the floor
+      { const v128_t zero = wasm_f32x4_splat(0), vmin = wasm_f32x4_splat(cmin);
+        for (; x + 4 < w; x += 4) {
+          const v128_t a = wasm_v128_load(fr + x), b = wasm_v128_load(fr + x + 1);
+          const v128_t m = wasm_v128_and(wasm_v128_xor(wasm_f32x4_le(a, zero), wasm_f32x4_le(b, zero)), wasm_f32x4_le(vmin, wasm_f32x4_abs(wasm_f32x4_sub(a, b))));
+          cb[x >> 6] |= (uint64_t)wasm_i32x4_bitmask(m) << (x & 63);
+        } }
+#endif
+      for (; x + 1 < w; x++) { const float a = fr[x], b = fr[x + 1]; if ((a > 0) != (b > 0) && !(fabsf(a - b) < cmin)) cb[x >> 6] |= 1ull << (x & 63); }
+      for (int wd = 0; wd < nwd && nq < maxq; wd++)
+      for (uint64_t bits = cb[wd]; bits && nq < maxq; bits &= bits - 1) {
+        const int x = wd * 64 + __builtin_ctzll(bits);
+        const size_t vi = (size_t)y * w + x;
+        if (vis[vi >> 3] >> (vi & 7) & 1) continue;
+        // ai: chase forward, then (open) backward from the cell above, the backward run reversed in front; points only for
+        // ai: a contour the size of a symbol
+        int n = 0, bx[4] = { x, x, y, y };
+        const int closed = tr_chase(&c, x, y, 0, cidx, ceo, &n, TR_MAXP, bx);
+        if (!closed && y > 0) {
+          int nb2 = 0;
+          uint32_t *bi = cidx + n;
+          uint8_t *be = ceo + n;
+          tr_chase(&c, x, y - 1, 2, bi, be, &nb2, TR_MAXP - n, bx);
+          if (nb2) {
+            // ai: the backward steps reversed, each its entry edge (the step before's exit, flipped) as its exit
+            uint32_t *ti = malloc((size_t)(n + nb2) * sizeof(uint32_t));
+            uint8_t *te = malloc((size_t)(n + nb2));
+            if (!ti || !te) { free(ti); free(te); continue; }
+            for (int k = 0; k < nb2; k++) { ti[k] = bi[nb2 - 1 - k]; te[k] = k + 1 < nb2 ? (uint8_t)((be[nb2 - 2 - k] + 2) & 3) : 2; }
+            memcpy(ti + nb2, cidx, (size_t)n * sizeof(uint32_t)); memcpy(te + nb2, ceo, (size_t)n);
+            memcpy(cidx, ti, (size_t)(n + nb2) * sizeof(uint32_t)); memcpy(ceo, te, (size_t)(n + nb2));
+            free(ti); free(te);
+            n += nb2;
+          }
+        }
+        if (n < 64 || bx[1] - bx[0] < TR_MIN * w || bx[3] - bx[2] < TR_MIN * h) continue;
+        tr_pts(&c, cidx, ceo, n, ptx, pty);
+        if (tr_segs(ptx, pty, n, closed, w, h, &out[nq], keep, st, rx, ry, uf)) nq++;
+      }
+    }
+    free(fr);
+  }
+done:
+  free(cidx);
+  frame_buf_done(f->fb, cc); frame_buf_done(f->fb, aux);
+  return nq;
+}
+
+// ---------------------------------------------------------------- the finder's lens
+// ai: A traced quad's four sides are curves; a lens bends them and a camera's perspective does not, so how much they
+// ai: bend gives the lens. The model is the registration's first radial term about the axis (ob_axis, else the image's
+// ai: centre), q over R (the farthest image corner's distance from it): a point at q undistorted lies at q (1 + k |q|^2)
+// ai: in the image. k is the one whose straightened sides are straightest: each side's curve sampled TRL_N times between
+// ai: its corners, undistorted (Newton on the radius), the smallest variance across each side's best line summed over the
+// ai: four, by a scan of k over -0.8 to 0.8 in 17 steps then golden section about the best. The quad then read is the
+// ai: straight lines' corners (the homography's), the track at its points bent by k (flens_t, thin_read_both), the
+// ai: corners handed back bent the same way, and the bend as the anchors' first model (find_frame's seed). On a strong
+// ai: bend with the symbol filling the picture the traced quads were right and every way round scored 0.05 or less on
+// ai: the track read through their homography (2026-11-23, the lens set: 1,075,029 to 1,082,015 blocks, with the seed
+// ai: 1,103,529).
+enum { TRL_N = 17 };
+static void tr_unbend(float kk, float ax, float ay, float x, float y, float *ux, float *uy) {   // ai: kk = k / R^2
+  const float dx = x - ax, dy = y - ay, rd = sqrtf(dx * dx + dy * dy);
+  if (rd < 1e-3f) { *ux = x; *uy = y; return; }
+  float r = rd / (1 + kk * rd * rd);   // ai: the first-order inverse, then Newton
+  for (int i = 0; i < 3; i++) r -= (r + kk * r * r * r - rd) / (1 + 3 * kk * r * r);
+  const float s = r / rd;
+  *ux = ax + dx * s; *uy = ay + dy * s;
+}
+// ai: the four sides' straightness under kk; ln (given): each side's line n . p = c as { nx, ny, c }
+static double tr_lens_err(float kk, float ax, float ay, const float *sx, const float *sy, float ln[4][3]) {
+  double e = 0;
+  // ai: the four sides' points unbent, four a step in the vector form (tr_unbend's operations lane for lane: the same
+  // ai: floats), then each side's sums in order
+  float uxa[4 * TRL_N], uya[4 * TRL_N];
+  int j = 0;
+#ifdef OB_SIMD
+  {
+    const v128_t vk = wasm_f32x4_splat(kk), vax = wasm_f32x4_splat(ax), vay = wasm_f32x4_splat(ay), one = wasm_f32x4_splat(1), k3 = wasm_f32x4_splat(3 * kk), eps = wasm_f32x4_splat(1e-3f);
+    for (; j + 4 <= 4 * TRL_N; j += 4) {
+      const v128_t x = wasm_v128_load(sx + j), y = wasm_v128_load(sy + j), dx = wasm_f32x4_sub(x, vax), dy = wasm_f32x4_sub(y, vay);
+      const v128_t rd = wasm_f32x4_sqrt(wasm_f32x4_add(wasm_f32x4_mul(dx, dx), wasm_f32x4_mul(dy, dy)));
+      v128_t r = wasm_f32x4_div(rd, wasm_f32x4_add(one, wasm_f32x4_mul(wasm_f32x4_mul(vk, rd), rd)));
+      for (int it = 0; it < 3; it++)
+        r = wasm_f32x4_sub(r, wasm_f32x4_div(wasm_f32x4_sub(wasm_f32x4_add(r, wasm_f32x4_mul(wasm_f32x4_mul(wasm_f32x4_mul(vk, r), r), r)), rd),
+                                             wasm_f32x4_add(one, wasm_f32x4_mul(wasm_f32x4_mul(k3, r), r))));
+      const v128_t sc = wasm_f32x4_div(r, rd), near = wasm_f32x4_lt(rd, eps);
+      wasm_v128_store(uxa + j, wasm_v128_bitselect(x, wasm_f32x4_add(vax, wasm_f32x4_mul(dx, sc)), near));
+      wasm_v128_store(uya + j, wasm_v128_bitselect(y, wasm_f32x4_add(vay, wasm_f32x4_mul(dy, sc)), near));
+    }
+  }
+#endif
+  for (; j < 4 * TRL_N; j++) tr_unbend(kk, ax, ay, sx[j], sy[j], &uxa[j], &uya[j]);
+  for (int s = 0; s < 4; s++) {
+    const float *ux = uxa + s * TRL_N, *uy = uya + s * TRL_N;
+    double mx = 0, my = 0, xx = 0, xy = 0, yy = 0;
+    for (int i = 0; i < TRL_N; i++) { mx += ux[i]; my += uy[i]; }
+    mx /= TRL_N; my /= TRL_N;
+    for (int i = 0; i < TRL_N; i++) { const double dx = ux[i] - mx, dy = uy[i] - my; xx += dx * dx; xy += dx * dy; yy += dy * dy; }
+    const double tr = xx + yy, det = xx * yy - xy * xy, lmin = 0.5 * tr - sqrt(fmax(0, 0.25 * tr * tr - det));
+    e += lmin;
+    if (ln) {   // ai: the normal: the eigenvector of the smallest eigenvalue
+      double nx = xy, ny = lmin - xx;
+      if (fabs(nx) + fabs(ny) < 1e-12) { nx = lmin - yy; ny = xy; }
+      if (fabs(nx) + fabs(ny) < 1e-12) { nx = xx < yy ? 1 : 0; ny = xx < yy ? 0 : 1; }
+      const double nn = hypot(nx, ny);
+      ln[s][0] = (float)(nx / nn); ln[s][1] = (float)(ny / nn); ln[s][2] = (float)((nx * mx + ny * my) / nn);
+    }
+  }
+  return e;
+}
+static int tr_meet_ln(const float *a, const float *b, float *x, float *y) {
+  const float det = a[0] * b[1] - a[1] * b[0];
+  if (fabsf(det) < 1e-6f) return 0;
+  *x = (a[2] * b[1] - a[1] * b[2]) / det; *y = (a[0] * b[2] - a[2] * b[0]) / det;
+  return 1;
+}
+// ai: cv: the image's top, right, bottom and left curves; q: their corners (TL, TR, BR, BL), replaced by the straight
+// ai: lines' corners; lk the bend. 0 where the lines do not meet.
+static int tr_lens(const fline_t *const *cv, float *q, int w, int h, flens_t *lk) {
+  float ax = ob_axis[0], ay = ob_axis[1];
+  if (!(ax == ax) || !(ay == ay)) { ax = w * 0.5f; ay = h * 0.5f; }
+  float R = 0;
+  for (int c = 0; c < 4; c++) { const float d = hypotf((c & 1 ? w : 0) - ax, (c & 2 ? h : 0) - ay); if (d > R) R = d; }
+  const float iR2 = 1 / (R * R), k0 = -0.8f, k1 = 0.8f;
+  float sx[4 * TRL_N], sy[4 * TRL_N];
+  // ai: side s from corner E0[s] to E1[s]; top and bottom curves give y from x, right and left x from y
+  static const int E0[4] = { 0, 1, 3, 0 }, E1[4] = { 1, 2, 2, 3 };
+  for (int s = 0; s < 4; s++) {
+    const float *pa = q + 2 * E0[s], *pb = q + 2 * E1[s];
+    for (int i = 0; i < TRL_N; i++) {
+      const float t = (float)i / (TRL_N - 1);
+      if (s & 1) { const float y = pa[1] + t * (pb[1] - pa[1]); sx[s * TRL_N + i] = line_at(cv[s], y); sy[s * TRL_N + i] = y; }
+      else { const float x = pa[0] + t * (pb[0] - pa[0]); sx[s * TRL_N + i] = x; sy[s * TRL_N + i] = line_at(cv[s], x); }
+    }
+  }
+  enum { NS = 17 };
+  int bi = 0;
+  double be = 1e300;
+  for (int i = 0; i < NS; i++) { const double e = tr_lens_err((k0 + (k1 - k0) * i / (NS - 1)) * iR2, ax, ay, sx, sy, NULL); if (e < be) { be = e; bi = i; } }
+  const float st = (k1 - k0) / (NS - 1), gr = 0.6180339887f;
+  float lo = k0 + st * (bi - 1), hi = k0 + st * (bi + 1), a = hi - gr * (hi - lo), b = lo + gr * (hi - lo);
+  double ea = tr_lens_err(a * iR2, ax, ay, sx, sy, NULL), eb = tr_lens_err(b * iR2, ax, ay, sx, sy, NULL);
+  for (int it = 0; it < 14; it++) {
+    if (ea < eb) { hi = b; b = a; eb = ea; a = hi - gr * (hi - lo); ea = tr_lens_err(a * iR2, ax, ay, sx, sy, NULL); }
+    else { lo = a; a = b; ea = eb; b = lo + gr * (hi - lo); eb = tr_lens_err(b * iR2, ax, ay, sx, sy, NULL); }
+  }
+  const float k = 0.5f * (lo + hi);
+  float ln[4][3], u[8];
+  tr_lens_err(k * iR2, ax, ay, sx, sy, ln);
+  if (!tr_meet_ln(ln[0], ln[3], &u[0], &u[1]) || !tr_meet_ln(ln[0], ln[1], &u[2], &u[3]) || !tr_meet_ln(ln[2], ln[1], &u[4], &u[5]) || !tr_meet_ln(ln[2], ln[3], &u[6], &u[7])) return 0;
+  // ai: a fit whose unbending diverged gives lines of NaN and corners of NaN, which pass every range test after and read
+  // ai: a NaN track score on the scalar and wasm readers (the vector readers clamp a NaN coordinate to pixel 0): refused
+  for (int k = 0; k < 8; k++) if (!isfinite(u[k])) return 0;
+  memcpy(q, u, sizeof u);
+  lk->on = 1; lk->kr = k * iR2; lk->ax = ax; lk->ay = ay;
+  return 1;
+}
+// ai: The finder's lens as the registration's model (lensm_t) about the homography through the corners it hands back
+// ai: (Hb, as acquire_core makes it): the displacement from Hb to the bent straight-sided map (Hu, lk) on a 9 x 9 grid of
+// ai: the layout, fitted by lensm_fit; the anchors' first round searches through it (the Garmin Virb ultrawide's and the
+// ai: GoPro Hero11 wide's frames from 2 and 1 anchors and 0 blocks to 25 and 54 and 53, 2026-11-23)
+static int finder_seed(const ob_layout_t *L, const homo_t *Hu, const flens_t *lk, const float *nc, const float *quad, int iw, int ih, lensm_t *seed) {
+  homo_t Hb;
+  if (!lk->on || !homography(nc, quad, &Hb)) return 0;
+  lensm_axis(iw, ih, seed);
+  enum { G = 9 };
+  double qx[G * G], qy[G * G], dx[G * G], dy[G * G];
+  int np = 0;
+  for (int j = 0; j < G; j++) for (int i = 0; i < G; i++) {
+    const float X = L->w * i / (float)(G - 1), Y = L->h * j / (float)(G - 1);
+    float bu, bv, tu, tv;
+    project(&Hb, X, Y, &bu, &bv);
+    project(Hu, X, Y, &tu, &tv);
+    flens_bend(lk, &tu, &tv);
+    qx[np] = (bu - seed->ax) / seed->R; qy[np] = (bv - seed->ay) / seed->R; dx[np] = tu - bu; dy[np] = tv - bv; np++;
+  }
+  unsigned char drop[G * G] = { 0 };
+  return lensm_fit(np, qx, qy, dx, dy, NULL, drop, 0, LENS_TERMS, seed);
 }
 
 // Finds the frame and its rotation. quad: the four lattice corners in layout order, as image points.
 // Ls: the layouts the symbol may be, which differ only in how many modules a side (lizard_phy.h LIZARD_RING); *which
-// comes back as the one that registered. The mark path scores every one before a hold settles it; the line path tries
-// the first (the 64 ring) first and the others only when it does not register.
-// ai: bin (and cb, the column bits on arm64 and x86-64; NULL elsewhere): buffers for the capture binarized, which the
-// ai: search at scale 1, or the line path, makes there (made); a symbol found at a coarser scale never pays for it. fb:
-// ai: frame_buf's
-static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, uint8_t *bin, uint32_t *cb, ob_fbufs_t *fb, float *quad, int *orient, float *score_out, int *which) {
-  int w = im->w, h = im->h, big = w > h ? w : h, n[4], nl[4], made = 0;
-  fpt_t *pts[4] = { 0 };            // allocated only if the scan runs, which a settled mark quad skips
-  fline_t line[4][SIDE_LINES];
+// comes back as the one that registered. fb: frame_buf's.
+// ai: Two finders of the same four corners from two features of the format, each whole on its own and failing where the
+// ai: other holds (2026-11-24, STATUS "The new C finder in liblizard"): the corner marks proposed from the grey picture
+// ai: (gray_cands), and the ring traced as one loop (trace_quads); the marks fail under blur and on small symbols, the
+// ai: trace past 2:1 of perspective and on lenses the symbol fills. The marks first: once a mark quad holds a rotation
+// ai: (rotation_holds) the trace is not run. A traced quad is read through the lens its sides' bend gives (tr_lens), and a
+// ai: winning one hands that lens on as the anchors' first model (*seed, *seeded). Before it (2026-09 to 2026-11-24) the
+// ai: marks were scanned in the capture binarized at three scales and the border fitted from binarized edge points (the
+// ai: line path); the new finder read the closed-ring sets level or above everywhere (front +2.7%, the lens set +1.5%,
+// ai: the stress spectrum +0.1%, the stress angles +0.4%, the judge's angles -0.1%) at a third of the time on a
+// ai: symbol, empty frames a third slower (one x86 core; research/build/rewrite-2026-11-23/README.md).
+static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, ob_fbufs_t *fb, float *quad, int *orient, float *score_out, int *which, lensm_t *seed, int *seeded) {
+  const int w = im->w, h = im->h;
   float best = -1, src[8], dst[8];
   int ok = 1;
   double tp = ob_now_ms();
   // The corner a layout side runs between, in the direction its modules count. Shared with the combination loop.
   static const int ENDS[4][2] = { { 0, 1 }, { 1, 2 }, { 3, 2 }, { 0, 3 } };
-  // The corner marks' quads, scored on the same scale as the line quads and tried FIRST. Once one has settled there
-  // is nothing for the 81 line combinations to add, only a chance for a wrong line quad (a bar, a merged run's
-  // ragged inner edge) to outscore a right one, and most of the finder's time to spend doing it. The line fit reads
-  // the frames no mark quad holds, most of them far off: without it the simulated lens set's roots read 10.95% fewer
-  // blocks, the far cells at 0.3 of the crop 94% fewer (2026-11-07).
-  //
-  // The gapped form, then the merged one only if that settled nothing, and within a form every quad, the TRACK
-  // choosing between them. Spacing cannot choose: a noisy background holds four grains at any spacing asked for, and
-  // only the symbol has a track between them. The best reading of the set wins, not the first to reach 0.15: taking
-  // the first lost 2 of 32 clean simulator frames of LIZARD-16, a format since removed (scripts/exp/fmt_word.mjs DAMAGE), to a mirror image of a wrong
-  // quad at 0.16, ahead of the true quad at 0.49 the right way round. A set is MARK_QUADS quads, so this is at most
-  // 32 hypotheses, what a set that settled nothing always cost, and thin_score stops reading one that cannot win.
-  //
-  // Then the same again on the image halved and quartered. binarize calls a pixel dark against the mean of its
-  // 40 px neighbourhood, so a mark whose core outgrows that window is light in the middle and fails its solidity
-  // probes: a 94-module symbol (the 32 ring, since removed) at 1080 fill 0.7 is 8 px a module and its cores are 48 px, and at 30 degrees the
-  // near marks were not found at all. A full-scale scan alone had sufficed for the 286-module side, where a core
-  // only reaches the window at very close range.
-  float msrc[8];
-  cand_t *mcand = malloc((size_t)MAX_CAND * sizeof(cand_t) + CAND_XY);
-  mquad_t mq[MARK_QUADS];
-  // ai: the capture halved (half) and quartered (quarter), each made where a search first needs it
-  uint8_t *half = NULL, *quarter = NULL, *lbin = NULL;
-  const uint32_t *scb = cb;   // the column bits of the scale's image (arm64, x86-64)
-  int lv[3];
-  const int nlv = mark_levels(Ls, nL, w, h, lv);
-  *which = 0;
+  fctx_t f = { fb, { im->px }, w, h, { 0 } };
+  *which = 0; *seeded = 0;
   for (int k = 0; k < 8; k++) ob_finder_info[k] = k == 5 || k == 7 ? 0 : -1;
-  for (int il = 0; mcand && il < nlv && !rotation_holds(best, *orient); il++) {
+  // THE CORNER MARKS, coarse to fine, each level's candidates read as the merged square and as the core, every quad the
+  // track choosing between them. Spacing cannot choose: a noisy background holds four grains at any spacing asked for,
+  // and only the symbol has a track between them. The best reading of the set wins, not the first to reach 0.15: taking
+  // the first lost 2 of 32 clean simulator frames of LIZARD-16 (since removed) to a mirror image of a wrong quad at
+  // 0.16, ahead of the true quad at 0.49 the right way round.
+  // ai: A quad's contrast gate is read near its corners (thin_levels_near): once with hypothesis 0's map, a quad that
+  // ai: fails it not scored at all (a turn or flip only permutes the sides it reads), then for each hypothesis, whose ref
+  // ai: and con thin_score takes.
+  float msrc[8];
+  cand_t *gc = malloc((size_t)2 * GRAY_MAX * sizeof(cand_t));
+  float rc[GRAY_MAX];
+  mquad_t mq[MARK_QUADS];
+  int lv[5];
+  const int nlv = gray_levels(w, h, lv);
+  for (int il = 0; gc && il < nlv && !rotation_holds(best, *orient); il++) {
     const int scale = lv[il];
-    const uint8_t *sbin = bin;
-    const int sw = w / scale, sh = h / scale;
-    if (scale == 1) {
-      if (!made) { PROF(PROF_BINARIZE, binarize(im->px, w, h, bin, cb, fb)); made = 1; }
-      scb = cb;
-    } else {
-      // ai: a scale under 64 px a side is left out; a finer one may follow
-      if (sw < 64 || sh < 64) continue;
-      if (!half && !(half = shrink2(im->px, w, h, fb, OB_FB_HALF))) break;
-      if (scale == 4 && !quarter && !(quarter = shrink2(half, w / 2, h / 2, fb, OB_FB_QUARTER))) break;
-      const uint8_t *grey = scale == 2 ? half : quarter;
-      frame_buf_done(fb, lbin);
-      if (!(lbin = frame_buf(fb, OB_FB_LBIN, (size_t)sw * sh))) break;
-#if defined(OB_NEON) || defined(OB_X86)
-      uint32_t *lcb = frame_buf(fb, OB_FB_LCB, (size_t)((sh + 31) / 32) * sw * sizeof(uint32_t) + 16);
-      if (!lcb) break;
-      scb = lcb;
-      PROF(PROF_BINARIZE, binarize(grey, sw, sh, lbin, lcb, fb));
-#else
-      PROF(PROF_BINARIZE, binarize(grey, sw, sh, lbin, NULL, fb));
-#endif
-      sbin = lbin;
-    }
-    // A third form reads the merged scan's squares again, as the CORE of a sharp mark. The merged scan finds any
-    // solid dark square bounded by light, and on a sharp capture the one it finds at a mark is its 6-module core,
-    // which the gap still separates from the line: read as a closed 10-module mark, its module size comes out
-    // 0.6 of the truth and its middle two modules off, and mark_quads refuses the real quad on spacing. The gapped
-    // form cannot stand in: its row cross-section, line then gap then core, and its solidity probes assume the
-    // mark nearly square to the rows, and past about 25 degrees of in-plane turn it stops finding marks at all
-    // (traced on LIZARD-16, since removed: 8 to 12 rows a mark at 20 degrees, 1 or 2 at 30, a mark missing outright at 30 and
-    // 35), where the merged scan still finds all four, 15 to 17 rows each, within half a pixel. The square test is
-    // a run and a column and four probes near the middle, none of which cares how the square is turned. No new
-    // scan: the candidates are the merged form's, their module size rescaled.
-    int nmark = 0;
-    for (int form = 0; form < 3 && !rotation_holds(best, *orient); form++) {
-    if (form < 2) PROF(PROF_FF_MARKS, nmark = mark_scan(Ls[0], sbin, scb, sw, sh, scale, form, mcand));
-    else {
-      const int core = mark_core(Ls[0]), sq = Ls[0]->corner - 2;
-      for (int k = 0; k < nmark; k++) mcand[k].unit *= (float)sq / core;
-    }
-    mpool_t pool;
-    mark_pool(mcand, nmark, &pool);
-    for (int li = 0; li < nL; li++) {
-    const ob_layout_t *L = Ls[li];
-    const int nq = mark_rect(L, &pool, nmark, w, h, form, msrc, mq);
-    if (form == 0 && scale == 1 && li == 0) ob_finder_info[7] = (float)nq;
-    for (int h0 = 0; h0 < 8 && !(h0 == 4 && rotation_holds(best, *orient)); h0 += 4)
-    for (int qi = 0; qi < nq; qi++) for (int hyp = h0; hyp < h0 + 4; hyp++) {
-      int rot = hyp & 3, mir = hyp >> 2;
-      float d2[8], ref = 0, con = 0, nc[8];
-      homo_t H;
-      for (int k = 0; k < 4; k++) { int from = (rot + (mir ? 4 - k : k)) & 3; d2[2 * k] = mq[qi].q[from].x; d2[2 * k + 1] = mq[qi].q[from].y; }
-      if (!homography(msrc, d2, &H)) continue;
-      int lev;
-      PROF(PROF_FF_TRACK, lev = thin_levels(L, im, &H, &ref, &con));
-      if (!lev) continue;
-      float sc;
-      PROF(PROF_FF_TRACK, sc = thin_score(L, im, &H, ref, con, best));
-      if (sc <= best) continue;
-      best = sc; *orient = hyp; *which = li;
-      ob_finder_info[0] = best; ob_finder_info[1] = (float)hyp; ob_finder_info[2] = (float)form; ob_finder_info[3] = (float)qi; ob_finder_info[4] = 0;
-      corner_coords(L, nc);
-      for (int k = 0; k < 4; k++) project(&H, nc[2 * k], nc[2 * k + 1], &quad[2 * k], &quad[2 * k + 1]);
-    }
-    }
+    int ng;
+    PROF(PROF_FF_GREY, ng = gray_cands(&f, scale, gc, rc));
+    cand_t *mc = gc + GRAY_MAX;
+    for (int form = 1; form < 3 && !rotation_holds(best, *orient); form++) {
+      gray_form(gc, rc, ng, form, mc);
+      mpool_t pool;
+      mark_pool(mc, ng, &pool);
+      for (int li = 0; li < nL; li++) {
+        const ob_layout_t *L = Ls[li];
+        const int nq = mark_rect(L, &pool, ng, w, h, form, msrc, mq);
+        if (form == 1 && il == 0 && li == 0) ob_finder_info[7] = (float)nq;
+        unsigned qok = 0;
+        for (int qi = 0; qi < nq; qi++) {
+          float d0[8], r0, c0;
+          homo_t H0;
+          for (int k = 0; k < 4; k++) { d0[2 * k] = mq[qi].q[k].x; d0[2 * k + 1] = mq[qi].q[k].y; }
+          int lev = 0;
+          if (homography(msrc, d0, &H0)) PROF(PROF_FF_TRACK, lev = thin_levels_near(L, im, &H0, &r0, &c0));
+          if (lev) qok |= 1u << qi;
+        }
+        for (int h0 = 0; h0 < 8 && !(h0 == 4 && rotation_holds(best, *orient)); h0 += 4)
+        for (int qi = 0; qi < nq; qi++) for (int hyp = h0; hyp < h0 + 4; hyp++) {
+          if (!(qok >> qi & 1)) continue;
+          const int rot = hyp & 3, mir = hyp >> 2;
+          float d2[8], ref = 0, con = 0, nc[8];
+          homo_t H;
+          for (int k = 0; k < 4; k++) { const int from = (rot + (mir ? 4 - k : k)) & 3; d2[2 * k] = mq[qi].q[from].x; d2[2 * k + 1] = mq[qi].q[from].y; }
+          if (!homography(msrc, d2, &H)) continue;
+          int lev;
+          PROF(PROF_FF_TRACK, lev = thin_levels_near(L, im, &H, &ref, &con));
+          if (!lev) continue;
+          float sc;
+          PROF(PROF_FF_TRACK, sc = thin_score(L, im, &H, ref, con, best));
+          if (sc <= best) continue;
+          best = sc; *orient = hyp; *which = li;
+          ob_finder_info[0] = best; ob_finder_info[1] = (float)hyp; ob_finder_info[2] = (float)form; ob_finder_info[3] = (float)qi; ob_finder_info[4] = 0;
+          corner_coords(L, nc);
+          for (int k = 0; k < 4; k++) project(&H, nc[2 * k], nc[2 * k + 1], &quad[2 * k], &quad[2 * k + 1]);
+        }
+      }
     }
   }
-  free(mcand); frame_buf_done(fb, half); frame_buf_done(fb, quarter); frame_buf_done(fb, lbin);
+  free(gc);
   ob_finder_info[5] = rotation_holds(best, *orient); ob_finder_info[6] = best;
   if (rotation_holds(best, *orient)) ok = 0;
   ob_prof_ms[PROF_FF_SCORE] += ob_now_ms() - tp; tp = ob_now_ms();
-  // THE SCAN AND THE LINE FIT, only if the marks settled nothing. A settled mark quad already cleared `ok`,
-  // which skipped the 81 combinations below; what it could not skip was the scan and the fit that feed them,
-  // and those were being paid for on every capture. Hoisting the marks above them changes no output (mark_rect
-  // reads `bin` and its own candidate array, never `pts`), so this is the same finder with the wasted half of it skipped when it is wasted.
+  // THE TRACED BORDER, only if the marks settled nothing.
+  tquad_t *tq = NULL;
+  int nct = 0;
+  // ai: each traced quad's lens, fitted once (its passes read the same curves): 0 not yet, 1 fitted, 2 refused
+  struct { int state; flens_t lk; float q[8]; } *lc = NULL;
   if (ok) {
-  // ai: the line path reads the capture binarized at full resolution (made already unless no mark search reached scale 1)
-  if (!made) { PROF(PROF_BINARIZE, binarize(im->px, w, h, bin, cb, fb)); made = 1; tp = ob_now_ms(); }
-  // Sides in layout order top, right, bottom, left. Rows give left (near) and right (far); the transposed image gives top and bottom.
-  // Contrast floor: a quarter of the picture's own range (5th to 95th percentile of a coarse grid).
-  int hist[256] = { 0 }, cnt = 0, p5 = 0, p95 = 255, acc = 0;
-  for (int y = 4; y < h; y += 8) for (int x = 4; x < w; x += 8) { hist[im->px[y * w + x]]++; cnt++; }
-  for (int v = 0; v < 256; v++) { acc += hist[v]; if (acc * 20 < cnt) p5 = v; if (acc * 20 < cnt * 19) p95 = v; }
-  int min_con = (p95 - p5) / 4 < 12 ? 12 : (p95 - p5) / 4;
-  for (int s = 0; s < 4; s++) pts[s] = malloc((size_t)(big / 2 + 1) * SIDE_K * sizeof(fpt_t));
-  edge_ctx_t ctx;
-  if (edge_ctx_init(&ctx, im->px, w, h, min_con, fb)) { for (int s = 0; s < 4; s++) free(pts[s]); return 0; }
-  row_points(bin, w, h, &ctx, pts[3], &n[3], pts[1], &n[1]);
-  ob_prof_ms[PROF_FF_POINTS] += ob_now_ms() - tp; tp = ob_now_ms();
-  col_points(bin, w, h, &ctx, pts[0], &n[0], pts[2], &n[2]);
-  ob_prof_ms[PROF_FF_TURN] += ob_now_ms() - tp; tp = ob_now_ms();
-  frame_buf_done(fb, ctx.buf);
-#ifdef OB_VERIFY_POINTS
-  {
-    int *pos = malloc(((size_t)big + 2) * sizeof(int)), m[4];
-    uint8_t *tr = malloc((size_t)w * h);
-    fpt_t *ref[4];
-    for (int s = 0; s < 4; s++) ref[s] = malloc((size_t)(big / 2 + 1) * SIDE_K * sizeof(fpt_t));
-    side_points(bin, w, h, im->px, 1, w, min_con, pos, ref[3], &m[3], ref[1], &m[1]);
-    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) tr[x * h + y] = bin[y * w + x];
-    side_points(tr, h, w, im->px, w, 1, min_con, pos, ref[0], &m[0], ref[2], &m[2]);
-    for (int s = 0; s < 4; s++) {
-      int bad = m[s] != n[s];
-      for (int k = 0; !bad && k < n[s]; k++) bad = ref[s][k].along != pts[s][k].along || ref[s][k].across != pts[s][k].across || ref[s][k].rank != pts[s][k].rank;
-      if (bad) { printf("OB_VERIFY_POINTS: side %d differs (%d candidates against %d), image %d x %d\n", s, n[s], m[s], w, h); abort(); }
-      free(ref[s]);
-    }
-    free(pos); free(tr);
+    // Contrast floor: 0.35 of the picture's own range (5th to 95th percentile of a coarse grid), 12 at least.
+    int hist[256] = { 0 }, cnt = 0, p5 = 0, p95 = 255, acc = 0;
+    for (int y = 4; y < h; y += 8) for (int x = 4; x < w; x += 8) { hist[im->px[y * w + x]]++; cnt++; }
+    for (int v = 0; v < 256; v++) { acc += hist[v]; if (acc * 20 < cnt) p5 = v; if (acc * 20 < cnt * 19) p95 = v; }
+    const int min_con = (int)((p95 - p5) * 0.35f) < 12 ? 12 : (int)((p95 - p5) * 0.35f);
+    tq = malloc((size_t)TR_MAXQ * sizeof(tquad_t));
+    lc = calloc(TR_MAXQ, sizeof *lc);
+    if (tq && lc) PROF(PROF_FF_TRACE, nct = trace_quads(&f, min_con, tq, TR_MAXQ));
+    ok = nct > 0;
+    tp = ob_now_ms();
   }
-#endif
-  // Strict: the border's points scatter by half a pixel, and with a loose tolerance a line that only crosses
-  // the border gathers nearly as many as the border does. A lens's bow is the curve fit's business, which
-  // grows outwards from whatever stretch the straight line holds.
-  float tol = 1.5f;
-  for (int s = 0; s < 4; s++) { nl[s] = fit_lines(pts[s], n[s], tol, 0.12f * (s & 1 ? h : w), line[s]); ok &= nl[s] > 0; }
-  ob_prof_ms[PROF_FF_FIT] += ob_now_ms() - tp; tp = ob_now_ms();
-  }
-  int combos = SIDE_LINES * SIDE_LINES * SIDE_LINES * SIDE_LINES;
-  // The lines are the image's and serve every layout; the track that judges them is each layout's own.
+  // The quads are the image's and serve every layout; the track that judges them is each layout's own.
   for (int li = 0; ok && li < nL && !rotation_holds(best, *orient); li++) {
   const ob_layout_t *L = Ls[li];
   // One reading serves every way round on a square, where a turn or a flip lands each side on another's.
@@ -4844,37 +4237,43 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
   if (!track_s || !track_sign) { free(track_s); free(track_sign); break; }
   for (int sd = 0; sd < 4; sd++) for (int i = 0; i < npts; i++) track_sign[sd * npts + i] = (int8_t)ob_thin_track(sd, i);
 #endif
-  // Two passes, one per depth the curves may run at (de). Blur is the same all round the symbol, so
-  // the four sides share one state and this is two hypotheses, not sixteen. The second runs only when the first
-  // settled nothing, so a capture sharp enough for the gap to survive pays for one.
+  // Three passes, one per depth the traced edge may run at (de: the ring's inner edge, the picture's edge once the gap has
+  // blurred into the band, the ring's outer edge). Blur is the same all round the symbol, so the four sides share one
+  // state. A pass runs only when the ones before settled nothing.
   //
-  // Every combination is scored under every rotation, and the best of them all wins. Until 2026-09-24 the first
-  // combination to reach 0.15 fixed the rotation and the rest were scored under it alone, so a wrong combination
-  // read passably one way round shut the true one out. One read serves all eight ways round, so this costs reading
-  // each side both ways, not eight reads: on the line path a decode at n = 1024 went from 15.5 to 15.8 ms (an ideal
-  // image, mark cores painted out).
-  for (int pass = 0; pass < 2 && !(pass && rotation_holds(best, *orient)); pass++) {
-  const float de = pass ? OB_THIN : 1 + OB_THIN_LINE;   // OB_THIN: the picture's edge, which is what line, track and ring merge to
+  // Every quad is scored under every rotation, and the best of them all wins. Until 2026-09-24 the first to reach 0.15
+  // fixed the rotation and the rest were scored under it alone, so a wrong quad read passably one way round shut the
+  // true one out. One read serves all eight ways round, so this costs reading each side both ways, not eight reads.
+  for (int pass = 0; pass < 3 && !(pass && rotation_holds(best, *orient)); pass++) {
+  const float de = pass == 2 ? 1 : pass ? OB_THIN : 1 + OB_THIN_LINE;
   { const float e = de, se[8] = { e, e, L->w - e, e, L->w - e, L->h - e, e, L->h - e }; memcpy(src, se, sizeof src); }
-  for (int combo = 0; ok && combo < combos; combo++) {
-    int pick[4] = { combo % SIDE_LINES, (combo / SIDE_LINES) % SIDE_LINES, (combo / (SIDE_LINES * SIDE_LINES)) % SIDE_LINES, combo / (SIDE_LINES * SIDE_LINES * SIDE_LINES) }, skip = 0;
-    for (int s = 0; s < 4; s++) skip |= pick[s] >= nl[s];
-    if (skip) continue;
-    const fline_t *T = &line[0][pick[0]], *Rr = &line[1][pick[1]], *B = &line[2][pick[2]], *Lf = &line[3][pick[3]];
+  for (int combo = 0; ok && combo < nct; combo++) {
+    const fline_t *T = &tq[combo].in[0], *Rr = &tq[combo].in[1], *B = &tq[combo].in[2], *Lf = &tq[combo].in[3];
     float q[8];
-    meet(Lf, T, &q[0], &q[1]); meet(Rr, T, &q[2], &q[3]); meet(Rr, B, &q[4], &q[5]); meet(Lf, B, &q[6], &q[7]);
-    if (q[2] - q[0] < 0.1f * w || q[7] - q[1] < 0.1f * h) continue;
+    if (!lc[combo].state) {
+      meet(Lf, T, &q[0], &q[1]); meet(Rr, T, &q[2], &q[3]); meet(Rr, B, &q[4], &q[5]); meet(Lf, B, &q[6], &q[7]);
+      int fin = 1;
+      for (int k = 0; k < 8; k++) fin &= isfinite(q[k]);
+      const fline_t *c4[4] = { T, Rr, B, Lf };
+      PROF(PROF_FF_LENS, lc[combo].state = fin && tr_lens(c4, q, w, h, &lc[combo].lk) ? 1 : 2);
+      memcpy(lc[combo].q, q, sizeof q);
+    }
+    if (lc[combo].state != 1) continue;
+    const flens_t *lk = &lc[combo].lk;
+    memcpy(q, lc[combo].q, sizeof q);
+    if (q[2] - q[0] < TR_MIN * w || q[7] - q[1] < TR_MIN * h) continue;
     float wide = 0.5f * ((q[2] - q[0]) + (q[4] - q[6])), tall = 0.5f * ((q[7] - q[1]) + (q[5] - q[3]));
     if (wide > 2 * tall || tall > 2 * wide) continue;
     memcpy(dst, q, sizeof q);
-    const fline_t *cv[4] = { T, Rr, B, Lf };
     float pair[8], con = 0;
     int nref = 0;
     homo_t H0;
     // The track is read once, the way up the quad is and both ways along each side (thin_read_both), and each
     // hypothesis takes its sides from that reading with its own threshold and signs: the score its own map gives,
     // without eight reads. The one that wins gets its own homography for the corners it hands back.
-    if (!homography(src, dst, &H0) || !(con = thin_read_both(L, im, &H0, cv, de, track_s, pair, npts, &nref))) continue;
+    if (!homography(src, dst, &H0)) continue;
+    PROF(PROF_FF_TRACK, con = thin_read_both(L, im, &H0, lk, track_s, pair, npts, &nref));
+    if (!con) continue;
 #if defined(OB_NEON) || defined(OB_X86)
     float hsc[8];
     int scored = 0;
@@ -4922,10 +4321,12 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
       if (!homography(src, d2, &H)) continue;
       best = sc; *orient = hyp; *which = li;
       ob_finder_info[0] = best; ob_finder_info[1] = (float)hyp; ob_finder_info[4] = 1;
-      // Hand back the lattice's own corners, which sit half a module further in than the line's middle.
+      // Hand back the lattice's own corners, which sit half a module further in than the line's middle, in the image:
+      // bent by the lens, which then seeds the anchors' first round.
       float nc[8];
       corner_coords(L, nc);
-      for (int k = 0; k < 4; k++) project(&H, nc[2 * k], nc[2 * k + 1], &quad[2 * k], &quad[2 * k + 1]);
+      for (int k = 0; k < 4; k++) { project(&H, nc[2 * k], nc[2 * k + 1], &quad[2 * k], &quad[2 * k + 1]); flens_bend(lk, &quad[2 * k], &quad[2 * k + 1]); }
+      *seeded = finder_seed(L, &H, lk, nc, quad, w, h, seed);
     }
   }
   }
@@ -4936,7 +4337,8 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
 #endif
   }
   ob_prof_ms[PROF_FF_SCORE] += ob_now_ms() - tp;
-  for (int s = 0; s < 4; s++) free(pts[s]);
+  free(tq); free(lc);
+  fctx_done(&f);
   *score_out = best;
   return best >= 0.06f;
 }
@@ -4949,7 +4351,7 @@ static int find_frame(const ob_layout_t *const *Ls, int nL, const image_t *im, u
 // and 3 outside, the coarse search's module and a half included, through H and a few pixels wider. Blurring the
 // whole frame instead cost 1.5 to 1.9 ms of a 3 to 4 ms acquisition at 1080; outside the band nothing reads it,
 // and what is there is the image itself.
-// ai: spare: a buffer of iw x ih bytes to write the copy into (arm64 hands it the binarized picture's, whose pages are
+// ai: spare: a buffer of iw x ih bytes to write the copy into (arm64 and x86-64 hand it the workspace's, whose pages are
 // ai: already the process's: a fresh one's first touches were most of the copy's time on an S26), or NULL for a new one
 static uint8_t *border_blur(const ob_layout_t *L, const homo_t *H, const uint8_t *img, int iw, int ih, int r, uint8_t *spare) {
   uint8_t *out = spare ? spare : malloc((size_t)iw * ih);
@@ -5007,28 +4409,20 @@ static int acquire_core(const ob_layout_t *const *Ls, int nL, const image_t *pim
   const uint8_t *img = im.px;
   int iw = im.w, ih = im.h;
   reg->nodes = NULL;
-  uint8_t *bin = in_quad ? NULL : frame_buf(fb, OB_FB_BIN, (size_t)iw * ih);
-#if defined(OB_NEON) || defined(OB_X86)
-  uint32_t *cb = in_quad ? NULL : frame_buf(fb, OB_FB_CB, (size_t)((ih + 31) / 32) * iw * sizeof(uint32_t) + 16);
-  if (!in_quad && !cb) { frame_buf_done(fb, bin); return 0; }
-#else
-  uint32_t *cb = NULL;
-#endif
-  int got = 0, thin_orient = -1;
+  int got = 0, thin_orient = -1, seeded = 0;
   float thin_quad[8], thin_sc = 0;
+  lensm_t seed;   // ai: the finder's lens, a traced quad's: the anchors' first model where seeded
   if (in_quad) { memcpy(thin_quad, in_quad, sizeof thin_quad); thin_orient = in_orient; thin_sc = in_score; got = 1; }
   else {
-    // ai: the finder binarizes the capture into bin where its search reaches scale 1 (find_frame)
-    PROF(PROF_FINDERS, got = find_frame(Ls, nL, &im, bin, cb, fb, thin_quad, &thin_orient, &thin_sc, which));
+    PROF(PROF_FINDERS, got = find_frame(Ls, nL, &im, fb, thin_quad, &thin_orient, &thin_sc, which, &seed, &seeded));
     L = Ls[*which];
   }
+  if (!got) return 0;
 #if defined(OB_NEON) || defined(OB_X86)
-  frame_buf_done(fb, cb);
+  uint8_t *bin = frame_buf(fb, OB_FB_BLUR, (size_t)iw * ih);   // ai: border_blur's copy, in the workspace's buffer
 #else
-  frame_buf_done(fb, bin);
-  bin = NULL;
+  uint8_t *bin = NULL;   // ai: border_blur allocates its own where it blurs
 #endif
-  if (!got) { frame_buf_done(fb, bin); return 0; }
 
   double tm = ob_now_ms();
   float src[8];
@@ -5050,8 +4444,7 @@ static int acquire_core(const ob_layout_t *const *Ls, int nL, const image_t *pim
     mpx += hypotf(res->quad[2 * k1] - res->quad[2 * k], res->quad[2 * k1 + 1] - res->quad[2 * k + 1]) / hypotf(src[2 * k1] - src[2 * k], src[2 * k1 + 1] - src[2 * k + 1]) / 4;
   }
   // ai: a box radius of at least one pixel, tested before the conversion (a NaN mpx blurs nothing, as before)
-  // ai: on arm64 and x86-64 the copy goes into the binarized picture's buffer (bin, the workspace's), which the finder is
-  // ai: done with
+  // ai: on arm64 and x86-64 the copy goes into the workspace's buffer (bin)
   if (mpx / 2 >= 1 && (blurred = border_blur(L, &H, img, iw, ih, (int)(mpx / 2), bin))) rim.px = blurred;
   // Finders first, so the homography the marks are measured against is as good as four
   // points can make it.
@@ -5071,7 +4464,7 @@ static int acquire_core(const ob_layout_t *const *Ls, int nL, const image_t *pim
   // ai: below starts from
   anchor_t anchors[OB_ANCH_K * OB_ANCH_K];
   lensm_t alm;
-  const int have_alm = anchor_register(L, &im, &rim, &H, iw, ih, mpx, res->quad, nodes, anchors, &alm);
+  const int have_alm = anchor_register(L, &im, &rim, &H, iw, ih, mpx, res->quad, nodes, anchors, &alm, seeded ? &seed : NULL);
   ob_anch_found = 0;
   for (int k = 0; k < OB_ANCH_K * OB_ANCH_K; k++) ob_anch_found += anchors[k].ok;
   // Rings outward from the corners, so each mark starts from measured neighbours.

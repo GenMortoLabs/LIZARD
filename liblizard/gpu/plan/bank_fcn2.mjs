@@ -1,4 +1,4 @@
-// ai: F2's plan (glsl/bank_fcn2.mjs fcn2Source, the proposer version 2): the net's arch from its file, the forms a
+// ai: F2's plan (slang/bank_fcn2.mjs fcn2Source, the proposer version 2): the net's arch from its file, the forms a
 // ai: device can be given and their workgroup memory (fcn2Layout), the literals the int8 form needs exact, and the
 // ai: constants the host (../bank_fcn2.mjs) and ../../gen/gen.mjs read.
 import { KEEP } from "./bank.mjs";
@@ -52,8 +52,8 @@ export function fcn2Plan(json) {
   return { convs, head, K, R, halo, eps: arch.eps, nominal: arch.nominal, floor: arch.floor ?? TAU, macs };
 }
 
-// ai: An f32 literal (WGSL's and GLSL's): nine significant digits give an f32 back. roundHalf, lit9, exactF32, quantOf
-// ai: and the plan and layout are the GLSL twin's too (../glsl/bank_fcn2.mjs).
+// ai: An f32 literal in a kernel's text: nine significant digits give an f32 back. roundHalf, lit9, exactF32, quantOf,
+// ai: the plan and the layout are the Slang module's (../slang/bank_fcn2.mjs).
 export const lit9 = (v) => { let s = (+v).toPrecision(9); if (!/[.e]/.test(s)) s += ".0"; return s; };
 // ai: int8 literals. An f32 the contract multiplies by must reach the kernel as that f32 exactly (checked here); a
 // ai: weight word is four codes packed as pack4xI8 packs them.
@@ -136,6 +136,6 @@ export function fcn2Forms(json, { f16 = false, int8 = false } = {}) {
 
 // Workgroup memory a source declares, bytes (the comment the source carries says the same).
 export function fcn2Bytes(src) {
-  const m = src.match(/(\d+) bytes of workgroup memory/);
+  const m = (typeof src === "string" ? src : src.slang).match(/(\d+) bytes of workgroup memory/);
   return m ? +m[1] : 0;
 }

@@ -38,8 +38,8 @@ struct CpuFrameOut {
   bool found = false;             // ai: the finder registered a symbol
   int ring = -1, n = 0;           // ai: the ring, and the picture the frame was finished at (0: not finished)
   bool hasWord = false;
-  int version = 0;                // ai: the frame's own word (codec.h cpu_frame_t): its version and its 6/7, 2/3 and 1/2 blocks
-  int count[3] = {0, 0, 0};
+  int version = 0;                // ai: the frame's own word (codec.h cpu_frame_t): its version and its 6/7, 3/4, 2/3 and 1/2 blocks
+  int count[4] = {0, 0, 0, 0};
   int fps = 0, delay = 0;          // ai: the sender's clock its word states (src/fmt.h), 0 where none
   float quad[8] = {};             // ai: the symbol's corners in the crop, TL TR BR BL
   int pilotSubch = 0;             // ai: the pilots (codec.h pilot_*): the sub-channels read (0 none), r and its standard

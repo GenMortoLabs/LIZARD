@@ -15,8 +15,8 @@
 enum { LIZARD_ANY_PICS = 2 };
 typedef struct {
   lizard_t ring[LIZARD_RINGS], pic[LIZARD_ANY_PICS];
-  // ai: a picture codec a (ring, sub-channel count): each count's rate profile is its own (lizard_phy.h lizard_tiers_for), so
-  // ai: a frame decodes on its version's codec, not as a prefix of its picture's top
+  // ai: a picture codec a (ring, sub-channel count): a frame decodes on its version's codec at its word's layout
+  // ai: (lizard_phy.h lizard_layout), not as a prefix of its picture's top
   int ready, nmax, pic_ring[LIZARD_ANY_PICS], pic_n[LIZARD_ANY_PICS], pic_subch[LIZARD_ANY_PICS], pic_used[LIZARD_ANY_PICS], pic_clock;
   int which;               // the ring the last frame registered in, -1 none
   int n;                   // the picture it was finished at, 0 none

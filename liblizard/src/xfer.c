@@ -35,9 +35,9 @@ int xfer_header_init(xfer_header_t *h, uint64_t length, int sb_log2) {
   return 0;
 }
 
-// What every description is held to: the form and the length.
+// What every description is held to: the hash, the source block size and the length.
 static int consistent(const xfer_header_t *h) {
-  if (h->hash != XFER_HASH_BLAKE3) return XFER_ERR_HASH;
+  if (h->hash != XFER_HASH_BLAKE3) return XFER_ERR;
   if (h->sb_log2 < XFER_LOG2_MIN || h->sb_log2 > XFER_LOG2_MAX) return XFER_ERR;
   if (h->source_blocks != xfer_source_blocks(h->length, h->sb_log2) || (h->length && !h->source_blocks)) return XFER_ERR;
   return 0;
@@ -107,7 +107,6 @@ static size_t cb_put(uint8_t *out, int mt, uint64_t v) {
   for (int i = 0; i < w; i++) out[1 + i] = (uint8_t)(v >> 8 * (w - 1 - i));
   return (size_t)(1 + w);
 }
-// ai: a head's bytes in its shortest form
 // ai: an integer key's head into out
 static size_t cb_put_key(uint8_t *out, int key) { return key >= 0 ? cb_put(out, CB_UINT, (uint64_t)key) : cb_put(out, CB_NINT, (uint64_t)(-1 - key)); }
 
@@ -126,7 +125,7 @@ int xfer_same_file(const xfer_header_t *a, const xfer_header_t *b) {
 int xfer_session_parse(const uint8_t *payload, xfer_session_t *s) {
   memset(s, 0, sizeof *s);
   // ai: the description, one CBOR map from byte 0; the bytes past it are a sender's to write as 0 and a receiver's to
-  // ai: ignore (2026-11-20, IP's rule: a later field there is read by receivers already in the field)
+  // ai: ignore (a later field is a key of the map's own, xfer.h)
   int mt;
   uint64_t a;
   if (cb_head(payload, XFER_PAYLOAD, &mt, &a) < 0 || mt != CB_MAP) return XFER_ERR;
@@ -278,8 +277,9 @@ int xfer_desc_write(const xfer_header_t *h, uint8_t *out) {
   return (int)n;
 }
 
-// ai: the keys of one map seen (a key twice refuses it): keys from -32 to 31 a bit each, others in a short list
-typedef struct { uint64_t bits; int64_t far[8]; int nfar; } keys_t;
+// ai: the keys of one map seen (a key twice refuses it): keys from -32 to 31 a bit each, others in a list as long as a
+// ai: description can hold pairs (each at least two bytes), so no count of keys is refused
+typedef struct { uint64_t bits; int64_t far[XFER_DESC_MAX / 2]; int nfar; } keys_t;
 static int key_seen(keys_t *k, int64_t key) {
   if (key >= -32 && key < 32) {
     const uint64_t b = 1ull << (key + 32);
@@ -288,7 +288,7 @@ static int key_seen(keys_t *k, int64_t key) {
     return 0;
   }
   for (int i = 0; i < k->nfar; i++) if (k->far[i] == key) return 1;
-  if (k->nfar == 8) return 1;   // ai: more than eight keys outside -32 .. 31: refused as a duplicate would be
+  if (k->nfar == (int)(sizeof k->far / sizeof k->far[0])) return 1;   // ai: unreachable within XFER_DESC_MAX
   k->far[k->nfar++] = key;
   return 0;
 }

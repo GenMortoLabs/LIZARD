@@ -1,4 +1,4 @@
-// ai: The sender's blocks made on the GPU (gpu_stream.h), its kernel gpu/wgsl/rq_enc.mjs BLOCKS.
+// ai: The sender's blocks made on the GPU (gpu_stream.h), its kernel gpu/slang/src/send_rq_blocks.slang.
 #include "gpu_stream.h"
 
 #include <algorithm>
@@ -23,7 +23,7 @@ namespace {
 constexpr uint32_t T = XFER_PAYLOAD, SB = 480;
 // ai: the upload slots: a source block's symbols each, the workers waiting for one while the recording thread copies
 constexpr uint32_t SLOTS = 4;
-// ai: TAB's layout (gpu/wgsl/rq_enc.mjs TAB_DEG, TAB_PLANS, TAB_PLAN)
+// ai: TAB's layout (gpu/plan/send.mjs TAB_DEG, TAB_PLANS, TAB_PLAN)
 constexpr uint32_t TAB_DEG = 1024, TAB_PLANS = 1056, TAB_PLAN = 8;
 // ai: the self-test's source block (K 218 at 460 B) and its ESIs past the first source symbols
 constexpr size_t SELF_BYTES = 100000;
@@ -61,7 +61,7 @@ void spread(const uint8_t* C, uint32_t L, uint8_t* out) {
 }  // namespace
 
 std::unique_ptr<GpuStream> GpuStream::create(wg::Device& d, const std::string& assets, const File& f) {
-  if (!f.sourceBlocks || !f.sbBytes) throw std::runtime_error("no chunks");
+  if (!f.sourceBlocks || !f.sbBytes) throw std::runtime_error("no source blocks");
   std::unique_ptr<GpuStream> s(new GpuStream(d));
   s->f_ = f;
   // ai: each source block's L from its K (a file has at most two lengths: the full source blocks', a short last one's)
@@ -139,7 +139,7 @@ void GpuStream::stop() {
 bool GpuStream::put(uint32_t c, const rq_enc_t* enc) {
   rq_par_t q{};
   const uint8_t* C = rq_enc_intermediate(enc, &q);
-  if (c >= total_ || q.L != len_[c]) throw std::runtime_error("chunk " + std::to_string(c) + " is not the stream's");
+  if (c >= total_ || q.L != len_[c]) throw std::runtime_error("source block " + std::to_string(c) + " is not the stream's");
   auto& d = dev_;
   std::call_once(symOnce_, [&] { sym_ = d.createBuffer(symBytes_, wg::STORAGE | (uma_ ? wg::MAP_WRITE : wg::COPY_DST), "rq SYM", false); });
   if (!sym_) throw std::runtime_error("no SYM");
@@ -200,7 +200,7 @@ bool GpuStream::put(uint32_t c, const rq_enc_t* enc) {
       submitted = true;
     }
     const VkResult r = vkWaitForFences(d.dev, 1, &fence, VK_TRUE, d.hangMs ? uint64_t{d.hangMs} * 1000000 : UINT64_MAX);
-    if (r == VK_TIMEOUT) throw std::runtime_error("a chunk's copy to the device did not finish");
+    if (r == VK_TIMEOUT) throw std::runtime_error("a source block's copy to the device did not finish");
     wg::check(r, "vkWaitForFences (rq copy)");
   } catch (const std::exception& e) {
     // ai: a copy that failed fails the stream: every put waiting for a slot, and every put after, throws its reason, so
@@ -285,14 +285,14 @@ void GpuStream::record(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& sym,
 }
 
 void GpuStream::blocks(wg::Encoder& enc, const std::shared_ptr<wg::Buffer>& out, const uint8_t* bl, uint32_t n, size_t stride, uint32_t room) {
-  if (!done()) throw std::runtime_error("a data block named before every chunk's symbols were on the device");
+  if (!done()) throw std::runtime_error("a data block named before every source block's symbols were on the device");
   ids(bl, n, stride, true, room);
   record(enc, sym_, tab_, sourceBlocks_, out, n, ctl_, total_, f_.controls);
 }
 
 void GpuStream::host(const xfer_id_t* idv, uint32_t n, uint8_t* out) {
   if (!n) return;
-  if (!done()) throw std::runtime_error("a data block named before every chunk's symbols were on the device");
+  if (!done()) throw std::runtime_error("a data block named before every source block's symbols were on the device");
   auto& d = dev_;
   if (!out_ || out_->size < uint64_t{SB} * n) {
     out_ = d.createBuffer(uint64_t{SB} * n, wg::STORAGE | wg::COPY_SRC, "rq OUT", false);

@@ -31,7 +31,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.movableContentOf
@@ -95,8 +94,8 @@ interface SendHost : ToolHost {
 }
 
 // ai: Send (the web's send.html; both apps' since 2026-10-31): a column (Start, or Stop and Pause or Resume while sending,
-// ai: beside Fullscreen where the platform has one; the state line naming the file; the figures; the heat warning;
-// ai: Settings in two groups, Experimental, Developer Tools, About) and the code area. Landscape: the column on the left,
+// ai: beside Fullscreen where the platform has one; what goes, as a block (Details); the heat warning; the settings
+// ai: folds, Experimental and Developer Tools) and the code area; an error a popup. Landscape: the column on the left,
 // ai: its edge dragged, the code area on the right; collapsed, the rail (play or pause, the capacity, Home at its foot).
 // ai: Portrait (a phone): the bar over one column, the code at its top. The code alone: the code area the whole screen.
 @Composable
@@ -273,7 +272,7 @@ fun TestStreamNote() {
 }
 
 // ai: the code area while an export runs with its codes hidden (2026-11-18, Send's Hide codes): one line centred on
-// ai: the soft fill, as exclusive fullscreen's control window's "Playing on <monitor>" was
+// ai: the soft fill
 @Composable
 fun CodesHiddenNote() = Box(Modifier.fillMaxSize().background(Soft), contentAlignment = Alignment.Center) {
     Text("Codes hidden", style = MaterialTheme.typography.bodyLarge, color = Fg, maxLines = 1, overflow = TextOverflow.Ellipsis,

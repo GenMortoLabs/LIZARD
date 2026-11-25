@@ -1,5 +1,5 @@
 // ai: lizard_usb (Windows): binds the WinUSB driver to the devices libusb needs on Windows and takes it off again,
-// ai: through libwdi (Zadig's library, LGPL-3.0, linked statically; its source and build: ../../packaging/libwdi.sh).
+// ai: through libwdi (Zadig's library, LGPL-3.0, linked statically; its source and build: ../../packaging/windows-extra.sh).
 // ai: libusb opens a USB device on Windows only through WinUSB (or libusbK): a phone shows Windows' MTP driver, the
 // ai: phone in accessory mode (Google's 18D1:2D00, or 2D01 with adb, its accessory interface MI_00) none at all, and a
 // ai: USB3 Vision camera (Aravis's, through libusb) none either.
