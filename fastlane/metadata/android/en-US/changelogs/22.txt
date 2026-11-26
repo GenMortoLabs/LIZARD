@@ -1,0 +1,5 @@
+- Files and codes go with the new format word and block: this release and 0.3.0 or earlier do not read each other's files or codes.
+- Each frame's word states its layout (the four code rates' block counts) and the sender's clock.
+- Every block names its file by a 48-bit object number and carries a 64-bit CRC; the file is checked at its BLAKE3 root.
+- Refresh: a delay of 1 to 30 for each code rate.
+- A new finder in the C decoder; every GPU kernel in Slang.

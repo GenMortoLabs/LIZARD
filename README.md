@@ -6,7 +6,7 @@ carries about 4 to 5 MB/s (see [Status](#status)).
 
 - **Demo:** [fosslabs.dev](https://fosslabs.dev)
 - **How it works:** [an example on video](https://www.youtube.com/shorts/pjcAtQ7GcVQ)
-- **Apps:** [0.3.0 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.3.0): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
+- **Apps:** [0.4.0 (beta)](https://github.com/GenMortoLabs/LIZARD/releases/tag/v0.4.0): the Android app, and the desktop app for Linux, Windows and macOS, which sends, and receives through a USB or built-in camera, a machine vision camera (USB3 Vision or GigE Vision) or an Android phone on a cable; every app, the web's too, also reads an image or a video file in place of a camera
 
 ## The idea
 
@@ -503,7 +503,7 @@ Released in 0.2.4 and 0.3.0:
   version, the frame rate and two extension bytes) and an animated word carrying one piece of a longer header, three
   Reed-Solomon codewords over 255 positions, any enough of which rebuild it, checked by its CRC-32C.
 
-On main since 0.3.0, for the next release (its senders and receivers read none of 0.3.0's words):
+Released in 0.4.0 (its senders and receivers read none of 0.3.0's words):
 
 - **Each frame's word states its layout and the sender's clock.** The word is 40 bits under RS(n, 6): one index of
   the configuration (the version, 1 to 67, up to 1,072 sub-channels, and the 6/7, 3/4, 2/3 and 1/2 block counts: any
@@ -532,9 +532,12 @@ On main since 0.3.0, for the next release (its senders and receivers read none o
 - **The file checked at its root.** The receiver hashes each chunk as it rebuilds it, in any order (BLAKE3's tree),
   and checks the file against its root at the end; a file that fails is collected again. No list of the chunks'
   hashes is sent, so the session header is the one control block, about one block in 190.
-- **The web receiver decodes with the C.** Its WebGPU decoder (0.3.0) is out: the page decodes on a pool of
-  WebAssembly workers, as it did wherever WebGPU was missing, and the installed web app is about 4 MB smaller. The
+- **The web receiver decodes with the C.** Its WebGPU decoder (0.3.0) is out: the page decodes with the C on
+  WebAssembly threads over one shared memory, and a file's transfer, its storage in the browser and its check run on
+  the same C as the apps' (the pages are cross-origin isolated). The installed web app is about 4 MB smaller. The
   Android and desktop apps keep the GPU decoder; the web sender keeps its WebGPU encoder.
+- **Metal on macOS.** The desktop app draws and decodes through Metal itself, in place of MoltenVK. Every GPU kernel
+  is written once in Slang and compiled for Vulkan, Metal and the web sender's WebGPU.
 - **Pilots apart from the blocks.** Every sub-channel's count pilot and reference sit on two coefficients of their
   own, so no block carries a pilot and every block place's Refresh delay is free (1 to 30, a slider each code rate).
 - **Senders tuned per deployment:** Refresh's delays, stream files and the split ([Tuning a sender](#tuning-a-sender));
