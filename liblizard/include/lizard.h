@@ -217,7 +217,8 @@ LIZ_API liz_tx *liz_tx_new_test(uint32_t first_id);
 LIZ_API void liz_tx_free(liz_tx *t);
 /* ai: A file's schedule drawn from seed in place of the random one liz_tx_new draws (each source block's first symbol,
  * ai: each round's order of the source blocks, each frame's shuffle, the session header's TOI), so a send repeats:
- * ai: before the first frame (LIZ_E_STATE after, and for the test stream), as liz_sender_seed. */
+ * ai: before the first frame (LIZ_E_STATE after), as liz_sender_seed. The test stream's TOI is drawn from it the same
+ * ai: way as a session header's, so a seeded test stream paints the same blocks every time. */
 LIZ_API int liz_tx_seed(liz_tx *t, uint32_t seed);
 /* ai: The next frame's n blocks (n x LIZ_BLOCK bytes): a frame asked for twice is two frames. Returns how many of
  * ai: them carry the file's data (the others its header); LIZ_E_TOOBIG where a source block could

@@ -287,6 +287,12 @@ size_t keptCount(const std::string& data) {
   const json k = json::parse(Session::kept(data), nullptr, false);
   return k.is_array() ? k.size() : 0;
 }
+std::vector<std::string> keptPaths(const std::string& data) {
+  std::vector<std::string> out;
+  const json k = json::parse(Session::kept(data), nullptr, false);
+  if (k.is_array()) for (const auto& e : k) out.push_back(text(e, "path"));
+  return out;
+}
 
 // ai: sim:0 showing `spec`, opened and started in its pick; the frame's size into w, h
 bool begin(Session& s, const std::string& spec, uint32_t& w, uint32_t& h, std::string& why) {
@@ -724,10 +730,11 @@ bool partialCase(Run& r) {
 // ai: The transfer across reconfigures (session.h reconfigure, receiver.h create's from): a 1 MB file part in on 1:1,
 // ai: the receiver made again for 2:1 (where the one centred code is in neither half: nothing read) and back: the new
 // ai: receivers go on with the transfer in hand, its part kept through 2:1 in the stats (one header read, no resume),
-// ai: and the file comes whole once, byte-equal in kept/. Then, the file in (the camera stopped for it) and the camera
-// ai: started again, made again for 2:1 and back: the stats' file verified after each, one take in kept/, and 2 s on
-// ai: 1:1 with the code in view nothing taken again (still one header and one "verified" line, the camera reading on;
-// ai: 2026-10-25: a new receiver's store let the finished folder go, and the file was received again from the start).
+// ai: and the file comes whole once, byte-equal in kept/. Then, the file in (the camera stopped for it, which lets its
+// ai: TOIs go: the same file is received again, as a second download of it is) and the camera started again, made
+// ai: again for 2:1 and back: a new transfer of it in the stats after each, not verified, the one take in kept/; back on
+// ai: 1:1 with the code in view the file comes whole a second time, byte-equal, its own take (two headers, two
+// ai: "verified" lines, the camera reading on).
 bool reconfigureCase(Run& r) {
   const char* c = "reconfigure";
   const fs::path src = randomFile(r.dir, "payload-1m.bin", 1'000'000, 2);
@@ -764,22 +771,26 @@ bool reconfigureCase(Run& r) {
   if (log.count(HEADER) != 1 || !log.find("xfer: resumed").empty())
     return r.fail(c, "the file came, but its transfer began again: " + std::to_string(log.count(HEADER)) + " header lines, " +
                          (log.find("xfer: resumed").empty() ? std::string("no resume") : "\"" + log.find("xfer: resumed") + "\""), &log);
-  // ai: the file in (the camera stopped for it): started again, made again for 2:1 and back, the transfer verified in
-  // ai: the stats, one take, and not taken again (the camera not stopped again for it: the receiver holds it)
+  // ai: the file in (the camera stopped for it, its TOIs let go): started again, made again for 2:1 and back, a new
+  // ai: transfer of it each time (not verified, the one take), then the file whole again on 1:1, its own take
   if (!begin(*s, spec, fw, fh, why)) return r.fail(c, "the file in, a start again: " + why, &log);
   for (const char* lay : {"2:1", "1:1"}) {
     if (!done(s->reconfigure("cpu", lay), why)) return r.fail(c, std::string("the file in, to ") + lay + ": " + why, &log);
     const json f = sub(statsOf(*s), "file");
-    if (!f.value("verified", false) || keptCount(data) != 1)
-      return r.fail(c, std::string("the file in, after the reconfigure to ") + lay + ": " + std::to_string(keptCount(data)) + " takes in kept/, the stats' file " + f.dump(), &log);
+    if (f.value("verified", false) || keptCount(data) != 1)
+      return r.fail(c, std::string("the file in, after the reconfigure to ") + lay + ": " + std::to_string(keptCount(data)) + " takes in kept/ (one: the second not yet whole), the stats' file " + f.dump() + " (a new transfer, not verified)", &log);
   }
-  sleepMs(2000);
-  if (keptCount(data) != 1 || log.count(HEADER) != 1 || log.count(VERIFIED) != 1 || !s->streaming())
-    return r.fail(c, "2 s on 1:1 after the reconfigures with the file in: " + std::to_string(keptCount(data)) + " takes, " + std::to_string(log.count(HEADER)) + " header lines, " +
-                         std::to_string(log.count(VERIFIED)) + " \"verified\" lines (one each: the file taken again), " + (s->streaming() ? "streaming" : "not streaming"), &log);
+  const auto t2 = Clock::now();
+  while (since(t2) < 60 && keptCount(data) < 2) sleepMs(100);
+  const double again = since(t2);
+  if (keptCount(data) != 2 || log.count(HEADER) != 2 || log.count(VERIFIED) != 2 || !s->streaming())
+    return r.fail(c, "the file again after the restart and the reconfigures: " + std::to_string(keptCount(data)) + " takes, " + std::to_string(log.count(HEADER)) + " header lines, " +
+                         std::to_string(log.count(VERIFIED)) + " \"verified\" lines (two each: received again), " + (s->streaming() ? "streaming" : "not streaming"), &log);
+  for (const std::string& take : keptPaths(data))
+    if (slurp(fs::u8path(take)) != slurp(src)) return r.fail(c, take + " differs from the file sent", &log);
   return r.ok(c, fmt("%.0f", part * 100) + "% in on 1:1, then 2:1 for 1.5 s (the part kept, " + fmt("%.0f", kept * 100) + "%) and back: the transfer went on (one header, no resume), the file whole " +
-                     fmt("%.1f", secs) + " s later, byte-equal in kept/; with the file in, started again, 2:1 and back: verified, one take, and 2 s on 1:1 not taken again, "
-                     "the camera reading on (simulated: " + spec.substr(0, spec.find(" file=")) + ", a 1,000,000 B file)");
+                     fmt("%.1f", secs) + " s later, byte-equal in kept/; with the file in (its TOIs let go), started again, 2:1 and back: a new transfer each time, "
+                     "then the file whole again " + fmt("%.1f", again) + " s later, its own take, both byte-equal (simulated: " + spec.substr(0, spec.find(" file=")) + ", a 1,000,000 B file)");
 }
 
 // ai: a control's value as camera() last read it (NaN where the camera lists none)

@@ -22,6 +22,7 @@ struct liz_tx {
   std::unique_ptr<lizard::XferTx> x;   // ai: null for the test stream
   uint32_t next = 0;    // ai: the test stream's next bare id
   uint64_t toi = 1;     // ai: and its TOI (48 bits)
+  bool made = false;    // ai: its first frame made (its TOI then fixed)
   uint64_t length = 0;
   std::vector<xfer_id_t> ids;
 };
@@ -124,7 +125,12 @@ LIZ_API void liz_tx_free(liz_tx* t) { delete t; }
 LIZ_API int liz_tx_seed(liz_tx* t, uint32_t seed) {
   return guard([&] {
     need(t, "a sender");
-    if (!t->x || !t->x->reseed(seed)) throw Error(LIZ_E_STATE, t->x ? "the schedule is drawn once its first frame is made" : "the test stream has no schedule");
+    if (!t->x) {   // ai: the test stream: its TOI from the seed, as a send's session header's
+      if (t->made) throw Error(LIZ_E_STATE, "the test stream's TOI is fixed once its first frame is made");
+      t->toi = lizard::sessionToi(seed);
+      return LIZ_OK;
+    }
+    if (!t->x->reseed(seed)) throw Error(LIZ_E_STATE, "the schedule is drawn once its first frame is made");
     return LIZ_OK;
   });
 }
@@ -161,7 +167,10 @@ LIZ_API int liz_tx_next(liz_tx* t, int n, uint8_t* blocks) {
       if (!f.empty()) throw Error(LIZ_E_TOOBIG, f);
       t->x->frameIds(t->ids.data(), n);
     }
-    else for (int i = 0; i < n; i++) t->ids[i] = t->next++;
+    else {
+      for (int i = 0; i < n; i++) t->ids[i] = t->next++;
+      t->made = true;
+    }
     int data = 0;
     for (int i = 0; i < n; i++) {
       uint8_t* o = blocks + size_t(i) * LIZ_BLOCK;

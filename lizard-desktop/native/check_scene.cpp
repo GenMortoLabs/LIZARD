@@ -156,12 +156,11 @@ void caseStraddle(liz_decoder* dec) {
   auto sc = make(c, s, d, o);
   if (!sc) return;
   std::vector<uint8_t> img(size_t(o.width) * o.height);
-  // ai: a clean capture first (the channel's own reading c0: the resampled picture's distortion
-  // ai: is in m2 too), then windows over the change from picture k - 1 to k, f of the window before it. The pilots'
-  // ai: theory (lizard_phy.h lizard_pilot), every sample the same blend: a count pilot both pictures paint alike reads
-  // ai: 1 / sqrt(m2), one they paint opposite (1 - 2f) / sqrt(m2), m2 = 1 - 2f + 2f^2 + 1 / c0^2 - 1 (the data's rms
-  // ai: lowered by the blend, the channel's distortion as it was); the even sub-channels' bit both neighbours flip, the
-  // ai: odd sub-channels' bit flips from k - 1 to k where k is even; the sign k's bit
+  // ai: a clean capture first (the channel's own reading, about 1), then windows over the change from picture k - 1 to
+  // ai: k, f of the window before it. The pilots' theory (lizard_phy.h lizard_pilot: a reading is the count pilots over
+  // ai: the reference, which every picture paints alike, so the blend's scale cancels): a count pilot both pictures
+  // ai: paint alike reads 1, one they paint opposite 1 - 2f; the even sub-channels' bit both neighbours flip, the odd
+  // ai: sub-channels' bit flips from k - 1 to k where k is even; the sign k's bit
   double c0 = 0;
   int n0 = 0;
   for (int i = 0; i < 3; i++) {
@@ -178,8 +177,8 @@ void caseStraddle(liz_decoder* dec) {
     const int64_t t0 = sc->shownAt(k) - int64_t(f * o.exposureMs * 1e6);
     sc->render(t0, img.data(), o.width);
     const Read r = readFrame(dec, img, int(o.width), int(o.height), 1);
-    const double q = std::sqrt(1 - 2 * f + 2 * f * f + 1 / (c0 * c0) - 1), sign0 = (k & 1) ? -1 : 1, sign1 = (k & 2) ? -1 : 1;
-    const double want0 = sign0 * (1 - 2 * f) / q, want1 = (k & 1) ? sign1 / q : sign1 * (1 - 2 * f) / q;
+    const double sign0 = (k & 1) ? -1 : 1, sign1 = (k & 2) ? -1 : 1;
+    const double want0 = sign0 * (1 - 2 * f), want1 = (k & 1) ? sign1 : sign1 * (1 - 2 * f);
     const bool near = r.found && std::abs(r.d[0].pilot_r[0] - want0) < 0.08 && std::abs(r.d[0].pilot_r[1] - want1) < 0.08;
     if (f == 0.5) good = good && r.blocks < r.total / 2 && near;
     else good = good && near;
@@ -405,12 +404,14 @@ void caseFile(liz_decoder* dec) {
 
 void caseParse() {
   const char* c = "parse";
-  struct Try { const char* spec; bool good; };
+  struct Try { std::string spec; bool good; };
+  // ai: the size's bounds the format's own (lizard.h LIZ_MIN_BLOCKS, LIZ_MAX_BLOCKS), each taken and one past each refused
   const Try tries[] = {
       {"blocks=64 ring=256 fps=255 codes=2 id=4294967295 hz=59.94 ppm=-50 phase=0 scan=1 response=0 sw=2560 sh=1440 share=0.5 "
        "surround=0 repeat=0.1 w=1280 h=720 fill=1.2 yaw=-30 tilt=20 roll=90 blur=0 exposure=0.1 shutter=global readout=0 "
        "gain=2 black=0 noise=0 shot=0 gamma=1 seed=9 file=/x", true},
-      {"", true}, {"ring=auto", true}, {"ring=64", true}, {"blocks=0", false}, {"blocks=3", false}, {"blocks=4", true}, {"blocks=65", false},
+      {"", true}, {"ring=auto", true}, {"ring=64", true}, {fmt("blocks=%d", LIZ_MIN_BLOCKS - 1), false},
+      {fmt("blocks=%d", LIZ_MIN_BLOCKS), true}, {fmt("blocks=%d", LIZ_MAX_BLOCKS), true}, {fmt("blocks=%d", LIZ_MAX_BLOCKS + 1), false},
       {"blocks=1.5", false}, {"ring=32", false}, {"ring=3", false}, {"ring=-1", false}, {"fps=0", false},
       {"codes=3", false}, {"hz=0", false}, {"share=0", false}, {"shutter=sideways", false}, {"blur=-1", false},
       {"exposure=0", false}, {"exposure=1,5", false}, {"file=", false}, {"yaw=95", false}, {"gain", false}, {"wobble=1", false},
@@ -423,7 +424,7 @@ void caseParse() {
     sim::Optics o;
     std::string why;
     const bool got = sim::parse(t.spec, s, d, o, why);
-    if (got != t.good) { wrong++; line += fmt(" \"%s\" %s;", t.spec, got ? "taken" : ("refused: " + why).c_str()); }
+    if (got != t.good) { wrong++; line += fmt(" \"%s\" %s;", t.spec.c_str(), got ? "taken" : ("refused: " + why).c_str()); }
   }
   // ai: the numbers read whatever the process's locale (the JVM sets LC_NUMERIC to the user's)
   const char* was = std::setlocale(LC_NUMERIC, nullptr);

@@ -479,6 +479,9 @@ std::unique_ptr<Scene> Scene::create(const Sender& s, const Display& d, const Op
   }
   p.tx = s.file.empty() ? liz_tx_new_test(s.firstId) : liz_tx_new_path(s.file.c_str(), nullptr, 0);
   if (!p.tx) { why = (s.file.empty() ? std::string("the test stream: ") : s.file + ": ") + liz_last_error(); return nullptr; }
+  // ai: the test stream's TOI from the scene's seed, so two scenes of one spec paint the same blocks (a TOI drawn at
+  // ai: random each time would make a capture differ from its reference scene's in every block)
+  if (s.file.empty()) liz_tx_seed(p.tx, o.seed);
 
   // ai: the display's clock
   p.fps = s.fps;

@@ -59,6 +59,10 @@ unsigned physicalCores();
 
 struct XferDesc;
 
+// ai: A session's TOI from a send's seed (xfer_tx.cpp: two 24-bit mixes, 0 taken as 1), one past avoid where it is
+// ai: that; the test stream's too where it is seeded (lizard.h liz_tx_seed)
+xfer_toi_t sessionToi(uint32_t seed, xfer_toi_t avoid = 0);
+
 class XferTx {
  public:
   // ai: data: the file's bytes, alive as long as this (the app maps the file); name as the header carries it (one past

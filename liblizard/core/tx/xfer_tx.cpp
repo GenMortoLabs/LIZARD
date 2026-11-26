@@ -398,7 +398,7 @@ void XferTx::seedWith(uint32_t seed) {
 // ai: The session's TOI as every sender draws it (sessionToi): from the send's seed,
 // ai: mix32(seed ^ 0x3c6ef372) in its high 24 bits and mix32(seed ^ 0x165667b1) in its low 24, 0 taken as 1, and one past
 // ai: the file's where it is that.
-static xfer_toi_t sessionToi(uint32_t seed, xfer_toi_t avoid) {
+xfer_toi_t sessionToi(uint32_t seed, xfer_toi_t avoid) {
   xfer_toi_t t = xfer_toi_t(mix32(seed ^ 0x3c6ef372u) & 0xffffffu) << 24 | (mix32(seed ^ 0x165667b1u) & 0xffffffu);
   if (!t) t = 1;
   if (t == avoid) t = t % XFER_TOI_MASK + 1;
