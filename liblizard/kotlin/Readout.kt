@@ -1,6 +1,6 @@
 package dev.lizard.readout
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -14,7 +14,7 @@ import kotlin.math.roundToInt
 // ai: use this file, compiled with their shared UI (lizard-ui; each app compiled liblizard/kotlin itself from 2026-10-25).
 object Readout {
     // ai: A name's stem and the ending kept whole when the line cuts it (2026-10-23, Parts.kt NameLine): a bundle's
-    // ai: " and N more.tar" (Tar.kt Bundle), else an extension of at most 10 characters, else nothing; the web's
+    // ai: " and N more.tar" (the bundle's name, lizard.h liz_bundle_name), else an extension of at most 10 characters, else nothing; the web's
     // ai: ui.mjs nameParts the same
     fun nameParts(name: String): Pair<String, String> {
         Regex("^(.+)( and \\d+ more\\.tar)$", RegexOption.DOT_MATCHES_ALL).find(name)?.let { return it.groupValues[1] to it.groupValues[2] }
@@ -157,7 +157,7 @@ object Readout {
     fun lab(on: Boolean, rx: Rx): String {
         if (!on) return ""
         if (rx.foundShare <= 0 && rx.goodputKBs <= 0) return "no code yet"
-        val named = if (rx.bandVersion > 0 && rx.state != "looking") ", LIZARD-${Pick.STEP * rx.bandVersion}" else ""
+        val named = if (rx.bandVersion > 0 && rx.state != "looking") ", LIZARD-${Ladder.STEP * rx.bandVersion}" else ""
         return "${rx.goodputKBs.roundToInt()}${NB}KB/s, ${(100 * rx.foundShare).roundToInt()}% registered$named"
     }
 }

@@ -20,7 +20,7 @@ const want = (name, got, exp) => { const ok = got === exp; if (!ok) fails++; con
 const setup = (n, subch, span = 128) => M._lizard_setup(n, subch, span);
 // ai: The tree's ladder (2^k and 3 x 2^k since 2026-09-27, 1152 and 1280 since 2026-10-29): a build from before it
 // ai: cannot build the sizes added since.
-const { N_FOR: nFor, VERSIONS } = await import(resolve("sim/lizard_pick.mjs"));
+const { N_FOR: nFor, VERSIONS } = await import(resolve("sim/ob.mjs"));
 console.log(`${path}: lizard_setup takes ${M._lizard_setup.length} arguments`);
 
 // ai: (int)(v * 255 + 0.5) clamped, in float32 as lizard_paint_rgba's scalar path does it (SPEC 6.8, Painting).

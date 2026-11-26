@@ -1,4 +1,4 @@
-// zstd for the default client's pack (core/tx/pack.h, sim/pack.mjs; header version 4, src/xfer.h: the transfer
+// zstd for the default client's pack (core/tx/pack.h; header version 4, src/xfer.h: the transfer
 // compresses nothing, a client packs a file before it goes), as every LIZARD build calls it: the parameters are pinned
 // here, so the web's client in wasm and the native apps write the same frames for the same file (the same packed
 // bytes, the same root: a transfer resumed from another client's send of that file goes on), and any receiver reads

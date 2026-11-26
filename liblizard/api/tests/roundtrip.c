@@ -1,7 +1,7 @@
 /* ai: The C API end to end, through lizard.h alone (2026-10-03):
  * ai:   1. every format (67 sizes, LIZ_MIN_BLOCKS to LIZ_MAX_BLOCKS, x LIZ_RINGS rings x 1 or 2 codes): an encoder
  * ai:      made, its geometry the arithmetic's; a size of 0 or past LIZ_MAX_BLOCKS refused;
- * ai:   2. the picker and the room against the web's (a table tests/pick_ref.mjs printed from sim/lizard_pick.mjs), when
+ * ai:   2. the picker and the room against the web's (a table tests/pick_ref.mjs printed from sim/ob.mjs), when
  * ai:      its path is given;
  * ai:   3. the test stream in every ring, one code and two, painted and read back: every block verified, every frame the
  * ai:      test stream's, none bad; then one payload byte wrong: one bad;

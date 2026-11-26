@@ -5,7 +5,7 @@
 // ai: holds a clean capture to. The symbol is painted by the codec at a pixel a drive pixel on white, no camera.
 //   node test/pilot_wasm.mjs      from liblizard/, a few seconds; OB_BUILD=<path> for another build; exit 1 on a failure
 import { init, Lizard, LizardAny } from "../sim/ob.mjs";
-import { N_FOR } from "../sim/lizard_pick.mjs";
+import { N_FOR } from "../sim/ob.mjs";
 
 await init();
 let fails = 0;

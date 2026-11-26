@@ -4,7 +4,7 @@
 // sub-channel, each sub-channel by its soft values' scale (EP.w, A / N): r_g = (sum w c_j / W_g) / (sum w ref / W), W_g
 // and W the weights' sums; each with its standard error by the delta method (the root of the sum of (w (c_j - r_g
 // ref_j))^2, over |the denominator|); NaN where a parity has none; into PILOT[PILOT_READ f]: r, its error, r2, its
-// error. The NaN where a parity has none is made at run time (P a uniform). Defines (back_tiers.mjs tblocksSource):
+// error. The NaN where a parity has none is made at run time (P a uniform). Defines (core/dec/build.cpp backHalf):
 // TIER_BLOCKS, STEP, PILOT_READ, SLOT_COUNT (uint); lib/tab.slang's.
 #include "lib/lists.slang"
 [[vk::binding(0, 0)]] StructuredBuffer<uint> LISTS;

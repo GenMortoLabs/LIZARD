@@ -1,6 +1,6 @@
 // ai: Where the transfer's receiving end keeps what it holds (2026-10-03, for the library: xfer_rx_core.h): each
-// ai: source block's stored blocks until it is solved, and the file being rebuilt. lizard-web/fountain-worker.mjs has two, OpfsStore
-// ai: and sim/xfer.mjs MemoryStore; so does this: files under a directory (the app's, as before), or memory with a cap
+// ai: source block's stored blocks until it is solved, and the file being rebuilt: files under a directory (the app's, and
+// ai: the web's on OPFS through the threaded wasm module's WasmFS since 2026-11-25), or memory with a cap
 // ai: (a wasm build, or a caller with no directory). Used from one thread at a time, the receiving end's own.
 #pragma once
 #include <cstdint>

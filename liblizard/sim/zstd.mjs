@@ -1,4 +1,4 @@
-// zstd for the default client's pack (sim/pack.mjs; core/tx/pack.h natively) through liblizard/zstd/shim.c, which pins
+// zstd through liblizard/zstd/shim.c (the default client's pack is the C's, core/tx/pack.h, the web's too), which pins
 // the parameters so every client writes the same frames; inside the codec's module (liblizard/build.sh), the instance
 // sim/ob.mjs's default build shares. Handed to pack and unpack as `Z`, so a module that never packs loads none of it.
 import { baseModule } from "./ob.mjs";
@@ -41,5 +41,5 @@ export const frameContent = (bytes) => frameCall(M._lizard_zstd_frame_content, b
 export const frameBytes = (bytes) => frameCall(M._lizard_zstd_frame_bytes, bytes);
 export const bound = (n) => M._lizard_zstd_bound(n);
 
-// What the pack takes: `Z` for sim/pack.mjs.
+// The shim's calls together: `Z`.
 export const Z = { compress, decompress, frameContent, frameBytes, bound };

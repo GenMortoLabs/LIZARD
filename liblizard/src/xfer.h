@@ -1,6 +1,6 @@
 // The transfer in the light: the block id and the session header (the send's description, its one file's map), so a
 // camera alone can recover a file. Before this the fountain's header went from the sender page to the receiver page over the rig's network, and
-// the block id was a convention of sim/phy.mjs.
+// the block id was a convention of the lab's harness.
 //
 // A file is cut into source blocks of 2^k bytes (k 10 to 24; the last one shorter), each its own RaptorQ source block,
 // and the file verified against its one BLAKE3 root: a source block of 2^k bytes aligned at its own size is a whole
@@ -248,7 +248,7 @@ void xfer_b3_subtree(const uint8_t *in, size_t len, uint64_t counter, int root, 
 // under a TOI the sender draws, as any send's, no header; block id i's payload the first len bytes of BLAKE3's extended
 // output of its bare id (its source block and symbol, bytes 0 to 4) as five little-endian bytes, the TOI no part. A
 // function of the id alone, so a receiver that knows it tells a test frame from its payloads without being told which
-// frame carried it (src/xfer.h stream_matches; sim/phy.mjs blockJudge); BLAKE3, the transfer's own hash, so the library
+// frame carried it (src/xfer.h stream_matches; the web's sim/ob.mjs blockJudge); BLAKE3, the transfer's own hash, so the library
 // carries one (SHAKE256 until 2026-11-15). Its vector: id 0's first 16 bytes cdc96eca844d7912acdbb3dca677757d, id 1's
 // 7784b17d1d8ff658cfe8f0e111316a96, id 0x0403020100's BLAKE3's own five-byte vector (test/vectors.mjs).
 void stream_fill(uint64_t id, uint8_t *out, uint32_t len);

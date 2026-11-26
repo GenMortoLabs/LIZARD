@@ -5,7 +5,7 @@
 // level and mask) and 10 of BCH, drawn twice. Aztec's mode message is 28 bits compact, 7 of data (layers and
 // codeword count) with Reed-Solomon over the rest. Neither says anything about the TRANSFER: a QR symbol's mode
 // indicator and character count live in the data stream, inside the payload's own error correction. LIZARD's do
-// the same. Sub-channels are 16 * version, the picture size is the smallest that holds them (sim/lizard_pick.mjs
+// the same. Sub-channels are 16 * version, the picture size is the smallest that holds them (sim/ob.mjs
 // N_FOR), the mode is always LDPC, the code rates are the four codes at the counts the word states, and the fountain's
 // header is payload.
 //

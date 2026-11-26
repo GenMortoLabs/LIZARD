@@ -36,15 +36,6 @@ constexpr uint32_t MODE_HUF = 0, MODE_RAW = 1, MODE_RLE = 2;
 // ai: a block below this goes raw (zstd's four streams want a few literals; a short last block gains nothing)
 constexpr uint32_t RAW_BELOW = 256;
 
-std::vector<uint32_t> spirv(const std::string& path) {
-  std::ifstream f(std::filesystem::u8path(path), std::ios::binary);
-  if (!f) throw std::runtime_error("the tree has no " + path + ": regenerate liblizard/out");
-  const std::vector<char> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-  std::vector<uint32_t> w(b.size() / 4);
-  std::memcpy(w.data(), b.data(), w.size() * 4);
-  return w;
-}
-
 // ai: JPEG-LS's median predictor (rx/lizfile.h), as zstd_med.slang
 inline int med(int a, int b, int c) {
   const int mx = a > b ? a : b, mn = a < b ? a : b;
@@ -214,19 +205,18 @@ std::unique_ptr<GpuZstd> GpuZstd::create(wg::Device& d, const std::string& asset
   // ai: most 1 GiB, 128 squares a batch
   const uint64_t outSq = uint64_t(z->nb_) * BLOCK + 64ull * z->nb_;
   const uint64_t per = SETS * (4ull * z->wps_ + 2ull * z->nb_ * 1024 + 2 * outSq + z->nb_ * 40);
-  const uint64_t share = std::min<uint64_t>(1ull << 30, d.limits.deviceLocalBytes / (d.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 4 : 8));
+  const uint64_t share = std::min<uint64_t>(1ull << 30, d.limits.deviceLocalBytes / (d.kind == wg::Kind::Discrete ? 4 : 8));
   const uint64_t range = std::min<uint64_t>(d.limits.maxStorageBufferRange, d.limits.maxBufferSize ? d.limits.maxBufferSize : UINT64_MAX);
   int sq = squares > 0 ? squares : int(std::min<uint64_t>(128, share / per));
   sq = int(std::min<uint64_t>(uint64_t(std::max(1, sq)), range / outSq));
   if (sq < 1) throw std::runtime_error("a square's output passes the device's largest buffer");
   z->maxSq_ = sq;
-  const std::string spv = assets + "/spv/send_zstd_";
   z->bglMed_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RW, Bind::Uniform}, "zstd med");
   z->bglHist_ = d.createBindGroupLayout({Bind::RO, Bind::RW, Bind::Uniform}, "zstd hist");
   z->bglHuf_ = d.createBindGroupLayout({Bind::RO, Bind::RO, Bind::RO, Bind::RW, Bind::RW, Bind::Uniform}, "zstd huf");
-  z->med_ = d.createPipeline(spirv(spv + "med.spv"), z->bglMed_, "", "zstd med");
-  z->hist_ = d.createPipeline(spirv(spv + "hist.spv"), z->bglHist_, "", "zstd hist");
-  z->huf_ = d.createPipeline(spirv(spv + "huf.spv"), z->bglHuf_, "", "zstd huf");
+  z->med_ = d.createPipeline(wg::readModule(assets, "send_zstd_med"), z->bglMed_, "", "zstd med");
+  z->hist_ = d.createPipeline(wg::readModule(assets, "send_zstd_hist"), z->bglHist_, "", "zstd hist");
+  z->huf_ = d.createPipeline(wg::readModule(assets, "send_zstd_huf"), z->bglHuf_, "", "zstd huf");
   const uint64_t S = uint64_t(sq), blocks = S * z->nb_;
   for (int k = 0; k < SETS; k++) {
     auto x = std::make_unique<Set>();

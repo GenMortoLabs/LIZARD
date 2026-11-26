@@ -1,5 +1,9 @@
-// ai: The desktop sender's presenter (presenter.h): the test sender lizard_present's swapchain, slots, waits and tallies
-// ai: (2026-10-03) as a class with one thread of its own.
+// ai: The desktop sender's presenter on Vulkan (presenter.h; Linux and Windows): the test sender lizard_present's
+// ai: swapchain, slots, waits and tallies (2026-10-03) as a class with one thread of its own. macOS's is Metal's,
+// ai: presenter_metal.mm (2026-11-25); the parts both run are presenter_common.h's, the window helpers window.cpp's.
+#if defined(__APPLE__)
+#error "macOS presents through presenter_metal.mm"
+#endif
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -32,6 +36,7 @@
 // ai: points from it, everything else from this presenter's own instance and device (the tables below)
 #include "volk.h"
 
+#include "presenter_common.h"
 #include "sender.h"
 #include "priority.h"
 #include "vk_present_timing.h"
@@ -45,42 +50,16 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
 #include <vulkan/vulkan_xlib.h>
-#elif defined(__APPLE__)
-#include <vulkan/vulkan_metal.h>
-
-#include "macos.h"
 #endif
 
 namespace lizard {
 
-namespace {
+using namespace pc;
 
-double nowMs() {
-  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
+namespace {
 
 void vkCheck(VkResult r, const char* what) {
   if (r != VK_SUCCESS) throw std::runtime_error(std::string(what) + " failed (VkResult " + std::to_string(static_cast<int>(r)) + ")");
-}
-
-// ai: a string's text fit for JSON (a driver's message may hold quotes or a backslash)
-std::string esc(const std::string& s) {
-  std::string o;
-  for (char ch : s) {
-    if (ch == '"' || ch == '\\') o += '\\';
-    if (static_cast<unsigned char>(ch) >= 0x20) o += ch;
-  }
-  return o;
-}
-
-// ai: a number as the JSON and the CSV want it whatever the process's locale: the JVM sets LC_NUMERIC to the user's,
-// ai: and a decimal-comma locale (de_DE, fr_FR, en_DK) made the stats JSON {"shownFps":54,0}, which the app could not
-// ai: read, so the rate line stayed empty (2026-10-04). A %.Nf conversion differs from C's only in that mark.
-std::string fmt(const char* f, double v) {
-  char b[64];
-  std::snprintf(b, sizeof b, f, v);
-  for (char* q = b; *q; q++) if (*q == ',') *q = '.';
-  return b;
 }
 
 // ai: The functions this presenter calls, fetched from the sender's instance and device (wg's, which made them with
@@ -142,21 +121,6 @@ struct Slot {
   bool none = false;   // ai: Scaling None: shown at its own pixels
   int w = 0, h = 0;
   int64_t usedBy = -2;   // ai: the last frame whose commands read or wrote it
-};
-
-// ai: one present: its id, the picture it carried (the sender's count, whose mod 4 the pilots paint), whether that
-// ai: picture was new with it, when (ms from the start) its acquire returned, it was submitted and it was on screen (-1:
-// ai: not known), and its epoch (a new one after a pause or a new swapchain: no gap is counted across it)
-struct Shown {
-  uint64_t id = 0, picture = 0;
-  bool fresh = false;
-  double acquiredMs = 0, submittedMs = 0, shownMs = -1;
-  uint32_t epoch = 0;
-  int queued = -1;   // ai: presents from the last one on screen to this one at its submit (the chain's slack); -1 unknown
-  // ai: on present timing (2026-10-31): the refresh this present was for (ms, -1 none) and its shown time the display's
-  // ai: first pixel; a present then stands for its picture's whole hold, so no refresh between two is a miss
-  double targetMs = -1;
-  bool timed = false;
 };
 
 // ai: The second thread that waits for each present to reach the screen (vkWaitForPresentKHR), in id order. Without
@@ -237,100 +201,6 @@ struct Waiter {
   }
 };
 
-// ai: The presents counted: the refreshes between presents in a row (one, unless the loop missed a refresh and the
-// ai: image before stayed up), and the refreshes each picture held (from its first present to the next picture's). A
-// ai: hold of 0 is the waits' doing, not the screen's: after a miss the queued presents' waits return together.
-struct Tally {
-  std::map<long, uint64_t> held;
-  uint64_t presents = 0, pictures = 0, missed = 0, unknown = 0, behind = 0;
-  // ai: present timing's (2026-10-31): pictures on screen a refresh or more past their target, the schedule moved to
-  // ai: the display's times, the largest first-pixel time off its target (ms)
-  uint64_t late = 0, slips = 0;
-  double errMaxMs = 0;
-  double lastShown = -1, lastFresh = -1;
-  uint32_t epoch = 0;
-  std::vector<double> gaps;
-  double queuedSum = 0;   // ai: the chain's slack at each submit, summed, and the least (-1: none known)
-  uint64_t queuedN = 0;
-  int queuedMin = -1;
-  void add(const Shown& s, double refreshMs) {
-    presents++;
-    if (s.queued >= 0) {
-      queuedSum += s.queued;
-      queuedN++;
-      if (queuedMin < 0 || s.queued < queuedMin) queuedMin = s.queued;
-    }
-    if (s.epoch != epoch) { epoch = s.epoch; lastShown = lastFresh = -1; }
-    if (s.shownMs < 0) { unknown++; lastShown = lastFresh = -1; return; }
-    if (s.timed && s.targetMs >= 0) {
-      const double err = s.shownMs - s.targetMs;
-      errMaxMs = std::max(errMaxMs, std::fabs(err));
-      if (s.fresh && err >= 0.5 * refreshMs) late++;
-    }
-    if (lastShown >= 0) {
-      const double gap = s.shownMs - lastShown;
-      gaps.push_back(gap);
-      const long k = std::lround(gap / refreshMs);
-      if (k >= 2 && !s.timed) missed += static_cast<uint64_t>(k - 1);
-    }
-    lastShown = s.shownMs;
-    if (s.fresh) {
-      pictures++;
-      if (lastFresh >= 0) held[std::lround((s.shownMs - lastFresh) / refreshMs)]++;
-      lastFresh = s.shownMs;
-    }
-  }
-  std::string heldJson() const {
-    std::string o = "{";
-    for (const auto& [k, n] : held) o += (o.size() > 1 ? ",\"" : "\"") + std::to_string(k) + "\":" + std::to_string(n);
-    return o + "}";
-  }
-  // ai: the refresh the presents show, Hz: the mean of the gaps of about one refresh (a wait's wake-up moves each time
-  // ai: by a few tenths of a ms either way, which a median of gaps leans on and a mean cancels). One refresh is the
-  // ai: mode's where it is known, else the median gap (FIFO presents one a refresh while the loop keeps up), so a
-  // ai: 144 Hz screen with no mode to read is not judged against 60.
-  // ai: Where fewer than half the gaps are near the mode's refresh (a windowed swapchain paced by another monitor's
-  // ai: CRTC than the one under the window's centre: a mixed 60/120 Hz pair), the median gap is the refresh
-  // ai: instead (2026-10-04: the mode alone left the measurement at 0 and paced 120 presents against 60).
-  double measuredHz(double modeHz) const {
-    if (gaps.size() < 8) return 0;
-    auto aroundRef = [&](double ref, double& hz) {
-      double sum = 0;
-      size_t n = 0;
-      for (double g : gaps)
-        if (g > 0.5 * ref && g < 1.5 * ref) { sum += g; n++; }
-      hz = n ? 1000.0 * static_cast<double>(n) / sum : 0;
-      return n;
-    };
-    double hz = 0;
-    if (modeHz > 0 && 2 * aroundRef(1000.0 / modeHz, hz) >= gaps.size()) return hz;
-    std::vector<double> g = gaps;
-    std::nth_element(g.begin(), g.begin() + static_cast<long>(g.size() / 2), g.end());
-    if (g[g.size() / 2] <= 0) return 0;
-    aroundRef(g[g.size() / 2], hz);
-    return hz;
-  }
-  // ai: a new window: its counts zero, the last times kept so the first gap of the next one counts
-  void reset() {
-    Tally t;
-    t.lastShown = lastShown;
-    t.lastFresh = lastFresh;
-    t.epoch = epoch;
-    *this = std::move(t);
-  }
-};
-
-// ai: the mutex taken for at most `ms`: the present thread never waits out a configure (the sender's painters joined
-// ai: and restarted, the GPU checked), only a take or a stats call's few microseconds
-bool lockFor(std::mutex& m, double ms) {
-  const double end = nowMs() + ms;
-  while (!m.try_lock()) {
-    if (nowMs() >= end) return false;
-    std::this_thread::sleep_for(std::chrono::microseconds(50));
-  }
-  return true;
-}
-
 void barrier(const DevFns& D, VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImageLayout to, VkAccessFlags sa,
              VkAccessFlags da, VkPipelineStageFlags ss, VkPipelineStageFlags ds) {
   VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -342,50 +212,6 @@ void barrier(const DevFns& D, VkCommandBuffer cb, VkImage img, VkImageLayout fro
   b.image = img;
   b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
   D.vkCmdPipelineBarrier(cb, ss, ds, 0, 0, nullptr, 0, nullptr, 1, &b);
-}
-
-// ai: The stretch's taps an axis (s source pixels to d): Lanczos-3's support of 3, widened by s / d where it shrinks, in
-// ai: whole pixels with one to spare
-int stretchTaps(int s, int d) { return static_cast<int>(std::ceil(6.0 * std::max(1.0, static_cast<double>(s) / d))) + 1; }
-
-// ai: One axis of the stretch's table (scale_h.slang, scale_v.slang): for each of d destination pixels its first source
-// ai: pixel, then `taps` weights: Lanczos-3 at the source pixels about the destination pixel's centre (in source pixels,
-// ai: (o + 0.5) s / d - 0.5), the argument divided by the widening, normalised to sum 1, zero past the support. A whole
-// ai: scale's centres fall on source pixels and every weight but the centre's is 0: an exact copy.
-void stretchAxis(float* out, int s, int d, int taps) {
-  constexpr double PI = 3.14159265358979323846;
-  const double k = std::max(1.0, static_cast<double>(s) / d);
-  std::vector<double> w(static_cast<size_t>(taps));
-  for (int o = 0; o < d; o++) {
-    const double c = (o + 0.5) * s / d - 0.5;
-    const int lo = static_cast<int>(std::floor(c - 3 * k)) + 1;
-    double sum = 0;
-    for (int j = 0; j < taps; j++) {
-      const double x = std::abs((lo + j - c) / k);
-      w[static_cast<size_t>(j)] = x < 1e-9 ? 1.0 : x >= 3 ? 0.0 : 3 * std::sin(PI * x) * std::sin(PI * x / 3) / (PI * PI * x * x);
-      sum += w[static_cast<size_t>(j)];
-    }
-    float* row = out + static_cast<size_t>(o) * static_cast<size_t>(taps + 1);
-    row[0] = static_cast<float>(lo);
-    for (int j = 0; j < taps; j++) row[1 + j] = static_cast<float>(w[static_cast<size_t>(j)] / sum);
-  }
-}
-
-// ai: whether a refresh shows fps pictures a second evenly, each held a whole number of refreshes (period()'s 1%)
-bool evenAt(double hz, int fps) {
-  const double p = hz / std::max(1, fps), r = std::round(p);
-  return r >= 1 && std::fabs(p - r) < 0.01 * r;
-}
-// ai: VSync's choice among a monitor's refreshes at its size: one fps divides, the nearest 60 Hz in whole Hz (the rate
-// ai: every monitor has, and the camera's), a tie to the higher (60.00 over 59.94, 120.00 over 119.88); -1 for none
-int pickRate(const std::vector<double>& hz, int fps) {
-  int best = -1;
-  for (int k = 0; k < static_cast<int>(hz.size()); k++) {
-    if (!evenAt(hz[k], fps)) continue;
-    const long a = std::lround(std::fabs(hz[k] - 60)), b = best < 0 ? 0 : std::lround(std::fabs(hz[best] - 60));
-    if (best < 0 || a < b || (a == b && hz[k] > hz[best])) best = k;
-  }
-  return best;
 }
 
 #if LIZ_X11 && !defined(_WIN32)
@@ -409,216 +235,9 @@ RRCrtc crtcAt(Display* d, XRRScreenResources* res, int x, int y) {
   }
   return found;
 }
-
-// ai: the window the manager manages above w: the ancestor with WM_STATE (a reparenting manager puts its own frame
-// ai: between it and the root), else the root's child (no manager)
-Window topLevel(Display* d, Window w) {
-  const Atom wmState = XInternAtom(d, "WM_STATE", True);
-  Window cur = w;
-  for (;;) {
-    if (wmState != None) {
-      Atom type = None;
-      int format = 0;
-      unsigned long n = 0, after = 0;
-      unsigned char* data = nullptr;
-      if (XGetWindowProperty(d, cur, wmState, 0, 0, False, AnyPropertyType, &type, &format, &n, &after, &data) == Success) {
-        if (data) XFree(data);
-        if (type != None) return cur;
-      }
-    }
-    Window root = 0, parent = 0, *kids = nullptr;
-    unsigned int nk = 0;
-    if (!XQueryTree(d, cur, &root, &parent, &kids, &nk)) return cur;
-    if (kids) XFree(kids);
-    if (!parent || parent == root) return cur;
-    cur = parent;
-  }
-}
 #endif
 
 }  // namespace
-
-// ai: the window manager's window around w (topLevel above), through a Display of its own (2026-10-23: the parent the
-// ai: desktop's file chooser is attached to, tx_jni.cpp windowOf); w itself off X11
-unsigned long x11TopLevel(unsigned long window) {
-#if LIZ_X11 && !defined(_WIN32)
-  Display* d = XOpenDisplay(nullptr);
-  if (!d) return window;
-  const unsigned long top = topLevel(d, window);
-  XCloseDisplay(d);
-  return top;
-#else
-  return window;
-#endif
-}
-
-// ai: The window manager's own states for its window (x11TopLevel's), asked as other apps ask: EWMH _NET_WM_STATE client
-// ai: messages, the way GTK, Qt and the browsers do it; the manager keeps the window's place, size and maximized state
-// ai: and gives them back. `full` asks full screen (2026-10-23), `maximized` both maximized directions (2026-11-13: the
-// ai: app keeps a full-screen window maximized underneath, FullScreen.kt), each where true, on one connection so the
-// ai: manager takes them in order: added, maximized first (a manager refuses to maximize a full-screen window: Muffin's
-// ai: recalc_features), removed, full screen first. true where the requests went; false off X11 (the app then asks
-// ai: Compose).
-// ai: Until 2026-10-23 the presenter set _NET_WM_BYPASS_COMPOSITOR and _NET_WM_STATE_ABOVE with the app's full screen,
-// ai: for a vsync whose losses were the machine's power-saving profile.
-bool x11WmState(unsigned long top, bool add, bool full, bool maximized) {
-#if LIZ_X11 && !defined(_WIN32)
-  Display* d = XOpenDisplay(nullptr);
-  if (!d) return false;
-  bool sent = true;
-  auto ask = [&](const char* a, const char* b) {
-    XEvent e{};
-    e.xclient.type = ClientMessage;
-    e.xclient.window = top;
-    e.xclient.message_type = XInternAtom(d, "_NET_WM_STATE", False);
-    e.xclient.format = 32;
-    e.xclient.data.l[0] = add ? 1 : 0;   // ai: _NET_WM_STATE_ADD, _NET_WM_STATE_REMOVE
-    e.xclient.data.l[1] = static_cast<long>(XInternAtom(d, a, False));
-    e.xclient.data.l[2] = b ? static_cast<long>(XInternAtom(d, b, False)) : 0;
-    e.xclient.data.l[3] = 1;   // ai: the source: an application
-    sent = XSendEvent(d, DefaultRootWindow(d), False, SubstructureRedirectMask | SubstructureNotifyMask, &e) != 0 && sent;
-  };
-  if (add && maximized) ask("_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ");
-  if (full) ask("_NET_WM_STATE_FULLSCREEN", nullptr);
-  if (!add && maximized) ask("_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ");
-  XFlush(d);
-  XCloseDisplay(d);
-  return sent;
-#else
-  (void)top; (void)add; (void)full; (void)maximized;
-  return false;
-#endif
-}
-// ai: the states the manager has the window in, from its _NET_WM_STATE: WM_FULL, WM_MAXIMIZED (both directions)
-int x11WmStateOf(unsigned long top) {
-#if LIZ_X11 && !defined(_WIN32)
-  Display* d = XOpenDisplay(nullptr);
-  if (!d) return 0;
-  const Atom state = XInternAtom(d, "_NET_WM_STATE", False), full = XInternAtom(d, "_NET_WM_STATE_FULLSCREEN", False),
-             vert = XInternAtom(d, "_NET_WM_STATE_MAXIMIZED_VERT", False), horz = XInternAtom(d, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
-  Atom type = None;
-  int format = 0;
-  unsigned long n = 0, after = 0;
-  unsigned char* data = nullptr;
-  int bits = 0;
-  if (XGetWindowProperty(d, top, state, 0, 64, False, XA_ATOM, &type, &format, &n, &after, &data) == Success && data) {
-    const Atom* atoms = reinterpret_cast<const Atom*>(data);
-    bool v = false, h = false;
-    for (unsigned long i = 0; i < n; i++) {
-      if (atoms[i] == full) bits |= WM_FULL;
-      v = v || atoms[i] == vert;
-      h = h || atoms[i] == horz;
-    }
-    if (v && h) bits |= WM_MAXIMIZED;
-    XFree(data);
-  }
-  XCloseDisplay(d);
-  return bits;
-#else
-  (void)top;
-  return 0;
-#endif
-}
-
-bool x11Background(unsigned long window, unsigned rgb) {
-#if LIZ_X11 && !defined(_WIN32)
-  Display* d = XOpenDisplay(nullptr);
-  if (!d) return false;
-  XWindowAttributes wa{};
-  bool ok = XGetWindowAttributes(d, static_cast<Window>(window), &wa) != 0;
-  if (ok) {
-    XColor c{};
-    c.red = static_cast<unsigned short>(((rgb >> 16) & 0xff) * 257);
-    c.green = static_cast<unsigned short>(((rgb >> 8) & 0xff) * 257);
-    c.blue = static_cast<unsigned short>((rgb & 0xff) * 257);
-    c.flags = DoRed | DoGreen | DoBlue;
-    ok = XAllocColor(d, wa.colormap, &c) != 0;
-    if (ok) XSetWindowBackground(d, static_cast<Window>(window), c.pixel);
-  }
-  XFlush(d);
-  XCloseDisplay(d);
-  return ok;
-#else
-  (void)window; (void)rgb;
-  return false;
-#endif
-}
-
-bool x11KeepOnResize(unsigned long window) {
-#if LIZ_X11 && !defined(_WIN32)
-  Display* d = XOpenDisplay(nullptr);
-  if (!d) return false;
-  XSetWindowAttributes a{};
-  a.bit_gravity = NorthWestGravity;
-  XChangeWindowAttributes(d, static_cast<Window>(window), CWBitGravity, &a);
-  XFlush(d);
-  XCloseDisplay(d);
-  return true;
-#else
-  (void)window;
-  return false;
-#endif
-}
-
-#if defined(_WIN32)
-namespace {
-// ai: the windows full screen now, each with what it was before: its style, its rectangle as a normal window, maximized
-struct Windowed { LONG_PTR style = 0; RECT rect{}; bool maximized = false; };
-std::mutex gFullMu;
-std::map<HWND, Windowed> gFull;
-}  // namespace
-#endif
-
-// ai: Windows' full screen (2026-10-24; Compose's placement before, which left the window unmaximized and the app's
-// ai: own state wrong), as Chromium makes it: a maximized window restored first (left maximized, its placement's
-// ai: rectangle stays the monitor's and it comes back over the taskbar), its normal rectangle kept, WS_CAPTION and
-// ai: WS_THICKFRAME off and the window over its monitor's whole rectangle, which also hides the taskbar; on leaving,
-// ai: the style and the rectangle back and the window maximized again where it was. Called from the app's thread,
-// ai: these reach the window's (AWT's) synchronously, as AWT's own peers do.
-bool win32Fullscreen(void* hwnd, bool on) {
-#if defined(_WIN32)
-  HWND w = static_cast<HWND>(hwnd);
-  if (!w || !IsWindow(w)) return false;
-  std::lock_guard<std::mutex> l(gFullMu);
-  auto at = gFull.find(w);
-  if (on) {
-    if (at != gFull.end()) return true;
-    MONITORINFO mi{};
-    mi.cbSize = sizeof mi;
-    if (!GetMonitorInfoW(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi)) return false;
-    Windowed was;
-    was.maximized = IsZoomed(w) != 0;
-    if (was.maximized) ShowWindow(w, SW_RESTORE);
-    was.style = GetWindowLongPtrW(w, GWL_STYLE);
-    GetWindowRect(w, &was.rect);
-    gFull[w] = was;
-    SetWindowLongPtrW(w, GWL_STYLE, was.style & ~static_cast<LONG_PTR>(WS_CAPTION | WS_THICKFRAME));
-    const RECT& r = mi.rcMonitor;
-    SetWindowPos(w, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-  } else {
-    if (at == gFull.end()) return true;
-    const Windowed was = at->second;
-    gFull.erase(at);
-    SetWindowLongPtrW(w, GWL_STYLE, was.style);
-    const RECT& r = was.rect;
-    SetWindowPos(w, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-    if (was.maximized) ShowWindow(w, SW_MAXIMIZE);
-  }
-  return true;
-#else
-  (void)hwnd; (void)on;
-  return false;
-#endif
-}
-bool win32IsFullscreen(void* hwnd) {
-#if defined(_WIN32)
-  std::lock_guard<std::mutex> l(gFullMu);
-  return gFull.count(static_cast<HWND>(hwnd)) > 0;
-#else
-  (void)hwnd;
-  return false;
-#endif
-}
 
 struct Presenter::Impl {
   PresentTarget target;
@@ -906,13 +525,6 @@ void Presenter::Impl::setup() {
   si.dpy = dpy;
   si.window = xwin;
   vkCheck(createSurface(inst, &si, nullptr, &surf), "vkCreateXlibSurfaceKHR");
-#elif defined(__APPLE__)
-  if (!target.metalLayer) throw std::runtime_error("no layer to present to");
-  auto createSurface = reinterpret_cast<PFN_vkCreateMetalSurfaceEXT>(vkGetInstanceProcAddr(inst, "vkCreateMetalSurfaceEXT"));
-  if (!createSurface) throw std::runtime_error("the sender's Vulkan instance has no VK_EXT_metal_surface");
-  VkMetalSurfaceCreateInfoEXT si{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
-  si.pLayer = static_cast<const CAMetalLayer*>(target.metalLayer);
-  vkCheck(createSurface(inst, &si, nullptr, &surf), "vkCreateMetalSurfaceEXT");
 #else
   throw std::runtime_error("no window surface for this platform yet");
 #endif
@@ -1040,15 +652,12 @@ VkExtent2D Presenter::Impl::windowSize() {
 #elif LIZ_X11
   XWindowAttributes wa{};
   if (XGetWindowAttributes(xq, xwin, &wa)) return {static_cast<uint32_t>(wa.width), static_cast<uint32_t>(wa.height)};
-#elif defined(__APPLE__)
-  uint32_t w = 0, h = 0;
-  if (mac::layerPixels(target.metalLayer, &w, &h)) return {w, h};
 #endif
   return {0, 0};
 }
 
 // ai: X11: the mode's refresh of the monitor (a CRTC) holding the window's centre; Windows: the display settings of the
-// ai: monitor nearest the window (whole Hz: 59 for 59.94, the measurement corrects it); macOS: the main display's mode
+// ai: monitor nearest the window (whole Hz: 59 for 59.94, the measurement corrects it)
 void Presenter::Impl::queryMode() {
 #if defined(_WIN32)
   HMONITOR mon = MonitorFromWindow(static_cast<HWND>(target.hwnd), MONITOR_DEFAULTTONEAREST);
@@ -1083,8 +692,6 @@ void Presenter::Impl::queryMode() {
   }
   XRRFreeScreenResources(res);
   modeHz = hz;
-#elif defined(__APPLE__)
-  modeHz = mac::layerRefreshHz(target.metalLayer);
 #endif
 }
 
@@ -1209,27 +816,6 @@ void Presenter::Impl::holdMode() {
   held.on = true;
   held.mode = want;
   held.hz = hz[static_cast<size_t>(b)];
-#elif defined(__APPLE__)
-  const uint32_t display = mac::mainDisplay();
-  if (held.on && held.where != display) { releaseMode(); held.decided = false; }
-  if (held.decided && held.where == display && held.fps == f) return;
-  double now = 0;
-  const std::vector<double> hz = mac::displayRates(display, &now);
-  // ai: a built-in panel's mode says 0: its refresh is the one measured
-  const double origHz = held.on ? held.origHz : now > 0 ? now : measured;
-  if (origHz <= 0) return;
-  held.decided = true; held.where = display; held.fps = f;
-  if (evenAt(origHz, f)) { releaseMode(); return; }
-  const int b = pickRate(hz, f);
-  if (b < 0) { say("presenter: VSync: no mode of this display shows " + fpsText() + " evenly"); releaseMode(); return; }
-  if (now > 0 && std::fabs(hz[static_cast<size_t>(b)] - now) < 0.01) return;
-  if (!mac::setDisplayRate(display, hz[static_cast<size_t>(b)])) {
-    say("presenter: VSync: the display refused " + fmt("%.2f", hz[static_cast<size_t>(b)]) + " Hz");
-    return;
-  }
-  if (!held.on) held.origHz = origHz;
-  held.on = true;
-  held.hz = hz[static_cast<size_t>(b)];
 #else
   return;
 #endif
@@ -1257,8 +843,6 @@ void Presenter::Impl::releaseMode() {
     }
     XRRFreeScreenResources(res);
   }
-#elif defined(__APPLE__)
-  mac::restoreDisplays();
 #endif
   rateMoved();
   say("presenter: VSync: the monitor back at " + fmt("%.2f", held.origHz) + " Hz");
@@ -2272,8 +1856,6 @@ const wg::DeviceExtras& Presenter::deviceExtras() {
                       VK_KHR_WIN32_SURFACE_EXTENSION_NAME
 #elif LIZ_X11
                       VK_KHR_XLIB_SURFACE_EXTENSION_NAME
-#elif defined(__APPLE__)
-                      VK_EXT_METAL_SURFACE_EXTENSION_NAME
 #endif
     };
     // ai: present_timing's surface query (VK_KHR_get_surface_capabilities2), enabled where offered

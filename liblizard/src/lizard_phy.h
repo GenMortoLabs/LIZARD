@@ -218,8 +218,8 @@ int lizard_acquire_ring(const lizard_t *const *rings, int k, const uint8_t *img,
 int lizard_hand_over(const lizard_t *from, const lizard_t *to);
 // ai: A held registration let go of unfinished (a frame whose picture is not known).
 void lizard_release(const lizard_t *f);
-// The picture size a format takes (sim/lizard_pick.mjs N_FOR).
-// ai: LIZARD_PICTURES: the sizes the ladder takes, smallest first (sim/lizard_pick.mjs PICTURE_SIZES): 384 to 1536.
+// The picture size a format takes (sim/ob.mjs N_FOR).
+// ai: LIZARD_PICTURES: the sizes the ladder takes, smallest first (sim/ob.mjs PICTURE_SIZES): 384 to 1536.
 enum { LIZARD_NPICTURES = 7 };
 extern const int LIZARD_PICTURES[LIZARD_NPICTURES];
 int lizard_n_for(int subch);

@@ -1,6 +1,6 @@
 package dev.lizard.ui
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import dev.lizard.readout.Readout
 import java.util.Locale
 import kotlin.math.floor
@@ -12,18 +12,23 @@ import kotlin.math.floor
 // ai: either way. A choice stays a ring index, so a kept ring reads alike in both. The web sender's are send.mjs
 // ai: showStatsLabels and blocksText.
 object SendRows {
+    // ai: the senders' pictures a second offered as chips under VSync: 60 and its divisors to 10, every picture a whole
+    // ai: number of refreshes at 60 Hz; a rate kept from a slider read as the nearest offered, a tie to the higher
+    val FPS = listOf(60, 30, 20, 15, 10)
+    fun fpsOf(v: Int) = FPS.minWith(compareBy<Int> { kotlin.math.abs(it - v) }.thenByDescending { it })
+
     fun blocksTitle(stats: Boolean) = if (stats) "Blocks" else "Density"
 
     // ai: the blocks a frame carries and what they hold, 1 KB = 1000 B (Readout's)
     fun blocksText(blocks: Int, stats: Boolean): String {
-        val kb = "${String.format(Locale.ROOT, "%.1f", blocks * Pick.PAYLOAD / 1000.0)} KB"
+        val kb = "${String.format(Locale.ROOT, "%.1f", blocks * Ladder.PAYLOAD / 1000.0)} KB"
         return if (stats) "$blocks, $kb" else kb
     }
 
     private val LOOK = mapOf(64 to "Thick", 128 to "Medium", 256 to "Thin")
     fun rings(stats: Boolean): List<Pair<Int, String>> =
-        if (stats) Pick.RINGS.indices.map { it to "${Pick.RINGS[it]}" }
-        else Pick.RINGS.indices.reversed().map { it to LOOK.getValue(Pick.RINGS[it]) }
+        if (stats) Ladder.RINGS.indices.map { it to "${Ladder.RINGS[it]}" }
+        else Ladder.RINGS.indices.reversed().map { it to LOOK.getValue(Ladder.RINGS[it]) }
 
     val CODES = listOf(1 to "1", 2 to "2")
 
@@ -44,7 +49,7 @@ object SendRows {
             add("Speed" to speed)
             if (stats) {
                 add("Pass" to if (pass >= 1) "${floor(pass).toInt()}" else "")
-                add("Pass time" to if (cycle > 0 && speedKBs > 0) "${String.format(Locale.ROOT, "%.1f", cycle / (speedKBs * 1000 / Pick.PAYLOAD))}\u00a0s" else "")
+                add("Pass time" to if (cycle > 0 && speedKBs > 0) "${String.format(Locale.ROOT, "%.1f", cycle / (speedKBs * 1000 / Ladder.PAYLOAD))}\u00a0s" else "")
             }
         }
         return Details(name, spinning = preparing, rows = rows)
@@ -60,14 +65,14 @@ object SendRows {
     }
 
     // ai: a stream file's format as its line says it, "LIZARD-480 · 2:1 · 15 fps" (its meta.json's format, layout, fps)
-    fun streamLabel(blocks: Int, codes: Int, fps: Int): String = "LIZARD-${Pick.STEP * blocks} \u00b7 ${if (codes > 1) "2:1" else "1:1"} \u00b7 $fps fps"
+    fun streamLabel(blocks: Int, codes: Int, fps: Int): String = "LIZARD-${Ladder.STEP * blocks} \u00b7 ${if (codes > 1) "2:1" else "1:1"} \u00b7 $fps fps"
 
     // ai: an export's file size before it is made (Laps' value): its frames (cycles of the file's blocks over a picture's,
     // ai: odd) at a frame's raw bytes (frameBytes, the native side's: its squares) x 0.73, what MED and zstd at level 1
     // ai: leave of these frames (72 to 74%, 2026-11-18)
     fun exportEstimate(cycles: Double, fileBytes: Long, pictureBlocks: Int, frameBytes: Long): Long {
         if (fileBytes <= 0 || pictureBlocks <= 0 || frameBytes <= 0) return 0
-        val cycle = (fileBytes + Pick.PAYLOAD - 1) / Pick.PAYLOAD
+        val cycle = (fileBytes + Ladder.PAYLOAD - 1) / Ladder.PAYLOAD
         val frames = kotlin.math.ceil(cycles * cycle / pictureBlocks).toLong() or 1L
         return (frames * frameBytes * 0.73).toLong()
     }

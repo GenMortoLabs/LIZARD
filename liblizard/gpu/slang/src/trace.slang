@@ -1,4 +1,4 @@
-// Defines (finder.mjs): K, TR_L, TR_MAX, TR_STEP.
+// Defines (core/dec/build.cpp Finder): K, TR_L, TR_MAX, TR_STEP.
 #include "lib/frame.slang"
 #include "lib/convert.slang"
 #include "lib/level_bindings.slang"

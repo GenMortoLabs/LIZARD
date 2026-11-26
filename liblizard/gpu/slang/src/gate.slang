@@ -3,7 +3,7 @@
 // and the chain's counters, verdicts, iteration counts and record count zeroed. One workgroup of 64. Built a batch
 // size. Bindings: 0 frames, 1 sel, 2 LISTS, 3 ARGS, 4 the gate's uniform (at[s] a slot's (workgroups of pass 1, rows of
 // pass 2, top version, 0), then the rows table four versions' words a float4), 5 BCOUNTS, 6 V, 7 ITS, 8 REC. The LISTS
-// and ARGS layouts: ../../plan/back_transform.mjs. Defines (back_transform.mjs gateSource): BATCH, SLOT_COUNT,
+// and ARGS layouts and the defines (core/dec/build.cpp backHalf): BATCH, SLOT_COUNT,
 // LISTS_HEAD, ARGS_LDPC, ARGS_WORDS, NC, CHUNKS, BLK_STRIDE (uint), GATE_ROWS; lib/cfg.slang's.
 #include "lib/frame.slang"
 [[vk::binding(0, 0)]] StructuredBuffer<Frame> frames;

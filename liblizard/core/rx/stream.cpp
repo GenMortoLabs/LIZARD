@@ -678,11 +678,8 @@ class Link {
 class GpuDevelop {
  public:
   static std::unique_ptr<GpuDevelop> make(const std::string& assets, const std::function<void(const std::string&)>& log, std::string& why) {
-    std::ifstream in(assets + "/spv/ingest_develop.spv", std::ios::binary);
-    std::vector<char> b((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (b.size() < 20 || b.size() % 4) { why = "no develop kernel in " + assets; return nullptr; }
-    std::vector<uint32_t> code(b.size() / 4);
-    std::memcpy(code.data(), b.data(), b.size());
+    wg::Module code;
+    try { code = wg::readModule(assets, "ingest_develop"); } catch (const std::exception& e) { why = "no develop kernel in " + assets + " (" + e.what() + ")"; return nullptr; }
     std::unique_ptr<GpuDevelop> g(new GpuDevelop());
     try {
       wg::DeviceExtras ex;
@@ -716,12 +713,7 @@ class GpuDevelop {
       }
       if (bind) group_ = dev_->createBindGroup(bgl_, {raw_, lut_, out_});
       stageRaw(r, x, y, w, h, raw_->mapped);
-      if (!raw_->coherent) {
-        VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
-        mr.memory = raw_->mem;
-        mr.size = VK_WHOLE_SIZE;
-        vkFlushMappedMemoryRanges(dev_->dev, 1, &mr);
-      }
+      dev_->flushMapped(*raw_);
       auto c = dev_->encoder();
       c.setPipeline(*pipe_);
       c.setBindGroup(*group_);

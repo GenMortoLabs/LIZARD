@@ -199,7 +199,7 @@ int Replay::finish(const std::string& rxStats, const std::string& rows, const st
   using ojson = nlohmann::ordered_json;
   const json st = json::parse(rxStats.empty() ? "{}" : rxStats, nullptr, false);
   const json word = st.is_object() && st.contains("word") ? st["word"] : json();
-  // ai: the web's saveRun config, what a replay reads (scripts/exp/capture_check.mjs, through sim/phy.mjs recordedSpec): the
+  // ai: the web's saveRun config, what a replay reads (scripts/exp/capture_check.mjs, through the lab's scripts/sim/phy.mjs recordedSpec): the
   // ai: format the light last named under today's rule, its stream the test stream's; null where no word was read
   ojson config;
   const int v = word.is_object() && word.contains("version") && word["version"].is_number() ? word["version"].get<int>() : 0;

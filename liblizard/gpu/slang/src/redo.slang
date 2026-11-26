@@ -1,5 +1,5 @@
 // The finder's second round's frame records and its frames' resets, and its grids.
-// Defines (finder.mjs): K, R2_N, RING_COUNT.
+// Defines (core/dec/build.cpp Finder): K, R2_N, RING_COUNT.
 #include "lib/frame.slang"
 
 [[vk::binding(0, 0)]] StructuredBuffer<Frame> frames;

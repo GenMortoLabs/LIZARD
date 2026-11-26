@@ -1,6 +1,7 @@
 // ai: XferRxCore and XferJudge (xfer_rx_core.h): the web's transfer chain ported, with no thread of its own (split out of
-// ai: xfer_rx.cpp 2026-10-03, every line of the chain as it was). Rx is sim/xfer.mjs XferReceiver and
-// ai: lizard-web/fountain-worker.mjs take; the judge is sim/phy.mjs blockJudge and lizard-web/recv.mjs take's dedupe. Each function
+// ai: xfer_rx.cpp 2026-10-03, every line of the chain as it was). Rx was sim/xfer.mjs XferReceiver and
+// ai: lizard-web/fountain-worker.mjs take, the judge (sim/ob.mjs blockJudge) and lizard-web/recv.mjs take's dedupe (the web
+// ai: runs this C since 2026-11-25, its JS deleted). Each function
 // ai: names the JS it ports; where the port differs, an ai: comment says so and why.
 #include "xfer_rx_core.h"
 
@@ -23,7 +24,7 @@ extern "C" {
 namespace lizard {
 
 static constexpr uint32_t PAYLOAD = XFER_PAYLOAD, REC = XFER_BLOCK;
-// ai: lizard-web/fountain-worker.mjs LIVE_BLOCKS, HOLD_BLOCKS; lizard-web/recv.mjs SEEN_KEEP
+// ai: (the web's LIVE_BLOCKS, HOLD_BLOCKS and SEEN_KEEP before 2026-11-25)
 static constexpr int64_t LIVE_BLOCKS = 4096, NEVER = INT64_MAX / 2;   // ai: XferProgress.live
 static constexpr size_t HOLD_BLOCKS = 1024, SEEN_KEEP = 1 << 16;
 // ai: meta.json written again every this many blocks stored (about 1 MB) or a second of storing, whichever comes first,
@@ -125,15 +126,17 @@ struct XferRxCore::Rx {
   // ai: (the header, the list); the solver holds the records in a decoder, lets them go, solves, recovers and checks the
   // ai: source block; the result is taken back on this thread (settle), where the store and the source block's state are touched. At
   // ai: most one job a solver is out (its records read as it goes): the rest wait as source block numbers, so a burst holds
-  // ai: about 36 MB a solver at 16 MiB source blocks, not every source block's records at once. No pool (solvers 0: the library's,
-  // ai: and the wasm's, which has no threads): the job runs here, inline, as before. A job names its transfer by its
+  // ai: about 36 MB a solver at 16 MiB source blocks, not every source block's records at once. A solver's thread starts with
+  // ai: the first job it is needed for (2026-11-25: a receiver with nothing to solve holds no thread for them, which in the
+  // ai: web's threaded module is a worker each), and stays. No pool (solvers 0: the library's, and the plain wasm module's,
+  // ai: which has no threads; or no thread could be had): the job runs here, inline, as before. A job names its transfer by its
   // ai: serial (one a transfer opened), so a solve of a transfer let go is dropped when it comes back.
   // ai: at: the blocks forwarded when the source block's solve was asked for (doneAt, below)
   struct Job { uint32_t c = 0; uint64_t serial = 0, at = 0; uint32_t len = 0, nrecs = 0; std::vector<uint8_t> recs; xfer_header_t h{}; };
   // ai: cv: the source block's chaining value (two source blocks or more), xfer_sb_check's
   struct Done { uint32_t c = 0; uint64_t serial = 0, at = 0; uint32_t nrecs = 0, dups = 0; bool solved = false, ok = false, oom = false, few = false; std::vector<uint8_t> out; std::unique_ptr<Dec> dec; double ms = 0; uint8_t cv[XFER_CV] = {}; };
 
-  // ai: One transfer this receiver holds (sim/xfer.mjs Transfer, 2026-11-19): a file, from
+  // ai: One transfer this receiver holds (2026-11-19): a file, from
   // ai: its session header's description on, each source block checked against its root, its blocks in a store
   // ai: of its own (the root store's make()).
   struct Obj {
@@ -494,8 +497,7 @@ struct XferRxCore::Rx {
   Rx(std::unique_ptr<Store> s, std::function<void(const std::string&)> l, unsigned n, std::function<void()> w)
       : root(std::move(s)), log(std::move(l)), wake(std::move(w)) {
     root->log = log;
-    for (unsigned i = 0; i < n; i++) try { pool.emplace_back([this] { solver(); }); } catch (const std::system_error&) { break; }
-    solvers = unsigned(pool.size());
+    solvers = n;
   }
   ~Rx() {
     { std::lock_guard<std::mutex> lk(jmu); jstop = true; }
@@ -597,12 +599,21 @@ struct XferRxCore::Rx {
     noteDone();
   }
   void dispatch() {
-    while (!waiting.empty() && out < solvers) {
+    while (!waiting.empty() && (out < solvers || !solvers)) {
       const auto [serial, c] = waiting.front();
       waiting.pop_front();
       waitN--;
       Obj* t = find(serial);
       if (!t || !t->hdr || c >= t->sbs.size() || t->sbs[c].state != SOLVING) continue;
+      // ai: a solver more where every one has a job (the pool's start); a thread refused, the ones running are the pool
+      // ai: (the source block waits for one of them), and with none the waiting are solved here
+      if (solvers && out >= pool.size()) {
+        try { pool.emplace_back([this] { solver(); }); } catch (const std::system_error&) {
+          solvers = unsigned(pool.size());
+          if (solvers) { waiting.push_front({serial, c}); waitN++; break; }
+        }
+      }
+      if (!solvers) { t->commit(run(t->jobOf(c))); continue; }
       Job j = t->jobOf(c);
       out++;
       { std::lock_guard<std::mutex> lk(jmu); jobs.push_back(std::move(j)); }
@@ -612,7 +623,7 @@ struct XferRxCore::Rx {
   uint32_t solving() const { return out + waitN; }
   void say(const std::string& s) { if (log) log(s); }
 
-  // ai: lizard-web/fountain-worker.mjs chunked (a config) and handle's clear: a new receiver, the held blocks let go, and on
+  // ai: a new receiver (the web's fountain worker's config and clear before 2026-11-25), the held blocks let go, and on
   // ai: a clear the finished files too (refused kept, as the web's receiver keeps it)
   void clearAll() {
     while (!objs.empty()) close(objs.begin()->first, false);
@@ -654,7 +665,7 @@ struct XferRxCore::Rx {
     }
   }
 
-  // ai: lizard-web/fountain-worker.mjs take: a block by its TOI (src/xfer.h). A data block goes to its object's transfer;
+  // ai: a block by its TOI (src/xfer.h). A data block goes to its object's transfer;
   // ai: any other is held until a header names its object; control blocks are read as they come.
   // ai: A block under TOI 0 (none) is ignored (SPEC 7.5).
   void block(const uint8_t* b) {
@@ -850,7 +861,7 @@ bool XferJudge::take(const uint8_t* b, const Pass& pass) {
   return true;
 }
 
-// ai: sim/phy.mjs blockJudge, then lizard-web/recv.mjs take: a test frame's new ids are counted and remembered as the page
+// ai: the web's blockJudge (sim/ob.mjs), then lizard-web/recv.mjs take: a test frame's new ids are counted and remembered as the page
 // ai: does, and none of its blocks passed on
 FrameVerdict XferJudge::frame(const uint8_t* blocks, size_t count, const Pass& pass) {
   FrameVerdict v;

@@ -2,7 +2,7 @@
 // ai: origin private file system, lizard-files/<id>/ holding the file as `data` and its meta.json ({ name, size,
 // ai: root, at }), the id the first 16 hex digits of its BLAKE3 root (-2 on for the same file received again: a second
 // ai: entry, as a download clicked twice, since 2026-11-20; it replaced the entry before). The
-// ai: fountain worker files a finished transfer there (fountain-worker.mjs fileAway); the pages list, open and delete
+// ai: receiver's engine files a finished transfer there (engine-worker.mjs, bindings/wasm/engine.cpp lizw_file_away); the pages list, open and delete
 // ai: here. A change is announced on a BroadcastChannel, so an open Home sees a file the receiver just filed.
 // ai: Without OPFS (a private window, ?store=memory) nothing is kept: the receiver offers its file until the page closes.
 export const DIR = "lizard-files";
@@ -69,7 +69,7 @@ export function watch(cb) {
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cb(); });
 }
 
-// ai: Transfers begun and not finished (2026-10-22): the fountain worker's folders under lizard-xfer (fountain-worker.mjs
+// ai: Transfers begun and not finished (2026-10-22): the receiver's folders under lizard-xfer (core/rx/store.h's file store on OPFS,
 // ai: OpfsStore), one a transfer by its root's first 16 hex digits and its TOI, each with meta.json ({ name, length, source blocks,
 // ai: verified, root, fraction, bytesIn }); a receiver resumes one when its file is in the light again. Newest
 // ai: first: { ...meta, id, at }, at when its meta.json was last written.
@@ -90,7 +90,7 @@ export async function unfinished() {
   return out.sort((a, b) => (b.at ?? 0) - (a.at ?? 0));
 }
 // ai: An unfinished transfer let go: its folder removed, or, where an open receiver holds its files (OPFS refuses the
-// ai: removal then), that receiver's fountain worker asked to forget it (fountain-worker.mjs listens on the channel).
+// ai: removal then), that receiver's engine asked to forget it (engine-worker.mjs listens on the channel).
 export async function forgetUnfinished(id) {
   try { await (await (await navigator.storage.getDirectory()).getDirectoryHandle(XFER)).removeEntry(id, { recursive: true }); }
   catch (e) { if (e?.name === "NotFoundError") return; if (typeof BroadcastChannel !== "function") throw e; const bc = new BroadcastChannel(XFER_CHANNEL); bc.postMessage({ forget: id }); bc.close(); }

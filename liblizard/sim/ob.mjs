@@ -1,13 +1,14 @@
 // The JS face of the codec's own exports (src/wasm.c) in the library's WebAssembly module, which build/ob.mjs names
 // (liblizard/build.sh: bindings/wasm/dist/lizard.mjs).
 import create from "../build/ob.mjs";
+import F from "../build/format.mjs";
 
 // OB_BUILD names ANOTHER build's ob.mjs, as a path relative to liblizard/, so a harness run can be held against a
 // different build of the same source without rebuilding in between: an A/B otherwise costs a full emcc run each
 // way round and the two arms cannot then run at once.
 //
-// THIS MODULE IS LOADED BY THE BROWSER. lizard-web/send.mjs reaches it through sim/phy.mjs and lizard-web/recv-worker.mjs
-// imports it directly, so it may not carry a node: import or touch `process` at the top level; doing either
+// THIS MODULE IS LOADED BY THE BROWSER. lizard-web/send.mjs and lizard-web/send-worker.mjs import it, so it may not
+// carry a node: import or touch `process` at the top level; doing either
 // stops both demo pages before they run. The static import above is what the browser takes, and the dynamic one
 // is only ever reached under node with the variable set.
 const ALT = typeof process !== "undefined" && process.env && process.env.OB_BUILD;
@@ -16,17 +17,281 @@ let M, base;
 // ai: (sim/fountain.mjs, sim/zstd.mjs) are one module since 2026-10-25, so they share it. OB_BUILD's module (an A/B) is
 // ai: init()'s alone; the shims stay the default build's (a build from before has none).
 export function baseModule() { return (base ??= create()); }
-// The margin the codec paints round the frame, in modules (src/lizard_phy.h LIZARD_QUIET), read from the codec by init(): a
-// live binding, undefined until then. Not a top-level await: a worker whose imports await loses the messages that
-// arrive meanwhile (lizard-web/recv-worker.mjs read nothing that way), and a page that only wants the arithmetic would pay
-// for a codec instance.
-export let QUIET;
+// ai: No top-level await here: a worker whose imports await loses the messages that arrive meanwhile
+// ai: (the web's decode workers read nothing that way), and a page that only wants the arithmetic below would pay for a
+// ai: codec instance.
 export async function init() {
   if (!M) {
     M = ALT ? await (await import(`../${ALT}`)).default() : await baseModule();
   }
-  QUIET ??= M._lizard_quiet?.();
   return M;
+}
+const needM = (what) => { if (!M) throw new Error(`${what}: the codec is not loaded yet: await sim/ob.mjs init() first`); return M; };
+const lastError = () => new Error(M.UTF8ToString(M._liz_last_error()));
+
+// ai: THE FORMAT'S ARITHMETIC, the C's (src/lizard_phy.c, api/format.cpp), as the table it writes at the build
+// ai: (build/format.mjs, gen/format.mjs over src/wasm.c lizard_format_json): no codec instance needed, so a page, a worker
+// ai: or a script reads it at once. A format is its sub-channel count, 16 x its version (1 to 67, the version its word
+// ai: carries); its picture size, blocks, tiers and rooms follow from it. The rings are indices into RINGS (64, 128 and
+// ai: 256 cells a side); a ring left out is the senders' default, RING_DEFAULT (the 128).
+export const STEP = F.STEP;
+export const VERSIONS = Array.from({ length: F.VERSION_MAX - F.VERSION_MIN + 1 }, (_, i) => F.STEP * (F.VERSION_MIN + i));
+export const NAME = (subch) => `LIZARD-${subch}`;
+export const subchOf = (version) => F.STEP * version;
+export const versionOf = (subch) => subch / F.STEP;   // ai: what the format word carries
+// ai: the margin the codec paints round a symbol, modules (LIZARD_QUIET); the border's depth past the ring's span
+// ai: (OB_MARGIN); the one bit map (LIZARD_BITMAP); a sub-channel's data slots; a block's slots by rate (6 the 6/7, 4
+// ai: 3/4, 3 2/3, 2 1/2); the picture sizes, smallest first; the senders' size unless one is chosen (blocks)
+export const QUIET = F.QUIET, OB_QUIET = F.QUIET, OB_MARGIN = F.OB_MARGIN, LIZARD_BITMAP = F.BITMAP, SUB_SLOTS = F.SUB_SLOTS;
+export const BLOCK_SLOTS = F.BLOCK_SLOTS, PICTURE_SIZES = F.PICTURE_SIZES, RINGS = F.RINGS, RING_DEFAULT = F.RING_DEFAULT;
+export const BLOCKS_DEFAULT = F.BLOCKS_DEFAULT;
+// ai: the gap between two codes of a frame, in modules, where none is set (lizard.h LIZ_GAP_MODULES: the native painter's,
+// ai: gpu/encoder.mjs's and send-worker.mjs's; the page's slider gives another)
+export const GAP_MODULES = F.GAP_MODULES;
+// ai: A block (src/xfer.h, the C's numbers): its 12-byte id, then its 460-byte payload. The id is 96 bits: the bare id
+// ai: (16 bits of source block over 24 of symbol) in bytes 0 to 4, the 48-bit TOI in bytes 5 to 10, both little-endian,
+// ai: and a reserved byte (0). Here a bare id is a number taken apart by arithmetic (40 bits, past JS's 32-bit
+// ai: operators; exact to 2^53), a list of ids a Float64Array; a TOI a number too (48 bits).
+export const PAYLOAD = F.PAYLOAD, ID_BYTES = F.ID_BYTES, BLOCK = F.ID_BYTES + F.PAYLOAD, CONTROL = F.CONTROL, LOG2_DEFAULT = F.LOG2_DEFAULT;
+const SYMBOLS = 2 ** F.ESI_BITS;
+export const ID_HEADER = F.CONTROL * SYMBOLS;   // ai: the session header's bare id (the control source block's symbol 0)
+export const idSbn = (id) => Math.floor(id / SYMBOLS);
+export const idEsi = (id) => id % SYMBOLS;
+export const isControlId = (id) => idSbn(id) === F.CONTROL;
+export const idOf = (sbn, symbol) => sbn * SYMBOLS + symbol;
+// ai: a block's bare id from its first five bytes and its TOI from the next six; both into them, the reserved byte 0
+export const idGet = (b, o = 0) => b[o] + b[o + 1] * 2 ** 8 + b[o + 2] * 2 ** 16 + b[o + 3] * 2 ** 24 + b[o + 4] * 2 ** 32;
+export const toiGet = (b, o = 0) => { let t = 0; for (let i = F.TOI_BYTES - 1; i >= 0; i--) t = t * 256 + b[o + F.ID_TOI + i]; return t; };
+export const idPut = (b, o, id, toi = 0) => {
+  for (let i = 0; i < F.ID_TOI; i++, id = Math.floor(id / 256)) b[o + i] = id % 256;
+  for (let i = 0; i < F.TOI_BYTES; i++, toi = Math.floor(toi / 256)) b[o + F.ID_TOI + i] = toi % 256;
+  b[o + F.ID_BYTES - 1] = 0;
+};
+export const hex = (a) => Array.from(a, (v) => v.toString(16).padStart(2, "0")).join("");
+export const PAINTED_MARGIN = () => F.QUIET;
+const ver = (subch) => (Number.isInteger(subch / F.STEP) ? F.versions[subch / F.STEP - F.VERSION_MIN] : undefined);
+const of = (subch) => { const v = ver(subch); if (!v) throw new Error(`${subch} sub-channels: no format (16 to 1072 in 16s)`); return v; };
+// ai: the picture size a format takes (lizard_n_for: the first picture size at least three times its radius); a count
+// ai: off the ladder (a harness's) through the codec, after init()
+export const N_FOR = (subch) => ver(subch)?.n ?? needM(`a picture for ${subch} sub-channels`)._lizard_n_for(subch);
+// ai: the default senders' layout (lizard_tiers_for): [[rate, blocks, slots], ...] inner first, the tiers with blocks
+// ai: alone; [] for a count that is no format's. blocksFor its blocks; countsFor [6/7, 3/4, 2/3, 1/2]; blocksMaxFor
+// ai: the most blocks any layout of it holds (6/7 blocks alone)
+export const tiersFor = (subch) => ver(subch)?.tiers.map((t) => [...t]) ?? [];
+export const blocksFor = (subch) => ver(subch)?.blocks ?? 0;
+export const blocksMaxFor = (subch) => ver(subch)?.max ?? 0;
+export const countsFor = (subch) => { const t = tiersFor(subch), at = (r) => t.find(([q]) => q === r)?.[1] ?? 0; return [at(6), at(4), at(3), at(2)]; };
+// ai: a frame's layout from its word's counts [6/7, 3/4, 2/3, 1/2] (src/fmt.c ob_fmt_layout: any counts whose blocks
+// ai: fit, the rest padding): all four tiers as [rate, blocks, slots], or [] where it is no frame. After init().
+let pCounts = 0;
+export function layoutOf(subch, counts) {
+  const m = needM("layoutOf");
+  if (!ver(subch) || counts.length !== 4 || !counts.every((x) => Number.isInteger(x) && x >= 0 && x < 2 ** 31)) return [];
+  pCounts ||= m._malloc(16);
+  m.HEAP32.set(counts, pCounts >> 2);
+  if (!m._ob_fmt_layout(subch / F.STEP, pCounts)) return [];
+  return [6, 4, 3, 2].map((r, i) => [r, counts[i], F.BLOCK_SLOTS[r]]);
+}
+// ai: a picture's span (2 x the ring's cells) and its symbol's modules a side (the span and the border, liz_ring_modules),
+// ai: neither depending on n; pixels a module (lizard_pxm_for: the fewest that do not shrink the picture); the painted
+// ai: symbol's pixels a side, its margin not counted
+export const SPAN = (n, ring = F.RING_DEFAULT) => F.SPANS[ring];
+export const MODULES = (n, ring = F.RING_DEFAULT) => F.MODULES[ring];
+export function CELL_OF(n, ring = F.RING_DEFAULT) {
+  const i = F.PICTURE_SIZES.indexOf(n);
+  if (i >= 0) return F.pxm[i][ring];
+  return needM(`a picture of ${n}`)._lizard_pxm_for(n, F.SPANS[ring]);
+}
+export const SAMPLES = (n, ring = F.RING_DEFAULT) => MODULES(n, ring) * CELL_OF(n, ring);
+// ai: the half-disc's radius a format's coefficients reach (liz_radius_for); the camera pixels across its symbol and the
+// ai: display pixels its room takes with the margin the codec paints (liz_camera_for, liz_room_for)
+export const R_RING = (subch) => of(subch).radius;
+export const CAMERA_PX_FOR = (subch, ring = F.RING_DEFAULT) => of(subch).camera[ring];
+export const ROOM_FOR = (subch, ring = F.RING_DEFAULT) => of(subch).room[ring];
+// ai: pickVersion(roomPx, top, ring): the largest sub-channel count up to top whose room fits in roomPx device px
+// ai: (liz_pick), with what follows from it; `tight` a room too small even for the smallest, `squeezed` one that cannot
+// ai: hold the picture's samples (reported, never silent). After init().
+export function pickVersion(roomPx, top = VERSIONS.at(-1), ring = null) {
+  const m = needM("pickVersion"), r = ring ?? F.RING_DEFAULT;
+  const b = m._liz_pick(roomPx, roomPx, 1, r, Math.max(F.VERSION_MIN, Math.min(F.VERSION_MAX, Math.floor(top / F.STEP))));
+  if (b < 0) throw lastError();
+  const subch = F.STEP * b, n = N_FOR(subch), samples = SAMPLES(n, r);
+  return { n, subch, ring: r, span: SPAN(n, r), version: b, samples, scale: roomPx / samples, needPx: ROOM_FOR(subch, r),
+    cameraPx: CAMERA_PX_FOR(subch, r), whole: Math.max(1, Math.floor(roomPx / samples)), tight: ROOM_FOR(subch, r) > roomPx, squeezed: samples > roomPx };
+}
+
+// ai: THE SENDERS' BUNDLE (lizard.h liz_bundle_*, api/tar.cpp): a choice of files and folders as one payload, laid out
+// ai: by the C. entries: [{ path, dir: true, mtime } | { path, blob, mtime }], '/' between a path's parts, relative, in
+// ai: any order; mtime seconds, left out for none. One file alone is itself; anything else one tar whose parts are the
+// ai: C's heads and the files' blobs by reference (no file's bytes copied or read here). Returns { name, size, files,
+// ai: bundled, blob }. After init().
+const u64 = (m, p) => m.HEAPU32[p >> 2] + m.HEAPU32[(p >> 2) + 1] * 2 ** 32;
+// ai: THE TRANSFER'S SENDING END, the C's (lizard.h liz_tx over this module: core/tx/xfer_tx.cpp, every source block made
+// ai: before the constructor returns, the plain module having no threads), for the checks and the lab that paint a file's
+// ai: frames (the pages' sender is the threaded module's, lizard-web/send-worker.mjs). A file's bytes, its name, the source
+// ai: block size's power of two (the C's choice unless given), the schedule's seed (a random one unless given), zstd
+// ai: where the bytes are the default client's stream. frameIds(n) takes the next n blocks of the schedule and gives
+// ai: their ids (a Float64Array: a bare id is 40 bits); block(id, out) and toiFor(id) answer for the frame's ids; info is
+// ai: liz_tx_info's (cycle, root, seed, sbLog2, sourceBlocks, length); K(c) source block c's source symbols.
+export class Sender {
+  constructor(bytes, { name = "", sbLog2 = -1, seed = null, zstd = false } = {}) {
+    const m = needM("Sender"), n = m.lengthBytesUTF8(name) + 1, np = m._malloc(n);
+    this.p = m._malloc(Math.max(1, bytes.length));
+    m.HEAPU8.set(bytes, this.p);
+    m.stringToUTF8(name, np, n);
+    this.h = sbLog2 >= 0 ? m._liz_tx_new_sized(this.p, bytes.length, np, zstd ? 2 : 0, sbLog2) : m._liz_tx_new(this.p, bytes.length, np, zstd ? 2 : 0);
+    m._free(np);
+    if (!this.h) { m._free(this.p); throw lastError(); }
+    if (seed != null && m._liz_tx_seed(this.h, seed >>> 0) < 0) throw lastError();
+    this.blocks = new Map(); this.buf = 0; this.cap = 0;
+  }
+  get info() {
+    const p = M._malloc(64);
+    M._liz_tx_info_get(this.h, p);
+    const dv = new DataView(M.HEAPU8.buffer, p, 64);
+    const i = { length: Number(dv.getBigUint64(8, true)), sourceBlocks: dv.getUint32(16, true), cycle: dv.getUint32(20, true), root: hex(M.HEAPU8.slice(p + 24, p + 56)), seed: dv.getUint32(56, true), sbLog2: dv.getUint32(60, true) };
+    M._free(p);
+    return i;
+  }
+  K(c) { const { length, sbLog2 } = this.info, size = 2 ** sbLog2; return Math.ceil(Math.min(size, length - c * size) / F.PAYLOAD); }
+  frameIds(n) {
+    if (n > this.cap) { if (this.buf) M._free(this.buf); this.buf = M._malloc(n * BLOCK); this.cap = n; }
+    if (M._liz_tx_next(this.h, n, this.buf) < 0) throw lastError();
+    const b = M.HEAPU8.slice(this.buf, this.buf + n * BLOCK), ids = new Float64Array(n);
+    this.blocks = new Map();
+    for (let k = 0; k < n; k++) { ids[k] = idGet(b, k * BLOCK); this.blocks.set(ids[k], b.subarray(k * BLOCK, (k + 1) * BLOCK)); }
+    return ids;
+  }
+  block(id, out) { out.set(this.blocks.get(id).subarray(F.ID_BYTES)); return out; }
+  toiFor(id) { return toiGet(this.blocks.get(id), 0); }
+  free() { if (!this.h) return; M._liz_tx_free(this.h); M._free(this.p); if (this.buf) M._free(this.buf); this.h = 0; }
+}
+// ai: BLAKE3 of bytes (b3sum's; src/xfer.h xfer_b3_hash), 32 bytes
+export function blake3(bytes) {
+  const m = needM("blake3"), p = m._malloc(Math.max(1, bytes.length)), o = m._malloc(32);
+  m.HEAPU8.set(bytes, p);
+  m._xfer_b3_hash(p, bytes.length, o);
+  const r = m.HEAPU8.slice(o, o + 32);
+  m._free(p); m._free(o);
+  return r;
+}
+// ai: A session header's or a frame's blocks read by the C's receiving end (lizard.h liz_rx, in memory), for a check
+// ai: that wants what the light said: frame(blocks) takes a frame's 472-byte blocks; header the description's name,
+// ai: root (hex) and length once a session header was read, else null; data the file once whole, else null.
+export class Receiver {
+  constructor() { this.h = needM("Receiver")._liz_rx_new(0); if (!this.h) throw lastError(); this.buf = 0; this.cap = 0; this.v = M._malloc(20); }
+  frame(blocks) {
+    if (blocks.length > this.cap) { if (this.buf) M._free(this.buf); this.buf = M._malloc(blocks.length); this.cap = blocks.length; }
+    M.HEAPU8.set(blocks, this.buf);
+    if (M._liz_rx_frame(this.h, this.buf, blocks.length / BLOCK, this.v) < 0) throw lastError();
+    const [seen, bad, judged, fresh, test] = M.HEAP32.subarray(this.v >> 2, (this.v >> 2) + 5);
+    return { seen, bad, judged, fresh, test: !!test };
+  }
+  get progress() {
+    const p = M._malloc(80);
+    M._liz_rx_progress(this.h, p);
+    const dv = new DataView(M.HEAPU8.buffer, p, 80);
+    const r = { header: dv.getInt32(0, true) !== 0, done: dv.getInt32(4, true) !== 0, length: Number(dv.getBigUint64(8, true)), verified: dv.getUint32(36, true), rejected: dv.getUint32(40, true) };
+    M._free(p);
+    return r;
+  }
+  get header() { const p = this.progress; return p.header ? { name: M.UTF8ToString(M._liz_rx_meta(this.h, 0)), root: M.UTF8ToString(M._liz_rx_meta(this.h, 1)), length: p.length } : null; }
+  get data() { const dp = M._malloc(8); try { if (M._liz_rx_data(this.h, dp, dp + 4)) return null; const a = M.HEAPU32[dp >> 2], n = M.HEAPU32[(dp + 4) >> 2]; return M.HEAPU8.slice(a, a + n); } finally { M._free(dp); } }
+  free() { if (this.h) M._liz_rx_free(this.h); if (this.buf) M._free(this.buf); M._free(this.v); this.h = 0; }
+}
+
+// ai: REFRESH (2026-11-17), the senders' hold rule, the C's (core/tx/refresh.h; lizard.h liz_refresh_places,
+// ai: liz_refresh_held), for a sender whose ids are its own (lizard-web/send-worker.mjs): every[r] the delay of code rate
+// ai: r (0 6/7, 1 3/4, 2 2/3, 3 1/2), a whole number of pictures 1 to REFRESH_MAX (the word's largest delay, src/fmt.h).
+// ai: In the frame painted seq-th a block repeats the id at its place in the frame before where there is one in this run
+// ai: and its place's delay is past 1 and seq no multiple of it; every other block takes a new id.
+export const REFRESH_MAX = F.DELAY_MAX;
+// ai: four whole values 1 to REFRESH_MAX, 1 for anything else (a page's four sliders)
+export const everyOf = (every) => [0, 1, 2, 3].map((r) => Math.max(1, Math.min(REFRESH_MAX, Math.round(+every?.[r]) || 1)));
+// ai: the delays of a format's `blocks` places from the four (the default senders' layout), an Int32Array; null where its
+// ai: layout lays other than `blocks` (then nothing is held). After init().
+export function refreshPlaces(subch, blocks, every) {
+  const m = needM("refreshPlaces"), e = m._malloc(16), p = m._malloc(4 * Math.max(1, blocks));
+  try {
+    m.HEAP32.set(everyOf(every), e >> 2);
+    return m._liz_refresh_places(subch, blocks, e, p) < 0 ? null : m.HEAP32.slice(p >> 2, (p >> 2) + blocks);
+  } finally { m._free(e); m._free(p); }
+}
+// ai: the frame painted seq-th, `total` blocks (codes x the places): held[t] 1 where block t repeats the frame before's
+// ai: (before: there is one of the same blocks)
+export function refreshHeld(places, total, seq, before) {
+  const m = needM("refreshHeld"), p = m._malloc(4 * Math.max(1, places.length)), h = m._malloc(Math.max(1, total));
+  try {
+    m.HEAP32.set(places, p >> 2);
+    if (m._liz_refresh_held(p, places.length, total, BigInt(seq), before ? 1 : 0, h) < 0) throw lastError();
+    return m.HEAPU8.slice(h, h + total);
+  } finally { m._free(p); m._free(h); }
+}
+// ai: One run's state: the setting, the format's places and the frame before's ids. A new format (start, a re-pick) or
+// ai: a stop forgets the frame before, so the next frame is new throughout. next(seq, total, take): the ids of the
+// ai: frame painted seq-th, take(m) giving the m new ids in order (asked only for m > 0): { ids, fresh, m }, fresh[t] 1
+// ai: where block t took a new id; the ids a Float64Array (a bare block id is 40 bits).
+export class Refresh {
+  constructor() { this.every = [1, 1, 1, 1]; this.subch = 0; this.blocks = 0; this.places = null; this.prev = null; }
+  setEvery(every) { this.every = everyOf(every); this.places = this.blocks ? refreshPlaces(this.subch, this.blocks, this.every) : null; }
+  setFormat(subch, blocks) { this.subch = subch; this.blocks = blocks; this.places = refreshPlaces(subch, blocks, this.every); this.prev = null; }
+  reset() { this.prev = null; }
+  next(seq, total, take) {
+    const { places, prev } = this, laid = !!places && total % places.length === 0;
+    const held = laid ? refreshHeld(places, total, seq, !!prev && prev.length === total) : new Uint8Array(total);
+    const fresh = new Uint8Array(total), ids = new Float64Array(total);
+    let m = 0;
+    for (let t = 0; t < total; t++) { fresh[t] = held[t] ? 0 : 1; m += fresh[t]; }
+    const got = m ? take(m) : null;
+    for (let t = 0, k = 0; t < total; t++) ids[t] = fresh[t] ? got[k++] : prev[t];
+    this.prev = ids;
+    return { ids, fresh, m };
+  }
+}
+
+// ai: THE GPU SENDER'S TABLES for the module's codec (the latest Lizard's), the native painter's own (core/tx/send_tables.cpp
+// ai: through bindings/wasm/tables.cpp), for encodes of `frames` frames of `codes` symbols `gap` modules apart:
+// ai: { why } where it cannot be painted, else the sizes (n, subch, blocks, npos, Vr, sdWords, q, sq, W, FW, RW, FS,
+// ai: codes, gap in pixels, copy), the tables copied out (rows, uv, su, g, taps, pu, anch, tab: Uint32Array; tw:
+// ai: Float32Array) and the plan's constants (P_DIMS, P_WORDS, G_WORDS, RSH_THREADS, RSH_BAND, BLOCK_BYTES). After init().
+export function sendTables(frames, codes, gap) {
+  const m = needM("sendTables"), j = JSON.parse(m.UTF8ToString(m._lizw_send_tables(frames, codes, gap)));
+  if (j.why) return { why: j.why };
+  const u32 = ([p, n]) => m.HEAPU32.slice(p >> 2, (p >> 2) + n);
+  for (const k of ["rows", "uv", "su", "g", "taps", "pu", "anch", "tab"]) j[k] = u32(j[k]);
+  j.tw = m.HEAPF32.slice(j.tw[0] >> 2, (j.tw[0] >> 2) + j.tw[1]);
+  return j;
+}
+
+export function bundle(entries) {
+  const m = needM("bundle"), b = m._liz_bundle_new(), q = m._malloc(24);
+  try {
+    for (const e of entries) {
+      const len = m.lengthBytesUTF8(e.path) + 1, p = m._malloc(len);
+      m.stringToUTF8(e.path, p, len);
+      const k = m._liz_bundle_add(b, p, e.dir ? 1 : 0, BigInt(e.dir ? 0 : e.blob.size), e.mtime ?? NaN);
+      m._free(p);
+      if (k < 0) throw lastError();
+    }
+    if (m._liz_bundle_make(b, Date.now() / 1000, q) < 0) throw lastError();
+    const size = u64(m, q), single = m.HEAP32[(q >> 2) + 2], files = m.HEAP32[(q >> 2) + 3], count = m.HEAP32[(q >> 2) + 4];
+    const name = m.UTF8ToString(m._liz_bundle_name(b));
+    if (single >= 0) return { name, size, files, bundled: false, blob: entries[single].blob };
+    const parts = [];
+    for (let e = 0; e < count; e++) {
+      const h = m._liz_bundle_entry_get(b, e, q), item = m.HEAP32[(q >> 2) + 2], pad = m.HEAP32[(q >> 2) + 3], len = m.HEAP32[(q >> 2) + 4];
+      parts.push(m.HEAPU8.slice(h, h + len));
+      if (item >= 0) parts.push(entries[item].blob);
+      if (pad) parts.push(new Uint8Array(pad));
+    }
+    parts.push(new Uint8Array(F.TAR_END));
+    const blob = new Blob(parts);
+    if (blob.size !== size) throw new Error(`bundle: ${blob.size} bytes laid out where the C counted ${size} (a file's size moved?)`);
+    return { name, size, files, bundled: true, blob };
+  } finally {
+    m._free(q);
+    m._liz_bundle_free(b);
+  }
 }
 // ai: Where the camera's axis falls in the next image decoded (src/lizard_phy.h lizard_set_axis): [x, y] image px, or null
 // ai: for the image's centre. Every decode sets it, so one frame's axis never stays for the next.
@@ -89,11 +354,52 @@ export function streamMatches(id, bytes) {
   M.HEAPU8.set(bytes, pMatch);
   return M._stream_matches_of(id, pMatch, bytes.length) === 1;
 }
+// ai: A frame's T blocks from its ids, laid out as the codec takes them (BLOCK bytes each): each its 12-byte id
+// ai: (src/xfer.h: the bare id, then toi: a number, every block's, or toi(id), a sender's toiFor) and its payload,
+// ai: payload(id, out) its PAYLOAD bytes, the test stream's (streamBlock) unless given. ids: the first of a run of T, or
+// ai: the T ids (a Float64Array: a bare id is 40 bits). Into out, or a new buffer; returned.
+export function frameBlocks(ids, T, { toi = 1, payload = null } = {}, out = new Uint8Array(T * BLOCK)) {
+  for (let t = 0; t < T; t++) {
+    const id = typeof ids === "number" ? ids + t : ids[t], o = t * BLOCK;
+    idPut(out, o, id, typeof toi === "number" ? toi : toi(id));
+    if (payload) payload(id, out.subarray(o + ID_BYTES, o + BLOCK));
+    else out.set(streamBlock(id, PAYLOAD), o + ID_BYTES);
+  }
+  return out;
+}
+// ai: A receiver's judge of a frame's verified blocks from the light alone (core/rx/xfer_rx_core.h XferJudge's rule, the
+// ai: engine's): the test stream's payload is a function of its id, so a frame is the test stream's when one of its
+// ai: verified data blocks carries its id's bytes (a file's block does so with probability 2^-3752); every other verified
+// ai: data block of that frame is then bad (the CRC let a wrong block through). A frame with none is a file's, or a test
+// ai: frame whose every verified block is wrong, the one case not counted: the CRC alone judges it. frame(ok, blocks): ok[k]
+// ai: set for each verified block k, at k * (payload + ID_BYTES). Returns got, the frame's every block not judged bad,
+// ai: control blocks (a transfer's session header) included, as { id (bare), toi, bytes }; seen (got's count), bad; test,
+// ai: whether the frame was judged the test stream's; judged, its data blocks held to the stream. Nothing kept from
+// ai: frame to frame: which blocks are new is the caller's to say.
+export function blockJudge(payload = PAYLOAD) {
+  const B = payload + ID_BYTES;
+  return {
+    frame(ok, blocks) {
+      let test = false, bad = 0;
+      const got = [], data = [];
+      for (let k = 0; k < ok.length; k++) {
+        if (!ok[k]) continue;
+        const o = k * B, id = idGet(blocks, o), toi = toiGet(blocks, o), bytes = blocks.slice(o + ID_BYTES, o + B);
+        if (isControlId(id)) { got.push({ id, toi, bytes }); continue; }
+        const same = streamMatches(id, bytes);
+        if (same) test = true;
+        data.push({ id, toi, bytes, same });
+      }
+      for (const d of data) if (test && !d.same) bad++; else got.push({ id: d.id, toi: d.toi, bytes: d.bytes });
+      return { got, seen: got.length, bad, test, judged: test ? data.length : 0 };
+    },
+  };
+}
 
 // ai: A receiver told nothing (src/lizard_phy.h lizard_acquire_ring, src/wasm.c lizard_any_rx): it registers against the
 // ai: rings (src/lizard_phy.h LIZARD_RING), reads the word there, and finishes the frame at the picture the word names, in whichever ring it was
 // ai: painted (any ring may carry any picture). nmax: the largest picture it decodes, the ladder's largest unless given
-// ai: (1536, sim/lizard_pick.mjs PICTURE_SIZES, sim/phy.mjs BLIND_NMAX; a frame whose word names a larger picture is
+// ai: (1536, PICTURE_SIZES' last; a frame whose word names a larger picture is
 // ai: found and its word read, but not finished). Its codecs are the module's own, apart from Lizard's, and replaced by
 // ai: the next LizardAny.
 export class LizardAny {
@@ -170,8 +476,8 @@ export class Lizard {
     M._lizard_tx_rgba(this.pBlocks, this.pDrive, this.pRGBA, ink >>> 0, paper >>> 0);
     return { w: W, rgba: M.HEAPU8.subarray(this.pRGBA, this.pRGBA + bytes) };
   }
-  // ai: The resampler encodeRGBA paints the picture with (src/lizard_phy.h lizard_resample_geom), for an encoder elsewhere
-  // ai: (gpu/encoder.mjs): q pixels across the picture and its guard interval from drive pixel o on either axis (the
+  // ai: The resampler encodeRGBA paints the picture with (src/lizard_phy.h lizard_resample_geom), for the lab (the web's GPU
+  // ai: encoder takes the C's taps whole, sendTables): q pixels across the picture and its guard interval from drive pixel o on either axis (the
   // ai: drive is px a side, the RGBA quiet * cell more round it), i0[x] the first of the six picture samples pixel x
   // ai: reads (unwrapped: mod n) and w[6 x + t] their weights, both passes alike. Copies, good after the next setup.
   resampleGeom() {
@@ -215,7 +521,7 @@ export class Lizard {
     return M.HEAPF32.slice(this.pDrive >> 2, (this.pDrive >> 2) + this.side * this.side);
   }
   // The word the last decode read out of the symbol's band, or null where it read none. This is all a receiver
-  // that was told nothing goes on: the version and the layout's counts (sim/lizard_pick.mjs layoutOf), and the sender's
+  // that was told nothing goes on: the version and the layout's counts (sim/ob.mjs layoutOf), and the sender's
   // clock (fps, 0 a still; delay, its places' largest).
   // ai: The C's ob_fmt_t (src/fmt.h): the version, the four counts (6/7, 3/4, 2/3, 1/2), fps and delay.
   static fmtOf(p) {
@@ -364,7 +670,7 @@ export class Lizard {
       fmt: Lizard.fmtOf(M._lizard_fmt_rx_ptr()), ok: M.HEAPU8.slice(this.pOk, this.pOk + (this.blocks = M._lizard_blocks())), blocks: M.HEAPU8.slice(this.pBlocks, this.pBlocks + this.blocks * this.blockBytes),
       mark: markOf(r), ...msOf(r) };
   }
-  // The code's own shape and its layered schedule, which gpu/back/ldpc.mjs allocates against, plus which
+  // The code's own shape and its layered schedule, as an LDPC kernel allocates against it (the native hosts' core/dec/codes.h), plus which
   // slots each block owns (first, count: its first slot of the frame and its slots). Read once a configuration, not
   // once a frame.
   ldpcCode() {
@@ -375,7 +681,7 @@ export class Lizard {
     // fault, it just makes every later decode return nothing, which reads exactly like a bad capture.
     M._lizard_ldpc_tables(0, pD, 0);
     const d = M.HEAP32.subarray(pD >> 2, (pD >> 2) + 12);
-    // ai: np the bits never sent (the 6/7 code's last 128 of the data, its known zeros, since 2026-11-01; gpu/back/bitmap.mjs sentBit), nt = n - np the bits a block's slots carry
+    // ai: np the bits never sent (the 6/7 code's last 128 of the data, its known zeros, since 2026-11-01; core/dec/codes.h sentBit), nt = n - np the bits a block's slots carry
     const code = { n: d[0], k: d[1], m: d[2], z: d[3], zp: d[4], mb: d[5], kb: d[6], norm: d[7],
       slotsMax: d[8], slotsTotal: d[9], slots: d[10], np: d[11], nt: d[0] - d[11] };
     const pLay = M._malloc(4 * (code.mb + 1 + 2 * code.slots));

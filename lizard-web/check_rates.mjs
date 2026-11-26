@@ -5,33 +5,39 @@
 //
 // ai: The receiver is blind (2026-09-26): nothing is posted to it, and the rig here only takes its development logs (the
 // ai: stats rows this script reads, and the finished file, ?save=post). It counts bad blocks from the light (a test frame
-// ai: known by its blocks' bytes, sim/phy.mjs blockJudge); a LIZARD run fails if it held none to the stream. LIE=1, the
+// ai: known by its blocks' bytes, the engine's judge, core/rx/xfer_rx_core.h XferJudge); a LIZARD run fails if it held none to the stream. LIE=1, the
 // ai: negative control: every LIE_EVERY-th display frame's block 1 carries its id's bytes with one bit flipped, its CRC
 // ai: right, and the run passes only if the page counts bad blocks. REPICK=<subch> (the test stream): the clip's second
 // ai: half at that version, as a sender re-picks mid-stream (ids go on from where the first half left them), held to
 // ai: both halves' version read through the lens and decoded at the display's rate.
 // Files (XFER=600k by default, a comma list of the cases below): a LIZARD file as the sender page sends it, a chunked
-// ai: transfer (sim/xfer.mjs), its header in the light only, as the sender sends it, so
+// ai: transfer (the C's sending end, sim/ob.mjs Sender over lizard.h liz_tx), its header in the light only, as the sender sends it, so
 // the receiver has the light and nothing else. The page hands the finished file back (recv.html?save=post) and it is
 // ai: held to the file sent: the same bytes, and BLAKE3 from the wasm (the vendored C, proved against the official
 // ai: vectors by test/xfer_wasm.mjs) equal to the sender's root; b3sum, where installed, must agree too but is not required.
 // ai: STORE=memory runs the receiver without OPFS.
-import { openSync, writeSync, closeSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { openSync, writeSync, closeSync, mkdirSync, rmSync, readFileSync, appendFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { makePhy, sourceFor } from "../liblizard/sim/phy.mjs";
-import { init as initOb } from "../liblizard/sim/ob.mjs";
-import { init, Encoder } from "../liblizard/sim/fountain.mjs";
-import { XferSender, blake3, hex, DEFAULT_LOG2, PAYLOAD, idSbn } from "../liblizard/sim/xfer.mjs";
-import { N_FOR, versionOf } from "../liblizard/sim/lizard_pick.mjs";
+import { init as initOb, Lizard, frameBlocks, streamBlock, BLOCK } from "../liblizard/sim/ob.mjs";
+import { Sender, blake3, hex, LOG2_DEFAULT, PAYLOAD, idSbn } from "../liblizard/sim/ob.mjs";
+import { N_FOR, versionOf } from "../liblizard/sim/ob.mjs";
 
 const at = (p) => fileURLToPath(new URL(p, import.meta.url));
 const dir = process.argv[2] ?? at("../research/build/check"), CW = +(process.env.CW ?? 1920), CH = +(process.env.CH ?? 1080), FD = 24, FC = 30, ONLY_TEST = process.env.ONLY === "test", FRAMES = ONLY_TEST ? 330 : 420;
 // stream: the same generator the live sender uses, so this measures what the demo measures.
 // SUBCH picks the LIZARD version (96 unless asked; a bigger one needs a clip tall enough for its picture, CW and CH).
 const SUBCH = +(process.env.SUBCH ?? 96), REPICK = +(process.env.REPICK ?? 0), LIE = process.env.LIE === "1", LIE_EVERY = 24;
-const spec = { phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] };
+// ai: The C's paint of a version (sim/ob.mjs Lizard; one LIZARD codec a module: a second replaces the first's under
+// ai: it): frame(seq, ids, src) a frame's blocks by frameBlocks (the test stream's under TOI 1 unless src names another
+// ai: payload or a file's TOIs), the pilots' count the painted count mod 4: { w, h, drive }
+async function painter(subch) {
+  await initOb();
+  const n = N_FOR(subch), fc = new Lizard(n, subch, 1), T = fc.blocks, blocks = new Uint8Array(T * BLOCK);
+  return { T, label: `lizard ${n} ${subch}sub`, free: () => fc.free(),
+    frame(seq, ids = seq * T, src = {}) { fc.setParity(seq & 3); return { w: fc.side, h: fc.side, drive: fc.encode(frameBlocks(ids, T, src, blocks)) }; } };
+}
 // VERIFY=1: the receiver's crop, checked from outside. The clip gets a grey marker (60, 100, 140, 180, clockwise
 // from the top left) 4 to 20 px inside each corner of what the page should be decoding (the centred square of the
 // short side, or the whole frame with CROP=full), and the page reports what it sent to the decoder at three points
@@ -110,13 +116,20 @@ async function clip(path, frameOf, frames = FRAMES) {
 // memory is sampled meanwhile: the renderer's peak (the page and every worker) and the whole tree's.
 // ai: Every stats row polled meanwhile comes back as the result's rows, [seconds since the start, row].
 const chrome = (path, seconds, until = null, extra = "") => new Promise((done) => {
-  const p = spawn("google-chrome", ["--headless=new", "--no-sandbox", ...(process.env.CHROME_LOG ? ["--enable-logging=stderr", "--v=0"] : []), "--disable-gpu", "--enable-unsafe-swiftshader", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-video-capture=${path}`, `--user-data-dir=${dir}/profile`, `http://localhost:${PORT}/lizard-web/${process.env.APP ? "app/" : ""}recv.html?auto&seen${extra}${process.env.WORKERS ? "&workers=" + process.env.WORKERS : ""}${process.env.DELAY ? "&delay=" + process.env.DELAY : ""}${process.env.CROP ? "&crop=" + process.env.CROP : ""}${process.env.SRCCROP ? "&srccrop=" + process.env.SRCCROP : ""}${VERIFY ? "&verify" : ""}${process.env.PROF ? "&prof" : ""}${process.env.DRAW ? "&draw=" + process.env.DRAW : ""}&res=${CW >= 3840 ? "3840x2160" : CW >= 2560 ? "2560x1440" : CW >= 1920 || CH >= 1920 ? "1920x1080" : "1280x720"}`], { stdio: process.env.CHROME_LOG ? ["ignore", "ignore", openSync(process.env.CHROME_LOG, "a")] : "ignore", detached: true });
+  const p = spawn("google-chrome", ["--headless=new", "--no-sandbox", ...(process.env.CHROME_LOG ? ["--enable-logging=stderr", "--v=0"] : []), "--disable-gpu", "--enable-unsafe-swiftshader", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", `--use-file-for-fake-video-capture=${path}`, `--user-data-dir=${dir}/profile`, `http://localhost:${PORT}/lizard-web/${process.env.APP ? "app/" : ""}recv.html?auto&seen${extra}${process.env.WORKERS ? "&workers=" + process.env.WORKERS : ""}${process.env.DELAY ? "&delay=" + process.env.DELAY : ""}${process.env.CROP ? "&crop=" + process.env.CROP : ""}${process.env.SRCCROP ? "&srccrop=" + process.env.SRCCROP : ""}${VERIFY ? "&verify" : ""}${process.env.DRAW ? "&draw=" + process.env.DRAW : ""}&res=${CW >= 3840 ? "3840x2160" : CW >= 2560 ? "2560x1440" : CW >= 1920 || CH >= 1920 ? "1920x1080" : "1280x720"}`], { stdio: process.env.CHROME_LOG ? ["ignore", "ignore", openSync(process.env.CHROME_LOG, "a")] : "ignore", detached: true });
   browser = p;
-  const mem = { renderer: 0, total: 0 }, t0 = Date.now();
-  const sample = () => {
-    const rows = spawnSync("ps", ["-o", "rss=,args=", "-g", String(p.pid)], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map((l) => [+l.trim().split(/\s+/)[0], l]);
+  const mem = { renderer: 0, total: 0, pss: 0, pssAt: [] }, t0 = Date.now();
+  // ai: the renderer's proportional set (Pss, /proc/<pid>/smaps_rollup: a page shared with another process counted in
+  // ai: its share), the figure a phone's dumpsys meminfo reports; MEMLOG=<file> appends each second's as a line
+  const pssOf = (pid) => { try { return 1024 * +/^Pss:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/smaps_rollup`, "utf8"))[1]; } catch { return 0; } };
+  const sample = (st) => {
+    const rows = spawnSync("ps", ["-o", "rss=,pid=,args=", "-g", String(p.pid)], { encoding: "utf8" }).stdout.split("\n").filter(Boolean).map((l) => [+l.trim().split(/\s+/)[0], +l.trim().split(/\s+/)[1], l]);
     mem.total = Math.max(mem.total, rows.reduce((a, [k]) => a + k, 0) * 1024);
-    for (const [k, l] of rows) if (l.includes("--type=renderer")) mem.renderer = Math.max(mem.renderer, k * 1024);
+    let pss = 0;
+    for (const [k, pid, l] of rows) if (l.includes("--type=renderer")) { mem.renderer = Math.max(mem.renderer, k * 1024); pss = Math.max(pss, pssOf(pid)); }
+    mem.pss = Math.max(mem.pss, pss);
+    if (pss) mem.pssAt.push(pss);
+    if (process.env.MEMLOG && pss) appendFileSync(process.env.MEMLOG, `${((Date.now() - t0) / 1000).toFixed(1)} ${(pss / 1048576).toFixed(1)} ${st?.workers ?? "-"} ${extra.includes("save=post") ? "file" : "test"} ${st?.file ? JSON.stringify(st.file) : "-"}\n`);
   };
   // Chrome is a tree of processes. Killing only the parent leaves children writing the profile, and the cleanup below fails.
   const rows = [];
@@ -126,9 +139,10 @@ const chrome = (path, seconds, until = null, extra = "") => new Promise((done) =
   let busy = false;
   const tick = setInterval(async () => {
     if (busy) return;
-    busy = true; sample();
+    busy = true;
     try {
       const st = (await api("/api/stats")).stats ?? {};
+      sample(st);
       if (st.processedFps !== undefined) rows.push([(Date.now() - t0) / 1000, st]);
       if (until && (Date.now() - t0 > seconds * 1000 || until(st))) { await new Promise((r) => setTimeout(r, 1500)); await end(); return; }
     } catch {}
@@ -137,7 +151,7 @@ const chrome = (path, seconds, until = null, extra = "") => new Promise((done) =
 });
 // ai: The page's decoder, from its last stats row: the CPU pool.
 function decoderLine(s, indent = "") {
-  console.log(`${indent}decoder: CPU pool, ${s.workers ?? "?"} worker${s.workers === 1 ? "" : "s"}`);
+  console.log(`${indent}decoder: the engine's CPU pool, ${s.workers ?? "?"} decoder${s.workers === 1 ? "" : "s"}, the store ${s.store ?? "?"}${s.storeWhy ? ` (${s.storeWhy})` : ""}`);
 }
 // ai: How the frames reached the pool (vframes.mjs) and the page's ms a frame each way, from the run's last 5 s window:
 // ai: as VideoFrames (to a pool worker, which copies the crop to luma, its pixel format named) or by the canvas grab. A
@@ -146,7 +160,7 @@ function decoderLine(s, indent = "") {
 function framesLine(s, indent = "") {
   const f = (v) => (typeof v === "number" ? v.toFixed(2) : "?");
   console.log(`${indent}frames to the CPU pool: ${s.vfSent
-    ? `${s.vfSent} as VideoFrames (from the ${s.vfSource}, ${s.vfFormat || "format not reported"}, copied to luma in the worker) and ${s.lumaSent} by the canvas grab. The page, a frame: VideoFrame ${f(s.msVideoFrame)} ms, canvas grab ${f(s.msGrab)} ms`
+    ? `${s.vfSent} as VideoFrames (from the ${s.vfSource}, ${s.vfFormat || "format not reported"}, copied to luma in the engine) and ${s.lumaSent} by the canvas grab. The page, a frame: VideoFrame ${f(s.msVideoFrame)} ms, canvas grab ${f(s.msGrab)} ms`
     : `the canvas grab only (${s.vfNote || "no reason given"})`}${!s.vfSent ? "  FAILED: no VideoFrame reached the pool" : ""}`);
   if (!s.vfSent) process.exitCode = 1;
 }
@@ -165,6 +179,7 @@ function totalsLine(s, indent = "") {
   console.log(`${indent}totals over ${dt.toFixed(1)} s: ${n} frames (${f(n / dt)} a second), registered ${f(100 * per(d("found")))}%, ${f(per(d("blocks")), 2)} blocks and ${f(per(d("fresh")), 0)} new bytes a frame, ${f(d("withNew") / dt)} frames with new data a second, ${f(d("fresh") / dt / 1000)} KB/s, bad ${d("bad")}, ${f(per(d("ms")), 2)} ms a frame`);
   console.log(`${indent}crop: ${f(100 * per(d("tracked")))}% of frames from a tracked crop, mean side ${f(Math.sqrt(per(d("px"))), 0)} px; ${sizes.map(([k, v]) => `${k} ${v}`).join(", ") || "no sizes"}`);
 }
+const medianMB = (v) => (v.length ? ([...v].sort((a, b) => a - b)[v.length >> 1] / 1048576).toFixed(0) : "-");
 const row = (name, want, got, unit) => console.log(`${name.padEnd(34)} expected ${want.toFixed(1).padStart(8)}  reported ${got.toFixed(1).padStart(8)} ${unit}  (${want ? ((100 * (got - want)) / want).toFixed(1) : "0"}%)`);
 
 let up = false;
@@ -172,18 +187,18 @@ for (let i = 0; i < 20 && !up; i++) { try { up = (await api("/api/info")).http =
 if (!up) { console.error(`check_rates: no answer from its own server on port ${PORT} (in use?)`); process.exit(1); }
 // 1. Test stream. ONLY=files skips it.
 if (process.env.ONLY !== "files") {
-  const phy = await makePhy(spec), per = phy.usefulBytes * phy.blocksPerFrame, half = FRAMES + MOTION_S * FC;
+  const phy = await painter(SUBCH), per = PAYLOAD * phy.T, half = FRAMES + MOTION_S * FC;
   // ai: LIE: block 1 of every LIE_EVERY-th display frame (ids seq * T + 1) painted with a bit of its bytes flipped.
   let lies = 0;
-  if (LIE) { const gen = sourceFor("blake3"), T = phy.blocksPerFrame; phy.setSource((id, out) => { gen(id, out); if (id % (LIE_EVERY * T) === 1) { out[0] ^= 1; lies++; } }); }
+  const lie = LIE ? { payload: (id, out) => { out.set(streamBlock(id, out.length)); if (id % (LIE_EVERY * phy.T) === 1) { out[0] ^= 1; lies++; } } } : {};
   // ai: REPICK: the second half at another version, its ids from where the first half's end. Made at the cut, not
   // ai: before: the wasm holds one LIZARD codec, and a second Lizard replaces the first's.
   let phy2 = null;
-  const cut = Math.floor((half * FD) / FC), spec2 = { ...spec, n: N_FOR(REPICK), subch: REPICK };
+  const cut = Math.floor((half * FD) / FC);
   await clip(`${dir}/test.y4m`, async (seq) => {
-    if (!REPICK || seq < cut) return phy.frame(seq);
-    phy2 ??= await makePhy(spec2);
-    return phy2.frame(seq, cut * phy.blocksPerFrame + (seq - cut) * phy2.blocksPerFrame);
+    if (!REPICK || seq < cut) return phy.frame(seq, seq * phy.T, lie);
+    phy2 ??= await painter(REPICK);
+    return phy2.frame(seq, cut * phy.T + (seq - cut) * phy2.T);
   }, REPICK ? 2 * half : half);
   const s = REPICK ? await chrome(resolve(dir, "test.y4m"), (2 * half) / FC - 1) : await chrome(resolve(dir, "test.y4m"), 10 + MOTION_S);
   console.log(`test stream, ${phy.label}${phy2 ? `, then ${phy2.label} from display frame ${cut}` : ""}, ${per.toFixed(0)} B per display frame, display ${FD} fps, camera ${FC} fps; nothing posted to the receiver${LIE ? `; ${lies} lying blocks painted (block 1 of every ${LIE_EVERY}th display frame)` : ""}`);
@@ -198,7 +213,7 @@ if (process.env.ONLY !== "files") {
   row("decoded with new data", FD, s.decodedFps, "fps");
   row("repeats, not counted as decoded", FC - FD, s.repeatFps, "fps");
   // ai: Under REPICK the last window is the second half's, so its rates are held to that version's truth.
-  const per2 = phy2 ? phy2.usefulBytes * phy2.blocksPerFrame : per;
+  const per2 = phy2 ? PAYLOAD * phy2.T : per;
   row("goodput", (FD * per2) / 1000, s.goodputKBs, "KB/s");
   // Per frame the decoder saw. The clip is played with nothing skipped, so that is every captured frame and
   // the expectations below are still the per-camera-frame ones.
@@ -218,7 +233,7 @@ if (process.env.ONLY !== "files") {
     if (!ok) process.exitCode = 1;
   }
   if (phy2) console.log(`rows (s: version, decoded fps, registered, bad): ${s.rows.map(([t, r]) => `${t.toFixed(0)}: ${r.bandVersion ?? "-"} ${(r.decodedFps ?? 0).toFixed(1)} ${(100 * (r.foundShare ?? 0)).toFixed(0)}% ${r.bad ?? "-"}`).join("; ")}`);
-  console.log(`${s.res}\nChrome's renderer peaked at ${(s.chromeMem.renderer / 1048576).toFixed(0)} MB resident, the whole tree ${(s.chromeMem.total / 1048576).toFixed(0)} MB\nworkers ${s.workers} of at most ${s.workersMax}, registered ${(100 * s.foundShare).toFixed(0)}%, skipped ${s.skippedFps.toFixed(1)}/s, bad ${s.bad}, grab ${s.msGrab.toFixed(1)} + decode ${s.ms.toFixed(1)} ms${Object.keys(s.prof ?? {}).length ? `\nstages, ms: ${Object.entries(s.prof).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(", ")}` : ""}\n`);
+  console.log(`${s.res}\nChrome's renderer peaked at ${(s.chromeMem.renderer / 1048576).toFixed(0)} MB resident (PSS ${(s.chromeMem.pss / 1048576).toFixed(0)} MB at most, ${medianMB(s.chromeMem.pssAt)} MB the median a second), the whole tree ${(s.chromeMem.total / 1048576).toFixed(0)} MB\nworkers ${s.workers} of at most ${s.workersMax}, registered ${(100 * s.foundShare).toFixed(0)}%, skipped ${s.skippedFps.toFixed(1)}/s, bad ${s.bad}, grab ${s.msGrab.toFixed(1)} + decode ${s.ms.toFixed(1)} ms\n`);
   if (VERIFY) {
     // Chrome's fake camera may read the clip's luma as limited range, which stretches it: compare with room for that.
     const near = (got, want) => Math.abs(got - want) <= 14 || Math.abs(got - (want - 16) * 1.164) <= 14, probe = s.cropProbe ?? [];
@@ -259,15 +274,14 @@ const CASES = {
 };
 const XFER = (process.env.XFER ?? "600k").split(",").filter(Boolean);
 if (!ONLY_TEST) {
-  await init();
-  const M = await initOb();
+  await initOb();
   for (const name of XFER) {
     const c = CASES[name];
     if (!c) { console.log(`no case ${name}: ${Object.keys(CASES).join(", ")}`); process.exitCode = 1; continue; }
     const bytes = new Uint8Array(c.length), fname = `check-${name}.bin`;
     for (let i = 0, v = c.length + 1; i < bytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bytes[i] = v >>> 16; }
-    const phy = await makePhy(spec), B = phy.blocksPerFrame;
-    const xs = new XferSender(bytes, { name: fname, sbLog2: c.log2 ?? DEFAULT_LOG2, M, Encoder });
+    const phy = await painter(SUBCH), B = phy.T;
+    const xs = new Sender(bytes, { name: fname, sbLog2: c.log2 ?? LOG2_DEFAULT }), info = xs.info;
     const src = (id, out) => xs.block(id, out);
     // ai: the corrupt case: every 64th of the source block's first K symbols in the order they are sent, so its first solve
     // ai: decodes wrong and the symbols after them are clean (its ids in 0 .. K - 1 until the sender's random start of
@@ -277,29 +291,30 @@ if (!ONLY_TEST) {
       if (idSbn(id) !== c.corrupt) return false;
       let k = order.get(id);
       if (k === undefined) { k = order.size; order.set(id, k); }
-      return k < xs.K[c.corrupt] && k % 64 === 3;
+      return k < xs.K(c.corrupt) && k % 64 === 3;
     };
-    phy.setSource(c.corrupt === undefined ? src : (id, out) => { src(id, out); if (corrupted(id)) out[5] ^= 1; return out; }, xs);
-    const least = Math.ceil(xs.K.reduce((a, b) => a + b, 0) / B);
+    // ai: the file's blocks, each under its own TOI (the sender's toiFor)
+    const file = { toi: (id) => xs.toiFor(id), payload: c.corrupt === undefined ? src : (id, out) => { src(id, out); if (corrupted(id)) out[5] ^= 1; return out; } };
+    const least = Math.ceil(Array.from({ length: info.sourceBlocks }, (_, k) => xs.K(k)).reduce((a, b) => a + b, 0) / B);
     // A cycle and a little (two for the corrupt case), a control block a frame at most. The fake camera loops the clip,
     // which repeats ids: that only helps a receiver that missed them the first time.
-    const frames = Math.ceil((Math.max(1, xs.carousel.cycle) * (c.corrupt === undefined ? 1.08 : 2.1)) / Math.max(1, B - 1)) + 24;
+    const frames = Math.ceil((Math.max(1, info.cycle) * (c.corrupt === undefined ? 1.08 : 2.1)) / Math.max(1, B - 1)) + 24;
     const clipFrames = Math.ceil((frames * FC) / FD), path = `${dir}/file.y4m`, t0 = Date.now();
     let first = null;
     if (c.resume) {
       // ai: the clips one after the other in the sender's schedule (frameIds goes on where the first left it)
       const fa = Math.ceil(frames * c.resume), ca = Math.ceil((fa * FC) / FD), pathA = `${dir}/first.y4m`;
-      await clip(pathA, (seq) => phy.frame(seq, xs.frameIds(B)), ca);
-      await clip(path, (seq) => phy.frame(seq + fa, xs.frameIds(B)), Math.ceil(((frames - fa) * FC) / FD));
+      await clip(pathA, (seq) => phy.frame(seq, xs.frameIds(B), file), ca);
+      await clip(path, (seq) => phy.frame(seq + fa, xs.frameIds(B), file), Math.ceil(((frames - fa) * FC) / FD));
       rmSync(`${RECEIVED}/${fname}`, { force: true });
       first = await chrome(resolve(pathA), ca / FC + 8);
       rmSync(pathA, { force: true });
       const x1 = first.xfer;
       console.log(`  the first page, ${(ca / FC).toFixed(0)} s of the clip's first ${Math.round(100 * c.resume)}%: ${x1?.verified ?? 0} of ${x1?.header?.sourceBlocks ?? "?"} chunks verified, ${/complete/.test(first.file ?? "") ? "COMPLETE" : "not complete"}; killed`);
       if (/complete/.test(first.file ?? "")) process.exitCode = 1;
-    } else await clip(path, (seq) => phy.frame(seq, xs.frameIds(B)), clipFrames);
+    } else await clip(path, (seq) => phy.frame(seq, xs.frameIds(B), file), clipFrames);
     const clipSecs = (c.resume ? Math.ceil(((frames - Math.ceil(frames * c.resume)) * FC) / FD) : clipFrames) / FC;
-    console.log(`${name}: ${c.length} B, ${xs.sourceBlocks} chunk${xs.sourceBlocks === 1 ? "" : "s"} of 2^${xs.sbLog2}, header in the light only; clip ${clipFrames} frames (${clipSecs.toFixed(0)} s) made in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+    console.log(`${name}: ${c.length} B, ${info.sourceBlocks} chunk${info.sourceBlocks === 1 ? "" : "s"} of 2^${info.sbLog2}, header in the light only; clip ${clipFrames} frames (${clipSecs.toFixed(0)} s) made in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
     rmSync(`${RECEIVED}/${fname}`, { force: true });
     const s = await chrome(resolve(path), clipSecs * (c.corrupt === undefined ? 2 : 1.5) + 30, (st) => /complete|FAILED/.test(st.file ?? ""), `&save=post${process.env.STORE ? "&store=" + process.env.STORE : ""}`);
     const m = /in ([\d.]+) s \(([\d.]+) KB/.exec(s.file ?? ""), secs = least / FD;
@@ -314,10 +329,10 @@ if (!ONLY_TEST) {
     // The file the page handed back, against the one sent.
     let got = null;
     try { got = readFileSync(`${RECEIVED}/${fname}`); } catch {}
-    const want = hex(xs.root), same = !!got && got.length === bytes.length && Buffer.compare(got, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length)) === 0;
+    const want = info.root, same = !!got && got.length === bytes.length && Buffer.compare(got, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length)) === 0;
     const hashes = {};
     if (got) {
-      hashes["vendored C (wasm)"] = hex(blake3(M, new Uint8Array(got.buffer, got.byteOffset, got.length)));
+      hashes["vendored C (wasm)"] = hex(blake3(new Uint8Array(got.buffer, got.byteOffset, got.length)));
       const b3 = spawnSync("b3sum", ["--no-names", `${RECEIVED}/${fname}`], { encoding: "utf8" });
       if (b3.status === 0) hashes.b3sum = b3.stdout.trim();
     }
@@ -327,8 +342,8 @@ if (!ONLY_TEST) {
     if (x) {
       const mem = x.mem ?? {};
       console.log(`  header ${x.lightSeen ? "read from the light" : "never read from the light"}; ${x.verified ?? "?"} of ${x.header?.sourceBlocks ?? "?"} chunks verified, ${x.rejected ?? 0} rejected; blocks held ${x.store === "opfs" ? "on disk (OPFS)" : `in memory (${(mem.storeBytes / 1048576).toFixed(1)} MB)`}`);
-      console.log(`  solving and checking took ${((x.solveMs ?? 0) / 1000).toFixed(2)} s of the fountain worker's time in all`);
-      console.log(`  fountain worker: heap ${(mem.codecHeap / 1048576).toFixed(1)} MB; Chrome's renderer peaked at ${(s.chromeMem.renderer / 1048576).toFixed(0)} MB resident (the page and every worker, ${s.workers} decoding at the end), the whole tree ${(s.chromeMem.total / 1048576).toFixed(0)} MB`);
+      console.log(`  solving and checking took ${((x.solveMs ?? 0) / 1000).toFixed(2)} s of the engine's solvers' time in all`);
+      console.log(`  the engine's shared heap ${(mem.codecHeap / 1048576).toFixed(1)} MB; Chrome's renderer peaked at ${(s.chromeMem.renderer / 1048576).toFixed(0)} MB resident (PSS ${(s.chromeMem.pss / 1048576).toFixed(0)} MB at most, ${medianMB(s.chromeMem.pssAt)} MB the median a second; the page, the engine and its threads, ${s.workers} decoding at the end), the whole tree ${(s.chromeMem.total / 1048576).toFixed(0)} MB`);
     }
     const ok = same && agree && !!x?.lightSeen && (c.corrupt === undefined || x?.rejected >= 1);
     console.log(`  bad ${s.bad}`);

@@ -10,6 +10,8 @@
 #include <random>
 #include <stdexcept>
 
+#include "gpu_painter.h"
+#include "send_plan.h"
 #include "wg.h"
 
 extern "C" {
@@ -23,19 +25,11 @@ namespace {
 constexpr uint32_t T = XFER_PAYLOAD, SB = 480;
 // ai: the upload slots: a source block's symbols each, the workers waiting for one while the recording thread copies
 constexpr uint32_t SLOTS = 4;
-// ai: TAB's layout (gpu/plan/send.mjs TAB_DEG, TAB_PLANS, TAB_PLAN)
-constexpr uint32_t TAB_DEG = 1024, TAB_PLANS = 1056, TAB_PLAN = 8;
+// ai: TAB's layout (send_plan.h)
+constexpr uint32_t TAB_DEG = send::TAB_DEG, TAB_PLANS = send::TAB_PLANS, TAB_PLAN = send::TAB_PLAN;
 // ai: the self-test's source block (K 218 at 460 B) and its ESIs past the first source symbols
 constexpr size_t SELF_BYTES = 100000;
 std::string mb(uint64_t b) { return std::to_string((b + (1u << 19)) >> 20); }
-std::vector<uint32_t> spirv(const std::string& path) {
-  std::ifstream f(std::filesystem::u8path(path), std::ios::binary);
-  if (!f) throw std::runtime_error("the tree has no " + path + ": regenerate liblizard/out");
-  const std::vector<char> b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-  std::vector<uint32_t> w(b.size() / 4);
-  std::memcpy(w.data(), b.data(), w.size() * 4);
-  return w;
-}
 // ai: TAB: RFC 6330's tables and each plan's K, K', J, W, P, P1
 std::vector<uint32_t> tabOf(const std::vector<rq_par_t>& plans) {
   std::vector<uint32_t> tab(TAB_PLANS + TAB_PLAN * plans.size(), 0);
@@ -62,6 +56,7 @@ void spread(const uint8_t* C, uint32_t L, uint8_t* out) {
 
 std::unique_ptr<GpuStream> GpuStream::create(wg::Device& d, const std::string& assets, const File& f) {
   if (!f.sourceBlocks || !f.sbBytes) throw std::runtime_error("no source blocks");
+  checkSendTree(assets);
   std::unique_ptr<GpuStream> s(new GpuStream(d));
   s->f_ = f;
   // ai: each source block's L from its K (a file has at most two lengths: the full source blocks', a short last one's)
@@ -96,13 +91,13 @@ std::unique_ptr<GpuStream> GpuStream::create(wg::Device& d, const std::string& a
   if (nsym * 30 >= (uint64_t{1} << 32) || s->symBytes_ > range)
     throw std::runtime_error("the file's symbols (" + mb(s->symBytes_) + " MB) pass the device's largest buffer (" + mb(range) + " MB)");
   // ai: a quarter of the memory where the device shares the system's (an integrated GPU, a phone's), a half on its own
-  const uint64_t share = Lm.deviceLocalBytes / (d.type == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 : 4);
+  const uint64_t share = Lm.deviceLocalBytes / (d.kind == wg::Kind::Discrete ? 2 : 4);
   if (s->symBytes_ + slots > share) throw std::runtime_error("the file's symbols (" + mb(s->symBytes_) + " MB) pass the GPU's share of its memory (" + mb(share) + " MB)");
   s->bgl_ = d.createBindGroupLayout({wg::Bind::RO, wg::Bind::RO, wg::Bind::RO, wg::Bind::RO, wg::Bind::RW, wg::Bind::RO}, "rq blocks");
-  s->pipe_ = d.createPipeline(spirv(assets + "/spv/send_rqBlocks.spv"), s->bgl_, "", "rq blocks");
+  s->pipe_ = d.createPipeline(wg::readModule(assets, "send_rqBlocks"), s->bgl_, "", "rq blocks");
   // ai: SYM is made by the first worker (put): host-visible, zeroed by wg as a host buffer is, where the device shares
   // ai: the system's memory, which takes a while for a large file and is not the configuring thread's (a phone's main one)
-  s->uma_ = d.type != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+  s->uma_ = d.kind != wg::Kind::Discrete;
   const auto up = [&](const std::vector<uint32_t>& v, const char* id) {
     auto b = d.createBuffer(std::max<size_t>(16, 4 * v.size()), wg::STORAGE | wg::COPY_DST, id, v.empty());
     d.upload(*b, 0, v.data(), 4 * v.size());
@@ -130,11 +125,11 @@ void GpuStream::stop() {
 // ai: Source block c (a worker's). Where the device shares the system's memory (a phone, an integrated GPU) SYM is host-visible
 // ai: and the worker writes the source block's symbols straight into it: no copy and no wait (the GPU reads them in the encodes
 // ai: after every source block was handed over; a host write is visible to a submission after it). On a discrete GPU, its
-// ai: symbols into a free slot, then copied into SYM on the device's second queue (Device::queue2
-// ai: and pool2: the receiver's camera ingest takes them on its own device, a sender's are free), the copy waited for
-// ai: here and the slot freed: the painting thread never touches the upload, and the copy runs beside the painting on the
-// ai: GPU (where the family has one queue, queue2 is the queue and the copy goes in turn, under its lock as the ingest's
-// ai: does). Same family, so SYM needs no ownership transfer; a data encode comes after every source block's copy finished (the
+// ai: symbols into a free slot, then copied into SYM on the device's second queue (Device::copyOnQueue2: the receiver's
+// ai: camera ingest takes that queue on its own device, a sender's is free), the copy waited for here and the slot
+// ai: freed: the painting thread never touches the upload, and the copy runs beside the painting on the GPU (where the
+// ai: family has one queue, queue2 is the queue and the copy goes in turn, under its lock as the ingest's does). Same
+// ai: family, so SYM needs no ownership transfer; a data encode comes after every source block's copy finished (the
 // ai: transfer names no data block before every sink returned), and wg begins every command buffer with a barrier.
 bool GpuStream::put(uint32_t c, const rq_enc_t* enc) {
   rq_par_t q{};
@@ -163,59 +158,20 @@ bool GpuStream::put(uint32_t c, const rq_enc_t* enc) {
     slotOf_[s] = c;
   }
   spread(C, q.L, slot_[s]->mapped);
-  VkCommandBuffer cb = VK_NULL_HANDLE;
-  VkFence fence = VK_NULL_HANDLE;
-  bool submitted = false;
-  const auto release = [&] {
-    std::lock_guard<std::mutex> p(poolMu_);
-    if (fence) vkDestroyFence(d.dev, fence, nullptr);
-    if (cb) vkFreeCommandBuffers(d.dev, d.pool2, 1, &cb);
-  };
   try {
-    {
-      std::lock_guard<std::mutex> p(poolMu_);
-      VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-      cai.commandPool = d.pool2;
-      cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-      cai.commandBufferCount = 1;
-      wg::check(vkAllocateCommandBuffers(d.dev, &cai, &cb), "vkAllocateCommandBuffers (rq copy)");
-      VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-      bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-      vkBeginCommandBuffer(cb, &bi);
-      const VkBufferCopy bc{0, uint64_t{base_[c]} * SB, uint64_t{len_[c]} * SB};
-      vkCmdCopyBuffer(cb, slot_[s]->buf, sym_->buf, 1, &bc);
-      wg::check(vkEndCommandBuffer(cb), "vkEndCommandBuffer (rq copy)");
-    }
-    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-    wg::check(vkCreateFence(d.dev, &fci, nullptr, &fence), "vkCreateFence (rq copy)");
-    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &cb;
-    {
-      // ai: a queue takes one submitting thread at a time (Vulkan's external synchronisation): queue2's lock, which the
-      // ai: desktop's presenter takes around its submits and presents on the same queue (wg.h queue2Mu)
-      std::lock_guard<std::mutex> p(poolMu_);
-      std::lock_guard<std::mutex> q2(d.queue2Mu());
-      wg::check(vkQueueSubmit(d.queue2, 1, &si, fence), "vkQueueSubmit (rq copy)");
-      submitted = true;
-    }
-    const VkResult r = vkWaitForFences(d.dev, 1, &fence, VK_TRUE, d.hangMs ? uint64_t{d.hangMs} * 1000000 : UINT64_MAX);
-    if (r == VK_TIMEOUT) throw std::runtime_error("a source block's copy to the device did not finish");
-    wg::check(r, "vkWaitForFences (rq copy)");
+    d.copyOnQueue2(*slot_[s], 0, *sym_, uint64_t{base_[c]} * SB, uint64_t{len_[c]} * SB);
   } catch (const std::exception& e) {
     // ai: a copy that failed fails the stream: every put waiting for a slot, and every put after, throws its reason, so
     // ai: the transfer's fault reaches the sender (until 2026-11-17 the slot was lost and nothing else knew: four lost,
-    // ai: the other workers waited for one for ever and the send hung). A copy submitted and not finished keeps its
-    // ai: slot, command buffer and fence, which the device may still use (wg's rule for a hung submit).
+    // ai: the other workers waited for one for ever and the send hung). The slot stays taken: a copy submitted and not
+    // ai: finished may still read it (wg's rule for a hung submit).
     {
       std::lock_guard<std::mutex> l(mu_);
       if (failed_.empty()) failed_ = e.what();
     }
     cv_.notify_all();
-    if (!submitted) release();
     throw;
   }
-  release();
   {
     std::lock_guard<std::mutex> l(mu_);
     slotOf_[s] = -1;

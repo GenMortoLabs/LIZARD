@@ -1,6 +1,6 @@
 // F5a, VOTE: each classified reading votes along its inward diagonal for the symbol's centre, a ray a ring.
 // Dispatched (ceil(cap / VOTE_READS), frames).
-// Defines (finder.mjs): CELL, CENTRE0, CENTRE1, RAY_HI, RAY_LO, RAY_SPREAD, RING_COUNT, SMIN, VOTE_READS.
+// Defines (core/dec/build.cpp Finder): CELL, CENTRE0, CENTRE1, RAY_HI, RAY_LO, RAY_SPREAD, RING_COUNT, SMIN, VOTE_READS.
 #include "lib/sync.slang"
 #include "lib/frame.slang"
 #include "lib/convert.slang"

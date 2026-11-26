@@ -3,15 +3,15 @@
 // layered integer min-sum (norm 13/16, caps 8191 and 127) up to MAXIT iterations, the violated checks a popcount of the
 // packed signs every iteration, the code's learned stop read after each (its MLP's words in TAB at NET_AT), then the
 // CRC-64 over the decided payload and a REC record for a verified block. Forms differing in workgroup memory alone (the
-// posteriors' store, ../../plan/back_tiers.mjs LDPC_FORMS): LW_PAIR two int16 halves a uint, updated by workgroup
+// posteriors' store, core/dec/build.cpp LDPC_FORMS): LW_PAIR two int16 halves a uint, updated by workgroup
 // atomic XOR (two lanes may write the two halves of one word in a layer); LW_I32 an int a posterior; LW_I16 an int16_t
 // a posterior, plain loads and stores (a 16-bit location is its own memory location), declared in whole 32-bit words (2
 // ceil(N / 2)): the Adreno 840 (driver E031.50.19.27) read an odd-length int16_t workgroup array wrongly. A check's
 // slot loops are unrolled by slangc itself ([ForceUnroll]): left to the driver's unroll hint, RADV once left the 6/7
 // and 3/4 codes' (NS 24 and 17) rolled and took 1.24 times as long, and the Adreno 840 left Slang's rolled (the 6/7
 // code's int16 form 0.087 against 0.055 ms a frame, half the instructions). The learned stop's sums are `precise`: no contraction into fused multiply-adds, so the kernel keeps the float32
-// order of stop/rule.mjs scoreF32 and the trainer's. The arithmetic: ../../back/DESIGN.md 6 and 7. Defines
-// (back_tiers.mjs tldpcSource): LW_PAIR, LW_I32, LW_I16, ONE (0 or 1: a check's record one uint, else a uint2); TH
+// order of the trainer's (scripts/gpu/back/stop/check_rule.mjs scoreF32). The arithmetic: ../../back/DESIGN.md 6 and 7. Defines
+// (core/dec/build.cpp Rule::ldpcRecipe): LW_PAIR, LW_I32, LW_I16, ONE (0 or 1: a check's record one uint, else a uint2); TH
 // (lanes), LDPC_CODE, LDPC_INV_AT, LDPC_N, LDPC_K, LDPC_Z, LDPC_MB, LDPC_NS, LDPC_KNOWN, LDPC_NET_H, LDPC_NET_AT,
 // CRC64_CHUNKS, PACK_WORDS, ROWV, PAIRV, PW_VECS, SLOT_COUNT (uint); lib/tab.slang's.
 #if LW_I16

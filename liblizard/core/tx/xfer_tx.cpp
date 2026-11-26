@@ -1,4 +1,5 @@
-// ai: The transfer's sending end (xfer_tx.h), liblizard/sim/xfer.mjs XferSender and Carousel line for line.
+// ai: The transfer's sending end (xfer_tx.h): every sender's, the web's too since 2026-11-25 (its JS twin, sim/xfer.mjs
+// ai: XferSender and Carousel, line for line until then, deleted).
 #include "xfer_tx.h"
 
 #include <algorithm>
@@ -39,14 +40,20 @@ extern "C" {
 #include "xfer.h"
 }
 
+// ai: Threads: natively, and in a wasm build made with them (-pthread: the web's threaded module, Emscripten's pthreads
+// ai: over one shared heap, 2026-11-25); the plain wasm module has none, and makes every source block on the caller's thread
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
+#define LIZ_TX_THREADS 1
+#endif
+
 namespace lizard {
 
 namespace {
 constexpr uint32_t PAYLOAD = XFER_PAYLOAD;
-constexpr uint32_t CONTROL = XFER_CONTROL, CONTROL_EVERY = 189;   // ai: sim/xfer.mjs CONTROL_EVERY (63 until 2026-11-21, with the manifest)
+constexpr uint32_t CONTROL = XFER_CONTROL, CONTROL_EVERY = 189;   // ai: (63 until 2026-11-21, with the manifest)
 constexpr xfer_id_t ID_HEADER = XFER_ID_HEADER;
 xfer_id_t idOf(uint32_t c, uint32_t s) { return xfer_id(c, s); }
-// ai: the carousel's draws (sim/xfer.mjs mix32, xorshift): murmur3's finaliser, a word's bits mixed; xorshift32, a
+// ai: the carousel's draws (mix32, xorshift): murmur3's finaliser, a word's bits mixed; xorshift32, a
 // ai: state that must not be 0
 uint32_t mix32(uint32_t x) { x ^= x >> 16; x *= 0x85ebca6bu; x ^= x >> 13; x *= 0xc2b2ae35u; x ^= x >> 16; return x; }
 // ai: A source block's symbols, pass by pass (2026-11-15): its v-th is the (v mod 2^24)-th of pass v >> 24 under a keyed
@@ -55,7 +62,7 @@ uint32_t mix32(uint32_t x) { x ^= x >> 16; x *= 0x85ebca6bu; x ^= x >> 13; x *= 
 // ai: receiver never meets the same ids at the same times twice: with consecutive ids from a start (until 2026-11-15)
 // ai: each pass repeated the last, and someone back a whole number of passes later (a kiosk looping one file, a pass of
 // ai: a one-source block file about 19 minutes at the 2:1 sender's rate), watching the stretch they had watched, held every
-// ai: id it showed. sim/xfer.mjs esiOf the same.
+// ai: id it showed.
 uint32_t passKey(uint32_t sbKey, uint64_t pass) { return mix32(sbKey ^ mix32(static_cast<uint32_t>(pass) * 0x85ebca6bu + 0x27d4eb2fu)); }
 uint32_t shuffle24(uint32_t key, uint32_t k) {
   uint32_t l = k >> 12 & 0xfff, r = k & 0xfff;
@@ -82,11 +89,16 @@ uint32_t nonzero(uint32_t s) { return s ? s : 0x9e3779b9u; }
 // ai: The prepare's workers: one a physical core, not a hardware thread (2026-11-06, 1 GiB on the 9950X, 16 cores of
 // ai: 2 threads: 16 workers 0.46 s random and 1.09 s compressible, 32 workers 0.62 and 1.18 s at twice the CPU time;
 // ai: two source blocks' solves on one core's caches go slower than one). The hardware threads where the system
-// ai: does not say; one under emscripten (no threads in the wasm build).
+// ai: does not say; one in the plain wasm module. The threaded one: LIZ_CORES where its page sets it (a browser tells
+// ai: hardwareConcurrency alone, its hardware threads; the page knows the architecture: lizard-web/send-worker.mjs), else
+// ai: the hardware threads.
 unsigned countCores() {
   unsigned n = 0;
-#if defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
   n = 1;
+#elif defined(__EMSCRIPTEN__)
+  const char* e = getenv("LIZ_CORES");
+  n = e && *e ? static_cast<unsigned>(atoi(e)) : 0;
 #elif defined(_WIN32)
   DWORD bytes = 0;
   GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
@@ -112,7 +124,7 @@ unsigned countCores() {
 }
 // ai: the source block size's log2: the caller's, else xfer_sb_log2_for's for the length (XFER_LOG2_MAX past what it holds,
 // ai: which the header then refuses)
-int pickLog2(size_t length, int k) {
+int pickLog2(uint64_t length, int k) {
   if (k >= 0) return k;
   const int f = xfer_sb_log2_for(length);
   return f < 0 ? XFER_LOG2_MAX : f;
@@ -129,7 +141,7 @@ rq_enc_t* encoderOf(const uint8_t* plain, size_t len, uint32_t T = PAYLOAD) {
 // ai: (2026-11-16: ecryptfs, about 0.9 s a GiB of the file sent, one call that could not be stopped).
 void spillClose(intptr_t f);
 intptr_t spillOpen(const std::string& dir, uint64_t bytes, const std::function<bool()>& stopped) {
-#if defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
   (void)dir; (void)bytes; (void)stopped;
   return -1;
 #else
@@ -203,14 +215,30 @@ unsigned physicalCores() {
 
 XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, int sbLog2, const std::string& spillDir,
                const std::function<bool()>& stopped, bool defer, uint8_t compression)
-    : size_(size_t{1} << pickLog2(length, sbLog2)), length_(length), data_(data) {
+    : XferTx(data, Reader{}, length, name, sbLog2, spillDir, stopped, defer, compression) {}
+
+XferTx::XferTx(Reader read, uint64_t length, const std::string& name, int sbLog2, const std::string& spillDir,
+               const std::function<bool()>& stopped, bool defer, uint8_t compression)
+    : XferTx(nullptr, std::move(read), length, name, sbLog2, spillDir, stopped, defer, compression) {}
+
+const uint8_t* XferTx::bytesOf(uint32_t c, std::vector<uint8_t>& buf) const {
+  const uint64_t at = uint64_t(c) * size_;
+  if (data_) return data_ + at;
+  buf.resize(len_[c]);
+  if (!read_ || !read_(at, len_[c], buf.data())) throw std::runtime_error("the file could not be read at chunk " + std::to_string(c));
+  return buf.data();
+}
+
+XferTx::XferTx(const uint8_t* data, Reader read, uint64_t length, const std::string& name, int sbLog2, const std::string& spillDir,
+               const std::function<bool()>& stopped, bool defer, uint8_t compression)
+    : size_(size_t{1} << pickLog2(length, sbLog2)), length_(length), data_(data), read_(std::move(read)) {
   sbLog2 = pickLog2(length, sbLog2);
   xfer_header_t h{};
   if (xfer_header_init(&h, length, sbLog2)) throw std::runtime_error("the file is too large for source blocks of 2^" + std::to_string(sbLog2) + " bytes");
   const uint32_t C = static_cast<uint32_t>((length + size_ - 1) / size_);
   sourceBlocks_ = C;
   len_.resize(C); K_.resize(C); enc_.resize(C); key_.assign(C, 0); cnt_.assign(C, 0);
-  for (uint32_t c = 0; c < C; c++) { len_[c] = std::min(size_, length - c * size_); K_[c] = uint32_t((len_[c] + PAYLOAD - 1) / PAYLOAD); }
+  for (uint32_t c = 0; c < C; c++) { len_[c] = size_t(std::min<uint64_t>(size_, length - uint64_t(c) * size_)); K_[c] = uint32_t((len_[c] + PAYLOAD - 1) / PAYLOAD); }
   if (!spillDir.empty() && C) {
     // ai: the spill's slots: three segments a source block of a quarter of its blocks, at least 64
     seg_.resize(C); off_.resize(C); base_.resize(C); segBase_.resize(C); taken_.assign(C, 0);
@@ -243,9 +271,12 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, int 
     std::atomic<uint32_t> nc{0}, bad{UINT32_MAX};
     std::atomic<bool> halt{false};
     auto hash = [&] {
+      std::vector<uint8_t> buf;   // ai: a source block read (read_), this thread's
       for (uint32_t c; !halt.load(std::memory_order_relaxed) && (c = nc.fetch_add(1, std::memory_order_relaxed)) < C;) {
         if (stopped && stopped()) { halt = true; break; }
-        if (xfer_sb_cv(data + c * size_, len_[c], c, sbLog2, cvs_.data() + 32 * c)) { uint32_t none = UINT32_MAX; bad.compare_exchange_strong(none, c); }
+        const uint8_t* b = nullptr;
+        try { b = bytesOf(c, buf); } catch (const std::exception&) {}
+        if (!b || xfer_sb_cv(b, len_[c], c, sbLog2, cvs_.data() + 32 * c)) { uint32_t none = UINT32_MAX; bad.compare_exchange_strong(none, c); }
       }
     };
     std::vector<std::thread> pool;
@@ -262,26 +293,27 @@ XferTx::XferTx(const uint8_t* data, size_t length, const std::string& name, int 
     if (xfer_root(cvs_.data(), C, root_)) fail("root");
   } else {
     if (C == 1 && !defer) make(0);
-    xfer_b3_hash(data, length, root_);
+    std::vector<uint8_t> buf;
+    xfer_b3_hash(C ? bytesOf(0, buf) : data, size_t(length), root_);
   }
   std::memcpy(h.root, root_, 32);
   // ai: the name a description carries: one past 255 bytes cut in its stem, its extension kept (src/xfer.h xfer_name_cut;
-  // ai: sim/xfer.mjs the same); a file alone's description always fits its session header
+  // ai: a file alone's description always fits its session header
   h.name_len = static_cast<uint8_t>(xfer_name_cut(reinterpret_cast<const uint8_t*>(name.data()), name.size(), h.name));
   h.compression = compression;
   hdr_ = h;
   headed_ = true;
   drawTois();
   writeHeader();
-#ifndef __EMSCRIPTEN__
+#ifdef LIZ_TX_THREADS
   if (spill_ >= 0) spillThread_ = std::thread([this] { spiller(); });
 #endif
   if (defer && C) return;   // ai: makeOnCpu makes them
   making_ = true;
   if (C < 2) { buildCarousel(); return; }   // ai: made already: its cycle known at once
   // ai: the source blocks made behind the constructor, a worker a physical core; on this thread where no other can start
-  // ai: (emscripten has no threads), every source block then before it returns
-#ifndef __EMSCRIPTEN__
+  // ai: (the plain wasm module has no threads), every source block then before it returns
+#ifdef LIZ_TX_THREADS
   for (uint32_t w = 0; w < W; w++) try { workers_.emplace_back([this] { work(); }); } catch (const std::system_error&) { break; }
 #endif
   if (workers_.empty()) { work(); const std::string f = fault(); if (!f.empty()) throw std::runtime_error(f); buildCarousel(); }
@@ -302,10 +334,10 @@ XferTx::~XferTx() {
 void XferTx::makeOnCpu(Sink sink) {
   if (!sourceBlocks_ || making_.exchange(true)) return;
   sink_ = std::move(sink);
-#ifndef __EMSCRIPTEN__
+#ifdef LIZ_TX_THREADS
   try { maker_ = std::thread([this] { makeAll(); }); return; } catch (const std::system_error&) {}
 #endif
-  makeAll();   // ai: no thread (emscripten, or one refused): every source block here
+  makeAll();   // ai: no thread (the plain wasm module, or one refused): every source block here
 }
 
 // ai: makeOnCpu's: the spill's file first where a folder was given (grown here, off the configuring thread; the
@@ -321,13 +353,13 @@ void XferTx::makeAll() {
     }
     std::lock_guard<std::mutex> l(spillMu_);
     spill_ = f;
-#ifndef __EMSCRIPTEN__
+#ifdef LIZ_TX_THREADS
     spillThread_ = std::thread([this] { spiller(); });
 #endif
   }
-  [[maybe_unused]] const uint32_t W = std::min<uint32_t>(sourceBlocks_, physicalCores());   // ai: (the wasm has no pool)
+  [[maybe_unused]] const uint32_t W = std::min<uint32_t>(sourceBlocks_, physicalCores());   // ai: (the plain wasm module has no pool)
   std::vector<std::thread> pool;
-#ifndef __EMSCRIPTEN__
+#ifdef LIZ_TX_THREADS
   for (uint32_t w = 1; w < W; w++) try { pool.emplace_back([this] { work(); }); } catch (const std::system_error&) { break; }
 #endif
   work();
@@ -363,7 +395,7 @@ void XferTx::seedWith(uint32_t seed) {
   if (headed_) { drawTois(); writeHeader(); }
 }
 
-// ai: The session's TOI as the reference senders draw it (sim/xfer.mjs sessionToi): from the send's seed,
+// ai: The session's TOI as every sender draws it (sessionToi): from the send's seed,
 // ai: mix32(seed ^ 0x3c6ef372) in its high 24 bits and mix32(seed ^ 0x165667b1) in its low 24, 0 taken as 1, and one past
 // ai: the file's where it is that.
 static xfer_toi_t sessionToi(uint32_t seed, xfer_toi_t avoid) {
@@ -377,7 +409,7 @@ void XferTx::drawTois() {
   toi_ = xfer_toi_of(root_, hdr_.length, hdr_.sb_log2);
 }
 
-// ai: The session header (src/xfer.h; sim/xfer.mjs writeHeader): the file's description (its own map), under the
+// ai: The session header (src/xfer.h): the file's description (its own map), under the
 // ai: session's TOI (the seed's). A new seed's rewrites it.
 void XferTx::writeHeader() {
   uint8_t e[XFER_DESC_LONGEST];
@@ -407,7 +439,11 @@ void XferTx::newRound() {
 
 // ai: Source block c: a RaptorQ encoder over its bytes (a source block of one block too: K = 1). Its slots written, then ready_.
 void XferTx::make(uint32_t c) {
-  std::unique_ptr<rq_enc_t, EncFree> enc(encoderOf(data_ + c * size_, len_[c]));
+  std::unique_ptr<rq_enc_t, EncFree> enc;
+  {
+    std::vector<uint8_t> buf;   // ai: the source block read (read_), let go once its encoder is made
+    enc.reset(encoderOf(bytesOf(c, buf), len_[c]));
+  }
   if (sink_) {
     // ai: the GPU streams its blocks (gpu_stream.h): the encoder handed over, then let go
     if (!sink_(c, enc.get())) throw std::runtime_error("stopped");
@@ -522,7 +558,9 @@ void XferTx::spiller() {
     }
     const uint32_t c = a.first;
     try {
-      std::unique_ptr<rq_enc_t, EncFree> enc(encoderOf(data_ + c * size_, len_[c]));
+      std::vector<uint8_t> buf;
+      std::unique_ptr<rq_enc_t, EncFree> enc(encoderOf(bytesOf(c, buf), len_[c]));
+      buf = {};
       writeSegment(c, enc.get(), a.second, base);
     } catch (const std::exception& x) {
       {

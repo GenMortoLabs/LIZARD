@@ -14,7 +14,7 @@
 // ai: Memory: the file's symbols must fit one buffer and a share of the device's memory (a quarter where the device
 // ai: shares the system's, a half on a discrete one; create says why not), else the CPU's path (its spill past RAM).
 // ai: Threads: create anywhere; put on any thread (a worker; on a discrete GPU it waits for a free slot and for its copy:
-// ai: pool2 under this stream's lock, Device::queue2 under the device's queue2Mu, which the presenter shares);
+// ai: Device::copyOnQueue2, under the device's locks, its queue the presenter's too);
 // ai: selfTest, blocks and host on the device's recording thread (wg.h) alone.
 #pragma once
 #include <condition_variable>
@@ -75,7 +75,6 @@ class GpuStream {
   File f_;
   std::vector<uint32_t> idw_;   // ai: the ids as written
   uint32_t toiHi_[2] = {};      // ai: the file's TOI's high 24 bits and the session header's (their ids' bytes 8 to 10), PAR's words 4 and 5
-  std::mutex poolMu_;           // ai: pool2's and queue2's (the workers' copies)
   bool uma_ = false;            // ai: the device shares the system's memory: SYM host-visible, written in place
   std::once_flag symOnce_;      // ai: SYM made by the first worker
   uint64_t symBytes_ = 0;

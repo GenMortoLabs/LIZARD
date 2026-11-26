@@ -1,7 +1,7 @@
-// ai: The receiving end's stores (store.h). FileStore is lizard-web/fountain-worker.mjs OpfsStore on plain files, as
+// ai: The receiving end's stores (store.h). FileStore is the web's OPFS store's layout (lizard-web/fountain-worker.mjs OpfsStore until 2026-11-25; the web's own since) on plain files, as
 // ai: xfer_rx.cpp held it until 2026-10-03, now on stdio alone (FILE*, 64-bit seeks, std::filesystem) so it builds on
 // ai: Windows as on Linux and Android, and since 2026-10-22 a folder a transfer, kept across receivers (store.h);
-// ai: MemoryStore is sim/xfer.mjs MemoryStore, one transfer at a time.
+// ai: MemoryStore one transfer at a time.
 #include "store.h"
 
 #include <algorithm>

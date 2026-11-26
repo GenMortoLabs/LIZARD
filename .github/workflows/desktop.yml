@@ -2,11 +2,12 @@
 # Apple Silicon (.dmg). On Linux once: the codec (Emscripten), Slang, the GPU tree (the painter's
 # and the decoder's), and Windows' native library and the receiver's tools (cam_check, lizard_receive) cross-built with
 # MinGW-w64. Then each system builds its package with jpackage, a Java runtime inside (Linux and macOS their native
-# library too, macOS with MoltenVK beside it), keeps it as an artifact, and only then runs the receiver's checks,
+# library too, macOS's on Metal itself), keeps it as an artifact, and only then runs the receiver's checks,
 # synthetic all (cam_check: no camera is listed or opened; each camera backend against a fake device, the receiver on a
 # simulated camera and the CPU decoder): a check that fails fails its job, and so the release, while the package it
-# built is kept to look at. The macOS build is also run from its .dmg twice: sending into its own window, a screenshot
-# of it read back by the C decoder, and receiving the simulated camera's test stream. Each system's checks' output is
+# built is kept to look at. The macOS build is also run from its .dmg three times: sending into its own window (the
+# GPU painter and the presenter on Metal), a screenshot of it read back by the C decoder, and receiving the simulated
+# camera's test stream on the C decoder and on the GPU decoder (Metal). Each system's checks' output is
 # kept too (smoke-<system>); on a tag the packages are also attached to that tag's release, made as a draft pre-release
 # where none exists.
 name: Desktop app
@@ -21,7 +22,6 @@ permissions:
 
 env:
   EMSDK_VERSION: 6.0.9
-  MOLTENVK_VERSION: v1.4.2
   TURBOJPEG_VERSION: 3.2.0
 
 jobs:
@@ -132,7 +132,8 @@ jobs:
           lizard-desktop/packaging/windows-extra.sh lizard-desktop/build/win/extra "$RUNNER_TEMP/windows-extra"
 
       # The GPU tree as the packages carry it (build.gradle.kts bundle): every setup (the painter's send.json, the
-      # decoder's six), every blob, every module but the raw ones; and Windows' binaries
+      # decoder's six), every blob, every module but the raw ones, as SPIR-V (Vulkan) and as MSL with its maps (Metal);
+      # and Windows' binaries
       - uses: actions/upload-artifact@v4
         with:
           name: tree
@@ -141,6 +142,7 @@ jobs:
             liblizard/out/blobs/
             liblizard/out/spv/*.spv
             !liblizard/out/spv/*.raw.spv
+            liblizard/out/msl/
             lizard-desktop/build/win/lizard_desktop.dll
             lizard-desktop/build/win/cam_check.exe
             lizard-desktop/build/win/lizard_receive.exe
@@ -360,16 +362,6 @@ jobs:
         with:
           name: tree
 
-      - name: MoltenVK
-        run: |
-          mkdir -p lizard-desktop/build/native /tmp/mvk
-          gh release download "$MOLTENVK_VERSION" -R KhronosGroup/MoltenVK -p MoltenVK-macos.tar -D /tmp/mvk
-          tar xf /tmp/mvk/MoltenVK-macos.tar -C /tmp/mvk
-          lipo /tmp/mvk/MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib -thin arm64 -output lizard-desktop/build/native/libMoltenVK.dylib
-          cp /tmp/mvk/MoltenVK/LICENSE lizard-desktop/build/native/MoltenVK.LICENSE
-        env:
-          GH_TOKEN: ${{ github.token }}
-
       # TurboJPEG for the checks' MJPEG cases: Homebrew's jpeg-turbo, the first place liblizard/core/cam/jpeg.cpp looks
       - name: TurboJPEG
         run: brew install jpeg-turbo
@@ -474,6 +466,34 @@ jobs:
           totals = rx.get('totals') or {}
           blocks = totals.get('blocks') or 0
           print(f"the receiver: {rx.get('state')}, {totals.get('frames')} frames, {blocks} blocks verified")
+          sys.exit(0 if blocks > 0 else 1)
+          EOF
+
+      # The same on the GPU decoder (Metal, liblizard/core/wg/wg_metal.mm; LIZ_RECEIVER_TEST's decoder=gpu, which fails
+      # rather than fall back to the C): the runner's paravirtual device builds the decoder's pipelines from the tree's
+      # MSL and reads the simulated camera
+      - name: Received from the simulated camera by the .dmg's app, on the GPU decoder
+        if: ${{ !cancelled() && steps.dmg.outcome == 'success' }}
+        timeout-minutes: 8
+        run: |
+          hdiutil detach /tmp/lizard-dmg 2> /dev/null || true
+          hdiutil attach -nobrowse -mountpoint /tmp/lizard-dmg lizard-desktop/build/compose/binaries/main/dmg/*.dmg
+          app=$(ls -d /tmp/lizard-dmg/*.app)
+          mkdir -p smoke "$RUNNER_TEMP/lizard-data-gpu"
+          code=0
+          LIZ_DATA="$RUNNER_TEMP/lizard-data-gpu" LIZ_DOWNLOADS="$RUNNER_TEMP/lizard-data-gpu" \
+            LIZ_CAMERA_SIM="blocks=6 fps=30 camfps=60 w=1280 h=720" LIZ_RECEIVER_TEST="secs=90 camera=sim:0 decoder=gpu" \
+            "$app/Contents/MacOS/LIZARD" > smoke/rx-gpu-out.json 2> smoke/rx-gpu-err.txt || code=$?
+          hdiutil detach /tmp/lizard-dmg
+          grep -v '^rx: {' smoke/rx-gpu-err.txt | tail -60; cat smoke/rx-gpu-out.json; echo "exit $code"
+          [ "$code" = 0 ]
+          python3 - <<'EOF'
+          import json, sys
+          lines = [l for l in open('smoke/rx-gpu-out.json') if l.startswith('{')]
+          rx = json.loads(lines[-1])['rx'] if lines else {}
+          totals = rx.get('totals') or {}
+          blocks = totals.get('blocks') or 0
+          print(f"the GPU receiver: {rx.get('state')}, decoder {rx.get('decoder')}, {totals.get('frames')} frames, {blocks} blocks verified")
           sys.exit(0 if blocks > 0 else 1)
           EOF
 

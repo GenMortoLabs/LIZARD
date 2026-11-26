@@ -35,7 +35,7 @@ std::vector<std::string> variantsFor(const wg::Device& d) {
   return out;
 }
 
-// ai: A variant's setup: setup/<variant>.json.
+// ai: A variant's index: setup/<variant>.json.
 std::string setupName(const std::string& variant) { return "setup/" + variant + ".json"; }
 
 std::vector<std::string> variantsIn(const std::string& root, const std::vector<std::string>& variants) {
@@ -44,25 +44,33 @@ std::vector<std::string> variantsIn(const std::string& root, const std::vector<s
   return out;
 }
 
+// ai: The tree made (build.cpp) with no back half yet: buildBack makes the one in use. LIZ_CAP=<n> (lab): SELECT's
+// ai: cap in place of plan.h CAP.
 std::unique_ptr<Setup> Setup::load(wg::Device& d, ReadFile read, const std::string& variant) {
   auto s = std::make_unique<Setup>();
   s->dev = &d;
   s->read = read;
   s->variant = variant;
-  auto bytes = read(setupName(variant));
-  s->tree = json::parse(bytes.begin(), bytes.end());
-  s->objects = std::move(s->tree["objects"]);
-  s->tree.erase("objects");
+  const char* cap = getenv("LIZ_CAP");
+  try {
+    s->made = build::make(read, variant, {}, cap ? atoi(cap) : 0);
+  } catch (const wg::Error&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw wg::Error(std::string("the GPU setup ") + variant + ": " + e.what());
+  }
+  s->tree = std::move(s->made.tree);
   return s;
 }
 
-std::vector<uint32_t> Setup::spirv(const std::string& module) {
+// ai: the module as the device takes it (wg::readModule); LIZ_SPV (lab) names another SPIR-V folder of the tree
+wg::Module Setup::module(const std::string& name) {
+#if LIZ_VK
   static const std::string dir = getenv("LIZ_SPV") ? getenv("LIZ_SPV") : "spv";
-  auto b = read(dir + "/" + module + ".spv");
-  if (b.size() % 4 || b.size() < 20) throw wg::Error("spv/" + module + ".spv: not SPIR-V");
-  std::vector<uint32_t> w(b.size() / 4);
-  memcpy(w.data(), b.data(), b.size());
-  return w;
+  return wg::readModule(read, name, dir);
+#else
+  return wg::readModule(read, name);
+#endif
 }
 
 static wg::Bind bindOf(const std::string& t) {
@@ -81,15 +89,15 @@ void Setup::make(const std::vector<std::string>& ids) {
     const char k = id[0];
     if (k == 'L' && !bgls.count(id)) {
       std::vector<wg::Bind> e;
-      for (auto& t : objects["bgls"].at(id)) e.push_back(bindOf(t.get<std::string>()));
+      for (auto& t : made.bgls.at(id)) e.push_back(bindOf(t.get<std::string>()));
       bgls[id] = dev->createBindGroupLayout(e, id);
     } else if (k == 'p' && !pipelines.count(id) && !unbuilt.count(id)) {
-      const auto& o = objects["pipelines"].at(id);
+      const auto& o = made.pipelines.at(id);
       if (o["groups"].size() != 1) throw wg::Error(id + ": " + std::to_string(o["groups"].size()) + " bind groups; the decoder uses one");
       const std::string g = o["groups"][0];
       make({g});
       const std::string label = o.value("label", json()).is_string() ? o["label"].get<std::string>() : "";
-      // ai: a pipeline whose workgroup passes the device's invocations (gen/gen.mjs lanesOf) is left out: only a form
+      // ai: a pipeline whose workgroup passes the device's invocations (its lanes, gen/gen.mjs slangFacts) is left out: only a form
       // ai: the host may do without names one (the LDPC's, front.cpp ldpcBuilt)
       const uint32_t lanes = o.value("lanes", 0u);
       if (lanes > dev->limits.maxComputeWorkGroupInvocations) {
@@ -97,7 +105,7 @@ void Setup::make(const std::vector<std::string>& ids) {
         unbuilt.insert(id);
         continue;
       }
-      // ai: so is one whose module needs a device feature the device lacks (gen/gen.mjs needsOf: "int16", shaderInt16)
+      // ai: so is one whose module needs a device feature the device lacks (its needs, gen/gen.mjs slangFacts: "int16", shaderInt16)
       std::string lacks;
       for (const auto& n : o.value("needs", json::array())) {
         const std::string k = n.get<std::string>();
@@ -109,18 +117,19 @@ void Setup::make(const std::vector<std::string>& ids) {
         continue;
       }
       auto t0 = std::chrono::steady_clock::now();
-      pipelines[id] = dev->createPipeline(spirv(o["module"]), bgls.at(g), id, label);
+      pipelines[id] = dev->createPipeline(module(o["module"]), bgls.at(g), id, label);
       const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
       if (ms > 200) dev->log("pipeline " + id + " (" + (label.empty() ? o["module"].get<std::string>() : label) + ", module " + o["module"].get<std::string>() + "): " + std::to_string((int)ms) + " ms to compile");
     } else if (k == 'b' && !buffers.count(id)) {
-      const auto& o = objects["buffers"].at(id);
-      const bool blob = o["blob"].is_string();
-      auto b = dev->createBuffer(o["size"].get<uint64_t>(), o["usage"].get<uint32_t>(), id, !blob);
-      if (blob) {
-        auto data = read("blobs/" + o["blob"].get<std::string>() + ".bin");
-        if (data.size() != b->size) throw wg::Error(id + ": blob of " + std::to_string(data.size()) + " B for a buffer of " + std::to_string(b->size));
-        dev->upload(*b, 0, data.data(), data.size());
-      }
+      // ai: its bytes uploaded and let go (a buffer of zeros made cleared); a back half made again makes them again
+      const auto& o = made.buffers.at(id);
+      auto it = made.bytes.find(id);
+      if (it == made.bytes.end()) throw wg::Error(id + ": its bytes were let go (the back half it is in was dropped)");
+      const bool zero = std::all_of(it->second.begin(), it->second.end(), [](uint8_t x) { return x == 0; });
+      auto b = dev->createBuffer(o["size"].get<uint64_t>(), o["usage"].get<uint32_t>(), id, zero);
+      if (it->second.size() != b->size) throw wg::Error(id + ": " + std::to_string(it->second.size()) + " B for a buffer of " + std::to_string(b->size));
+      if (!zero) dev->upload(*b, 0, it->second.data(), it->second.size());
+      made.bytes.erase(it);
       buffers[id] = b;
     }
   }
@@ -140,7 +149,7 @@ void Setup::build(int B) {
   auto t0 = std::chrono::steady_clock::now();
   std::vector<std::string> ids;
   idsIn(tree["front"], ids);
-  // ai: the anchors' stages (gen.mjs exportAnch), with the front half
+  // ai: the anchors' stages (the tree's `anch`), with the front half
   idsIn(tree.at("anch"), ids);
   // ai: layouts before pipelines before buffers, so a pipeline's layout is there and its compile starts early
   std::stable_sort(ids.begin(), ids.end(), [](const std::string& a, const std::string& b) { auto r = [](char c) { return c == 'L' ? 0 : c == 'p' ? 1 : 2; }; return r(a[0]) < r(b[0]); });
@@ -150,18 +159,31 @@ void Setup::build(int B) {
 }
 
 void Setup::buildBack(int B) {
-  if (!tree["backs"].contains(std::to_string(B))) throw wg::Error("no back half at B = " + std::to_string(B) + " in the setup");
-  // ai: The previous back half's objects go (the front half's stay): the web's destroyBack.
+  // ai: The previous back half's objects go (the front half's stay): the web's destroyBack; made again when wanted
   if (backB && backB != B) {
     std::vector<std::string> old;
     idsIn(back(), old);
-    for (const auto& id : old) { buffers.erase(id); pipelines.erase(id); }
+    for (const auto& id : old) { buffers.erase(id); pipelines.erase(id); unbuilt.erase(id); }
+    tree["backs"].erase(std::to_string(backB));
   }
+  backTree(B);
   backB = B;
   std::vector<std::string> ids;
   idsIn(back(), ids);
   make(ids);
   dev->flush();
+}
+
+const json& Setup::backTree(int B) {
+  const std::string k = std::to_string(B);
+  if (!tree["backs"].contains(k)) {
+    try {
+      tree["backs"][k] = made.back(B);
+    } catch (const std::exception& e) {
+      throw wg::Error("the GPU setup's back half at B = " + k + ": " + e.what());
+    }
+  }
+  return tree["backs"][k];
 }
 
 wg::Buffer& Setup::buf(const std::string& id) { return *bufPtr(id); }

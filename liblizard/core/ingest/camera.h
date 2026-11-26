@@ -30,7 +30,9 @@ class CameraIngest {
   uint64_t ingest(AHardwareBuffer* hb, uint32_t x, uint32_t y, uint32_t w, uint32_t h, wg::Texture& ring, uint32_t layer);
   bool done(uint64_t value) const;
   uint64_t completed() const;
+#if LIZ_VK
   VkSemaphore timeline = VK_NULL_HANDLE;
+#endif
   // ai: Every import made again (a camera reconfigured, a ring remade).
   void forget();
   // ai: The camera's reader closed (2026-10-02): its buffers will not come again, and a reopened camera hands over new
@@ -42,8 +44,9 @@ class CameraIngest {
 
  private:
   CameraIngest(wg::Device& d) : dev(d) {}
+  [[maybe_unused]] wg::Device& dev;   // ai: (unused where the ingest is a stub)
+#if LIZ_VK
   struct Imported { VkImage img = VK_NULL_HANDLE; VkDeviceMemory mem = VK_NULL_HANDLE; VkImageView view = VK_NULL_HANDLE; VkDescriptorSet set = VK_NULL_HANDLE; VkImageView ringView = VK_NULL_HANDLE; uint32_t w = 0, h = 0; };
-  wg::Device& dev;
   std::vector<uint32_t> spirv;
   uint64_t externalFormat = 0;
   VkFormat format = VK_FORMAT_UNDEFINED;
@@ -60,6 +63,7 @@ class CameraIngest {
   bool build(AHardwareBuffer* hb);
   Imported& importOf(AHardwareBuffer* hb);
   void destroyPipe();
+#endif
 };
 
 }  // namespace lizard

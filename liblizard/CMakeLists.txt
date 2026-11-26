@@ -36,7 +36,14 @@ endif()
 # ai: LIZ_SCALAR (the core's option, build.sh scalar) builds the codec's scalar twins in place of its vector paths, the
 # ai: rest as the SIMD module, LIZ_VERIFY_POINTS (build.sh verify) the border finder's point scans beside the plain scan they
 # ai: replaced (src/acquire.c OB_VERIFY_POINTS): lab builds for scripts/exp/simd_check.mjs and points_check.mjs.
+# ai: LIZ_WASM_THREADS (liblizard/build.sh's default build, a tree of its own beside the plain module's; 2026-11-25): the
+# ai: web's threaded module, lizard-mt.mjs and its .wasm: every object built -pthread (Emscripten's pthreads, Web Workers
+# ai: over one SharedArrayBuffer heap, so a page that loads it is cross-origin isolated), WasmFS with its OPFS backend,
+# ai: and beside the plain module's exports the web receiver's engine (bindings/wasm/engine.cpp: core/cpu/pool.h's
+# ai: decoders and core/rx/xfer_rx.h's transfer on threads, the store on OPFS) and the transfer's sending end making
+# ai: its source blocks on threads (core/tx/xfer_tx.cpp). SIMD and wasm exceptions as the plain module's.
 option(LIZ_WASM_MVP "the wasm build as WebAssembly 1.0 (MVP): no SIMD, JS exceptions" OFF)
+option(LIZ_WASM_THREADS "the web's threaded wasm module (lizard-mt.mjs): pthreads, WasmFS on OPFS, the receiver's engine" OFF)
 option(LIZ_VERIFY_POINTS "the border finder's point scans checked against the plain scan (a lab build)" OFF)
 set(LIZ_WASM_DIST ${CMAKE_CURRENT_SOURCE_DIR}/bindings/wasm/dist CACHE PATH "where the wasm build writes its module")
 if(EMSCRIPTEN)
@@ -51,6 +58,10 @@ if(EMSCRIPTEN)
     if(NOT LIZ_SCALAR)
       add_compile_options(-msimd128)
     endif()
+  endif()
+  if(LIZ_WASM_THREADS)
+    add_compile_options(-pthread)
+    add_link_options(-pthread)
   endif()
 endif()
 
@@ -68,17 +79,19 @@ get_filename_component(LIZ_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 add_compile_options("-ffile-prefix-map=${LIZ_ROOT}=.")
 add_subdirectory(core EXCLUDE_FROM_ALL)
 
-set(LIZ_API_SOURCES api/api.cpp api/format.cpp api/codec.cpp api/xfer.cpp)
+set(LIZ_API_SOURCES api/api.cpp api/format.cpp api/codec.cpp api/xfer.cpp api/tar.cpp)
 if(EMSCRIPTEN)
-  add_executable(lizard ${LIZ_API_SOURCES} src/wasm.c)
-  target_include_directories(lizard PRIVATE src)
+  # ai: beside the codec's exports the web sender's GPU encoder's tables, the native painter's own (bindings/wasm/tables.cpp
+  # ai: over core/tx/send_tables.cpp)
+  add_executable(lizard ${LIZ_API_SOURCES} src/wasm.c bindings/wasm/tables.cpp core/tx/send_tables.cpp)
+  target_include_directories(lizard PRIVATE src core/tx)
   # ai: the C API, then the codec's own exports (src/wasm.c and what it reaches; an in-tree interface, no stability
   # ai: promise), zstd's shim by name (the default client's pack, sim/pack.mjs: nothing in the library calls it, so its
   # ai: object is linked only for these), RaptorQ (src/rq.h: the transfer's fountain for sim/fountain.mjs), then the allocator
-  set(LIZ_WASM_EXPORTS _liz_version _liz_last_error _liz_last_error_code _liz_simd _liz_ring_cells _liz_geometry_of _liz_room_for
-      _liz_pick _liz_blocks_for _liz_block_place_of _liz_encoder_new _liz_encoder_free _liz_encoder_geometry _liz_encoder_paint _liz_decoder_new
+  set(LIZ_WASM_EXPORTS _liz_version _liz_last_error _liz_last_error_code _liz_simd _liz_ring_cells _liz_ring_modules _liz_geometry_of _liz_room_for
+      _liz_radius_for _liz_camera_for _liz_pick _liz_blocks_for _liz_block_place_of _liz_encoder_new _liz_encoder_free _liz_encoder_geometry _liz_encoder_paint _liz_decoder_new
       _liz_decoder_free _liz_decoder_max_blocks _liz_decode _liz_layout_rects _liz_tx_new
-      _liz_tx_new_test _liz_tx_free _liz_tx_next _liz_tx_info_get _liz_rx_new _liz_rx_free _liz_rx_frame
+      _liz_tx_new_sized _liz_tx_new_read _liz_tx_seed _liz_refresh_places _liz_refresh_held _liz_tx_new_test _liz_tx_free _liz_tx_next _liz_tx_info_get _liz_rx_new _liz_rx_free _liz_rx_frame
       _liz_rx_progress _liz_rx_source_blocks _liz_rx_meta _liz_rx_data _liz_rx_clear
       _lizard_setup _lizard_setup_tiers _lizard_any_setup _lizard_any_rx _lizard_any_max_blocks _lizard_any_which
       _lizard_any_n _lizard_any_blocks _lizard_any_fmt _lizard_any_builds _lizard_bitmap_get _lizard_subch
@@ -94,9 +107,23 @@ if(EMSCRIPTEN)
       _xfer_sb_ok _xfer_root_check _xfer_root
       _xfer_sb_cv _xfer_b3_hash _xfer_b3_sub _xfer_sb_log2_of _xfer_same_file_of
       _xfer_desc_write_of _xfer_name_cut_of _xfer_toi_of_wasm
+      _liz_bundle_new _liz_bundle_free _liz_bundle_add _liz_bundle_make _liz_bundle_name _liz_bundle_entry_get
+      _lizard_format_json _lizard_n_for _lizard_pxm_for _ob_fmt_layout
       _lizard_zstd_bound _lizard_zstd_compress _lizard_zstd_decompress _lizard_zstd_frame_content _lizard_zstd_frame_bytes
       _rq_symbols _rq_enc_new _rq_enc_symbol _rq_enc_free _rq_dec_new _rq_dec_add _rq_dec_recover _rq_dec_free
+      _lizw_send_tables
       _malloc _free)
+  if(LIZ_WASM_THREADS)
+    # ai: the web receiver's engine (bindings/wasm/engine.cpp), its decoders and its transfer on threads; the web sender's
+    # ai: transfer over a picked file read where it lies (bindings/wasm/send.cpp)
+    target_sources(lizard PRIVATE bindings/wasm/engine.cpp bindings/wasm/send.cpp)
+    target_link_libraries(lizard PRIVATE lizard_cpu lizard_xfer)
+    list(APPEND LIZ_WASM_EXPORTS _lizw_opfs _lizw_rx_new _lizw_rx_free _lizw_rx_offer _lizw_rx_room _lizw_rx_luma _lizw_luma_of_rgba
+         _lizw_rx_results _lizw_rx_res _lizw_rx_size _lizw_rx_ceiling _lizw_rx_lost _lizw_rx_tick _lizw_rx_progress _lizw_rx_data
+         _lizw_rx_release _lizw_rx_forget _lizw_rx_clear _lizw_rx_pause _lizw_file_away _lizw_unpack
+         _lizw_prepare _lizw_prep_slot _lizw_prep_state _lizw_prep_why _lizw_prep_tx _lizw_prep_sent _lizw_prep_name _lizw_prep_compression
+         _lizw_prep_cancel _lizw_prep_free)
+  endif()
   string(REPLACE ";" "," LIZ_WASM_EXPORTS "${LIZ_WASM_EXPORTS}")
   set_target_properties(lizard PROPERTIES SUFFIX ".mjs" RUNTIME_OUTPUT_DIRECTORY ${LIZ_WASM_DIST})
   target_link_options(lizard PRIVATE -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node -sALLOW_MEMORY_GROWTH=1
@@ -104,6 +131,20 @@ if(EMSCRIPTEN)
       -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU32,HEAP32,HEAPF32,HEAPF64,UTF8ToString,stringToUTF8,lengthBytesUTF8)
   if(LIZ_SCALAR)
     target_compile_definitions(lizard PRIVATE OB_SCALAR)
+  endif()
+  if(LIZ_WASM_THREADS)
+    # ai: one worker made at the start, WasmFS's OPFS thread (the module's own thread waits on it as it mounts /opfs, before
+    # ai: it returns to its event loop, where a worker made later would start); every other thread gets a worker as the C
+    # ai: starts it (the receiver's decoders and its transfer's thread at its start, a decoder more as the pool grows and a
+    # ai: solver as a transfer's solves need one; the sender's as it prepares a file), and a thread's worker, once it ends,
+    # ai: waits for the next: the workers are what the page's threads have been at most. The heap growing to wasm32's
+    # ai: 4 GiB, a thread's stack 1 MiB; the memory's own object exported, so a JS face refreshes its views after a growth on
+    # ai: another thread, and the environment's (the page's LIZ_CORES, core/tx/xfer_tx.cpp countCores). $stringToUTF8OnStack: WasmFS's OPFS directory listing (_wasmfs_opfs_get_entries, emsdk 6.0.9)
+    # ai: calls it without naming it among its dependencies, so a build with nothing else that names it had none, and
+    # ai: every listing of an OPFS folder failed (EIO): the store's resume found no blocks in hand
+    set_target_properties(lizard PROPERTIES OUTPUT_NAME lizard-mt)
+    target_link_options(lizard PRIVATE -sWASMFS "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=$stringToUTF8OnStack" -sPTHREAD_POOL_SIZE=1 -sPTHREAD_POOL_SIZE_STRICT=0 -sMAXIMUM_MEMORY=4GB
+        -sDEFAULT_PTHREAD_STACK_SIZE=1MB -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU32,HEAP32,HEAPF32,HEAPF64,UTF8ToString,stringToUTF8,lengthBytesUTF8,wasmMemory,ENV)
   endif()
   if(LIZ_WASM_MVP)
     set_target_properties(lizard PROPERTIES OUTPUT_NAME lizard-mvp)

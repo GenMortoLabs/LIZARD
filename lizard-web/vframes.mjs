@@ -1,14 +1,14 @@
-// ai: The camera's frames as VideoFrames for the receiver's CPU pool (recv.mjs sendPoolFrame): the page hands a worker the
-// ai: frame with the crop it would have grabbed, and the worker copies the crop to luma (lumaOf, below, run by recv-worker.mjs), so no
-// ai: canvas is drawn or read back on the page. frameTap is the page's half, lumaOf the worker's. No top-level await:
-// ai: workers import it.
+// ai: The camera's frames as VideoFrames for the receiver's engine (recv.mjs sendFrame): the page hands the engine worker
+// ai: the frame with the crop it would have grabbed, and the engine copies the crop's luma into its shared heap (lumaOf,
+// ai: below, run by engine-worker.mjs), so no canvas is drawn or read back on the page. frameTap is the page's half, lumaOf
+// ai: the engine's. No top-level await: workers import it.
 
-// ai: One channel of a crop at three points of each corner, (12, 12), (3, 12) and (12, 3) pixels in, for
+// ai: A crop's luma at three points of each corner, (12, 12), (3, 12) and (12, 3) pixels in, for
 // ai: lizard-web/check_rates.mjs's crop check (recv.html?verify): its clip has a marker at each corner of the true centre
 // ai: square that starts 4 pixels in, covering the first point and stopping short of the other two, so a crop off by a
-// ai: pixel either way puts some corner's background point on its marker. stride 4 reads the red channel of RGBA, 1 luma.
-export function cornerProbe(px, w, h, stride) {
-  const at = (x, y) => px[stride * (y * w + x)], out = [];
+// ai: pixel either way puts some corner's background point on its marker. The crop's pixel (x, y) at px[off + y stride + x].
+export function cornerProbe(px, off, stride, w, h) {
+  const at = (x, y) => px[off + y * stride + x], out = [];
   for (const [cx, cy] of [[0, 0], [1, 0], [1, 1], [0, 1]]) for (const [dx, dy] of [[12, 12], [3, 12], [12, 3]]) out.push(at(cx ? w - 1 - dx : dx, cy ? h - 1 - dy : dy));
   return out;
 }
@@ -49,7 +49,9 @@ export function frameTap(track, video) {
   return tap;
 }
 
-// ai: The crop's luma out of a VideoFrame, for a pool worker: every frame, closed here whatever happens. The crop (x, y,
+// ai: The crop's luma out of a VideoFrame, for the engine: every frame, closed here whatever happens. into(n) gives the
+// ai: n bytes to copy into (the engine's buffer in its shared heap: copyTo writes there itself); the answer { buf, off,
+// ai: stride, format } puts the crop's pixel (i, j) at buf[off + j stride + i]. The crop (x, y,
 // ai: w, h) is in the frame's display pixels, the space the page works in (the video's). copyTo's rect is in coded
 // ai: pixels, and a camera frame need not be 1:1 with its display size: the
 // ai: S26 Ultra at 2560 x 1440 hands over a coded 1848 x 4000 frame whose visible rect (0, 356, 1848, 3286) is displayed
@@ -58,14 +60,15 @@ export function frameTap(track, video) {
 // ai: the frame is scaled, sampled bilinearly at the display pixels' centres.
 // ai: A planar YUV frame keeps its luma in plane 0: copyTo takes the crop as a rect (even coordinates on a subsampled
 // ai: format) but refuses a layout of fewer planes than the format has (Chrome 153: "Expected 3 planes, found 1"), so
-// ai: every plane is copied (1.5 bytes a pixel on I420, 0.3 ms at a 720 crop) and plane 0 is the luma, a view when its
-// ai: rows are packed, as Chrome packs them. An RGB frame is converted with the rig's formula (src/acquire.c), so
-// ai: every path hands the codec the same quantity. Any other format throws.
+// ai: every plane is copied (1.5 bytes a pixel on I420, 0.3 ms at a 720 crop) and plane 0 is the luma, read in place at
+// ai: its offset and stride. A scaled frame's crop is resampled after the copy, and an RGB frame converted with the rig's
+// ai: formula (src/acquire.c), into the buffer past the copy, so every path hands the codec the same quantity. Any other
+// ai: format throws.
 // ai: PLANAR_Y8: the pixel formats whose plane 0 is the luma at a byte a sample (the S26 Ultra's camera and headless
 // ai: Chrome's fake one give I420; not the 10 and 12 bit forms, two bytes a sample); RGB_RED: the 8-bit RGB ones, with
 // ai: the byte that holds red.
 const PLANAR_Y8 = /^(I4(20|22|44)A?|NV12|NV21)$/, RGB_RED = { RGBA: 0, RGBX: 0, BGRA: 2, BGRX: 2 };
-export async function lumaOf(vf, x, y, w, h) {
+export async function lumaOf(vf, x, y, w, h, into) {
   const format = vf.format ?? "unknown";
   try {
     if (!PLANAR_Y8.test(format) && !(format in RGB_RED)) throw new Error(`${format}: not a pixel format this worker reads`);
@@ -77,48 +80,47 @@ export async function lumaOf(vf, x, y, w, h) {
     const cx0 = Math.max(0, Math.floor(u0)) & ~1, cy0 = Math.max(0, Math.floor(v0)) & ~1;
     const cx1 = Math.min(vf.codedWidth, (Math.ceil(u0 + (w - 1) * sx) + (scaled ? 2 : 1) + 1) & ~1), cy1 = Math.min(vf.codedHeight, (Math.ceil(v0 + (h - 1) * sy) + (scaled ? 2 : 1) + 1) & ~1);
     const rect = { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 };
-    const buf = new ArrayBuffer(vf.allocationSize({ rect })), [p0] = await vf.copyTo(buf, { rect });
-    // ai: The copied rect's luma plane: bytes, the plane's offset in them and its row stride.
-    let plane = new Uint8Array(buf), po = p0.offset, ps = p0.stride;
-    if (format in RGB_RED) {
-      const R = RGB_RED[format], B = 2 - R, pw = rect.width, L = new Uint8Array(pw * rect.height);
-      for (let r = 0; r < rect.height; r++) for (let c = 0, i = r * pw, j = po + r * ps; c < pw; c++, i++, j += 4) L[i] = (77 * plane[j + R] + 150 * plane[j + 1] + 29 * plane[j + B] + 128) >> 8;
-      plane = L; po = 0; ps = pw;
+    // ai: the copy, then (scaled, or RGB) the crop's luma past it
+    const size = vf.allocationSize({ rect }), rgb = format in RGB_RED, conv = rgb ? rect.width * rect.height : 0, buf = into(size + conv + (scaled ? w * h : 0));
+    const [p0] = await vf.copyTo(buf.subarray(0, size), { rect });
+    // ai: The copied rect's luma plane: its offset in buf and its row stride.
+    let po = p0.offset, ps = p0.stride;
+    if (rgb) {
+      const R = RGB_RED[format], B = 2 - R, pw = rect.width;
+      for (let r = 0; r < rect.height; r++) for (let c = 0, i = size + r * pw, j = po + r * ps; c < pw; c++, i++, j += 4) buf[i] = (77 * buf[j + R] + 150 * buf[j + 1] + 29 * buf[j + B] + 128) >> 8;
+      po = size; ps = pw;
     }
-    if (scaled) return { luma: resample(plane, po, ps, rect.width, rect.height, u0 - cx0, sx, v0 - cy0, sy, w, h), format };
+    if (scaled) { resample(buf, po, ps, rect.width, rect.height, u0 - cx0, sx, v0 - cy0, sy, w, h, buf, size + conv); return { buf, off: size + conv, stride: w, format }; }
     const ox = Math.round(u0) - cx0, oy = Math.round(v0) - cy0;
-    if (ox === 0 && oy === 0 && ps === w) return { luma: new Uint8Array(plane.buffer, plane.byteOffset + po, w * h), format };
-    const luma = new Uint8Array(w * h);
-    for (let r = 0; r < h; r++) luma.set(plane.subarray(po + (oy + r) * ps + ox, po + (oy + r) * ps + ox + w), r * w);
-    return { luma, format };
+    return { buf, off: po + oy * ps + ox, stride: ps, format };
   } finally { vf.close(); }
 }
 
-// ai: w x h samples of a luma plane (pw x ph at offset po, rows ps apart), output (i, j) taken bilinearly at plane position
-// ai: (u0 + i du, v0 + j dv), the position of a pixel's top left tap, so a plane pixel's centre is at k + 0.5. Taps are
-// ai: clamped to the plane. Weights are 8-bit fixed point: 2.07 M samples at a 1440 crop, so no floats in the inner loop.
-function resample(plane, po, ps, pw, ph, u0, du, v0, dv, w, h) {
-  const out = new Uint8Array(w * h), kx = new Int32Array(w), fx = new Int32Array(w);
+// ai: w x h samples of a luma plane (pw x ph at offset po, rows ps apart) into out at oo, rows w apart: output (i, j) taken
+// ai: bilinearly at plane position (u0 + i du, v0 + j dv), the position of a pixel's top left tap, so a plane pixel's
+// ai: centre is at k + 0.5. Taps are clamped to the plane. Weights are 8-bit fixed point: 2.07 M samples at a 1440 crop,
+// ai: so no floats in the inner loop.
+function resample(plane, po, ps, pw, ph, u0, du, v0, dv, w, h, out, oo) {
+  const kx = new Int32Array(w), fx = new Int32Array(w);
   for (let i = 0; i < w; i++) { const u = Math.min(Math.max(u0 + i * du, 0), pw - 1), k = Math.min(Math.floor(u), pw - 2); kx[i] = k; fx[i] = Math.round((u - k) * 256); }
   for (let j = 0; j < h; j++) {
     const v = Math.min(Math.max(v0 + j * dv, 0), ph - 1), l = Math.min(Math.floor(v), ph - 2), fy = Math.round((v - l) * 256), gy = 256 - fy;
-    const r0 = po + l * ps, o = j * w;
+    const r0 = po + l * ps, o = oo + j * w;
     for (let i = 0; i < w; i++) {
       const k = r0 + kx[i], f = fx[i], g = 256 - f;
       const top = plane[k] * g + plane[k + 1] * f, bot = plane[k + ps] * g + plane[k + ps + 1] * f;
       out[o + i] = (top * gy + bot * fy + 32768) >> 16;
     }
   }
-  return out;
 }
 
-// ai: The grey range a frame arrived with (the decode worker, every 32nd frame): the 5th to 95th percentile's width,
+// ai: The grey range a frame arrived with (the engine, every 32nd frame): the 5th to 95th percentile's width,
 // ai: the median and the shares pinned at 255 and 0, over the middle half (every second pixel of every second row), so
-// ai: the surround and the frame do not vote. step: bytes a pixel (4 for RGBA, the first byte read).
-export function greyLevels(px, w, h, step) {
+// ai: the surround and the frame do not vote. The crop's pixel (x, y) at px[off + y stride + x].
+export function greyLevels(px, off, stride, w, h) {
   const hist = new Uint32Array(256), x0 = w >> 2, x1 = (3 * w) >> 2, y0 = h >> 2, y1 = (3 * h) >> 2;
   let n = 0;
-  for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) { hist[px[(y * w + x) * step]]++; n++; }
+  for (let y = y0; y < y1; y += 2) for (let x = x0; x < x1; x += 2) { hist[px[off + y * stride + x]]++; n++; }
   if (!n) return null;
   const at = (p) => { let acc = 0; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n * p) return v; } return 255; };
   return { range: at(0.95) - at(0.05), mid: at(0.5), hi: hist[255] / n, lo: hist[0] / n };

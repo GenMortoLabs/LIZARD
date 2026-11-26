@@ -27,6 +27,7 @@
 #include "gpu_painter.h"
 #include "gpu_zstd.h"
 #include "lizfile.h"
+#include "refresh.h"
 #include "stream_export.h"
 #include "xfer_tx.h"
 
@@ -124,22 +125,15 @@ class Sender {
   std::string painter() const { return onGpu_ ? "gpu" : "cpu"; }
   const std::string& gpuWhy() const { return gpuWhy_; }
   const XferTx* xfer() const { return xfer_.get(); }
-  // ai: Refresh (2026-11-17; Rate refresh of 2026-11-12, 1 to 4 a code rate, before): each block place of a symbol takes
-  // ai: a new block every `every` pictures, its delay, a whole number (1, the default, every picture), so its rate is the
-  // ai: format's fps over a whole number: picture k (the count) shows a new block there where k is a multiple of it, and
-  // ai: repeats the picture before's block otherwise. The pilots stay the picture's count (painted with the picture, not
-  // ai: kept with the block), so a receiver and its phase lock read every picture as ever: no format change, a repeated
-  // ai: block one a receiver has. Only new places take ids. From the next frame made (frames already made ahead keep
-  // ai: theirs).
-  static constexpr int REFRESH_MAX = 30;   // ai: the largest delay the border's word states (src/fmt.h OB_FMT_DELAY_MAX)
+  // ai: Refresh (refresh.h, the rule every sender's: each block place a delay 1 to refresh::MAX pictures, a held place
+  // ai: repeating the picture before's block). Only new places take ids. From the next frame made (frames already made
+  // ai: ahead keep theirs).
   // ai: per code rate (0 6/7, 1 3/4, 2 2/3, 3 1/2; the format's tiers from the inside out): every block of the rate takes
   // ai: its rate's; kept across configures
   void setRefresh(const int rate[4]);
   // ai: per block place of this format's symbol (every code alike); a configure to a format of another block count ends
   // ai: it, each place its rate's again. False where `place` is not this format's count.
   bool setRefreshBlocks(const std::vector<int>& place);
-  // ai: whether picture k shows a new block at a place that takes one every `every` pictures
-  static bool due(int every, uint64_t k) { return every <= 1 || k % static_cast<uint64_t>(every) == 0; }
   // ai: A file's schedule drawn from seed in place of its random one (xfer_tx.h reseed): before its first frame only;
   // ai: false after, or for the test stream.
   bool seed(uint32_t seed);

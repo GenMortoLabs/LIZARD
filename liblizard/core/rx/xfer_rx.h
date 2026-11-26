@@ -28,7 +28,8 @@ class XferRx {
   // ai: storeDir: a folder the receiver may write; it works in storeDir/lizard-xfer, a folder a transfer (store.h
   // ai: fileStore): the transfers a receiver before this one parked stay there to resume, and finished files not yet
   // ai: taken out stay for their taker; anything else is let go (one receiver a folder). A finished file is
-  // ai: storeDir/lizard-xfer/<id>/done/<its name>, beside <id>/meta.json.
+  // ai: storeDir/lizard-xfer/<id>/done/<its name>, beside <id>/meta.json. "": memory (store.h memoryStore, no cap; the
+  // ai: web's where its origin keeps no files), the finished file's bytes in data().
   XferRx(const std::string& storeDir, std::function<void(const std::string&)> log = nullptr);
   ~XferRx();
   XferRx(const XferRx&) = delete;
@@ -41,6 +42,9 @@ class XferRx {
   XferProgress progress();
   // ai: progress() with XferProgress.per from the next snapshot on (an O(source blocks) list no app reads; the checks do)
   void keepSbs(bool on) { sourceBlocks_ = on; }
+  // ai: XferRxCore::data: the file in focus's bytes once done, where the store is memory, else null; read after progress()
+  // ai: says done (a finished file's bytes are written no more)
+  const std::vector<uint8_t>* data() const { return rx_->data(); }
   // ai: XferRxCore::taken, read from any thread: the blocks the transfer took, ever (a receiver's file rate)
   uint64_t taken() const { return rx_->taken().load(std::memory_order_relaxed); }
   // ai: The page's Clear: the ids, the transfer in hand and every file received let go, so the same file still in the

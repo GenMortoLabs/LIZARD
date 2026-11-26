@@ -221,12 +221,12 @@ export class Tx {
     check(M._liz_tx_next(this.h, n, p));
     return M.HEAPU8.slice(p, p + n * BLOCK);
   }
-  // ai: liz_tx_info, 56 bytes in wasm32
+  // ai: liz_tx_info, 64 bytes in wasm32
   get info() {
-    const p = scratch.at(56);
+    const p = scratch.at(64);
     check(M._liz_tx_info_get(this.h, p));
     const root = Array.from(M.HEAPU8.subarray(p + 24, p + 56), (b) => b.toString(16).padStart(2, "0")).join("");
-    return { test: !!M.HEAP32[p >> 2], length: u64(p + 8), sourceBlocks: M.HEAPU32[(p + 16) >> 2], cycle: M.HEAPU32[(p + 20) >> 2], root };
+    return { test: !!M.HEAP32[p >> 2], length: u64(p + 8), sourceBlocks: M.HEAPU32[(p + 16) >> 2], cycle: M.HEAPU32[(p + 20) >> 2], root, seed: M.HEAPU32[(p + 56) >> 2], sbLog2: M.HEAPU32[(p + 60) >> 2] };
   }
   free() { if (this.h) M._liz_tx_free(this.h); this.h = 0; this.blocks.free(); }
 }
@@ -249,14 +249,15 @@ export class Rx {
     const [seen, bad, judged, fresh, test] = M.HEAP32.subarray(v >> 2, (v >> 2) + 5);
     return { seen, bad, judged, fresh, test: !!test };
   }
-  // ai: liz_progress, 56 bytes in wasm32
+  // ai: liz_progress, 80 bytes in wasm32
   get progress() {
-    const p = scratch.at(56);
+    const p = scratch.at(80);
     check(M._liz_rx_progress(this.h, p));
     return {
       header: !!M.HEAP32[p >> 2], done: !!M.HEAP32[(p >> 2) + 1], length: u64(p + 8), bytesIn: u64(p + 16),
       fraction: M.HEAPF64[(p + 24) >> 3], sourceBlocks: M.HEAPU32[(p + 32) >> 2], verified: M.HEAPU32[(p + 36) >> 2],
-      rejected: M.HEAPU32[(p + 40) >> 2], solveMs: M.HEAPF64[(p + 48) >> 3],
+      rejected: M.HEAPU32[(p + 40) >> 2], solveMs: M.HEAPF64[(p + 48) >> 3], forwarded: u64(p + 56), doneAt: u64(p + 64),
+      refused: M.HEAPU32[(p + 72) >> 2], over: M.HEAPU32[(p + 76) >> 2],
     };
   }
   // ai: each source block: 0 to 99 the share of its source symbols in, 255 verified

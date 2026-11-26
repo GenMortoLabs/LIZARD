@@ -1,9 +1,9 @@
 // ai: The desktop app (2026-10-03; Home, Send and Receive since 2026-10-25): a native sender with the web sender's UI,
-// ai: painting on the CPU or on Vulkan, and a receiver reading a camera into the native decoders. Its
-// ai: stack, for portability and vsync: Kotlin on the JVM, the UI in Compose Multiplatform,
-// ai: the code drawn by the native presenter (lizard-desktop/native/presenter.cpp: its own Vulkan swapchain, FIFO, on the code
-// ai: area's AWT canvas, its window found through JAWT), the encoders liblizard/core's (as the Android app's) over JNI
-// ai: (lizard-desktop/native).
+// ai: painting on the CPU or on the GPU (Vulkan; Metal on macOS), and a receiver reading a camera into the native
+// ai: decoders. Its stack, for portability and vsync: Kotlin on the JVM, the UI in Compose Multiplatform, the code drawn
+// ai: by the native presenter (lizard-desktop/native/presenter.cpp: its own Vulkan swapchain, FIFO; presenter_metal.mm on
+// ai: macOS, the layer's drawables; on the code area's AWT canvas, its window found through JAWT), the encoders
+// ai: liblizard/core's (as the Android app's) over JNI (lizard-desktop/native).
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import java.security.MessageDigest
 import java.time.Instant
@@ -29,8 +29,8 @@ dependencies {
 }
 
 // ai: What the app carries as resources: the native library (lizard-desktop/build/native, CMake on native/) and the GPU
-// ai: tree (liblizard/out; ../lizard-android/build.sh gen): the painter's kernels and tables (setup/send.json, its TAB
-// ai: blob, spv/send_*.spv) and since the receiver (2026-10-25) the decoder's beside them, the Android app's LizardAssets
+// ai: tree (liblizard/out; ../lizard-android/build.sh gen): the painter's kernels and their index (setup/send.json,
+// ai: spv/send_*.spv; its tables the C's) and since the receiver (2026-10-25) the decoder's beside them, the Android app's LizardAssets
 // ai: rule: every setup, every blob, every module but the raw ones (about 17 MB). Native.kt extracts them at start to a
 // ai: folder named by their hash.
 val bundled = layout.buildDirectory.dir("bundled")
@@ -42,9 +42,6 @@ val nativeLib = rootDir.resolve("build/native/" + when {
     onMac -> "liblizard_desktop.dylib"
     else -> "liblizard_desktop.so"
 })
-// ai: macOS (2026-10-23): MoltenVK, Vulkan over Metal, carried beside the library (its rpath is the library's own
-// ai: folder): build/native/libMoltenVK.dylib, from a MoltenVK release (the desktop workflow fetches it)
-val moltenVk = rootDir.resolve("build/native/libMoltenVK.dylib")
 // ai: the files carried beside the library where a system's package needs them (2026-11-01): libusb, Aravis and their
 // ai: libraries, Windows' driver helper lizard_usb.exe (packaging/windows-extra.sh, packaging/macos-extra.sh), and in
 // ai: licenses/ their license texts, which licenseText adds; none on Linux, whose package depends on the system's
@@ -55,20 +52,18 @@ val extraNative = rootDir.resolve("build/native/extra")
 // ai: its license text (and Windows' zlib's, built into libavcodec there) into licenseText
 val ffmpegDir = rootDir.resolve("../liblizard/build/ffmpeg/" + when { hostOs.contains("win") -> "windows"; onMac -> "macos"; else -> "linux" })
 val ffmpegLibs = if (hostOs.contains("win")) "bin" to "av*-??.dll" else if (onMac) "lib" to "libav*.??.dylib" else "lib" to "libav*.so.??"
-// ai: the TAB blob send.json names (the paint's codes); a tree without liblizard/out or the native library (a fresh clone) still
+// ai: the painter's index (setup/send.json); a tree without liblizard/out or the native library (a fresh clone) still
 // ai: configures, and bundleInputs says what to run (a Sync with no files is skipped, its own actions too)
 val sendJson = liblizardOut.resolve("setup/send.json")
-val tab = if (sendJson.isFile) Regex("\"blob\"\\s*:\\s*\"([^\"]+)\"").find(sendJson.readText())?.groupValues?.get(1) else null
 // ai: the decoder's six variants (liblizard/core/dec/setup.cpp variantsFor: int8, f16, f32, each with and without
 // ai: subgroups), every one shipped whole: a variant missing a module fails at the receiver's create
 val decoderSetups = listOf("int8-sg", "int8", "f16-sg", "f16", "f32-sg", "f32")
 val bundleInputs by tasks.registering {
     doLast {
         if (!nativeLib.isFile) throw GradleException("no $nativeLib: cmake -S native -B build/native && cmake --build build/native")
-        if (onMac && !moltenVk.isFile) throw GradleException("no $moltenVk: libMoltenVK.dylib from a MoltenVK release (MoltenVK/dynamic/dylib/macOS)")
         if (ffmpegDir.resolve(ffmpegLibs.first).listFiles()?.none { it.name.contains("avformat") } != false)
             throw GradleException("no FFmpeg in ${ffmpegDir.normalize()}: ../liblizard/ffmpeg/build.sh ${ffmpegDir.name}")
-        if (tab == null) throw GradleException("no GPU painter's files in ${liblizardOut.normalize()}: ../lizard-android/build.sh tools, then gen")
+        if (!sendJson.isFile) throw GradleException("no GPU painter's files in ${liblizardOut.normalize()}: ../lizard-android/build.sh tools, then gen")
         decoderSetups.filter { !liblizardOut.resolve("setup/$it.json").isFile }.let {
             if (it.isNotEmpty()) throw GradleException("no decoder setup ${it.joinToString()} in ${liblizardOut.normalize()}: ../lizard-android/build.sh tools, then gen")
         }
@@ -78,11 +73,13 @@ val bundle by tasks.registering(Sync::class) {
     dependsOn(bundleInputs)
     into(bundled)
     from(nativeLib) { into("lizard/native") }
-    if (onMac) from(moltenVk) { into("lizard/native") }
     from(extraNative) { exclude("licenses/**"); into("lizard/native") }
     from(ffmpegDir.resolve(ffmpegLibs.first)) { include(ffmpegLibs.second); into("lizard/native") }
+    // ai: the kernels as the system's GPU takes them: SPIR-V for Vulkan (Linux, Windows), MSL and its binding maps for
+    // ai: Metal (macOS, 2026-11-25: MoltenVK carried beside the library before)
     from(liblizardOut) {
-        include("setup/*.json", "blobs/*.bin", "spv/*.spv")
+        include("setup/*.json", "blobs/*.bin")
+        if (onMac) include("msl/*.metal", "msl/*.json") else include("spv/*.spv")
         exclude("spv/*.raw.spv")
         into("lizard/assets")
     }
@@ -119,7 +116,7 @@ val buildInfo by tasks.registering {
 }
 // ai: The Kotlin binding's sources (liblizard/bindings/kotlin: dev.lizard.Session, the receive session; its natives are
 // ai: this app's library's, registered as it loads, so the binding's own liblizard is never loaded here).
-// ai: liblizard/kotlin's plain-JVM code (Tar.kt, Readout.kt, Pick.kt) comes compiled with the shared UI (:lizard-ui).
+// ai: liblizard/kotlin's plain-JVM code (Lib.kt, Readout.kt) comes compiled with the shared UI (:lizard-ui).
 sourceSets.main {
     resources.srcDir(bundle); resources.srcDir(buildInfo)
     kotlin.srcDir(layout.projectDirectory.dir("../liblizard/bindings/kotlin/lizard/src/main/kotlin"))
@@ -145,18 +142,20 @@ abstract class LicenseText : DefaultTask() {
 }
 val licenseText by tasks.registering(LicenseText::class) {
     val lib = rootDir.resolve("../liblizard")
-    titles.set(listOf("", "", "Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option",
-        "RaptorQ's constants (liblizard/src/rq_tables.h), from RFC 6330, under the Simplified BSD License of the IETF Trust's Legal Provisions",
-        "volk (liblizard/core/third_party/volk)", "JSON for Modern C++ (liblizard/core/third_party/json.hpp)",
-        "Vulkan headers (liblizard/core/third_party/vulkan-headers)", "BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option",
-        "Skia (in Compose's skiko, which draws the window)", "Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1",
-        "JetBrains Mono (liblizard/vendor/fonts/jetbrains-mono), under the SIL Open Font License 1.1"))
-    parts.from(rootDir.resolve("../LICENSE"), rootDir.resolve("../NOTICE"), lib.resolve("vendor/zstd/LICENSE"), lib.resolve("src/rq_tables.LICENSE"),
-        lib.resolve("core/third_party/volk/LICENSE.md"), lib.resolve("core/third_party/json.LICENSE.MIT"),
-        lib.resolve("core/third_party/vulkan-headers/LICENSE.md"), lib.resolve("vendor/blake3/LICENSE_A2"),
-        project.file("packaging/skia.LICENSE"), lib.resolve("vendor/fonts/inter/LICENSE.txt"), lib.resolve("vendor/fonts/jetbrains-mono/OFL.txt"))
-    // ai: macOS: MoltenVK's (Apache 2.0), carried beside the library; its release's LICENSE at build/native
-    if (onMac) { titles.add("MoltenVK (Vulkan over Metal, macOS)"); parts.from(rootDir.resolve("build/native/MoltenVK.LICENSE")) }
+    // ai: volk and the Vulkan headers where the library is built over Vulkan (not macOS's Metal build)
+    val texts = listOfNotNull(
+        "" to rootDir.resolve("../LICENSE"), "" to rootDir.resolve("../NOTICE"),
+        "Zstandard (liblizard/vendor/zstd), under its BSD 3-Clause option" to lib.resolve("vendor/zstd/LICENSE"),
+        "RaptorQ's constants (liblizard/src/rq_tables.h), from RFC 6330, under the Simplified BSD License of the IETF Trust's Legal Provisions" to lib.resolve("src/rq_tables.LICENSE"),
+        if (onMac) null else "volk (liblizard/core/third_party/volk)" to lib.resolve("core/third_party/volk/LICENSE.md"),
+        "JSON for Modern C++ (liblizard/core/third_party/json.hpp)" to lib.resolve("core/third_party/json.LICENSE.MIT"),
+        if (onMac) null else "Vulkan headers (liblizard/core/third_party/vulkan-headers)" to lib.resolve("core/third_party/vulkan-headers/LICENSE.md"),
+        "BLAKE3 (liblizard/vendor/blake3), under its Apache License 2.0 option" to lib.resolve("vendor/blake3/LICENSE_A2"),
+        "Skia (in Compose's skiko, which draws the window)" to project.file("packaging/skia.LICENSE"),
+        "Inter (liblizard/vendor/fonts/inter), under the SIL Open Font License 1.1" to lib.resolve("vendor/fonts/inter/LICENSE.txt"),
+        "JetBrains Mono (liblizard/vendor/fonts/jetbrains-mono), under the SIL Open Font License 1.1" to lib.resolve("vendor/fonts/jetbrains-mono/OFL.txt"))
+    titles.set(texts.map { it.first })
+    texts.forEach { parts.from(it.second) }
     // ai: the libraries carried beside the library (extraNative), each text headed with what it covers
     extraNative.resolve("licenses").listFiles()?.filter { it.isFile }?.sortedBy { it.name }?.forEach { titles.add(""); parts.from(it) }
     // ai: FFmpeg's (and Windows' zlib's), each text headed with what it covers and where its source is

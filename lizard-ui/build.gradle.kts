@@ -20,8 +20,8 @@ kotlin {
     jvm("desktop")
     sourceSets {
         commonMain {
-            // ai: liblizard/kotlin's plain-JVM code both apps use (Readout.kt, the screens' words and figures; Pick.kt, the
-            // ai: format a room holds; Tar.kt, a bundle's tar), compiled here once for both. commonMain sees the JDK: its
+            // ai: liblizard/kotlin's plain-JVM code both apps use (Readout.kt, the screens' words and figures; Lib.kt, the
+            // ai: C's format numbers and the bundle's tar through JNI), compiled here once for both. commonMain sees the JDK: its
             // ai: two targets are both JVMs.
             kotlin.srcDir("../liblizard/kotlin")
             dependencies {

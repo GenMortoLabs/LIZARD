@@ -13,8 +13,8 @@ import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import dev.lizard.Session
 import dev.lizard.readout.Readout
-import dev.lizard.tar.isTar
-import dev.lizard.tar.tarEach
+import dev.lizard.lib.isTar
+import dev.lizard.lib.tarEach
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -31,7 +31,7 @@ import dev.lizard.ui.*
 // ai: its take let go (Session.placed). A file the default client packed is kept by the session as it came
 // ai: (keepPacked, 2026-11-15) and read back here through the native Unpacker as it is placed, one pass from the take's
 // ai: file into Downloads, the bytes counted for Receive's Saving row (onSaving). A tar (several files or a folder sent
-// ai: as one, Tar.kt; told by its name, isTar: the description carries no media type) is unpacked into a folder
+// ai: as one, Lib.kt over the C's reader; told by its name, isTar: the description carries no media type) is unpacked into a folder
 // ai: there whole as it is read (one folder alone at its top is the bundle's,
 // ai: else the tar's name less .tar; a free name, the folder's files hidden as pending until the last is in); one that
 // ai: does not read whole (a packed frame damaged, a tar damaged or cut short) is placed as the file it came as. What
@@ -364,7 +364,7 @@ class Received(private val ctx: Context, private val data: File) {
     // ai: then copied in before that): each file's bytes into Downloads as placeFolder places them, each pending until
     // ai: the last is in. One folder alone at its top is the bundle's, else the tar's name less .tar: the first entry
     // ai: under a folder names the bundle by it, and a second top, or a file at the top, after it moves what is in under
-    // ai: the tar's name (their rows' RELATIVE_PATH, still pending). Tar.kt tarEach refuses links, paths out of it,
+    // ai: the tar's name (their rows' RELATIVE_PATH, still pending). Lib.kt tarEach (the C's reader) refuses links, paths out of it,
     // ai: damaged headers and a tar cut short: Broken, nothing of it left in Downloads; a throw where Downloads does not
     // ai: take it (what was inserted deleted). folderIs hears the folder each time it is chosen.
     private fun untar(src: InputStream, name: String, root: String, at: Long, folderIs: (String) -> Unit): Entry {

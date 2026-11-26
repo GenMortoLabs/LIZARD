@@ -1,8 +1,9 @@
-// ai: The decoder's setup, as liblizard/gen/gen.mjs wrote it from the web host: one
-// ai: variant's tree (setup/<variant>.json), its buffers' bytes (blobs/<hash>.bin) and its pipelines' SPIR-V
-// ai: (spv/<module>.spv), built on a wg device. Only the front half and the one back half in use (a batch size) are
-// ai: built; every object keeps the id the web host's recorder gave it.
+// ai: The decoder's setup, made by the host (build.h: its tree, every buffer with its bytes, every layout and
+// ai: pipeline) through the variant's index gen writes (setup/<variant>.json: its modules' names, the nets' blobs) and
+// ai: built on a wg device from its pipelines' SPIR-V (spv/<module>.spv). Only the front half and the one back half in
+// ai: use (a batch size) are made and built.
 #pragma once
+#include "build.h"
 #include "wg.h"
 #include "json.hpp"
 
@@ -17,10 +18,8 @@ namespace lizard {
 
 using json = nlohmann::json;
 
-// ai: A file's bytes by its path under the generated tree (a directory, or the app's assets).
-using ReadFile = std::function<std::vector<uint8_t>(const std::string&)>;
 ReadFile readDir(const std::string& root);
-// ai: A variant's setup's path under the tree: setup/<variant>.json.
+// ai: A variant's index's path under the tree: setup/<variant>.json.
 std::string setupName(const std::string& variant);
 
 // ai: A pipeline and its one bind group layout, as the web host's { p, bgl } pairs.
@@ -43,8 +42,8 @@ std::vector<std::string> variantsFor(const wg::Device& d);
 std::vector<std::string> variantsIn(const std::string& root, const std::vector<std::string>& variants);
 
 struct Setup {
-  json tree;       // ai: the variant's tree less its objects
-  json objects;    // ai: buffers, bgls, pipelines by id
+  json tree;            // ai: the variant's tree (made.tree's values, the back half built at backB among its backs)
+  build::Tree made;     // ai: the objects by id (buffers with their bytes until uploaded, bgls, pipelines)
   wg::Device* dev = nullptr;
   ReadFile read;
   std::map<std::string, std::shared_ptr<wg::Buffer>> buffers;
@@ -58,6 +57,8 @@ struct Setup {
   // ai: The front half's objects and the back half at batch size B, built (a back half built before is dropped).
   void build(int B);
   void buildBack(int B);
+  // ai: the back half at B made (its tree part and objects) if it is not, none of it built on the device
+  const json& backTree(int B);
   const json& back() const { return tree["backs"][std::to_string(backB)]; }
   int backB = 0;
 
@@ -71,7 +72,7 @@ struct Setup {
 
  private:
   void make(const std::vector<std::string>& ids);
-  std::vector<uint32_t> spirv(const std::string& module);
+  wg::Module module(const std::string& name);
 };
 
 }  // namespace lizard

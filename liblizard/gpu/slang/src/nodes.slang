@@ -1,9 +1,9 @@
 // F7's node search (NODES; the centred form, NODES_CENTRED 1, the border's second search about the anchors' prediction,
 // ANCH_ROUND): each border node found by normalised cross-correlation of the border as painted, over offsets about the
 // finder's map (the centred form: about the node's place the anchors predicted, a node not at w 2 left as it is), on
-// one lattice of samples and offsets (../plan/register.mjs latticeSide), whose values are read once a node and gathered
+// one lattice of samples and offsets (core/dec/build.cpp latticeSide), whose values are read once a node and gathered
 // by each offset. A workgroup of 256 a (node, frame). Every workgroup variable is written before it is read.
-// Defines (register.mjs nodesSource): NODES_CENTRED (0 or 1), NODES_CHUNK, NODES_ITEMS, NODES_GRID (the lattice's
+// Defines (core/dec/build.cpp nodesRecipe): NODES_CENTRED (0 or 1), NODES_CHUNK, NODES_ITEMS, NODES_GRID (the lattice's
 // side), NODES_MAX, LIGHT_VECS (uint); NODES_SPACING (a template sample's spacing in modules), NODES_RATIO (lattice
 // steps a sample step, uint), HALF_WINDOW, SUB_F (float).
 #include "lib/sync.slang"

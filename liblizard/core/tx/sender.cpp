@@ -27,7 +27,7 @@ namespace {
 double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 constexpr int PAYLOAD = XFER_PAYLOAD, ID_BYTES = XFER_ID_BYTES;
 constexpr int TX_GPU_FRAMES = 32;   // ai: frames a GPU encode at most (configure)
-bool control(xfer_id_t id) { return xfer_id_sbn(id) == XFER_CONTROL; }   // ai: sim/xfer.mjs isControlId
+bool control(xfer_id_t id) { return xfer_id_sbn(id) == XFER_CONTROL; }   // ai: the session header's control source block
 // ai: a string's text fit for the stats JSON (a driver's message may hold quotes or a backslash)
 std::string esc(const std::string& s) {
   std::string o;
@@ -213,8 +213,8 @@ std::string Sender::configure(const TxFormat& fIn) {
           stream_fill(static_cast<xfer_id_t>(t), o + ID_BYTES, PAYLOAD);
         }
         const auto c = gpu_->check(blocks.data(), k);
-        if (!c.ok) gpuWhy_ = "its frames are not the C's (border " + std::to_string(c.borderDiff) + " pixels apart, the square up to " + std::to_string(c.squareMax) + " levels" +
-                             (c.anchorDiff ? ", the anchors " + std::to_string(c.anchorDiff) + " pixels apart" : "") + ")";
+        if (!c.ok) gpuWhy_ = "its frames do not hold (border " + std::to_string(c.borderDiff) + " pixels off the C's" +
+                             (c.anchorDiff ? ", the anchors " + std::to_string(c.anchorDiff) + " pixels" : "") + ", " + std::to_string(c.readBad) + " of " + std::to_string(c.readBlocks) + " blocks not read blind)";
       }
     } catch (const std::exception& e) { gpuWhy_ = e.what(); }
     if (gpuWhy_.empty()) gpu = true;
@@ -277,7 +277,7 @@ std::string Sender::configure(const TxFormat& fIn) {
   tiers_.clear();
   rateOf_.clear();
   for (int t = 0; t < probe.tiers; t++) {
-    const int r = probe.tier[t].rate == 6 ? 0 : probe.tier[t].rate == 4 ? 1 : probe.tier[t].rate == 3 ? 2 : 3;
+    const int r = refresh::rateIndex(probe.tier[t].rate);
     tiers_ += (t ? ", " : "") + std::string(r == 0 ? "6/7" : r == 1 ? "3/4" : r == 2 ? "2/3" : "1/2") + " x " + std::to_string(probe.tier[t].blocks);
     rateOf_.insert(rateOf_.end(), static_cast<size_t>(probe.tier[t].blocks), static_cast<uint8_t>(r));
   }
@@ -433,13 +433,9 @@ void Sender::produce() {
     }
     Job j{made_++, std::vector<uint8_t>(static_cast<size_t>(T) * B), 0};
     const std::vector<int> sched = scheduleLocked();
-    if (!sched.empty()) j.delay = std::clamp(*std::max_element(sched.begin(), sched.end()), 1, REFRESH_MAX);
+    if (!sched.empty()) j.delay = refresh::clampDelay(*std::max_element(sched.begin(), sched.end()));
     l.unlock();
-    int fresh = 0;
-    for (int t = 0; t < T; t++) {
-      held[t] = !last.empty() && !due(sched[static_cast<size_t>(t % blocks_)], j.seq);
-      fresh += !held[t];
-    }
+    const int fresh = refresh::held(sched.data(), blocks_, T, j.seq, !last.empty(), held.data());
     std::string err;
     {
       std::lock_guard<std::mutex> x(xferMu_);
@@ -1256,16 +1252,16 @@ std::shared_ptr<wg::Buffer> Sender::ring() const { return gpu_ ? gpu_->ring() : 
 uint32_t Sender::ringFrameWords() const { return gpu_ ? gpu_->frameWords() : 0; }
 uint32_t Sender::ringRowWords() const { return gpu_ ? gpu_->rowWords() : 0; }
 
-// ai: Refresh (sender.h setRefresh, setRefreshBlocks), each delay held to 1 .. REFRESH_MAX
+// ai: Refresh (sender.h setRefresh, setRefreshBlocks), each delay held to 1 .. refresh::MAX
 void Sender::setRefresh(const int rate[4]) {
   std::lock_guard<std::mutex> l(mu_);
-  for (int r = 0; r < 4; r++) byRate_[r] = std::clamp(rate[r], 1, REFRESH_MAX);
+  for (int r = 0; r < 4; r++) byRate_[r] = refresh::clampDelay(rate[r]);
 }
 bool Sender::setRefreshBlocks(const std::vector<int>& place) {
   std::lock_guard<std::mutex> l(mu_);
   if (place.size() != static_cast<size_t>(blocks_)) return false;
   byPlace_.clear();
-  for (const int e : place) byPlace_.push_back(std::clamp(e, 1, REFRESH_MAX));
+  for (const int e : place) byPlace_.push_back(refresh::clampDelay(e));
   return true;
 }
 std::vector<int> Sender::scheduleLocked() const {

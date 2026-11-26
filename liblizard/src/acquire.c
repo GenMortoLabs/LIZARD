@@ -2130,7 +2130,7 @@ static inline float mark_mid(const ob_layout_t *L) { return (OB_THIN_TRACK + L->
 static float mark_form_mid(const ob_layout_t *L, int form) { return form == 1 ? L->corner / 2.0f : mark_mid(L); }
 
 // The mark geometry a finder outside the codec needs to be scale-free the way mark_quads is
-// (gpu/tables.mjs, scripts/exp/fmt_word.mjs). Nothing in the decoder calls this. A blob detector measures a mark in PIXELS and has
+// (core/dec/build.cpp rings, scripts/exp/fmt_word.mjs). Nothing in the decoder calls this. A blob detector measures a mark in PIXELS and has
 // no module size of its own, so it has to get one the way this file does: divide the blob by the mark's known
 // module count, then check that four of them sit the known number of modules apart. Both forms are given
 // because a threshold that keeps the light gap open finds the CORE and one that closes it finds the whole
@@ -2861,7 +2861,7 @@ static int trk_scores(const float *s, int npts, int (*row)[4], const float *pair
 // The format read's sample PLAN, emitted by the reader itself so the two cannot drift: every position it would
 // sample, in the order it samples them, plus the indices its arithmetic needs. Positions are module coordinates
 // and depend only on the layout, so this is read once a configuration and not once a frame; what changes with
-// the frame is the map they go through, which is the GPU's business (gpu/tables.mjs carries this plan to it).
+// the frame is the map they go through, which is the GPU's business (core/dec/build.cpp carries this plan to it).
 //
 //   pts   2 floats a point. refs first (2 a reference, dark then light), then each side's track pairs
 //         (2 a pair), then each side's word cells.

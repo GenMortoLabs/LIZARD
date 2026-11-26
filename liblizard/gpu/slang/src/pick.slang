@@ -1,5 +1,5 @@
 // F6b: the frame's answer, one workgroup a frame.
-// Defines (finder.mjs): HYP, K, ORIENT, RING_COUNT, ZEROS_16, ZEROS_32, ZEROS_9.
+// Defines (core/dec/build.cpp Finder): HYP, K, ORIENT, RING_COUNT, ZEROS_16, ZEROS_32, ZEROS_9.
 #include "lib/frame.slang"
 #include "lib/homography.slang"
 #include "lib/bend.slang"

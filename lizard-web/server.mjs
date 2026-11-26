@@ -34,6 +34,10 @@ const phoneUrl = `https://${lan}:${HTTPS}/lizard-web/recv.html`;
 let matrix = null;
 try { matrix = JSON.parse(execFileSync("python3", ["-c", "import qrcode,json,sys; q=qrcode.QRCode(border=2); q.add_data(sys.argv[1]); q.make(); print(json.dumps(q.get_matrix()))", phoneUrl], { stdio: ["ignore", "pipe", "ignore"] }).toString()); } catch {}
 
+// ai: Cross-origin isolated (2026-11-25): every answer opens no window of another origin's and embeds nothing that does
+// ai: not allow it (COOP same-origin, COEP require-corp), so a page has SharedArrayBuffer for the threaded module
+// ai: (liblizard/bindings/wasm/dist/lizard-mt.mjs); the pages load nothing from another origin
+const ISOLATED = { "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" };
 let stats = {}, statsAt = 0;
 const body = (req) => new Promise((ok) => { const c = []; req.on("data", (d) => c.push(d)); req.on("end", () => ok(Buffer.concat(c))); });
 
@@ -73,7 +77,7 @@ async function handle(req, res) {
   if (file === RIG || file.startsWith(RIG + sep)) { res.writeHead(404); return res.end("not found"); }   // ai: as normalised: "//" collapses
   if (existsSync(file) && statSync(file).isDirectory()) file = join(file, "index.html");
   if (!existsSync(file)) { res.writeHead(404); return res.end("not found"); }
-  res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": "no-store" });
+  res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": "no-store", ...ISOLATED });
   res.end(readFileSync(file));
 }
 const safe = (req, res) => handle(req, res).catch((e) => { res.writeHead(500); res.end(String(e)); });

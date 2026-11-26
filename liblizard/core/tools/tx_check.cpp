@@ -1,7 +1,8 @@
 // ai: The app's sender off the phone (2026-10-01):
 // ai:   tx_check ids <file> <frames> <blocks a frame> <out> [seed]   the sending end's ids and blocks, frame after frame
-// ai:       (the ids, 12 bytes: 8 little-endian with the file's TOI, its session's TSI and a reserved byte; then each block's 460 bytes) under the carousel's seed (1 unless given), for
-// ai:       gen/xfer_tx_ref.mjs to hold against the JS sender's
+// ai:       (the ids, 12 bytes: the bare id and the 48-bit TOI, little-endian, then a reserved byte; then each block's 460
+// ai:       bytes) under the carousel's seed (1 unless given), held byte for byte to gen/xfer_tx_ref.mjs's (the wasm build
+// ai:       of the same C)
 // ai:   tx_check paint <file | -> <subch> [frames] [threads] [store dir]   frames painted by the Sender (core/tx), each
 // ai:       decoded blind by the C (cpu/codec.h) from its luma: the word, every block verified; the test stream's ("-")
 // ai:       blocks held to BLAKE3 of their ids, a file's through the receiving end (rx/xfer_rx.h) until it is whole and
@@ -32,13 +33,19 @@
 // ai:       the ink (of most where the ink is the lighter: an inverted code), every pixel on the line between them (each
 // ai:       channel within a level of the grey's place on it). Exit 1 on a fault
 // ai:   tx_check decode <luma> <w> <h>   one frame read blind (a screenshot of the phone's Send screen, grey)
+// ai:   tx_check noise <subch> [ring] [codes] [frames] [sigma,...]   the GPU painter's margin against the C's paint: the
+// ai:       same blocks, the same Gaussian noise, both read blind by the C (blocks verified, LDPC iterations), by sigma
 // ai: The GPU's painter (2026-10-02, tx/gpu_painter.h), its kernels and manifest from LIZ_ASSETS (out, liblizard/out run from liblizard/, by default):
-// ai:   tx_check gputables <dir>   tx/send_tables.cpp's tables against gen/send_tables_ref.mjs's, every format in its
-// ai:       index, section by section (exact; the twiddles to a float's last bit, the border's picture, which the GPU
-// ai:       paints again, within a grey level)
+// ai:   tx_check gputables [all]   tx/send_tables.cpp's tables of every format held to the C through the kernels that read
+// ai:       them: each format configured on the GPU painter and GpuPainter::check (the GPU's frames of the test stream
+// ai:       against the C's paint of the same blocks: the border and the anchors to the byte, the square within the
+// ai:       painter's bound, every symbol read blind by the C with all its blocks); every version in the default ring and
+// ai:       a spread in the others (b % 9 == 2 of the 8-sub-channel counts b, and LIZARD-1024), `all` every version in
+// ai:       every ring; LIZ_CODES=2 two codes a frame. Exit 1 on a fault
 // ai:   tx_check gpucheck <subch> [ring] [frames] [codes] [encode]   the GPU's frames of the test stream's blocks against
-// ai:       the C's paint at the same counts (the border to the byte, the square within a grey level: the web's auto
-// ai:       rule), then its GPU ms a frame over encodes of its most, the test stream made on the device and the blocks
+// ai:       the C's paint at the same counts (the border and the anchors to the byte, every symbol read blind by the C
+// ai:       with all its blocks; the square's pixels off the C reported, the largest and the RMS: GpuPainter::check, the
+// ai:       sender's auto rule), then its GPU ms a frame over encodes of its most, the test stream made on the device and the blocks
 // ai:       given whole alternately (their difference the device's BLAKE3), `encode` frames an encode (4 unset; 2026-11-18);
 // ai:       LIZ_ENCODES=<k> the encodes of each kind timed (16 unset), LIZ_SEND_STAGES=1 each stage's GPU ms a frame too
 // ai:       (GpuPainter's per-stage timestamp pairs; 2026-11-24)
@@ -55,7 +62,7 @@
 // ai:   LIZ_REFRESH=<6/7>,<3/4>,<2/3>,<1/2> tx_check paint ...   Refresh (2026-11-17, Sender::setRefresh; Rate refresh's
 // ai:       1-to-4 holds of 2026-11-12 before) set before the first frame, each rate's delay, a whole number of pictures:
 // ai:       every read block's id held against the frame before's at its place, the same exactly where its delay holds
-// ai:       (Sender::due false: the count no multiple of it), a fault otherwise; the repeats a rate counted.
+// ai:       (core/tx/refresh.h refresh::due false: the count no multiple of it), a fault otherwise; the repeats a rate counted.
 // ai:       LIZ_REFRESH_BLOCKS=<delay>,... in its place (Sender::setRefreshBlocks after the configure): place b takes entry
 // ai:       b mod their count
 // ai:   tx_check gpucheck ...   the GPU's frames against the C's: the anchors' squares (SPEC 6.13) to the byte besides
@@ -101,6 +108,7 @@
 #include "json.hpp"
 #include "lizfile.h"
 #include "send_tables.h"
+#include "refresh.h"
 #include "sender.h"
 #include "receiver.h"
 #include "xfer_rx.h"
@@ -132,15 +140,6 @@ double nowMs() { return std::chrono::duration<double, std::milli>(std::chrono::s
 std::string assets() { const char* a = getenv("LIZ_ASSETS"); return a ? a : "out"; }
 // ai: LIZ_SPILL=<dir>: the transfer's spill there (xfer_tx.h: its symbols on disk, no encoder kept), the apps' path
 std::string spill() { const char* a = getenv("LIZ_SPILL"); return a ? a : ""; }
-std::vector<uint8_t> slurp(const std::string& path) {
-  FILE* f = fopen(path.c_str(), "rb");
-  if (!f) { perror(path.c_str()); exit(2); }
-  std::vector<uint8_t> b;
-  uint8_t buf[1 << 16];
-  for (size_t k; (k = fread(buf, 1, sizeof buf, f)) > 0;) b.insert(b.end(), buf, buf + k);
-  fclose(f);
-  return b;
-}
 // ai: count frames of the test stream's blocks from id 0, blocks x 472 B each (id then BLAKE3 of it)
 std::vector<uint8_t> testBlocks(int count, int blocks) {
   std::vector<uint8_t> b(static_cast<size_t>(count) * blocks * XFER_BLOCK);
@@ -159,7 +158,7 @@ int main(int argc, char** argv) {
     Mapped m(argv[2]);
     XferTx x(m.p, m.n, std::filesystem::path(argv[2]).filename().string(), -1, spill());
     x.reseed(argc >= 7 ? static_cast<uint32_t>(std::strtoul(argv[6], nullptr, 10)) : 1u);   // ai: the carousel's seed, gen/xfer_tx_ref.mjs's
-    x.waitMade();   // ai: every source block made before the first frame, so the frames are the serial JS sender's (no warm frames)
+    x.waitMade();   // ai: every source block made before the first frame, so the frames are the serial sender's, as gen/xfer_tx_ref.mjs's (no warm frames)
     const int frames = atoi(argv[3]), T = atoi(argv[4]);
     FILE* out = fopen(argv[5], "wb");
     std::vector<xfer_id_t> ids(T);
@@ -204,8 +203,8 @@ int main(int argc, char** argv) {
     const int tiers = lizard_tiers_for(subch, tier);
     bool okArgs = four("refresh", 1, refresh) && four("tier", 0, tierLoss) && four("tierframe", 0, tierFrame) && tiers > 0 &&
                   pBlock >= 0 && pBlock < 1 && pFrame >= 0 && pFrame < 1 && burst >= 1 && join >= 0;
-    for (int r = 0; r < 4; r++) okArgs = okArgs && refresh[r] >= 1 && refresh[r] <= Sender::REFRESH_MAX && tierLoss[r] >= 0 && tierLoss[r] <= 1 && tierFrame[r] >= 0 && tierFrame[r] <= 1;
-    if (!okArgs) { fprintf(stderr, "broadcast: a format, delays of 1 to %d, losses in [0, 1) (a tier's in [0, 1]), burst 1 or more\n", Sender::REFRESH_MAX); return 2; }
+    for (int r = 0; r < 4; r++) okArgs = okArgs && refresh[r] >= 1 && refresh[r] <= refresh::MAX && tierLoss[r] >= 0 && tierLoss[r] <= 1 && tierFrame[r] >= 0 && tierFrame[r] <= 1;
+    if (!okArgs) { fprintf(stderr, "broadcast: a format, delays of 1 to %d, losses in [0, 1) (a tier's in [0, 1]), burst 1 or more\n", refresh::MAX); return 2; }
     // ai: each block place's rate index (0 6/7 .. 3 1/2), the format's tiers inner first (liz_block_place_of's order)
     std::vector<int> rateOf;
     for (int t = 0; t < tiers; t++)
@@ -369,7 +368,7 @@ int main(int argc, char** argv) {
     for (uint64_t seq = 0;; seq++) {
       int fresh = 0;
       std::vector<char> held(T);
-      for (int t = 0; t < T; t++) { held[t] = seq > 0 && !Sender::due(int(refresh[rateOf[t]]), seq); fresh += !held[t]; }
+      for (int t = 0; t < T; t++) { held[t] = seq > 0 && !refresh::due(int(refresh[rateOf[t]]), seq); fresh += !held[t]; }
       if (fresh) x.frameIds(ids.data(), fresh);
       for (int t = 0, k = 0; t < T; t++) {
         if (held[t]) continue;
@@ -722,7 +721,7 @@ int main(int argc, char** argv) {
           if (now[static_cast<size_t>(b)] < 0 || was[static_cast<size_t>(b)] < 0) continue;
           const int r = rateAt[static_cast<size_t>(b)];
           const int e = sched[static_cast<size_t>(b)];
-          const bool hold = !Sender::due(e, seq), rep = now[static_cast<size_t>(b)] == was[static_cast<size_t>(b)];
+          const bool hold = !refresh::due(e, seq), rep = now[static_cast<size_t>(b)] == was[static_cast<size_t>(b)];
           // ai: a fresh block may name the control block the frame before named there (the header, every other control
           // ai: slot; the warm frames, xfer_tx.h, carry nothing else): no repeat
           if (rep && !hold && xfer_id_sbn(static_cast<xfer_id_t>(now[static_cast<size_t>(b)])) == XFER_CONTROL) continue;
@@ -758,69 +757,33 @@ int main(int argc, char** argv) {
   }
   // ai: decode <luma file> <width> <height>: one frame of 8-bit luma (a screenshot of the phone's Send screen, made
   // ai: grey by the caller), read blind by the C: the word, the blocks verified, and those that are the test stream's
-  if (mode == "gputables" && argc >= 3) {
-    const std::string dir = argv[2], man = assets() + "/setup/send.json";
-    const auto mb = slurp(man);
-    const std::string text(mb.begin(), mb.end());
-    SendConsts k;
-    const std::string le = k.load(text, slurp(assets() + "/" + nlohmann::json::parse(text)["tab"]["blob"].get<std::string>()));
-    if (!le.empty()) { printf("FAIL %s\n", le.c_str()); return 1; }
-    const auto ib = slurp(dir + "/index.json");
-    const auto index = nlohmann::json::parse(std::string(ib.begin(), ib.end()));
-    int bad = 0, done = 0;
-    for (const auto& e : index) {
-      const int subch = e["subch"], ring = e["ring"], n = e["n"];
-      const std::string name = e["name"];
-      lizard_t f{};
-      if (ring < 0 || ring >= LIZARD_RINGS || lizard_init(&f, n, subch, 2 * LIZARD_RING[ring])) { printf("FAIL %s: the codec refused it\n", name.c_str()); bad++; continue; }
-      SendTables t;
-      const std::string te = sendTables(f, k, 4, t, e.value("codes", 1));
-      if (!te.empty()) { printf("FAIL %s: %s\n", name.c_str(), te.c_str()); bad++; lizard_free(&f); continue; }
-      std::vector<std::string> off;
-      auto same = [&](const char* sec, const void* p, size_t bytes, bool ulp = false) {
-        const auto ref = slurp(dir + "/" + name + "." + sec + ".bin");
-        if (ref.size() != bytes) { off.push_back(std::string(sec) + " " + std::to_string(bytes) + " B against " + std::to_string(ref.size())); return; }
-        size_t diff = 0, far = 0;
-        for (size_t i = 0; i + 3 < bytes || (i < bytes && !ulp); i += ulp ? 4 : 1) {
-          if (ulp) {
-            int32_t a, b; std::memcpy(&a, static_cast<const uint8_t*>(p) + i, 4); std::memcpy(&b, ref.data() + i, 4);
-            if (a != b) { diff++; if (std::abs(static_cast<long>(a) - b) > 1) far++; }
-          } else if (static_cast<const uint8_t*>(p)[i] != ref[i]) diff++;
+  if (mode == "gputables") {
+    const bool all = argc > 2 && std::string(argv[2]) == "all";
+    const int codes = getenv("LIZ_CODES") ? atoi(getenv("LIZ_CODES")) : 1, frames = 4;
+    std::unique_ptr<GpuPainter> g;
+    try { g = GpuPainter::create(assets(), [](const std::string& m) { printf("%s\n", m.c_str()); }); }
+    catch (const std::exception& e) { printf("FAIL no GPU painter: %s\n", e.what()); return 1; }
+    int done = 0, bad = 0, worst = 0;
+    long blocks = 0, square = 0;
+    double rms = 0;
+    for (int ring = 0; ring < LIZARD_RINGS; ring++)
+      for (int v = OB_FMT_VERSION_MIN; v <= OB_FMT_VERSION_MAX; v++) {
+        const int subch = LIZARD_STEP * v, b = subch / 8;
+        if (!all && ring != LIZARD_RING_DEFAULT && b % 9 != 2 && b != 128) continue;
+        const std::string name = std::to_string(subch) + "_" + std::to_string(ring);
+        const std::string ce = g->configure(subch, 2 * LIZARD_RING[ring], 60, frames, codes, GAP_MODULES, 0, 0, 0, false);
+        if (!ce.empty()) { printf("FAIL %s: configure: %s\n", name.c_str(), ce.c_str()); bad++; done++; continue; }
+        const auto c = g->check(testBlocks(std::max(frames, g->frames()), subch / 8 * codes).data(), frames);
+        if (!c.ok) {
+          printf("FAIL %s: border %ld pixels apart, the anchors %ld, the square %ld of %ld off the C (at most %d levels, RMS %.3f), read blind %ld of %ld blocks\n", name.c_str(),
+                 c.borderDiff, c.anchorDiff, c.squareDiff, c.squarePx, c.squareMax, c.squareRms, c.readBlocks - c.readBad, c.readBlocks);
+          bad++;
         }
-        if (far || (!ulp && diff)) off.push_back(std::string(sec) + " " + std::to_string(ulp ? far : diff) + (ulp ? " floats past a last bit" : " bytes"));
-        else if (diff) off.push_back(std::string("(") + sec + " " + std::to_string(diff) + " floats a last bit apart)");
-      };
-      same("rows", t.rows.data(), 4 * t.rows.size()); same("uv", t.uv.data(), 4 * t.uv.size()); same("tw", t.tw.data(), 4 * t.tw.size(), true);
-      same("su", t.su.data(), 48); same("g", t.g.data(), 48); same("taps", t.taps.data(), 4 * t.taps.size());
-      same("pu", t.pu.data(), 4 * t.pu.size());
-      // ai: the border as the painter reads it: every pixel outside the square and in the anchors' squares to the byte;
-      // ai: the picture between them (painted again on the GPU, never read from here) within a grey level, as gpucheck
-      // ai: holds the GPU's square: x86-64's vector kernels round it apart from the scalar C and the wasm (2026-11-05)
-      {
-        const auto ref = slurp(dir + "/" + name + ".border.bin");
-        if (ref.size() != t.border.size()) off.push_back("border " + std::to_string(t.border.size()) + " B against " + std::to_string(ref.size()));
-        else {
-          auto inAnchor = [&](int v) { for (int i = 0; i < 7; i++) if (v >= static_cast<int>(t.anch[i]) && v < static_cast<int>(t.anch[i] + t.anch[7])) return true; return false; };
-          size_t exact = 0, far = 0, near = 0;
-          for (int y = 0; y < t.W; y++) for (int x = 0; x < t.W; x++) {
-            const size_t i = static_cast<size_t>(y) * t.W + x;
-            const int d = std::abs(static_cast<int>(t.border[i]) - ref[i]);
-            if (!d) continue;
-            const bool square = x >= t.sq && x < t.sq + t.q && y >= t.sq && y < t.sq + t.q;
-            if (!square || (inAnchor(x) && inAnchor(y))) exact++; else if (d > 1) far++; else near++;
-          }
-          if (exact) off.push_back("border " + std::to_string(exact) + " bytes outside the picture");
-          if (far) off.push_back("border " + std::to_string(far) + " picture bytes past a grey level");
-          if (near) off.push_back("(border " + std::to_string(near) + " picture bytes a grey level apart)");
-        }
+        blocks += c.readBlocks - c.readBad; square += c.squareDiff; worst = std::max(worst, c.squareMax); rms = std::max(rms, c.squareRms);
+        done++;
       }
-      const bool fail = std::any_of(off.begin(), off.end(), [](const std::string& x) { return x[0] != '('; });
-      if (fail || (done < 3 && !off.empty())) { printf("%s %s:", fail ? "FAIL" : "note", name.c_str()); for (auto& x : off) printf(" %s;", x.c_str()); printf("\n"); }
-      bad += fail;
-      done++;
-      lizard_free(&f);
-    }
-    printf("%d formats: %d differ\n%s\n", done, bad, bad ? "FAILED" : "ok");
+    printf("%d formats x %d codes on %s: %d differ; %ld blocks read blind, the square %ld pixels off the C (at most %d levels, RMS at most %.3f)\n%s\n", done, codes,
+           g->device().c_str(), bad, blocks, square, worst, rms, bad ? "FAILED" : "ok");
     return bad ? 1 : 0;
   }
   if (mode == "gpucheck" && argc >= 3) {
@@ -837,8 +800,8 @@ int main(int argc, char** argv) {
     const auto c = g->check(blocks.data(), frames);
     char an[160] = "";
     snprintf(an, sizeof an, ", the anchors %ld pixels (%ld dark) %ld apart", c.anchorPx, c.anchorDark, c.anchorDiff);
-    printf("check, %d frames of LIZARD-%d x %d in the %d ring on %s: border %ld pixels apart, the square %ld pixels apart, at most %d levels%s: %s\n",
-           frames, subch, codes, LIZARD_RING[ring], g->device().c_str(), c.borderDiff, c.squareDiff, c.squareMax, an, c.ok ? "ok" : "FAILED");
+    printf("check, %d frames of LIZARD-%d x %d in the %d ring on %s: border %ld pixels apart, the square %ld of %ld pixels off the C, at most %d levels, RMS %.3f%s; read blind: %ld of %ld blocks: %s\n",
+           frames, subch, codes, LIZARD_RING[ring], g->device().c_str(), c.borderDiff, c.squareDiff, c.squarePx, c.squareMax, c.squareRms, an, c.readBlocks - c.readBad, c.readBlocks, c.ok ? "ok" : "FAILED");
     std::vector<std::vector<uint8_t>> out(R);
     // ai: the encodes alternate the test stream made on the device from the ids (the sender's test path) and the same
     // ai: blocks given whole (a file's path): the difference a frame is the device's BLAKE3 (2026-11-15)
@@ -866,6 +829,72 @@ int main(int argc, char** argv) {
            gpu[0] / perFrame, gpu[1] / perFrame, (gpu[0] - gpu[1]) / perFrame, 1000 * (gpu[0] - gpu[1]) / (perFrame * nb), nb,
            wall[0] / encodes, wall[1] / encodes, R, g->side());
     return c.ok ? 0 : 1;
+  }
+  // ai: tx_check noise <subch> [ring] [codes] [frames] [sigma,...] (lab, 2026-11-24): the GPU painter's margin against the
+  // ai: C's: the same test blocks painted by both, the same Gaussian noise (sigma grey levels, rounded, clamped to 0..255,
+  // ai: a seed a symbol and sigma) added to each symbol, each read blind by the C; by sigma, each side's blocks verified
+  // ai: and the LDPC's mean iterations a verified block (the GPU's square is its own arithmetic: is its margin the C's?)
+  if (mode == "noise" && argc >= 3) {
+    const int subch = atoi(argv[2]), ring = argc > 3 ? atoi(argv[3]) : LIZARD_RING_DEFAULT, codes = argc > 4 ? atoi(argv[4]) : 1, frames = argc > 5 ? atoi(argv[5]) : 32;
+    std::vector<double> sigmas;
+    for (std::string list = argc > 6 ? argv[6] : "20,30,40,50,60"; !list.empty();) {
+      const size_t c = list.find(',');
+      sigmas.push_back(atof(list.substr(0, c).c_str()));
+      list = c == std::string::npos ? "" : list.substr(c + 1);
+    }
+    std::unique_ptr<GpuPainter> g;
+    try { g = GpuPainter::create(assets(), [](const std::string&) {}); }
+    catch (const std::exception& e) { printf("FAIL no GPU painter: %s\n", e.what()); return 1; }
+    const std::string ce = g->configure(subch, 2 * LIZARD_RING[ring], 60, 4, codes, GAP_MODULES, 0, 0, 0, false);
+    if (!ce.empty()) { printf("FAIL configure: %s\n", ce.c_str()); return 1; }
+    lizard_t p{};
+    if (lizard_init(&p, lizard_n_for(subch), subch, 2 * LIZARD_RING[ring])) { printf("FAIL the codec refused the format\n"); return 1; }
+    const int R = g->frames(), W = g->side(), FW = g->width(), nb = g->blocks(), gap = codes > 1 ? (FW - codes * W) / (codes - 1) : 0;
+    const auto blocks = testBlocks(frames + R, nb * codes);
+    const size_t per = static_cast<size_t>(nb) * XFER_BLOCK;
+    cpu_dec_t* d = cpu_dec_new(1536);
+    const int top = cpu_dec_top(d), BB = cpu_dec_block_bytes(d);
+    std::vector<uint8_t> rb(static_cast<size_t>(top) * BB), ok(top), rgba(static_cast<size_t>(W) * W * 4), luma[2], noisy(static_cast<size_t>(W) * W);
+    luma[0].resize(noisy.size()); luma[1].resize(noisy.size());
+    std::vector<float> drive(static_cast<size_t>(p.px) * p.px);
+    std::vector<std::vector<uint8_t>> out(R);
+    const size_t S = sigmas.size();
+    std::vector<long> verified(2 * S, 0), its(2 * S, 0), total(2 * S, 0);
+    for (int f0 = 0; f0 < frames; f0 += R) {
+      const int k = std::min(R, frames - f0);
+      g->encode(blocks.data() + static_cast<size_t>(f0) * codes * per, k, f0 & 3, out.data(), 0, true);
+      for (int i = 0; i < k; i++) {
+        lizard_parity(&p, (f0 + i) & 3);
+        for (int cd = 0; cd < codes; cd++) {
+          lizard_encode(&p, blocks.data() + (static_cast<size_t>(f0 + i) * codes + cd) * per, drive.data());
+          lizard_paint_rgba(&p, drive.data(), rgba.data());
+          const int x0 = cd * (W + gap);
+          for (int y = 0; y < W; y++) for (int x = 0; x < W; x++) {
+            luma[0][static_cast<size_t>(y) * W + x] = rgba[4 * (static_cast<size_t>(y) * W + x)];
+            luma[1][static_cast<size_t>(y) * W + x] = out[i][static_cast<size_t>(y) * FW + x0 + x];
+          }
+          for (size_t si = 0; si < S; si++) for (int side = 0; side < 2; side++) {
+            std::mt19937_64 rng(1000003ull * (f0 + i) + 7919ull * cd + si);
+            std::normal_distribution<double> nd(0.0, sigmas[si]);
+            for (size_t j = 0; j < noisy.size(); j++) noisy[j] = static_cast<uint8_t>(std::clamp(std::lround(luma[side][j] + nd(rng)), 0L, 255L));
+            cpu_frame_t fr{};
+            const int got = cpu_dec_frame(d, noisy.data(), W, W, rb.data(), ok.data(), &fr);
+            const int8_t* bi = nullptr; const float* be = nullptr;
+            cpu_dec_block_stats(d, &bi, &be);
+            verified[2 * si + side] += got; total[2 * si + side] += nb;
+            if (bi) for (int b = 0; b < fr.total; b++) if (ok[static_cast<size_t>(b)]) its[2 * si + side] += bi[b];
+          }
+        }
+      }
+    }
+    lizard_parity(&p, 0);
+    printf("noise, %d frames of LIZARD-%d x %d in the %d ring on %s, read blind by the C (blocks verified, the LDPC's mean iterations a verified block):\n", frames, subch, codes, LIZARD_RING[ring], g->device().c_str());
+    for (size_t si = 0; si < S; si++)
+      printf("  sigma %5.1f: the C's paint %ld of %ld, %.2f; the GPU's %ld of %ld, %.2f\n", sigmas[si], verified[2 * si], total[2 * si], verified[2 * si] ? double(its[2 * si]) / verified[2 * si] : 0.0,
+             verified[2 * si + 1], total[2 * si + 1], verified[2 * si + 1] ? double(its[2 * si + 1]) / verified[2 * si + 1] : 0.0);
+    cpu_dec_free(d);
+    lizard_free(&p);
+    return 0;
   }
   if (mode == "decode" && argc >= 5) {
     const int iw = atoi(argv[3]), ih = atoi(argv[4]);
@@ -930,6 +959,7 @@ int main(int argc, char** argv) {
     const char* want = getenv("LIZ_VK_DEVICE");
     auto dev = wg::Device::create(want ? want : "", false, [](const std::string& s) { fprintf(stderr, "%s\n", s.c_str()); });
     printf("device: %s\n", dev->name.c_str());
+#if LIZ_VK
     for (uint32_t i = 0; i < dev->mem.memoryTypeCount; i++) {
       const auto fl = dev->mem.memoryTypes[i].propertyFlags;
       printf("memory type %u (heap %u):%s%s%s%s%s\n", i, dev->mem.memoryTypes[i].heapIndex, fl & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT ? " DL" : "",
@@ -950,6 +980,9 @@ int main(int argc, char** argv) {
     const auto ty = [](VkComponentTypeKHR t) { switch (t) { case VK_COMPONENT_TYPE_FLOAT16_KHR: return "f16"; case VK_COMPONENT_TYPE_FLOAT32_KHR: return "f32";
       case VK_COMPONENT_TYPE_SINT8_KHR: return "s8"; case VK_COMPONENT_TYPE_UINT8_KHR: return "u8"; case VK_COMPONENT_TYPE_SINT32_KHR: return "s32"; case VK_COMPONENT_TYPE_UINT32_KHR: return "u32"; default: return "?"; } };
     for (const auto& c : cp) printf("coop %ux%ux%u A %s B %s C %s R %s scope %d\n", c.MSize, c.NSize, c.KSize, ty(c.AType), ty(c.BType), ty(c.CType), ty(c.ResultType), static_cast<int>(c.scope));
+#else
+    printf("memory: shared with the host\ncooperative matrix: none (Metal)\n");
+#endif
     return 0;
   }
   if (mode == "bench" && argc >= 3) {

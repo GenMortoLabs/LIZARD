@@ -2,7 +2,7 @@
 # ai: The Android decoder's build steps; core/, gen/, out/ and .tools/ are liblizard's:
 #   ./build.sh tools     slang 2026.22 into ../liblizard/.tools/slang, the shader-slang release build (Linux x86-64 or
 #                        macOS arm64), its sha256 checked, unless it is there already (curl, tar)
-#   ./build.sh gen       the setup from the JS host (liblizard/gpu/decoder.mjs): ../liblizard/out/{setup,blobs,slang,spv},
+#   ./build.sh gen       the GPU tree: the host's tool listing its recipes (build/linux/lizard_gpu_tree, built first), then ../liblizard/out/{setup,blobs,slang,spv},
 #                        every kernel and the engine's own shaders by slangc, and ../liblizard/gpu/send_wgsl.mjs (the
 #                        web encoder's WGSL, slangc's). Needs Node, ../liblizard/build/ob.mjs and
 #                        ../liblizard/bindings/wasm/dist/lizard.wasm (liblizard's ./build.sh) and slang 2026.22 (tools)
@@ -50,6 +50,9 @@ case $step in
     slang
     ;;
   gen)
+    # ai: the host's tool that lists the recipes gen compiles (core/tools/gpu_tree.cpp), built first
+    cmake -S $LIB/core -B build/linux -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null
+    cmake --build build/linux --target lizard_gpu_tree -j"$(nproc)"
     node $LIB/gen/gen.mjs "$@"
     ;;
   ffmpeg)

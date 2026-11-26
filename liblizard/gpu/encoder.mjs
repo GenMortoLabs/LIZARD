@@ -6,17 +6,20 @@
 // ai: The kernels, one compute pass an encode of up to `sub` frames, a symbol a workgroup z (frames x codes, the codes
 // ai: of a frame side by side):
 // ai:   paint: a block a workgroup (slang/src/send_paint.slang, 2026-10-07): the CRC-64, its code's systematic codeword
-// ai:     (every code of the format's rate profile, src/lizard_phy.h lizard_tiers_for; the codes' tables in TAB, sendTab,
-// ai:     from the wasm's codec), the bit map and whitening, the pilots, QPSK onto the disc; the test stream's payloads
-// ai:     made there from their ids (BLAKE3 of the id, src/xfer.h stream_fill: encode's test, 2026-11-15), so its blocks come as ids;
+// ai:     (every code of the format's rate profile, src/lizard_phy.h lizard_tiers_for; the codes' tables in TAB, the native
+// ai:     painter's, core/tx/send_tables.cpp SendConsts through the wasm), the bit map and whitening into SD, each data coefficient's two bits; the test stream's payloads made there from their ids (BLAKE3 of the id,
+// ai:     src/xfer.h stream_fill: encode's test, 2026-11-15), so its blocks come as ids;
 // ai:   irows, ipic: the decoder's own butterflies as the inverse transforms (slang/src/send_irows.slang, send_ipic.slang) on
-// ai:     the spectrum transposed (back/disc.mjs sendDiscLayout, paint conjugating where UV's bit 31 says): the inverse
-// ai:     along y, then turn_pack's packing and the inverse along x, clipped to 0..1 in f32, the picture row-major;
+// ai:     the spectrum transposed (core/tx/send_tables.cpp sendTables' uv, INV its entries' frame coefficients, bit 31 conjugated):
+// ai:     irows makes each entry's coefficient from paint's data bits (the pilots, the padding, QPSK; 2026-11-24, the
+// ai:     disc no longer painted between), the inverse along y, Y two halves a word, then turn_pack's
+// ai:     packing and the inverse along x, clipped to 0..1 in f32, the picture row-major;
 // ai:     in the copy form (below) ipic writes the frame's bytes of the square itself, from workgroup memory (ipicFrame);
-// ai:   rsv, rsh: the C's Lanczos-3 resample onto the ring's square with the C's own taps (sim/ob.mjs resampleGeom),
-// ai:     grey as lizard_paint_rgba rounds it, and every pixel outside the square the border's byte (slang/src/send_rsv.slang, send_rsh.slang);
+// ai:   rsh: the C's Lanczos-3 resample onto the ring's square with the C's own taps (sendTables' taps), a workgroup
+// ai:     a frame row, its vertical pass in workgroup memory, grey as lizard_paint_rgba rounds it, and every pixel outside
+// ai:     the square the border's byte (slang/src/send_rsh.slang);
 // ai:     where every tap is the C's on-sample copy (pxm = n / span: 384 to 1536 in the 64 ring, 512, 768, 1024, 1280
-// ai:     and 1536 in the 128, 512, 1024 and 1536 in the 256, 15 of the 24 pairs) no rsv, ipic's frame form writing the
+// ai:     and 1536 in the 128, 512, 1024 and 1536 in the 256, 15 of the 24 pairs) no resample, ipic's frame form writing the
 // ai:     square's words and rsh's border form every other word;
 // ai:   present: a render pass onto the canvas, whole canvas pixels a frame pixel, a frame of a batch.
 // ai: The border (ring, marks, band, word, quiet margin) is the C's paint, taken once a configuration from this
@@ -43,63 +46,37 @@
 // ai: the latest. The wasm holds one codec at a time, the latest configuration's Lizard (cfg.lizard): configure and
 // ai: check run one at a time on a chain shared by every encoder. batch 16 and sub 4 unless asked, sub then batch halved
 // ai: while the device cannot hold a configuration's buffers (cfg.batch, cfg.sub say what it got).
-// ai: the kernels, WGSL slangc writes from the sender's Slang (slang/src/send_*.slang), by ../gen/gen.mjs; their constants plan/send.mjs
+// ai: the kernels, WGSL slangc writes from the sender's Slang (slang/src/send_*.slang), by ../gen/gen.mjs; their constants
+// ai: core/tx/send_plan.h's, and every table the native painter's (core/tx/send_tables.cpp), from the wasm (sim/ob.mjs
+// ai: sendTables: the module's codec's, made by the C as the native painter makes them)
 import { SEND_WGSL } from "./send_wgsl.mjs";
-import { RSV_THREADS, RSH_THREADS, GA_BYTES, PARAMS_AT } from "./plan/send.mjs";
-import { transformTables, sendDiscLayout } from "./back/disc.mjs";
-import { whiten, perm, sentBit } from "./back/bitmap.mjs";
-import { ruleTables } from "./back/codes.mjs";
-import { CODES, WHITE_SLOTS } from "./plan/back_tiers.mjs";
-// ai: the gap between two codes, in modules, unless configure names one (lizard-web/send-worker.mjs paints the same for the
-// ai: wasm path; the page's slider gives both)
-export const GAP_MODULES = 12;
-import { crcPowers, PAYLOAD } from "./back/ref_ldpc.mjs";
-import { clipLimit } from "./back/paint.mjs";
-import { computePipeline } from "./pipeline.mjs";
-import { init as initOb, Lizard, streamBlock } from "../sim/ob.mjs";
-import { ID_BYTES, idGet } from "../sim/xfer.mjs";
-import { STEP, versionOf } from "../sim/lizard_pick.mjs";
+// ai: the squares' RMS difference from the C's paint a device's frames are held under (grey levels; check)
+export const SQUARE_RMS = 0.5;
+import { init as initOb, Lizard, streamBlock, sendTables, GAP_MODULES } from "../sim/ob.mjs";
+import { ID_BYTES, idGet } from "../sim/ob.mjs";
 
-// ai: A block's 472 bytes in BLOCKS, 118 words of the 120 a block (slang/src/send_paint.slang; the last two the paint's CRC words).
-const BLOCK_BYTES = 480;
-
-// ai: The paint's TAB (slang/src/send_paint.slang) from the codec's codes (back/codes.mjs ruleTables: { codes }, the
-// ai: codes in CODES' order): word 0 the whitening's offset; 16 words a code at 16 + 16 c, (n, k, m, z, mb, rows,
-// ai: lay, perm, slots, nt: slots a block's); a code's block rows' first entries (mb + 1), its entries (col | shift << 16), its bit map
-// ai: (slot i's codeword bit, back/bitmap.mjs sentBit of perm[i], in the half i & 1 of word i >> 1, over the nt sent bits); the whitening, a
-// ai: bit a slot of the frame over the ladder's largest (plan/back_tiers.mjs WHITE_SLOTS) and a word past them. The same for every format: gen/sender.mjs
-// ai: bakes it for the native painter.
-export function sendTab({ codes }) {
-  if (codes.length !== CODES.length) throw new Error(`the paint takes ${CODES.length} codes, got ${codes.length}`);
-  let o = 16 + 16 * codes.length;
-  const at = codes.map((c) => { const rows = o; o += c.mb + 1; const lay = o; o += c.slots; const pm = o; o += c.nt / 2; return { rows, lay, pm }; });
-  const WHITE = o;
-  o += WHITE_SLOTS / 32 + 1;
-  const tab = new Uint32Array(o);
-  tab[0] = WHITE;
-  codes.forEach((c, q) => {
-    const a = at[q];
-    // ai: a block's slots its code's sent bits alone (the pilots apart from the blocks since 2026-11-21: no tail to paint)
-    if (c.nt % 2 || CODES[q].slots !== c.nt || c.n / 32 > 240) throw new Error(`the ${CODES[q].name} code's n ${c.n} (${c.nt} sent, its block ${CODES[q].slots} slots) does not fit the paint`);
-    tab.set([c.n, c.k, c.m, c.z, c.mb, a.rows, a.lay, a.pm, CODES[q].slots, c.nt], 16 + 16 * q);
-    for (let r = 0; r <= c.mb; r++) tab[a.rows + r] = c.lay[r];
-    for (let e = 0; e < c.slots; e++) tab[a.lay + e] = c.lay[c.mb + 1 + 2 * e] | (c.lay[c.mb + 2 + 2 * e] << 16);
-    const p = perm(c.nt);
-    for (let i = 0; i < c.nt; i++) tab[a.pm + (i >> 1)] |= sentBit(c, p[i]) << (16 * (i & 1));
-  });
-  const w = whiten(WHITE_SLOTS);
-  for (let i = 0; i < WHITE_SLOTS; i++) if (w[i]) tab[WHITE + (i >> 5)] |= 1 << (i & 31);
-  return tab;
+// ai: A compute pipeline, compiled asynchronously with no error scope of its own, so any number of them can be in flight
+// ai: at once (2026-09-29, the worker's start: STATUS "The ramp at the start"). An error scope is the device's, pushed and
+// ai: popped in call order, and two compiles awaited across each other pop each other's; a failed creation rejects its
+// ai: own promise instead (GPUPipelineError), and the module's own messages, where it has any, name the line.
+async function computePipeline(device, { code, layout, label }) {
+  const module = device.createShaderModule({ label, code });
+  try {
+    return await device.createComputePipelineAsync({ label, layout, compute: { module, entryPoint: "main" } });
+  } catch (e) {
+    const errs = (await module.getCompilationInfo()).messages.filter((m) => m.type === "error");
+    if (!errs.length) throw e;
+    throw new Error(errs.map((m) => `${m.lineNum}:${m.linePos} ${m.message}`).join("\n") + "\n" + String(code).split("\n").map((l, i) => `${i + 1} ${l}`).join("\n"));
+  }
 }
-// ai: The codec's codes and profiles, read once a page on the codec's chain (ruleTables sets up a codec of its own).
-let codesOnce = null;
+
 // ai: Frames a half unless asked (32), and frames an encode at most: the sender paints ahead, so a deep batch adds no
 // ai: latency (the page's pump still holds each encode to its share of the animation frame).
 export const BATCH = 32, SUB = 32;
 // ai: Timestamp readbacks in flight at most; a batch that finds none free goes untimed.
 const TIMERS = 4;
 // ai: The compute stages a batch, in order (a profile's names).
-export const STAGES = ["paint", "irows", "ipic", "rsv", "rsh"];
+export const STAGES = ["paint", "irows", "ipic", "rsh"];
 
 export class Unavailable extends Error {}
 
@@ -131,24 +108,23 @@ export class GpuEncoder {
     return e;
   }
 
-  // ai: The layouts, and the pipelines no picture size shapes (paint, rsv, rsh twice, present), compiled at once.
+  // ai: The layouts, and the pipelines no picture size shapes (paint, rsh twice, present), compiled at once.
   async buildShared() {
     const d = this.device, RO = "read-only-storage", RW = "storage", UN = "uniform";
     const layout = (types, visibility = GPUShaderStage.COMPUTE) => d.createBindGroupLayout({ entries: types.map((type, binding) => ({ binding, visibility, buffer: { type } })) });
     this.bgl = {
-      paint: layout([RO, RO, RO, RW, UN]),
-      irows: layout([RO, RO, RW, UN, UN]),
+      // ai: paint: BLOCKS, TAB, SD, P; irows: SD, TW, Y, ROWS, SU, TAB, INV, P (it makes the coefficients from the data bits)
+      paint: layout([RO, RO, RW, UN]),
+      irows: layout([RO, RO, RW, UN, UN, RO, RO, UN]),
       ipic: layout([RO, RO, RW, UN]),
       ipicFrame: layout([RO, RO, RW, UN, UN, RO, RO]),
-      rsv: layout([RO, RO, RW, UN]),
       rsh: layout([RO, RO, RO, RW, UN]),
       present: layout([RO, UN], GPUShaderStage.FRAGMENT),
     };
     const vs = d.createShaderModule({ label: "send present vs", code: SEND_WGSL.presentVs }), fs = d.createShaderModule({ label: "send present fs", code: SEND_WGSL.presentFs });
     // ai: The pipelines under names of their own: `present` is the method.
-    [this.paintPipe, this.rsvPipe, this.rshPipe, this.rshBorderPipe, this.presentPipe] = await Promise.all([
+    [this.paintPipe, this.rshPipe, this.rshBorderPipe, this.presentPipe] = await Promise.all([
       computePipeline(d, { code: SEND_WGSL.paint, layout: this.pl("paint"), label: "send paint" }),
-      computePipeline(d, { code: SEND_WGSL.rsv, layout: this.pl("rsv"), label: "send rsv" }),
       computePipeline(d, { code: SEND_WGSL.rsh, layout: this.pl("rsh"), label: "send rsh" }),
       computePipeline(d, { code: SEND_WGSL.rshBorder, layout: this.pl("rsh"), label: "send rsh border" }),
       d.createRenderPipelineAsync({ label: "send present", layout: this.pl("present"), vertex: { module: vs, entryPoint: "main" }, fragment: { module: fs, entryPoint: "main", targets: [{ format: this.format }] }, primitive: { topology: "triangle-list" } }),
@@ -156,11 +132,11 @@ export class GpuEncoder {
   }
   pl(k) { return this.device.createPipelineLayout({ bindGroupLayouts: [this.bgl[k]] }); }
 
-  // ai: The two inverse transforms of a picture size (ipic in both forms), built once and kept. ipic holds two exchange buffers of n vec2f
-  // ai: (24,576 B at 1536): a device that offers less has no GPU encoder at that size (Unavailable).
+  // ai: The two inverse transforms of a picture size (ipic in both forms), built once and kept. ipic holds two exchange buffers of n
+  // ai: words, a complex value two halves a word (12,288 B at 1536): a device that offers less has no GPU encoder at that size (Unavailable).
   pipesFor(n) {
     if (!this.pipes.has(n)) {
-      const lim = this.device.limits, need = 16 * n;
+      const lim = this.device.limits, need = 8 * n;
       if (need > lim.maxComputeWorkgroupStorageSize) throw new Unavailable(`the ${n} picture's inverse needs ${need} B of workgroup memory, the device has ${lim.maxComputeWorkgroupStorageSize}`);
       if (n / 8 > lim.maxComputeInvocationsPerWorkgroup) throw new Unavailable(`the ${n} picture's inverse needs ${n / 8} invocations a workgroup`);
       if (!SEND_WGSL[`irows${n}`] || !SEND_WGSL[`ipic${n}`] || !SEND_WGSL[`ipicFrame${n}`]) throw new Unavailable(`no inverse built for the ${n} picture`);
@@ -183,7 +159,8 @@ export class GpuEncoder {
     return p;
   }
 
-  // ai: A configuration: the format's tables, the border and the resampler from the C, every buffer a batch needs.
+  // ai: A configuration: the format's tables (the native painter's, made by the C: sim/ob.mjs sendTables), the border
+  // ai: from the C's paint, every buffer a batch needs.
   // ai: spec as the page's (n, subch, span); codes symbols a frame, side by side.
   configure(opts) { return this.serial(() => this.configureNow(opts)); }
   async configureNow({ spec, codes = 1, gap = GAP_MODULES, clock = [60, 1] }) {
@@ -192,27 +169,15 @@ export class GpuEncoder {
     await initOb();
     alive();
     const pipes = this.pipesFor(n);
-    // ai: The codec changes hands from here (ruleTables, the first time, and transformTables set up and free their own,
-    // ai: then this configuration's Lizard), so the Lizard before it can no longer paint, whether or not this
-    // ai: configuration comes to be.
+    // ai: The codec changes hands from here (this configuration's Lizard), so the Lizard before it can no longer paint,
+    // ai: whether or not this configuration comes to be.
     codec.lizard?.free();
     codec.lizard = null;
-    codesOnce ??= await ruleTables();
-    const rt = codesOnce, profile = subch % STEP ? null : rt.profiles[versionOf(subch)];
-    if (!profile) throw new Unavailable(`the GPU encoder paints the format's ladder (LIZARD-16 to -1072), not LIZARD-${subch}`);
-    // ai: TAB, the encoder's for its life (the same for every format; release leaves it, destroy takes the device)
-    if (!this.TAB) { const tab = sendTab(rt); this.TAB = this.device.createBuffer({ size: tab.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); this.device.queue.writeBuffer(this.TAB, 0, tab); }
-    const [tb0] = await transformTables([{ n, subch }]);
-    // ai: the disc the spectrum transposed (slang/src/send_ipic.slang writes the picture row-major)
-    const tb = { ...tb0, ...sendDiscLayout(tb0.shape, tb0.pos) };
     const fc = new Lizard(n, subch, 1, { span });
     fc.setClock(...clock);   // ai: the sender's clock the border's word states (src/fmt.h): fps, the places' largest delay
     let c = null;
     try {
       alive();
-      const g = fc.resampleGeom(), ag = fc.anchorGeom(), V = fc.blocks, B = fc.blockBytes, W = fc.side + 2 * fc.quiet * fc.cell;
-      const want = profile.reduce((a, t) => a + t.count, 0);
-      if (g.n !== n || tb.blocks !== subch / 8 || V !== want || B !== PAYLOAD) throw new Error(`the tables (${tb.blocks} chunks at ${n}, a profile of ${want} blocks) and the codec (${V} of ${B} B at ${g.n}) disagree`);
       const [irows, ipic, ipicFrame] = await pipes;
       alive();
       // ai: The sizes. Over the device's limits: FRAME (two halves of batch frames) halves batch, the scratch (sub
@@ -225,16 +190,20 @@ export class GpuEncoder {
       while (!c) {
         sub = Math.min(sub, batch);
         if (batch < 1) throw new Unavailable(`no configuration of LIZARD-${subch} at ${n} fits this device's memory`);
-        const t = this.shape({ spec, codes, gapModules: gap, tb, g, ag, fc, V, B, W, batch, sub, irows, ipic, ipicFrame }), z = t.sizes;
-        t.profile = profile;
+        // ai: the tables for encodes of sub frames (the paint's uniform counts its symbols), while fc is the module's codec
+        const tables = sendTables(sub, codes, gap);
+        if (tables.why) throw new Unavailable(`LIZARD-${subch} at ${n}: ${tables.why}`);
+        // ai: TAB, the encoder's for its life (the same for every format; release leaves it, destroy takes the device)
+        if (!this.TAB) { this.TAB = this.device.createBuffer({ size: tables.tab.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); this.device.queue.writeBuffer(this.TAB, 0, tables.tab); }
+        const t = this.shape({ spec, tables, fc, batch, sub, irows, ipic, ipicFrame }), z = t.sizes;
         if (z.FRAME > most) { batch = Math.floor(batch / 2); continue; }
-        if (Math.max(z.BLOCKS, z.S, z.Y, z.TMP, z.PIC) > most) {
+        if (Math.max(z.BLOCKS, z.SD, z.Y, z.PIC) > most) {
           if (sub === 1) throw new Unavailable(`one frame of LIZARD-${subch} at ${n} needs a buffer over this device's limit`);
           sub = Math.floor(sub / 2); continue;
         }
         d.pushErrorScope("validation");
         d.pushErrorScope("out-of-memory");
-        this.allocate(t, tb, g);
+        this.allocate(t, tables);
         const [oom, bad] = await Promise.all([d.popErrorScope(), d.popErrorScope()]);
         if (oom || bad || this.dead) {
           for (const b of t.bufs) b.destroy();
@@ -255,77 +224,65 @@ export class GpuEncoder {
     return c;
   }
 
-  // ai: A configuration's numbers and its buffers' sizes: halves of `batch` frames, scratch for `sub` (R symbols).
-  shape({ spec, codes, gapModules = GAP_MODULES, tb, g, ag, fc, V, B, W, batch, sub, irows, ipic, ipicFrame }) {
-    const { n, subch, span = 0 } = spec, q = g.q, R = sub * codes;
-    // ai: two codes a gap of gapModules modules apart (2026-09-30; a slider since 2026-10-03; lizard-web/send-worker.mjs
-    // ai: paints the same gap): the frame is codes W + (codes - 1) gap wide, the gap the margin's colour (slang/src/send_rsh.slang pixel)
-    const gap = codes > 1 ? gapModules * fc.cell : 0;
-    const FW = codes * W + (codes - 1) * gap, RW = Math.ceil(FW / 4), words = RW * W, FS = 64 * Math.ceil(words / 64);
-    // ai: A copy when every pixel takes one sample whole (the C's on-sample taps): no vertical pass, no TMP, no PIC
-    // ai: (ipic's frame form writes the square's bytes).
-    const copy = g.w.every((w, i) => w === (i % 6 === 2 ? 1 : 0));
-    const sStride = tb.npos, Vr = tb.V, yStride = Vr * n;
+  // ai: A configuration's numbers and its buffers' sizes: halves of `batch` frames, scratch for `sub` (R symbols). The
+  // ai: frame (the C's): codes symbols W wide a gap apart (the margin's colour, slang/src/send_rsh.slang pixel), RW words
+  // ai: a row, FS words a frame; a copy where every pixel takes one sample whole (the C's on-sample taps: no resample, no
+  // ai: PIC, ipic's frame form writing the square's bytes).
+  shape({ spec, tables: t, fc, batch, sub, irows, ipic, ipicFrame }) {
+    const { span = 0 } = spec, { n, subch, codes, gap, W, FW, RW, FS, q, sq, Vr, npos: sStride, sdWords, copy, blocks: V } = t, B = fc.blockBytes;
+    const R = sub * codes, words = RW * W, yStride = Vr * n;
     const sizes = {
-      BLOCKS: R * V * BLOCK_BYTES, S: R * sStride * 8, Y: R * yStride * 8,
-      // ai: TMP, the vertical pass's rows (none on a copy)
-      TMP: copy ? 16 : R * 4 * q * n, PIC: copy ? 16 : R * n * n * 4, FRAME: batch * FS * 4,
+      // ai: Y between the inverses a complex value two halves a word (slang/src/send_irows.slang)
+      // ai: SD, the data coefficients' bits (paint's, 16 a word); irows makes the coefficients from them, no disc between
+      BLOCKS: R * V * t.BLOCK_BYTES, SD: R * sdWords * 4, Y: R * yStride * 4,
+      PIC: copy ? 16 : R * n * n * 4, FRAME: batch * FS * 4,
     };
-    // ai: the anchors' runs in a symbol's pixels for RSH's G (slang/src/send_rsh.slang's G: each square's first pixel along
-    // ai: either axis, the drive fc.quiet modules into the symbol, then the side; core/tx/send_tables.cpp the same)
-    const anch = [...ag.m0.map((m) => (m + fc.quiet) * fc.cell), ag.side * fc.cell];
-    return { spec, n, subch, span, codes, gap, V, B, W, FW, RW, FS, q, sq: g.o + fc.quiet * fc.cell, words, Vr, sStride, yStride, batch, sub, R, copy, sizes, irows, ipic, ipicFrame, anch, bufs: [], whole: 0, frameMs: null, lizard: null,
+    return { spec, n, subch, span, codes, gap, V, B, W, FW, RW, FS, q, sq, words, Vr, sStride, yStride, sdWords, batch, sub, R, copy, sizes, irows, ipic, ipicFrame, bufs: [], whole: 0, frameMs: null, lizard: null,
+      blockStride: t.BLOCK_BYTES, pDims: t.P_DIMS, rshThreads: t.RSH_THREADS, rshBand: t.RSH_BAND,
       label: `LIZARD-${subch} at ${n}, ${W} px a symbol${codes > 1 ? ` x ${codes}` : ""}` };
   }
 
   // ai: The buffers and bind groups of a shaped configuration.
-  allocate(c, tb, g) {
-    const d = this.device, U = GPUBufferUsage, { n, V, q, codes, sStride, Vr, yStride, W, R } = c;
+  allocate(c, t) {
+    const d = this.device, U = GPUBufferUsage, { n, q, W } = c;
     const buf = (size, usage, data) => {
       const b = d.createBuffer({ size: Math.max(16, 4 * Math.ceil(size / 4)), usage });
       if (data) d.queue.writeBuffer(b, 0, data);
       c.bufs.push(b);
       return b;
     };
-    // ai: the paint's uniform: the blocks (and the slots they take, the coefficients the frame holds: the padding
-    // ai: between), each code's tier (first block, first slot, blocks), dims, the CRC's powers
-    const paintUni = new Uint32Array(PARAMS_AT.words);
-    paintUni.set([V, 0, c.profile.used, 320 * c.subch], PARAMS_AT.sizes);
-    for (const t of c.profile) paintUni.set([t.firstBlock, t.slot0, t.count, 0], PARAMS_AT.sizes + 4 * (1 + t.c));
-    paintUni.set([V, sStride, R, 0], PARAMS_AT.dims);
-    paintUni.set(crcPowers(PAYLOAD), PARAMS_AT.pw);
-    const size = new ArrayBuffer(48), s32 = new Uint32Array(size), sf = new Float32Array(size), lim = clipLimit(c.subch);
-    s32.set([n, Vr, yStride, sStride, (n * n) / 4, 0, 0, 0]); sf[8] = lim; sf[9] = Math.fround(0.5 / lim);
-    const rows = new Uint32Array(2048); rows.set(tb.rows);
-    // ai: The taps: each one's sample mod n (the C wraps it in resample), then the weights, 6 a pixel.
-    const taps = new ArrayBuffer(48 * q), idx = new Uint32Array(taps, 0, 6 * q);
-    for (let x = 0; x < q; x++) for (let t = 0; t < 6; t++) idx[6 * x + t] = (((g.i0[x] + t) % n) + n) % n;
-    new Float32Array(taps, 24 * q, 6 * q).set(g.w);
-    c.g = new Uint32Array([n, q, c.sq, W, codes, c.FW, c.RW, c.FS, 1, 0, c.gap, 0, ...c.anch]);
+    // ai: the C's: the paint's uniform (the blocks, the slots they take and the coefficients the frame holds: the padding
+    // ai: between; each code's tier, first block, first slot, blocks; dims; the CRC's powers), the inverse's sizes and
+    // ai: clip (SU), the disc's rows, the taps (each one's sample mod n, then the weights, 6 a pixel), rsh's G (the
+    // ai: geometry, then the anchors' runs: send_rsh.slang's G)
+    c.g = new Uint32Array([...t.g, ...t.anch]);
     c.BLOCKS = buf(c.sizes.BLOCKS, U.STORAGE | U.COPY_DST);
     c.staging = new Uint8Array(c.sizes.BLOCKS);
-    const UV = buf(4 * tb.UV.length, U.STORAGE | U.COPY_DST, tb.UV);
-    c.S = buf(c.sizes.S, U.STORAGE | U.COPY_DST);
-    const PU = buf(4 * PARAMS_AT.words, U.UNIFORM | U.COPY_DST, paintUni);
-    const TW = buf(8 * n, U.STORAGE | U.COPY_DST, tb.tw);
-    const ROWS = buf(4 * rows.length, U.UNIFORM | U.COPY_DST, rows);
-    const SU = buf(48, U.UNIFORM | U.COPY_DST, new Uint8Array(size));
+    // ai: INV, a disc entry's frame coefficient (bit 31 conjugated): the size's UV turned round (an entry past the
+    // ai: format's coefficients irows makes zero)
+    const inv = new Uint32Array(t.uv.length);
+    for (let i = 0; i < t.uv.length; i++) inv[t.uv[i] & 0x7fffffff] = (i | (t.uv[i] & 0x80000000)) >>> 0;
+    const INV = buf(4 * inv.length, U.STORAGE | U.COPY_DST, inv);
+    c.SD = buf(c.sizes.SD, U.STORAGE);
+    const PU = buf(4 * t.pu.length, U.UNIFORM | U.COPY_DST, t.pu);
+    const TW = buf(8 * n, U.STORAGE | U.COPY_DST, t.tw);
+    const ROWS = buf(4 * t.rows.length, U.UNIFORM | U.COPY_DST, t.rows);
+    const SU = buf(4 * t.su.length, U.UNIFORM | U.COPY_DST, t.su);
     const Y = buf(c.sizes.Y, U.STORAGE);
-    const TMP = buf(c.sizes.TMP, U.STORAGE);
     const PIC = buf(c.sizes.PIC, U.STORAGE);
-    const TAPS = buf(48 * q, U.STORAGE | U.COPY_DST, new Uint8Array(taps));
+    const TAPS = buf(48 * q, U.STORAGE | U.COPY_DST, t.taps);
     c.BORDER = buf(W * W, U.STORAGE | U.COPY_DST);
-    const GU = (c.GU = buf(GA_BYTES, U.UNIFORM | U.COPY_DST, c.g));
-    c.PG = buf(GA_BYTES, U.UNIFORM | U.COPY_DST, c.g);
+    const GU = (c.GU = buf(4 * t.G_WORDS, U.UNIFORM | U.COPY_DST, c.g));
+    c.PG = buf(4 * t.G_WORDS, U.UNIFORM | U.COPY_DST, c.g);
     c.FRAME = [buf(c.sizes.FRAME, U.STORAGE | U.COPY_SRC), buf(c.sizes.FRAME, U.STORAGE | U.COPY_SRC)];
     const group = (k, list) => d.createBindGroup({ layout: this.bgl[k], entries: list.map((r, binding) => ({ binding, resource: r.buffer ? r : { buffer: r } })) });
-    c.paintGroup = group("paint", [c.BLOCKS, this.TAB, UV, c.S, PU]);
+    c.paintGroup = group("paint", [c.BLOCKS, this.TAB, c.SD, PU]);
     c.PU = PU;
-    c.irowsGroup = group("irows", [c.S, TW, Y, ROWS, SU]);
+    c.irowsGroup = group("irows", [c.SD, TW, Y, ROWS, SU, this.TAB, INV, PU]);
     // ai: ipic's group: the copy form's a half each (it writes that half's FRAME)
     c.ipicGroups = c.copy ? c.FRAME.map((F) => group("ipicFrame", [Y, TW, F, SU, GU, c.BORDER, TAPS])) : [0, 1].map(() => group("ipic", [Y, TW, PIC, SU]));
-    c.rsvGroup = c.copy ? null : group("rsv", [PIC, TAPS, TMP, GU]);
-    c.rshGroups = c.FRAME.map((F) => group("rsh", [TMP, TAPS, c.BORDER, F, GU]));
+    // ai: rsh's group, a half each: the resample reads PIC (the border form binds it unread)
+    c.rshGroups = c.FRAME.map((F) => group("rsh", [PIC, TAPS, c.BORDER, F, GU]));
     // ai: A frame's present binds its own words of its half's FRAME, FS words apart (FS a multiple of 64 words: 256 B,
     // ai: the offset alignment WebGPU asks of a storage binding).
     c.presentGroups = [];
@@ -353,7 +310,7 @@ export class GpuEncoder {
   }
 
   // ai: count frames (1 to c.sub) into frames f0 .. f0 + count - 1 of half h (0 or 1), one submission: each frame codes x
-  // ai: V blocks of 472 bytes, each block its id then its payload (sim/phy.mjs frameBlocks), frame after frame. The
+  // ai: V blocks of 472 bytes, each block its id then its payload (sim/ob.mjs frameBlocks), frame after frame. The
   // ai: frame offset goes in G before the submission, in queue order. parity: the first frame's count (the sender's
   // ai: count of painted pictures mod 4; each frame after it one more), which the pilots carry (SPEC 7.3). test: the
   // ai: blocks are the test stream's, each read for its id alone and its payload made by PAINT (BLAKE3 of the id, SPEC
@@ -363,22 +320,21 @@ export class GpuEncoder {
     const d = this.device, per = c.codes * c.V, R = count * c.codes;
     if (count < 1 || count > c.sub || f0 + count > c.batch || blocks.length !== count * per * c.B) throw new Error(`an encode is 1 to ${c.sub} frames of ${per} blocks of ${c.B} B within a half of ${c.batch}, got ${count} frames from ${f0} in ${blocks.length} B`);
     // ai: under test each block's first ID_BYTES (12) alone, packed (PAINT reads the id's three words there), else the blocks at
-    // ai: BLOCK_BYTES
-    const at = test ? ID_BYTES : BLOCK_BYTES, take = test ? ID_BYTES : c.B;
+    // ai: the plan's block stride (core/tx/send_plan.h BLOCK_BYTES)
+    const at = test ? ID_BYTES : c.blockStride, take = test ? ID_BYTES : c.B;
     for (let i = 0; i < count * per; i++) c.staging.set(blocks.subarray(i * c.B, i * c.B + take), i * at);
     d.queue.writeBuffer(c.BLOCKS, 0, c.staging, 0, count * per * at);
     d.queue.writeBuffer(c.GU, 36, new Uint32Array([f0]));
-    d.queue.writeBuffer(c.PU, 4 * (PARAMS_AT.dims + 3), new Uint32Array([((parity & 3) | (c.codes << 2) | (test ? 0x80000000 : 0)) >>> 0]));
+    d.queue.writeBuffer(c.PU, 4 * (c.pDims + 3), new Uint32Array([((parity & 3) | (c.codes << 2) | (test ? 0x80000000 : 0)) >>> 0]));
     const enc = d.createCommandEncoder(), t = this.timer(), K = this.profile ? STAGES.length : 1;
-    enc.clearBuffer(c.S, 0, R * c.sStride * 8);
     const stages = [
       [this.paintPipe, c.paintGroup, [c.V, 1, R]],
       [c.irows, c.irowsGroup, [c.Vr, 1, R]],
       [c.copy ? c.ipicFrame : c.ipic, c.ipicGroups[h], [c.n / 4, 1, R]],
-      c.copy ? null : [this.rsvPipe, c.rsvGroup, [Math.ceil(c.n / 4 / RSV_THREADS), c.q, R]],
-      [c.copy ? this.rshBorderPipe : this.rshPipe, c.rshGroups[h], [Math.ceil(c.RW / RSH_THREADS), c.W, count]],
+      // ai: the copy form's border words, a lane a word; else the resample, a workgroup a strip of words by a band of rows
+      [c.copy ? this.rshBorderPipe : this.rshPipe, c.rshGroups[h], [Math.ceil(c.RW / c.rshThreads), c.copy ? c.W : Math.ceil(c.W / c.rshBand), count]],
     ];
-    // ai: One pass (timed whole), or with profile a pass a stage, a skipped stage (rsv on a copy) its pair around nothing.
+    // ai: One pass (timed whole), or with profile a pass a stage.
     let p = null;
     stages.forEach((st, k) => {
       if (!p || this.profile) p = enc.beginComputePass(t ? { timestampWrites: { querySet: t.qs, beginningOfPassWriteIndex: this.profile ? 2 * k : 0, endOfPassWriteIndex: this.profile ? 2 * k + 1 : 1 } } : {});
@@ -462,8 +418,10 @@ export class GpuEncoder {
 
   // ai: This device against the C on count frames in half 0 (encodes of up to c.sub): each frame encoded here and by the
   // ai: C (its own paint, the same word), compared symbol by symbol. ok when every border and margin is equal to the byte
-  // ai: and every square within one grey level. borderDiff: border pixels that differ; squareMax, squareDiff: the
-  // ai: squares' largest difference and the pixels that differ at all; got: the frames' pixels, frame after frame.
+  // ai: and the squares' RMS difference is under SQUARE_RMS grey levels: the GPU's arithmetic is its own (Y in halves,
+  // ai: 2026-11-24), so a square need not be the C's, and the blind read (scripts/gpu/encoder_check.mjs) is what holds
+  // ai: it; the RMS catches a device that paints garbage. borderDiff: border pixels that differ; squareMax, squareDiff,
+  // ai: squareRms: the squares' largest difference, the pixels that differ at all, the RMS; got: the frames' pixels.
   // ai: c: the configuration to check, which must still be the latest when the check's turn comes (a check queued
   // ai: behind another configure is refused, never run on the other configuration). test (the default, as the native
   // ai: sender's check, core/tx/gpu_painter.cpp): the device encodes from the blocks' ids alone, the test stream made
@@ -483,7 +441,7 @@ export class GpuEncoder {
     if (test) for (let o = 0; o + c.B <= full.length; o += c.B) {
       full.set(streamBlock(idGet(full, o), c.B - ID_BYTES), o + ID_BYTES);   // ai: the bare id's stream (its tag aside)
     }
-    let borderDiff = 0, squareMax = 0, squareDiff = 0;
+    let borderDiff = 0, squareMax = 0, squareDiff = 0, sq2 = 0, squarePx = 0;
     const got = new Uint8Array(count * c.FW * c.W);
     for (let f = 0; f < count; f++) {
       const px = await this.readback(f, c);
@@ -493,13 +451,13 @@ export class GpuEncoder {
         const { rgba } = c.lizard.encodeRGBA(full.subarray((f * c.codes + k) * per, (f * c.codes + k + 1) * per));
         for (let y = 0; y < c.W; y++) for (let x = 0; x < c.W; x++) {
           const dv = Math.abs(px[y * c.FW + k * (c.W + c.gap) + x] - rgba[4 * (y * c.W + x)]);
-          if (!dv) continue;
-          if (x >= c.sq && x < c.sq + c.q && y >= c.sq && y < c.sq + c.q) { squareDiff++; if (dv > squareMax) squareMax = dv; } else borderDiff++;
+          if (x >= c.sq && x < c.sq + c.q && y >= c.sq && y < c.sq + c.q) { squarePx++; sq2 += dv * dv; if (dv) squareDiff++; if (dv > squareMax) squareMax = dv; } else if (dv) borderDiff++;
         }
       }
     }
     c.lizard.setParity(0);
-    return { ok: !this.lost && !this.error && borderDiff === 0 && squareMax <= 1, borderDiff, squareMax, squareDiff, pixels: count * c.codes * c.W * c.W, got };
+    const squareRms = squarePx ? Math.sqrt(sq2 / squarePx) : 0;
+    return { ok: !this.lost && !this.error && borderDiff === 0 && squareRms < SQUARE_RMS, borderDiff, squareMax, squareDiff, squareRms, pixels: count * c.codes * c.W * c.W, got };
   }
 
   // ai: A configuration's buffers freed (its Lizard stays the wasm's codec while it is the latest: another configure frees it).

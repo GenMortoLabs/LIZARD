@@ -1,10 +1,11 @@
-# ai: The GPU files the engines read (2026-10-03), out of the generated tree (out/: gen's setup, SPIR-V and blobs):
-# ai: each decoder variant's setup and the modules and blobs it names (core/dec/setup.cpp reads objects.pipelines[].module
-# ai: as spv/<module>.spv and objects.buffers[].blob as blobs/<blob>.bin), the camera's ingest kernel, the sender's setup
-# ai: with its blob (tab.blob, the paint's codes and whitening) and its send_*.spv (core/tx/gpu_painter.cpp). Nothing
-# ai: else of the tree: its raw SPIR-V and the benchmark's kernel are not read. The one copy of the rule: the library's
-# ai: install takes it by the function, and a build that is not CMake's (the AAR, bindings/kotlin/lizard-android) runs
-# ai: this file as a script for the list.
+# ai: The GPU files the engines read (2026-10-03), out of the generated tree (out/: gen's indexes, SPIR-V and blobs):
+# ai: each decoder variant's index (setup/<variant>.json, which core/dec/build.cpp makes the variant's setup through
+# ai: since 2026-11-25), the modules it names (spv/<name>.spv) and the nets' files it names (blobs/<hash>.bin), the
+# ai: camera's ingest kernel, the sender's index (setup/send.json, each module's recipe: core/tx/gpu_painter.cpp holds it
+# ai: to its own; its tables the C's since 2026-11-25, no blob) and its send_*.spv. Nothing else of the tree: its raw SPIR-V, the record of the JS setup
+# ai: (record/) and the benchmark's kernel are not read. The one copy of the rule: the library's install takes it by the
+# ai: function, and a build that is not CMake's (the AAR, bindings/kotlin/lizard-android) runs this file as a script for
+# ai: the list.
 # ai:   liz_gpu_files(<out var> <tree> <variants...>): the files, relative to the tree
 # ai:   cmake -DLIZ_GPU_TREE=<tree> "-DLIZ_GPU_VARIANTS=<v;v...>" -DLIZ_GPU_LIST=<file> -P gpu_files.cmake: the files
 # ai:     written to <file>, one a line
@@ -13,33 +14,26 @@ function(liz_gpu_files out tree)
   file(GLOB sends RELATIVE ${tree} ${tree}/spv/send_*.spv)
   list(FILTER sends EXCLUDE REGEX "\\.raw\\.spv$")
   list(APPEND files ${sends})
-  file(READ ${tree}/setup/send.json send)
-  string(JSON tab GET "${send}" tab blob)
-  list(APPEND files ${tab})
   foreach(v ${ARGN})
     if(NOT EXISTS ${tree}/setup/${v}.json)
       message(FATAL_ERROR "no GPU setup ${v} in ${tree}")
     endif()
     list(APPEND files setup/${v}.json)
     file(READ ${tree}/setup/${v}.json j)
-    string(JSON pipes GET "${j}" objects pipelines)
-    string(JSON np LENGTH "${pipes}")
-    math(EXPR last "${np} - 1")
+    string(JSON mods GET "${j}" modules)
+    string(JSON nm LENGTH "${mods}")
+    math(EXPR last "${nm} - 1")
     foreach(i RANGE ${last})
-      string(JSON id MEMBER "${pipes}" ${i})
-      string(JSON m GET "${pipes}" ${id} module)
+      string(JSON m GET "${mods}" ${i} name)
       list(APPEND files spv/${m}.spv)
     endforeach()
-    string(JSON bufs GET "${j}" objects buffers)
-    string(JSON nb LENGTH "${bufs}")
-    math(EXPR last "${nb} - 1")
+    string(JSON nets GET "${j}" nets)
+    string(JSON nn LENGTH "${nets}")
+    math(EXPR last "${nn} - 1")
     foreach(i RANGE ${last})
-      string(JSON id MEMBER "${bufs}" ${i})
-      string(JSON type ERROR_VARIABLE none TYPE "${bufs}" ${id} blob)
-      if(type STREQUAL "STRING")
-        string(JSON b GET "${bufs}" ${id} blob)
-        list(APPEND files blobs/${b}.bin)
-      endif()
+      string(JSON f MEMBER "${nets}" ${i})
+      string(JSON b GET "${nets}" ${f})
+      list(APPEND files blobs/${b}.bin)
     endforeach()
   endforeach()
   list(REMOVE_DUPLICATES files)

@@ -82,7 +82,6 @@ class ReceiverTest private constructor(private val secs: Double, private val kv:
     suspend fun run(app: App) {
         running = app
         val r = app.recv
-        if (app.loadError.isNotEmpty()) fail(app.loadError)
         r.enter()
         val t0 = System.nanoTime()
         while (r.phase != RxPhase.On) {

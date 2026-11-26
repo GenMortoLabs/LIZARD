@@ -10,6 +10,7 @@
 
 #include "api.hpp"
 #include "xfer_rx_core.h"
+#include "refresh.h"
 #include "xfer_tx.h"
 
 extern "C" {
@@ -34,13 +35,13 @@ struct liz_rx {
 
 using namespace liz;
 
-static liz_tx* fileTx(std::vector<uint8_t> owned, const uint8_t* data, size_t length, const char* name, int flags) {
+static liz_tx* fileTx(std::vector<uint8_t> owned, const uint8_t* data, size_t length, const char* name, int flags, int sbLog2 = -1) {
   static const uint8_t empty = 0;
   auto t = std::make_unique<liz_tx>();
   t->owned = std::move(owned);
   if (!t->owned.empty()) data = t->owned.data();
   try {
-    t->x = std::make_unique<lizard::XferTx>(length ? data : &empty, length, name ? name : "", -1, "", std::function<bool()>{}, false,
+    t->x = std::make_unique<lizard::XferTx>(length ? data : &empty, length, name ? name : "", sbLog2, "", std::function<bool()>{}, false,
                                             uint8_t(flags & LIZ_TX_ZSTD ? XFER_COMP_ZSTD : XFER_COMP_NONE));
   } catch (const std::runtime_error& e) {
     throw Error(LIZ_E_TOOBIG, e.what());   // ai: XferTx refuses a file only for its size (source blocks)
@@ -57,6 +58,36 @@ LIZ_API liz_tx* liz_tx_new(const uint8_t* data, size_t length, const char* name,
     std::vector<uint8_t> owned;
     if (flags & LIZ_TX_COPY) owned.assign(data, data + length);
     return fileTx(std::move(owned), data, length, name, flags);
+  });
+}
+
+LIZ_API liz_tx* liz_tx_new_sized(const uint8_t* data, size_t length, const char* name, int flags, int sbLog2) {
+  return guardNew<liz_tx>([&] {
+    need(data || !length, "the file's bytes");
+    need(sbLog2 >= XFER_LOG2_MIN && sbLog2 <= XFER_LOG2_MAX, "sb_log2 within the header's (10 to 24)");
+    std::vector<uint8_t> owned;
+    if (flags & LIZ_TX_COPY) owned.assign(data, data + length);
+    return fileTx(std::move(owned), data, length, name, flags, sbLog2);
+  });
+}
+
+LIZ_API liz_tx* liz_tx_new_read(liz_read_fn read, void* user, uint64_t length, const char* name, int flags, int sbLog2, const char* spillDir) {
+  return guardNew<liz_tx>([&] {
+    need(read, "a reader");
+    need(sbLog2 == -1 || (sbLog2 >= XFER_LOG2_MIN && sbLog2 <= XFER_LOG2_MAX), "sb_log2 -1 or within the header's (10 to 24)");
+    xfer_header_t h{};
+    const int k = sbLog2 >= 0 ? sbLog2 : xfer_sb_log2_for(length);
+    if (k < 0 || xfer_header_init(&h, length, k)) throw Error(LIZ_E_TOOBIG, "the file is too large for the transfer's source blocks");
+    auto t = std::make_unique<liz_tx>();
+    try {
+      t->x = std::make_unique<lizard::XferTx>([read, user](uint64_t off, size_t n, uint8_t* into) { return read(user, off, n, into) == 1; }, length,
+                                              name ? name : "", sbLog2, spillDir ? spillDir : "", std::function<bool()>{}, false,
+                                              uint8_t(flags & LIZ_TX_ZSTD ? XFER_COMP_ZSTD : XFER_COMP_NONE));
+    } catch (const std::runtime_error& e) {
+      throw Error(LIZ_E_IO, e.what());   // ai: the size held above: a read or the spill refused
+    }
+    t->length = length;
+    return t.release();
   });
 }
 
@@ -90,6 +121,37 @@ LIZ_API liz_tx* liz_tx_new_test(uint32_t first) {
 
 LIZ_API void liz_tx_free(liz_tx* t) { delete t; }
 
+LIZ_API int liz_tx_seed(liz_tx* t, uint32_t seed) {
+  return guard([&] {
+    need(t, "a sender");
+    if (!t->x || !t->x->reseed(seed)) throw Error(LIZ_E_STATE, t->x ? "the schedule is drawn once its first frame is made" : "the test stream has no schedule");
+    return LIZ_OK;
+  });
+}
+
+LIZ_API int liz_refresh_places(int subch, int blocks, const int every[4], int* place) {
+  return guard([&] {
+    need(every, "the four delays");
+    need(place, "the places");
+    lizard_tier_t tier[LIZARD_TIERS];
+    const int tiers = lizard_tiers_for(subch, tier);
+    int laid = 0;
+    for (int t = 0; t < tiers; t++) laid += tier[t].blocks;
+    if (tiers <= 0 || laid != blocks) throw Error(LIZ_E_ARG, "LIZARD-" + std::to_string(subch) + " lays " + std::to_string(laid) + " blocks, not " + std::to_string(blocks));
+    lizard::refresh::places(tier, tiers, blocks, every, place);
+    return LIZ_OK;
+  });
+}
+
+LIZ_API int liz_refresh_held(const int* place, int blocks, int total, uint64_t seq, int before, uint8_t* held) {
+  return guard([&] {
+    need(place, "the places");
+    need(held, "held");
+    if (blocks < 1 || total < 0 || total % blocks) throw Error(LIZ_E_ARG, std::to_string(total) + " blocks are no frame of " + std::to_string(blocks) + "-block symbols");
+    return lizard::refresh::held(place, blocks, total, seq, before != 0, held);
+  });
+}
+
 LIZ_API int liz_tx_next(liz_tx* t, int n, uint8_t* blocks) {
   return guard([&] {
     need(t && blocks && n >= 1, "a sender, at least a block and a place for them");
@@ -119,8 +181,11 @@ LIZ_API int liz_tx_info_get(const liz_tx* t, liz_tx_info* out) {
     liz_tx_info i{};
     i.test = !t->x;
     if (t->x) {
-      i.length = t->length; i.source_blocks = t->x->sourceBlocks(); i.cycle = t->x->cycle();
+      // ai: the carousel's cycle once drawn (at the first frame after every source block is made), the one it will
+      // ai: have from the moment they are (lizard.h: 0 until every source block is made)
+      i.length = t->length; i.source_blocks = t->x->sourceBlocks(); i.cycle = t->x->cycle() ? t->x->cycle() : t->x->cycleWhenMade();
       std::memcpy(i.root, t->x->root(), sizeof i.root);
+      i.seed = t->x->seed(); i.sb_log2 = t->x->sbLog2();
     }
     *out = i;
     return LIZ_OK;
@@ -160,6 +225,7 @@ LIZ_API int liz_rx_progress(liz_rx* r, liz_progress* out) {
     liz_progress o{};
     o.header = p.header; o.done = p.done; o.length = p.length; o.bytes_in = p.bytesIn; o.fraction = p.fraction;
     o.source_blocks = p.sourceBlocks; o.verified = p.verified; o.rejected = p.rejected; o.solve_ms = p.solveMs;
+    o.forwarded = p.forwarded; o.done_at = p.doneAt; o.refused = p.refused; o.over = p.over;
     *out = o;
     return LIZ_OK;
   });

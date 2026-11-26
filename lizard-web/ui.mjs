@@ -215,7 +215,7 @@ export function detailsOf(el) {
   return { name: el.querySelector(".nm")?.textContent ?? "", end: el.querySelector(".pc")?.textContent ?? "", spin: !!el.querySelector(".spin"),
     frac: m ? parseFloat(m.style.width) / 100 : null, ghost: el.classList.contains("ghost"), rows };
 }
-// ai: a name's stem and the ending kept whole when it is cut: a bundle's " and N more.tar" (tar.mjs bundle), else an
+// ai: a name's stem and the ending kept whole when it is cut: a bundle's " and N more.tar" (sim/ob.mjs bundle), else an
 // ai: extension of at most 10 characters, else nothing
 export function nameParts(name) {
   const m = /^(.+)( and \d+ more\.tar)$/s.exec(name);

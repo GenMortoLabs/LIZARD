@@ -1,6 +1,6 @@
 package dev.lizard.desktop
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import dev.lizard.ui.INK_DEFAULT
 import dev.lizard.ui.CYCLES_DEFAULT
 import dev.lizard.ui.EXPORT_GB_DEFAULT
@@ -13,7 +13,7 @@ import java.util.prefs.Preferences
 
 // ai: What the sender keeps between runs (the web's send:<id> keys): the encoder (auto, gpu, cpu), the payload (file,
 // ai: test), the format's size (0 auto, else a version 1 to 64), pictures a second, the code's size (25 to 100%), the spacing
-// ai: and the margin (modules, Pick's bounds), the ring (-1 the default, else an index into Pick.RINGS, kept as its
+// ai: and the margin (modules, Pick's bounds), the ring (-1 the default, else an index into Ladder.RINGS, kept as its
 // ai: cells), the codes, VSync, the folds and the rail; the receiver's and Home's in a node of their own (Rx, 2026-10-25). forget(): a run that
 // ai: neither reads nor keeps either node's, every setting at its default (the test hooks', SenderTest.kt and
 // ai: ReceiverTest.kt); the receiver's set in the run held in memory.
@@ -125,16 +125,16 @@ object Prefs {
     var enc: String get() = str("enc", "auto"); set(v) { p?.put("enc", v) }
     var payload: String get() = str("payload", "file"); set(v) { p?.put("payload", v) }
     // ai: kept as "version" since the versions went to 16 sub-channels (2026-10-29; "blocks" before counted 8)
-    var blocks: Int get() = int("version", Pick.VERSION_DEFAULT); set(v) { p?.putInt("version", v) }   // ai: the page's LIZARD-480 default
+    var blocks: Int get() = int("version", Ladder.VERSION_DEFAULT); set(v) { p?.putInt("version", v) }   // ai: the page's LIZARD-480 default
     var fps: Int get() = int("fps", 60); set(v) { p?.putInt("fps", v) }
     var size: Int get() = int("size", 100); set(v) { p?.putInt("size", v) }
     var margin: Int get() = int("margin", Room.MARGIN_DEFAULT); set(v) { p?.putInt("margin", v) }
     var spacing: Int get() = int("spacing", Room.SPACING_DEFAULT); set(v) { p?.putInt("spacing", v) }
-    // ai: an index into Pick.RINGS, kept by its cells (ringCells), so a change of the list moves no saved choice: cells
+    // ai: an index into Ladder.RINGS, kept by its cells (ringCells), so a change of the list moves no saved choice: cells
     // ai: no ring has any more read as the default
     var ring: Int
-        get() = Pick.RINGS.indexOf(int("ringCells", 0))
-        set(v) { p?.putInt("ringCells", if (v in Pick.RINGS.indices) Pick.RINGS[v] else -1) }
+        get() = Ladder.RINGS.indexOf(int("ringCells", 0))
+        set(v) { p?.putInt("ringCells", if (v in Ladder.RINGS.indices) Ladder.RINGS[v] else -1) }
     var codes: Int get() = int("codes", 1); set(v) { p?.putInt("codes", v) }
     // ai: Rate refresh (2026-11-12): "a,b,c,d", lizard-ui refreshText; "1,1,1,1" unless set
     var refresh: String get() = str("refresh", "1,1,1,1"); set(v) { p?.put("refresh", v) }

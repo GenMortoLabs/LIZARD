@@ -1682,7 +1682,7 @@ int lizard_acquire_quad(const lizard_t *f, const uint8_t *img, int iw, int ih, f
   return acquire_hold(f, &im, &reg, got);
 }
 
-// ai: The picture size a format takes, sim/lizard_pick.mjs N_FOR: the first of LIZARD_PICTURES that oversamples its top
+// ai: The picture size a format takes, sim/ob.mjs N_FOR: the first of LIZARD_PICTURES that oversamples its top
 // ai: ring by half again (n >= 3R), the last where none does. The sizes are 2^k and 3 x 2^k (since 2026-09-27), so no
 // ai: step is more than 1.5 times the last and n / 2R stays between 1.5 and 2.24; the powers of two alone put
 // ai: LIZARD-144 at 1024 (2.99). 1152 and 1280 (since 2026-10-29) split the step from 1024 to 1536: LIZARD-576 to -720
@@ -1809,7 +1809,7 @@ static void frame_spectrum(const lizard_t *f, struct lizard_ws *w, const image_t
   // ai: its acquisition found, so a square reads as its surroundings' shading once the detrend has taken it off. The
   // ai: surface is fitted over every eighth sample outside the squares (n^2 / 64 of them): fitted over fewer, the data's
   // ai: spread in it fills every square alike, a comb on block 0 (the GPU's 16 x 16 points to tree 15, about 4 dB of
-  // ai: its lowest sub-channel on clean pictures; gpu/plan/anchors.mjs ANCH_FILL) (the margin measured: on the S26's lenses an erased sample more costs about 0.2 dB
+  // ai: its lowest sub-channel on clean pictures; core/dec/build.cpp Anchors::FILL) (the margin measured: on the S26's lenses an erased sample more costs about 0.2 dB
   // ai: in a 1:1 crop, one fewer 0.15; research/build/anchors/PLAN.md). At the picture's mean with no shading taken off,
   // ai: the squares held the shading there instead: k^2 patches on the squares' lattice, whose spectrum is the shading's
   // ai: low frequencies copied round every point of the lattice's reciprocal, onto block 0 (2026-11-05, STATUS "The SNR
@@ -2246,7 +2246,7 @@ int lizard_decode(const lizard_t *f, const uint8_t *img, int iw, int ih, float g
   return lizard_finish(f, 0, blocks, ok, res);
 }
 
-// The detrend's basis and its transforms, for a caller running the transform elsewhere (gpu/back/transform.mjs).
+// The detrend's basis and its transforms, for a caller running the transform elsewhere (core/dec/build.cpp Disc).
 // Layout: cx[n], qx[n], x1r[n], x1i[n], x2r[n], x2i[n], then sx2 and sq2. All f32; the two norms are doubles
 // here and are narrowed on the way out, which costs the projections a last bit and nothing else.
 void lizard_tables(const lizard_t *f, float *out) {

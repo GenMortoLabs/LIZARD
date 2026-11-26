@@ -1,15 +1,15 @@
 package dev.lizard.desktop
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.lizard.readout.Readout
-import dev.lizard.tar.Bundle
-import dev.lizard.tar.Stoppable
-import dev.lizard.tar.Stopped
-import dev.lizard.tar.TarEntry
+import dev.lizard.lib.Bundle
+import dev.lizard.lib.Stoppable
+import dev.lizard.lib.Stopped
+import dev.lizard.lib.TarEntry
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -93,7 +93,7 @@ class CodeCanvas(private val s: SendState) : Canvas() {
     // ai: its X background the area's colour (SendState.codeFill: white round the presenter's code, which clears to
     // ai: white), so what X fills on a map or a resize before anything draws is that (AWT sets the desktop theme's grey:
     // ai: a dark frame where the canvas came, 2026-11-02)
-    private fun look() { if (s.loadError.isEmpty() && isDisplayable) runCatching { Native.windowBackground(this, s.codeFill.toArgb() and 0xFFFFFF) } }
+    private fun look() { if (isDisplayable) runCatching { Native.windowBackground(this, s.codeFill.toArgb() and 0xFFFFFF) } }
 
     // ai: nothing painted by AWT: the presenter's pictures are the canvas's (Canvas's own paint clears it)
     override fun update(g: Graphics) {}
@@ -138,7 +138,7 @@ class SendState(val full: FullScreen) {
     }
 
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
-    // ai: (../liblizard/kotlin/Tar.kt Bundle, the web sender's rule), made from the selection (items); `reading` while
+    // ai: (../liblizard/kotlin/Lib.kt Bundle, the C's, the web sender's rule), made from the selection (items); `reading` while
     // ai: picks wanted are walked or the bundle is made
     var choice by mutableStateOf<Bundle?>(null)
     private var singleFile: File? = null   // ai: the one file the choice is, where it is one
@@ -220,13 +220,13 @@ class SendState(val full: FullScreen) {
     private var runDisplay = true   // ai: the run shows its frames
     // ai: the painter the sender runs on now, "gpu" or "cpu" ("" before a send): the Encoder chip auto marks (2026-10-05)
     val painterNow: String get() = sender?.str("painter") ?: ""
-    // ai: a version 4 to 64 (16 sub-channels a step, Pick.STEP), Pick.VERSION_DEFAULT unless chosen; no auto since
+    // ai: a version 4 to 64 (16 sub-channels a step, Ladder.STEP), Ladder.VERSION_DEFAULT unless chosen; no auto since
     // ai: 2026-11-07 (a kept 0, auto's, reads as the default)
-    var blocks by mutableStateOf(Prefs.blocks.let { if (it in Pick.VERSION_MIN..Pick.VERSION_MAX) it else Pick.VERSION_DEFAULT })
-    var fps by mutableStateOf(if (Prefs.vsync) Pick.fpsOf(Prefs.fps) else Prefs.fps.coerceIn(1, 60))
+    var blocks by mutableStateOf(Prefs.blocks.let { if (it in Ladder.VERSION_MIN..Ladder.VERSION_MAX) it else Ladder.VERSION_DEFAULT })
+    var fps by mutableStateOf(if (Prefs.vsync) SendRows.fpsOf(Prefs.fps) else Prefs.fps.coerceIn(1, 60))
     // ai: VSync (2026-10-23, on by default): while the code is shown its monitor holds a refresh the rate divides, the
     // ai: nearest 60 Hz, where its own does not (a 165 Hz laptop at 60: pictures of 3, 3, 2 and 3 refreshes), and is put
-    // ai: back at the stop (presenter.h setVsync); off, the monitor is left as it is. FPS is Pick.FPS's chips under VSync,
+    // ai: back at the stop (presenter.h setVsync); off, the monitor is left as it is. FPS is SendRows.FPS's chips under VSync,
     // ai: a 1 to 60 slider without it; VSync turned on takes a slider's rate to the nearest chip.
     var vsync by mutableStateOf(Prefs.vsync)
     // ai: Scaling (2026-11-17, Performance): "bilinear", the blit's linear filter (the default); "lanczos", Lanczos-3 on the
@@ -234,8 +234,8 @@ class SendState(val full: FullScreen) {
     var scaling by mutableStateOf(Prefs.scaling.takeIf { it in SCALINGS } ?: "bilinear")
     var size by mutableStateOf(Prefs.size.coerceIn(25, 100))
     var spacing by mutableStateOf(Prefs.spacing.coerceIn(Room.SPACING_MIN, Room.SPACING_MAX))
-    var margin by mutableStateOf(Prefs.margin.coerceIn(Pick.QUIET, Room.MARGIN_MAX))
-    var ring by mutableStateOf(Prefs.ring.let { if (it in Pick.RINGS.indices) it else -1 })
+    var margin by mutableStateOf(Prefs.margin.coerceIn(Ladder.QUIET, Room.MARGIN_MAX))
+    var ring by mutableStateOf(Prefs.ring.let { if (it in Ladder.RINGS.indices) it else -1 })
     var codes by mutableStateOf(if (Prefs.codes == 2) 2 else 1)
     // ai: Refresh (2026-11-17, lizard-ui rateRefreshSettings; Rate refresh of 2026-11-12 before): each code rate's delay,
     // ai: its blocks new every n-th picture, 6/7, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed to the sender
@@ -269,7 +269,6 @@ class SendState(val full: FullScreen) {
         private set
     var senderRaw = ""
         private set
-    var loadError = ""
 
     val canvas = CodeCanvas(this)
     private var h = 0L
@@ -295,23 +294,23 @@ class SendState(val full: FullScreen) {
     // ai: a stream file is what plays: Source Stream with the test stream off (Control's Test stream, 2026-11-19, sends
     // ai: the test stream whatever Source says)
     val playing get() = source == "stream" && !test
-    val canStart get() = loadError.isEmpty() && !sending && (if (playing) stream != null else (test || (choice != null && !reading)))
+    val canStart get() = !sending && (if (playing) stream != null else (test || (choice != null && !reading)))
     // ai: Export offered: files painted as they go (a stream is painted already), not the test stream (it has no cycle)
     val canExport get() = source != "stream" && !test
     // ai: the run exports with no screen: the code area blank, no presenter, no Pause
     val blind get() = sending && runExport && !runDisplay
-    val ringIndex get() = if (ring in Pick.RINGS.indices) ring else Pick.RING_DEFAULT
+    val ringIndex get() = if (ring in Ladder.RINGS.indices) ring else Ladder.RING_DEFAULT
     // ai: the margin past the quiet zone the presenter keeps at the area's edges, for the ring configured
     private val edge get() = edgeShare
     // ai: the light the presenter keeps past the frame at each edge, a share of its height (presenter.h PresentOptions::edge)
-    val edgeShare get() = Room.edgeShare(fmt?.span ?: Pick.span(ringIndex), margin).toFloat()
+    val edgeShare get() = Room.edgeShare(fmt?.span ?: Ladder.span(ringIndex), margin).toFloat()
     // ai: what the code offers at most, KB/s: codes x blocks a frame x 460 B x the pictures a second it can show, the
     // ai: asked rate or the measured refresh where lower, so a limit outside the sender shows in the figure
     // ai: (2026-10-04), x the share of blocks new in a frame (freshShare); null before a configure
     val capacityKBs: Double? get() {
         val f = fmt ?: return null
         val hz = present?.num("hz") ?: 0.0
-        return f.codes * sentBlocks * Pick.PAYLOAD.toDouble() * (if (hz > 0) min(f.fps.toDouble(), hz) else f.fps.toDouble()) * freshShare / 1000
+        return f.codes * sentBlocks * Ladder.PAYLOAD.toDouble() * (if (hz > 0) min(f.fps.toDouble(), hz) else f.fps.toDouble()) * freshShare / 1000
     }
     // ai: the share of a frame's blocks new in each frame under Rate refresh (the sender's stats' fresh, 2026-11-12), 1
     // ai: before the stats or with none held: a held rate's repeats carry nothing new
@@ -542,7 +541,7 @@ class SendState(val full: FullScreen) {
     // ai: the stream file chooser (one .lizard) over the sender's window
     fun chooseStream() = frame?.let { Chooser.choose(it, "Choose a stream", false, false) { f -> f.firstOrNull()?.let { openStream(it) } } }
     // ai: what a .lizard is (its kind and meta.json, read by the native side): a stream's StreamMeta, else null
-    fun streamOf(f: File): StreamMeta? = if (!ReceiveState.isReplay(f) || loadError.isNotEmpty()) null else
+    fun streamOf(f: File): StreamMeta? = if (!ReceiveState.isReplay(f)) null else
         parse(Native.lizardInfo(f.path))?.takeIf { it.str("kind") == "stream" }?.obj("meta")?.let { streamMetaOf(it) }
     // ai: a stream file chosen, dropped or opened with LIZARD: Source Stream with it; a replay or another file refused
     fun openStream(f: File) {
@@ -567,8 +566,8 @@ class SendState(val full: FullScreen) {
     val exportSize: String get() {
         exportNow?.takeIf { it.flag("done") }?.let { return Readout.bytes(it.num("bytes").toLong()) }
         val bytes = if (compressed > 0) compressed else choice?.size ?: 0L
-        val subch = Pick.STEP * blocks
-        val side = runCatching { Native.frameSide(subch, Pick.span(ringIndex)) }.getOrDefault(0)
+        val subch = Ladder.STEP * blocks
+        val side = runCatching { Native.frameSide(subch, Ladder.span(ringIndex)) }.getOrDefault(0)
         val est = SendRows.exportEstimate(cycles, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
         return if (est > 0) Readout.bytes(est) else ""
     }
@@ -668,11 +667,11 @@ class SendState(val full: FullScreen) {
             }
         }
     }
-    fun chooseBlocks(b: Int) { if (b in Pick.VERSION_MIN..Pick.VERSION_MAX) { blocks = b; Prefs.blocks = b } }
+    fun chooseBlocks(b: Int) { if (b in Ladder.VERSION_MIN..Ladder.VERSION_MAX) { blocks = b; Prefs.blocks = b } }
     fun chooseFps(v: Int) { fps = v.coerceIn(1, 60); Prefs.fps = fps }
     fun chooseVsync(on: Boolean) {
         vsync = on; Prefs.vsync = on
-        if (on && fps !in Pick.FPS) { chooseFps(Pick.fpsOf(fps)); commitFps() }
+        if (on && fps !in SendRows.FPS) { chooseFps(SendRows.fpsOf(fps)); commitFps() }
         if (p != 0L) Native.presentVsync(p, on)
     }
     fun chooseScaling(v: String) {
@@ -682,8 +681,8 @@ class SendState(val full: FullScreen) {
     }
     fun chooseSize(v: Int) { size = v.coerceIn(25, 100); Prefs.size = size }
     fun chooseSpacing(v: Int) { spacing = v.coerceIn(Room.SPACING_MIN, Room.SPACING_MAX); Prefs.spacing = spacing }
-    fun chooseMargin(v: Int) { margin = v.coerceIn(Pick.QUIET, Room.MARGIN_MAX); Prefs.margin = margin }
-    fun chooseRing(v: Int) { ring = if (v in Pick.RINGS.indices) v else -1; Prefs.ring = ring; repick() }
+    fun chooseMargin(v: Int) { margin = v.coerceIn(Ladder.QUIET, Room.MARGIN_MAX); Prefs.margin = margin }
+    fun chooseRing(v: Int) { ring = if (v in Ladder.RINGS.indices) v else -1; Prefs.ring = ring; repick() }
     fun chooseCodes(v: Int) { codes = if (v == 2) 2 else 1; Prefs.codes = codes; repick() }
     // ai: a group's delay (its code rates), applied at once (the sender's next frame; no configure): not while a prepare
     // ai: holds the sender's lock (the UI thread would wait out the driver's compile), which hands it on as it ends
@@ -760,8 +759,8 @@ class SendState(val full: FullScreen) {
         if (h == 0L) return false
         // ai: a stream's format is its own (the native side takes it from the file; these say it to the presenter's room)
         val sm = if (runPlay) stream?.meta else null
-        val f = if (sm != null) Format(Pick.STEP * sm.blocks, Pick.span(sm.ring), sm.fps, sm.codes, 0, 0)
-            else Format(Pick.STEP * blocks, Pick.span(ringIndex), fps, codes, if (codes > 1) Room.gapOf(spacing) else 0,
+        val f = if (sm != null) Format(Ladder.STEP * sm.blocks, Ladder.span(sm.ring), sm.fps, sm.codes, 0, 0)
+            else Format(Ladder.STEP * blocks, Ladder.span(ringIndex), fps, codes, if (codes > 1) Room.gapOf(spacing) else 0,
                 when (enc) { "cpu" -> 0; "gpu" -> 1; else -> 2 })
         if (f == fmt) return true
         val threads = min(8, maxOf(1, Runtime.getRuntime().availableProcessors() - 2))
@@ -825,7 +824,7 @@ class SendState(val full: FullScreen) {
         if (phase != Phase.On || paused) return 0.0
         val f = fmt ?: return 0.0
         val pr = present ?: return 0.0
-        return pr.num("shownFps") * f.codes * sentBlocks * Pick.PAYLOAD * freshShare / 1000.0
+        return pr.num("shownFps") * f.codes * sentBlocks * Ladder.PAYLOAD * freshShare / 1000.0
     }
 
     // ai: The readout (the web's #tx, Developer Tools): the format and why, the file, the frame on the surface, a frame's
@@ -839,10 +838,10 @@ class SendState(val full: FullScreen) {
         l += "LIZARD-${f.subch} ($b blocks${if (tiers.isNotEmpty()) ": $tiers" else ""}), picture ${sd.num("n").toInt()} samples in the ${f.span / 2}-cell ring"
         if (!runTest) l += "file $fileSize B${if (compressed in 1 until fileSize) ", $compressed B packed (zstd)" else ""}: ${sd.num("sourceBlocks").toInt()} chunk${if (sd.num("sourceBlocks").toInt() == 1) "" else "s"}, " +
             "${sd.num("cycle").toInt()} data blocks a pass, BLAKE3 ${sd.str("root").take(16)}..., seed ${sd.num("seed").toLong()}" +
-            (sd.num("pass").let { p -> if (p >= 1) "\npass ${floor(p).toInt()}" + (sd.num("offeredKBs").let { k -> if (k > 0 && sd.num("cycle") > 0) ", ${Fmt.f1(sd.num("cycle") / (k * 1000 / Pick.PAYLOAD))} s a pass" else "" }) else "" })
+            (sd.num("pass").let { p -> if (p >= 1) "\npass ${floor(p).toInt()}" + (sd.num("offeredKBs").let { k -> if (k > 0 && sd.num("cycle") > 0) ", ${Fmt.f1(sd.num("cycle") / (k * 1000 / Ladder.PAYLOAD))} s a pass" else "" }) else "" })
         l += "frame ${sd.num("width").toInt()} x ${sd.num("side").toInt()} px" + (if (f.codes > 1) ", ${f.codes} side by side $spacing modules apart" else "") + ", margin $margin modules" +
             (pr?.let { " on a ${it.str("surface").replace("x", " x ")} px surface" } ?: "")
-        l += "${if (f.codes > 1) "${f.codes} x " else ""}$b x ${Pick.PAYLOAD} B = ${f.codes * b * Pick.PAYLOAD} B per frame"
+        l += "${if (f.codes > 1) "${f.codes} x " else ""}$b x ${Ladder.PAYLOAD} B = ${f.codes * b * Ladder.PAYLOAD} B per frame"
         if (pr != null) {
             l += "shown ${Fmt.f1(pr.num("shownFps"))}/s of ${f.fps} asked, ${Fmt.f1(pr.num("presentsPerSec"))} presents a second, the screen " +
                 "${Fmt.f1(pr.num("hz"))} Hz${if (pr.num("modeHz") > 0) " (its mode ${Fmt.f1(pr.num("modeHz"))})" else ""}" +
@@ -850,7 +849,7 @@ class SendState(val full: FullScreen) {
             val held = (pr["held"] as? JsonObject)?.entries?.sortedBy { it.key.toIntOrNull() ?: Int.MAX_VALUE }
                 ?.joinToString(", ") { "${it.key}: ${(it.value as? JsonPrimitive)?.contentOrNull ?: "?"}" }.orEmpty()
             l += "refreshes a picture: ${held.ifEmpty { "none" }}; missed ${pr.num("missed").toInt()}, behind ${pr.num("behind").toInt()}"
-            l += "presenter: Vulkan on ${pr.str("device")}${if (pr.flag("paused")) ", paused" else ""}"
+            l += "presenter: ${if (System.getProperty("os.name").lowercase().contains("mac")) "Metal" else "Vulkan"} on ${pr.str("device")}${if (pr.flag("paused")) ", paused" else ""}"
         }
         l += (if (sd.str("painter") == "gpu") "encoder: GPU, ${sd.str("device")}, ${Fmt.f1(sd.num("paintMs"))} ms a frame"
             else "encoder: CPU, ${sd.num("painters").toInt()} painters, ${Fmt.f1(sd.num("paintMs"))} ms a frame on one" +

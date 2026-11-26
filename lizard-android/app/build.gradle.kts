@@ -52,8 +52,8 @@ android {
     }
     buildFeatures { compose = true }
     // ai: the Kotlin binding's sources (dev.lizard.Session, the receive session; its natives are libliz.so's, registered
-    // ai: at its load, so the binding's own liblizard is never loaded here). liblizard/kotlin's plain-JVM code (Tar.kt,
-    // ai: Readout.kt, Pick.kt) comes compiled with the shared UI (:lizard-ui).
+    // ai: at its load, so the binding's own liblizard is never loaded here). liblizard/kotlin's plain-JVM code (Lib.kt,
+    // ai: Readout.kt) comes compiled with the shared UI (:lizard-ui).
     sourceSets.getByName("main").kotlin.srcDir(rootProject.layout.projectDirectory.dir("../liblizard/bindings/kotlin/lizard/src/main/kotlin"))
     // ai: the setup's tables, blobs and SPIR-V stored, not deflated: copied out once, and a stored entry streams
     androidResources { noCompress += listOf("spv", "bin", "json") }

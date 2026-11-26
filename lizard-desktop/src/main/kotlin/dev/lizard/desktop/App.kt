@@ -56,9 +56,6 @@ class App {
     val column = DesktopColumn()
     val receive = DesktopReceive(this)
     val sendUi = DesktopSend(this)
-    // ai: why the native library did not load ("" it did): the sender's line and the receiver's say it
-    var loadError = ""
-        set(v) { field = v; send.loadError = v }
     val about: String get() = send.about
 
     fun go(to: Screen) {
@@ -117,7 +114,7 @@ fun ApplicationScope.LizardWindow(app: App, sendTest: SenderTest?, recvTest: Rec
     val ws = rememberWindowState(width = 1280.dp, height = 800.dp)
     Window(onCloseRequest = { app.close(); exitApplication() }, state = ws, title = "LIZARD", icon = rememberVectorPainter(Icons.appIcon)) {
         // ai: the frame white before Compose's first frame (2026-10-07): AWT's default grey showed until Skia drew
-        remember { window.background = java.awt.Color.WHITE; window.contentPane.background = java.awt.Color.WHITE; if (app.loadError.isEmpty()) whiten(window); app.frame = window; s.frame = window; app.full.attach(window, ws) }
+        remember { window.background = java.awt.Color.WHITE; window.contentPane.background = java.awt.Color.WHITE; whiten(window); app.frame = window; s.frame = window; app.full.attach(window, ws) }
         // ai: Keys wherever the focus is (the canvas takes none), as video players have them (2026-10-23; F11 and Escape
         // ai: before), Send's and Receive's (Receive's since 2026-11-13; Home takes none): F or F11 full screen and back,
         // ai: Escape out of it; Space or K Send's play and pause (SendState.playPause), Receive's Start and Stop

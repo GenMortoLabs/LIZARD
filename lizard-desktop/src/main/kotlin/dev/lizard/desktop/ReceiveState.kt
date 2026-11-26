@@ -7,7 +7,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import dev.lizard.Session
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import dev.lizard.readout.Readout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -302,7 +302,6 @@ class ReceiveState(private val app: App) {
     // ai: it is none or gone), and its stream in its kept mode (or one the test hook or Settings named); the phase is
     // ai: the session's from the poll right after.
     fun start() {
-        if (app.loadError.isNotEmpty()) { phase = RxPhase.Error(app.loadError); return }
         if (running || (testCamera == null && !startable)) return
         // ai: a Start tries again what did not go: the files Downloads did not take
         retryKept()
@@ -450,7 +449,7 @@ class ReceiveState(private val app: App) {
     // ai: listing opens each device (V4L2's nodes, Media Foundation's sources)
     private var listing = false
     fun refreshCameras() {
-        if (listing || app.loadError.isNotEmpty()) return
+        if (listing) return
         listing = true
         thread(name = "lizard-cameras", isDaemon = true) {
             val l = runCatching { listed() }.getOrNull()
@@ -518,7 +517,7 @@ class ReceiveState(private val app: App) {
     }
     private fun watchCameras() {
         dropGonePhone()
-        if (stamping || app.loadError.isNotEmpty()) return
+        if (stamping) return
         stamping = true
         thread(name = "lizard-camera-watch", isDaemon = true) {
             val st = runCatching { Session.camerasStamp() }.getOrNull()
@@ -536,7 +535,7 @@ class ReceiveState(private val app: App) {
     // ai: Home's lists: the received files (a small file, read here) and the unfinished transfers (a folder each); the
     // ai: takes not in Downloads filed again (retryKept); the cameras' settings moved once (moving)
     fun refreshLists() {
-        if (app.loadError.isEmpty()) moving()
+        moving()
         files = Received.list()
         retryKept()
         thread(name = "lizard-partials", isDaemon = true) { val p = Partials.list(); post { partials = p } }
@@ -739,7 +738,7 @@ class ReceiveState(private val app: App) {
         if (j != null) {
             val word = j["word"] as? JsonObject
             val v = word?.num("version")?.toInt() ?: 0
-            val named = if (v > 0) "LIZARD-${Pick.STEP * v}${word?.num("fps")?.toInt()?.takeIf { it > 0 }?.let { " at $it fps" } ?: ""}" else "no word yet"
+            val named = if (v > 0) "LIZARD-${Ladder.STEP * v}${word?.num("fps")?.toInt()?.takeIf { it > 0 }?.let { " at $it fps" } ?: ""}" else "no word yet"
             val told = (j["totals"] as? JsonObject)?.let { t -> "total ${t.num("blocks").toLong()} blocks in ${t.num("frames").toLong()} frames" }
             if (now) put("code", "found ${f(100 * j.num("foundShare"), 0)}%" + (if (j.num("side") > 0) ", symbol ${f(j.num("side"), 0)} px" else "") + ", $named",
                 "${Readout.rate(j.num("goodputKBs"))}, ${j.num("blocks").toInt()} blocks in ${f(j.num("windowSecs"), 2)} s" + (told?.let { "; $it" } ?: ""))

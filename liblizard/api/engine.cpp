@@ -262,7 +262,7 @@ LIZ_API int liz_sender_export(liz_sender* s, const char* path, int frames, int l
   });
 }
 
-static_assert(LIZ_REFRESH_MAX == lizard::Sender::REFRESH_MAX, "lizard.h's refresh bound is the sender's");
+static_assert(LIZ_REFRESH_MAX == lizard::refresh::MAX, "lizard.h's refresh bound is the senders' (core/tx/refresh.h)");
 LIZ_API int liz_sender_refresh(liz_sender* s, const int every[4]) {
   return guard([&] {
     need(s && every, "a sender and four refreshes");

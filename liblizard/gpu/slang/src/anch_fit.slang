@@ -3,14 +3,16 @@
 // (the shading's least-squares surface over the picture's points in no square, from ANCH_SUMS' slices), the picture's
 // gain from the signal's swing (SPEC 6.10), and the record pass 1 reads; the count found into result word 31. swH,
 // whose atomics start from zero, is zeroed first; everything else is written before it is
-// read. Defines (anchors.mjs): ANCH_K, ANCH_SIDE, ANCH_REC, ANCH_SURF, ANCH_GAIN, ANCH_KNOT_ROUNDS, SW_T, SW_R, SW_LAG,
+// read. Defines (core/dec/build.cpp Anchors): ANCH_K, ANCH_SIDE, ANCH_REC, ANCH_SURF, ANCH_GAIN, ANCH_KNOT_ROUNDS, SW_T, SW_R, SW_LAG,
 // SW_MIN, SW_BINS (uint), SPREADS3 (float); lib/anch_head.slang's and lib/anch_fill.slang's.
 #include "lib/sync.slang"
+#include "lib/solve.slang"
 #include "lib/anch_head.slang"
 struct Result { float r[32]; };
 [[vk::binding(7, 0)]] StructuredBuffer<float4> anch;
 [[vk::binding(8, 0)]] RWStructuredBuffer<float4> arec;
 [[vk::binding(9, 0)]] RWStructuredBuffer<Result> result;
+[[vk::binding(10, 0)]] StructuredBuffer<float4> fill;
 #include "lib/anch_fill.slang"
 static const uint NK = ANCH_K;
 static const uint SIDE = ANCH_SIDE;
@@ -99,21 +101,21 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
   float M[16] = maps[f].m;
   Lens lz = lensOf(f);
   int aa = f2i(geo.y);
-  // the squares' fill (SPEC 6.13; plan/anchors.mjs ANCH_FILL): the shading's least-squares surface over the
+  // the squares' fill (SPEC 6.13; core/dec/build.cpp Anchors::FILL): the shading's least-squares surface over the
   // picture's points in no square, its normal matrix's inverse the ring's (A.g, the C's hole_inv); its six sums
   // ANCH_SUMS' slices added (a lane a sum)
   if (li < 6u) {
     uint o = fillSums(f) + (li >> 2u);
     float s = 0.0;
-    for (uint g = 0u; g < ANCH_GS; g++) { s += anch[o + 2u * g][li & 3u]; }
+    for (uint g = 0u; g < ANCH_GS; g++) { s += fill[o + 2u * g][li & 3u]; }
     red[64u * li] = s;
   }
   GroupMemoryBarrierWithGroupSync();
   // The gain (SPEC 6.10, the C's lizard_finish_ext): the signal's swing in SW_T x SW_T tiles of the picture, the root
   // of half the mean squared difference of neighbours on runs of reads span / SW_LAG modules apart along SW_R rows a
-  // tile, outside the squares' bands (plan/anchors.mjs); the fill's basis fitted to the tiles' swings at their centres,
+  // tile, outside the squares' bands (lib/anch_fill.slang); the fill's basis fitted to the tiles' swings at their centres,
   // robustly (a tile past three robust spreads dropped and the surface refitted, three rounds; the median from two
-  // histograms); pass 1 multiplies each sample by the surface's mean over its value (../back_transform.mjs). A
+  // histograms); pass 1 multiplies each sample by the surface's mean over its value (pass1.slang). A
   // falloff scales the swing, an added light does not.
   {
     const uint RUN = SW_LAG / SW_T;
@@ -274,7 +276,7 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
         N[5][5] = swS[1280];
         N[5][6] = swS[1664];
         bool ok = swS[27 * 64] >= 12.0;
-        #include "gen/solve"
+        gaussJordan(N, 1e-12, ok);
         float a0 = N[0][6] / N[0][0];
         float a1 = N[1][6] / N[1][1];
         float a2 = N[2][6] / N[2][2];

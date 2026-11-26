@@ -5,8 +5,8 @@
 // offset with the lens taken out (the mesh's knots). ANCH_PREDICT: the fit over the anchors alone (its radial terms no
 // more than the anchors past 8 allow), each border node's place written for the border's second search (w 2); nothing
 // under the minimum. wcnt, wnba and wchg, whose atomics start from zero, are zeroed first; everything else is
-// written before it is read. The solves are straight-line, generated in register.mjs. Defines (anchors.mjs
-// anchRefitSource): PREDICT (0 or 1), ANCH_K, ANCH_SIDE, NODES_MAX, LENS_P, RESID (uint), WMIN, TAU_SPREAD (float),
+// written before it is read. The solves are unrolled (every index a constant). Defines (core/dec/build.cpp
+// Anchors::refit): PREDICT (0 or 1), ANCH_K, ANCH_SIDE, NODES_MAX, LENS_P, RESID (uint), WMIN, TAU_SPREAD (float),
 // RING_COUNT, LATTICE_VECS, ZEROS_<n>.
 #include "lib/sync.slang"
 #include "lib/frame.slang"
@@ -23,6 +23,19 @@
 #define KMAX 3u
 #define WEIGHT (i < count && pd[min(i, NODES_MAX - 1u)] == 1u) ? 0.0 : pw[i]
 #endif
+// The lens model's rows: parameter a's coefficient in a point's x and its y, d.x, d.y, 1, the
+// projective pair, then the radial terms t, t^2, t^3 along q; LENS_HX and LENS_HY whether it has one in each (a
+// parameter with none takes no term in a sum).
+static const bool LENS_HX[11] = { true, true, false, false, true, false, true, true, true, true, true };
+static const bool LENS_HY[11] = { false, false, true, true, false, true, true, true, true, true, true };
+float lensRx(int a, float2 d, float2 q, float t, float t2, float t3) {
+  return a == 0 ? d.x : a == 1 ? d.y : a == 4 ? 1.0 : a == 6 ? (-d.x * d.x) : a == 7 ? (-d.y * d.x) : a == 8 ? (t * q.x) : a == 9 ? (t2 * q.x) : (t3 * q.x);
+}
+float lensRy(int a, float2 d, float2 q, float t, float t2, float t3) {
+  return a == 2 ? d.x : a == 3 ? d.y : a == 5 ? 1.0 : a == 6 ? (-d.x * d.y) : a == 7 ? (-d.y * d.y) : a == 8 ? (t * q.y) : a == 9 ? (t2 * q.y) : (t3 * q.y);
+}
+// the packed upper triangle's entry (a, b), b >= a
+int lensIdx(int a, int b) { return a * LENS_P - (a * (a - 1)) / 2 + (b - a); }
 // A point's terms in the lens fit (p, the frame's LF, the axis LA, lir): d its place normalised over the points' box, q
 // about the axis over the frame's farthest corner, t the radial argument and its powers.
 #define LENS_POINT \
@@ -217,7 +230,18 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
         float2 p = pp[i].xy;
         float2 r = pp[i].zw;
         LENS_POINT
-#include "gen/accumulate"
+        // the normal equations' sums, each over the terms the pair has, then the right-hand sides
+        [ForceUnroll] for (int a = 0; a < int(LENS_P); a++) [ForceUnroll] for (int b = a; b < int(LENS_P); b++) {
+          const bool hx = LENS_HX[a] && LENS_HX[b], hy = LENS_HY[a] && LENS_HY[b];
+          if (hx && hy) acc[lensIdx(a, b)] += w * (lensRx(a, d, q, t, t2, t3) * lensRx(b, d, q, t, t2, t3) + lensRy(a, d, q, t, t2, t3) * lensRy(b, d, q, t, t2, t3));
+          else if (hx) acc[lensIdx(a, b)] += w * (lensRx(a, d, q, t, t2, t3) * lensRx(b, d, q, t, t2, t3));
+          else if (hy) acc[lensIdx(a, b)] += w * (lensRy(a, d, q, t, t2, t3) * lensRy(b, d, q, t, t2, t3));
+        }
+        [ForceUnroll] for (int a = 0; a < int(LENS_P); a++) {
+          if (LENS_HX[a] && LENS_HY[a]) acc[66 + a] += w * (lensRx(a, d, q, t, t2, t3) * r.x + lensRy(a, d, q, t, t2, t3) * r.y);
+          else if (LENS_HX[a]) acc[66 + a] += w * (lensRx(a, d, q, t, t2, t3) * r.x);
+          else acc[66 + a] += w * (lensRy(a, d, q, t, t2, t3) * r.y);
+        }
       }
       LS[li] = acc;
     }
@@ -230,7 +254,45 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
     GroupMemoryBarrierWithGroupSync();
     if (li == 0u) {
       for (uint k = 0u; k < 4u; k++) { LK[k] = 0u; }
-#include "gen/solve"
+      // the normal equations unpacked, scaled to a unit diagonal (a ridge of 1e-4 and 1e-9), factored by Cholesky (okD
+      // the first column whose pivot fell under 1e-7), then each model of 8 + K terms solved where its columns factored
+      float Ns[11][11] = ZEROS_11_11;
+      float bs[11] = ZEROS_11;
+      float Dg[11] = ZEROS_11;
+      float Ln[11][11] = ZEROS_11_11;
+      float z[11] = ZEROS_11;
+      float Ap[77] = ZEROS_77;
+      [ForceUnroll] for (int i = 0; i < 77; i++) Ap[i] = LP[i];
+      [ForceUnroll] for (int a = 0; a < int(LENS_P); a++) [ForceUnroll] for (int b = a; b < int(LENS_P); b++) { Ns[a][b] = Ap[lensIdx(a, b)]; Ns[b][a] = Ap[lensIdx(a, b)]; }
+      [ForceUnroll] for (int a = 0; a < int(LENS_P); a++) Dg[a] = 1.0 / sqrt(max(Ns[a][a], 1e-30));
+      [ForceUnroll] for (int a = 0; a < int(LENS_P); a++) {
+        [ForceUnroll] for (int b = 0; b < int(LENS_P); b++) Ns[a][b] *= Dg[a] * Dg[b];
+        Ns[a][a] = Ns[a][a] * 1.0001 + 1e-9; bs[a] = Ap[66 + a] * Dg[a];
+      }
+      uint okD = 11u;
+      [ForceUnroll] for (int j = 0; j < int(LENS_P); j++) {
+        { float v = Ns[j][j]; [ForceUnroll] for (int k = 0; k < j; k++) v = v - Ln[j][k] * Ln[j][k];
+          uint om = min(okD, uint(j)); okD = !(v > 1e-7) ? om : okD; Ln[j][j] = sqrt(max(v, 1e-7)); }
+        [ForceUnroll] for (int i = j + 1; i < int(LENS_P); i++) {
+          float e = Ns[i][j]; [ForceUnroll] for (int k = 0; k < j; k++) e = e - Ln[i][k] * Ln[j][k];
+          Ln[i][j] = (e) / Ln[j][j];
+        }
+      }
+      [ForceUnroll] for (int i = 0; i < int(LENS_P); i++) {
+        float e = bs[i]; [ForceUnroll] for (int k = 0; k < i; k++) e = e - Ln[i][k] * z[k];
+        z[i] = (e) / Ln[i][i];
+      }
+      [ForceUnroll] for (int K = 0; K <= 3; K++) {
+        if (uint(8 + K) <= okD && uint(K) <= LF.kmax) {
+          float y[11] = ZEROS_11;
+          [ForceUnroll] for (int i = 8 + K - 1; i >= 0; i--) {
+            float e = z[i]; [ForceUnroll] for (int k = i + 1; k < 8 + K; k++) e = e - Ln[k][i] * y[k];
+            y[i] = (e) / Ln[i][i];
+          }
+          [ForceUnroll] for (int a = 0; a < int(LENS_P); a++) LT[K][a] = a < 8 + K ? Dg[a] * y[a] : 0.0;
+          LK[K] = 1u;
+        }
+      }
     }
     GroupMemoryBarrierWithGroupSync();
     {
@@ -243,7 +305,17 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
         float2 p = pp[i].xy;
         float2 r = pp[i].zw;
         LENS_POINT
-#include "gen/residuals"
+        // each model fitted: its residual's square, weighted
+        [ForceUnroll] for (int K = 0; K < 4; K++) {
+          if (LK[K] != 0u) {
+            float mx = 0.0, my = 0.0;
+            bool ax = false, ay = false;
+            [ForceUnroll] for (int a = 0; a < 8 + K; a++) if (LENS_HX[a]) { const float u = LT[K][a] * lensRx(a, d, q, t, t2, t3); mx = ax ? mx + u : u; ax = true; }
+            [ForceUnroll] for (int a = 0; a < 8 + K; a++) if (LENS_HY[a]) { const float u = LT[K][a] * lensRy(a, d, q, t, t2, t3); my = ay ? my + u : u; ay = true; }
+            float2 e = r - float2(mx, my);
+            rs[K] += w * dot(e, e);
+          }
+        }
       }
       LR[li] = rs;
       LQ[li] = float4(float(nu), 0.0, 0.0, 0.0);
@@ -271,7 +343,7 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
         if (score < best) { best = score; kb = k; }
       }
       float tk[LENS_P] = ZEROS_11;
-      #include "gen/pick"
+      [ForceUnroll] for (int K = 0; K < 4; K++) { if (kb == uint(K)) { [ForceUnroll] for (int a = 0; a < int(LENS_P); a++) tk[a] = LT[K][a]; } }
       if (kb < 4u) {
         LZ = Lens(float4(LF.ctr, LF.sig, LF.smid), float4(LA, lir, LF.ish), float4(tk[0], tk[1], tk[2], tk[3]),
           float4(tk[4], tk[5], tk[6], tk[7]), float4(tk[8], tk[9], tk[10], 0.0));

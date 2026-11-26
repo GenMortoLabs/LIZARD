@@ -8,7 +8,8 @@
 // ai:   1. installed: the worker controls the page, Chrome's own verdict finds it installable (Page.getInstallabilityErrors,
 // ai:      the manifest's errors), and the caches hold the shell exactly (the worker's lists, no more, no fewer);
 // ai:   2. offline, the server gone (closed, not emulated): Home loads, the receiver decodes the test stream off the fake
-// ai:      camera (a LIZARD-96 clip, as check_ui.mjs makes them), the sender paints it at its clean URL (send?...);
+// ai:      camera (a LIZARD-96 clip, as check_ui.mjs makes them) cross-origin isolated (the cache's copies keep _headers'
+// ai:      COOP and COEP: the threaded module's shared memory), the sender paints it at its clean URL (send?...);
 // ai:   3. a rebuild of the same sources (a new cache name, the same files): the next visit installs it fetching the
 // ai:      worker, the pages and the manifest alone, nothing under assets/ (the differential install).
 // ai: Over all three, no request but GET (a public host gets no development log, devlog.mjs) and no console error but
@@ -21,8 +22,7 @@ import { tmpdir } from "node:os";
 import { join, extname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tabs, open, evaluate, navigate } from "./phone.mjs";
-import { makePhy } from "../liblizard/sim/phy.mjs";
-import { N_FOR } from "../liblizard/sim/lizard_pick.mjs";
+import { init as initOb, Lizard, frameBlocks, BLOCK, N_FOR } from "../liblizard/sim/ob.mjs";
 
 const OUT = fileURLToPath(new URL("../research/build/check-app", import.meta.url)), ROOT = OUT, PORT = 8900 + (process.pid % 90), DEV = 9480 + (process.pid % 90);
 const HOST = "lizard.pages.test", BASE = `http://${HOST}:${PORT}/`;
@@ -40,6 +40,18 @@ function build() {
 // ai: the shell as the built worker lists it: its two arrays' entries (the hashes object's lines carry a colon)
 const shellOf = () => readFileSync(join(OUT, "service-worker.js"), "utf8").split("\n").filter((l) => /^  "\.\/[^"]*",$/.test(l)).map((l) => l.trim().slice(1, -2));
 
+// ai: The app's _headers as Cloudflare Pages applies them: each block a path pattern (* any run of characters) and its
+// ai: indented "Name: value" lines, every block that matches a path adding its headers
+function headersOf() {
+  const rules = [];
+  for (const line of readFileSync(join(OUT, "_headers"), "utf8").split("\n")) {
+    if (!line.trim()) continue;
+    if (!/^\s/.test(line)) { rules.push({ re: new RegExp(`^${line.trim().replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`), headers: {} }); continue; }
+    const at = line.indexOf(":");
+    if (rules.length && at > 0) rules.at(-1).headers[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).trim();
+  }
+  return (path) => Object.assign({ "cache-control": "public, max-age=0, must-revalidate" }, ...rules.filter((r) => r.re.test(path)).map((r) => r.headers));
+}
 // ai: A static server over the built app, as Cloudflare Pages serves it (the header), that logs every request (every
 // ai: across the three parts, log since the last serve()); stop() closes it and every connection, so the next request is
 // ai: refused as by a host that is gone.
@@ -47,6 +59,7 @@ const MIME = { ".html": "text/html; charset=utf-8", ".mjs": "text/javascript", "
 let log = [], every = [], server = null;
 const isFile = (f) => { try { return statSync(f).isFile(); } catch { return false; } };
 function serve() {
+  const headers = headersOf();
   server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://x"), path = decodeURIComponent(url.pathname);
     log.push(`${req.method} ${path}`); every.push(`${req.method} ${path}`);
@@ -56,8 +69,7 @@ function serve() {
     let file = normalize(join(ROOT, path.endsWith("/") ? `${path}index.html` : path));
     if (!isFile(file) && isFile(`${file}.html`)) file = `${file}.html`;
     if (!file.startsWith(ROOT) || !isFile(file) || path === "/_headers") { res.writeHead(404).end(); return; }
-    const cache = path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "public, max-age=0, must-revalidate";
-    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": cache }).end(readFileSync(file));
+    res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", ...headers(path) }).end(readFileSync(file));
   });
   return new Promise((ok) => server.listen(PORT, "127.0.0.1", ok));
 }
@@ -66,16 +78,20 @@ const stop = () => new Promise((ok) => { server.closeAllConnections?.(); server.
 // ai: LIZARD-96's test stream at 24 painted, 1920 x 1080 at 30, as check_ui.mjs clips it
 async function clip(path) {
   const CW = 1920, CH = 1080, FD = 24, FC = 30, SUBCH = 96;
-  const phy = await makePhy({ phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] });
+  // ai: the C's paint of the test stream (sim/ob.mjs: a frame's blocks by frameBlocks under TOI 1, the pilots' count the
+  // ai: painted count mod 4)
+  await initOb();
+  const fc = new Lizard(N_FOR(SUBCH), SUBCH, 1), T = fc.blocks, blocks = new Uint8Array(T * BLOCK);
   const fd = openSync(path, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
   writeSync(fd, `YUV4MPEG2 W${CW} H${CH} F${FC}:1 Ip A1:1 C420jpeg\n`);
   let shown = -1;
   for (let i = 0; i < 75; i++) {
     const seq = Math.floor((i * FD) / FC);
     if (seq !== shown) {
-      const fr = await phy.frame(seq), ox = (CW - fr.w) >> 1, oy = (CH - fr.h) >> 1;
+      fc.setParity(seq & 3);
+      const drive = fc.encode(frameBlocks(seq * T, T, {}, blocks)), w = fc.side, ox = (CW - w) >> 1, oy = (CH - w) >> 1;
       y.fill(235);
-      for (let r = 0; r < fr.h; r++) for (let c = 0; c < fr.w; c++) y[(oy + r) * CW + ox + c] = Math.round(20 + 215 * fr.drive[r * fr.w + c]);
+      for (let r = 0; r < w; r++) for (let c = 0; c < w; c++) y[(oy + r) * CW + ox + c] = Math.round(20 + 215 * drive[r * w + c]);
       shown = seq;
     }
     writeSync(fd, "FRAME\n"); writeSync(fd, y); writeSync(fd, chroma);
@@ -134,6 +150,9 @@ check(await evaluate(s, `!!document.getElementById("go")`).catch(() => false), `
 await navigate(s, `${BASE}recv.html?auto&seen`);
 const read = await until(s, `document.querySelector("#dt:not([hidden]) .nm")?.textContent === "Test stream" && /LIZARD-96/.test(document.getElementById("lab").textContent)`, 40000, "offline: the test stream read").catch((e) => (console.log(`     ${e.message}`), false));
 check(read, `offline: the receiver reads the test stream off the camera (the codec, the workers, every file from the cache)`);
+// ai: the cache's copy of the page carries its headers (COOP, COEP): the page cross-origin isolated, the threaded
+// ai: module's shared memory there
+check(await evaluate(s, "crossOriginIsolated && typeof SharedArrayBuffer === 'function'"), `offline: the receiver's page cross-origin isolated from the cache (SharedArrayBuffer there)`);
 await navigate(s, `${BASE}send?fps=24&payload=test&auto`);
 const painted = await until(s, `/painted [\\d.]+\\/s/.test(document.getElementById("tx").textContent) && document.querySelector("#dt:not([hidden]) .nm")?.textContent === "Test stream" && !document.querySelector("#dt .spin")`, 30000, "offline: the test stream painted").catch((e) => (console.log(`     ${e.message}`), false));
 check(painted, `offline: the sender paints the test stream, asked for at its clean URL (send?...)`);

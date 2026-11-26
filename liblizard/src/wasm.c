@@ -6,6 +6,10 @@
 #include "any.h"
 #include "ldpc.h"
 #include "xfer.h"
+#include "fmt.h"
+#include "layout.h"
+#include "lizard.h"
+#include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +42,9 @@ int lizard_setup(int n, int subch, int span) {
   fready = 1;
   return F.block_bytes;
 }
+// ai: the codec lizard_setup or lizard_setup_tiers made last, NULL before one (bindings/wasm/tables.cpp, the GPU sender's
+// ai: tables of it)
+const lizard_t *lizard_current(void) { return fready ? &F : NULL; }
 // Up to four runs (LIZARD_TIERS) of blocks at different code rates (lizard_phy.h): rate index and blocks (a block's slots are
 // its rate's, lizard_block_slots); a run of 0 blocks ends the list.
 int lizard_setup_tiers(int n, int span, int r0, int b0, int r1, int b1, int r2, int b2, int r3, int b3) {
@@ -200,29 +207,31 @@ int lizard_rx_acquire_quad(const uint8_t *img, int iw, int ih, float gamma, cons
 }
 int lizard_rx_finish(float *grid, uint8_t *blocks, uint8_t *ok) { return fready ? lizard_finish(&F, grid, blocks, ok, &R) : 0; }
 
-// ai: The mesh tables (the node lattice, the per-module kind map, which nodes carry a mark), for gpu/tables.mjs and the
-// ai: checks that read a symbol's cells (test/vectors.mjs, scripts/exp/fmt_word.mjs).
+// ai: The mesh tables (the node lattice, the per-module kind map, which nodes carry a mark), for the checks that read a
+// ai: symbol's cells (test/vectors.mjs, scripts/gpu/word_check.mjs, scripts/exp/fmt_word.mjs) and the lab's GPU tables
+// ai: (scripts/gpu/native/format.mjs, host.mjs).
 int ob_test_mesh_tables_out(int32_t *dims, float *nodeX, float *nodeY, uint8_t *kind, int32_t *mark) {
   return fready ? ob_test_mesh_tables(&F.frame, dims, nodeX, nodeY, kind, mark) : 0;
 }
 int ob_test_fmt_plan(int cells, float *pts, int32_t *meta, int32_t *widx) {
   return fready ? ob_thin_fmt_plan(&F.frame, cells, pts, meta, widx) : 0;
 }
-// The track read's sample plan (gpu/tables.mjs), and a single hypothesis through it and what the finder settled on
-// last time (scripts/exp/fmt_word.mjs).
+// The track read's sample plan (the lab's GPU tables, scripts/gpu/native/format.mjs and host.mjs), and a single
+// hypothesis through it and what the finder settled on last time (scripts/exp/fmt_word.mjs).
 int ob_test_thin_plan(float *pts, int32_t *meta, int32_t *signs) { return fready ? ob_thin_score_plan(&F.frame, pts, meta, signs) : 0; }
 int ob_test_thin_score_out(const uint8_t *img, int w, int h, const float *centres, int hyp, int merged, float *out) {
   return fready ? ob_test_thin_score(&F.frame, img, w, h, centres, hyp, merged, out) : 0;
 }
 void ob_test_finder_out(float *out) { for (int k = 0; k < 8; k++) out[k] = ob_finder_info[k]; }
 // ai: the anchors (SPEC 6.13): how many the last acquisition counted (-1 where it made no mesh), and their geometry in
-// ai: the current symbol for the sender's WebGPU encoder (lizard_phy.h lizard_anchor_geom: out[0] the side, out[1..7] the
+// ai: the current symbol for the lab (the web's GPU encoder takes them in bindings/wasm/tables.cpp; lizard_phy.h lizard_anchor_geom: out[0] the side, out[1..7] the
 // ai: first modules, the ring's k and the last repeated past them; k (3, 5 or 7), or 0 before a setup)
 int lizard_anchors_found(void) { return ob_anch_found; }
 int lizard_anchor_geom_get(int *out) { return fready ? lizard_anchor_geom(&F, out) : 0; }
 int ob_test_fmt_cells(void) { return fready ? ob_fmt_side_cells(F.frame.w < F.frame.h ? F.frame.w : F.frame.h, F.frame.reserve) : 0; }
 
-// The current layout's mark geometry (acquire.c ob_mark_geom), for gpu/tables.mjs and scripts/exp/fmt_word.mjs.
+// The current layout's mark geometry (acquire.c ob_mark_geom), for the lab's GPU tables (scripts/gpu/native/format.mjs,
+// host.mjs) and scripts/exp/fmt_word.mjs.
 int ob_test_marks(float *out) { if (!fready) return 0; ob_mark_geom(&F.frame, out); return 1; }
 // Shapes the GPU pipeline has to allocate for: n, bw, vblocks, subch, blocks, and the coefficient index table's
 // length. The table itself is lizard_pos_ptr: subch * LIZARD_SUB ints into the spectrum (src/lizard_phy.c).
@@ -358,4 +367,69 @@ int xfer_sb_ok(const uint8_t *desc, uint32_t desc_len, uint32_t index, const uin
 // xfer_b3_subtree with the 1 KiB chunk counter as a double (xfer_sb_cv is the same thing by chunk index).
 void xfer_b3_sub(const uint8_t *in, uint32_t len, double counter, int root, uint8_t *out) {
   xfer_b3_subtree(in, len, counter > 0 && counter < 18446744073709551616.0 ? (uint64_t)counter : 0, root, out);
+}
+
+// ai: The format's arithmetic as one JSON object, for the web's and the lab's JS (build.sh writes it into build/format.mjs
+// ai: after the module, gen/format.mjs; sim/ob.mjs reads it, so a module needs no codec instance for it): the constants,
+// ai: each ring's cells, span and modules (lizard.h liz_ring_modules), each version 1 to 67's picture, tiers (lizard_tiers_for), blocks, most blocks, radius and room and camera pixels in
+// ai: each ring (lizard.h), and pixels a module for each picture size in each ring. Returns its length, or what it would
+// ai: need where cap is too small.
+static int jput(char *out, int cap, int at, const char *s) {
+  const int n = (int)strlen(s);
+  if (at + n < cap) memcpy(out + at, s, (size_t)n + 1);
+  return at + n;
+}
+int lizard_format_json(char *out, int cap) {
+  char b[256];
+  int at = 0, i, r, v;
+  snprintf(b, sizeof b, "{\"STEP\":%d,\"VERSION_MIN\":%d,\"VERSION_MAX\":%d,\"QUIET\":%d,\"OB_MARGIN\":%d,\"BITMAP\":%d,"
+           "\"SUB_SLOTS\":%d,\"PAYLOAD\":%d,\"BLOCKS_DEFAULT\":%d,\"GAP_MODULES\":%d,\"TAR_END\":%d,\"RING_DEFAULT\":%d,",
+           LIZARD_STEP, OB_FMT_VERSION_MIN, OB_FMT_VERSION_MAX, LIZARD_QUIET, OB_MARGIN, LIZARD_BITMAP, 2 * LIZARD_SUB - 4,
+           XFER_PAYLOAD, LIZ_BLOCKS_DEFAULT, LIZ_GAP_MODULES, LIZ_TAR_END, LIZARD_RING_DEFAULT);
+  at = jput(out, cap, at, b);
+  /* ai: a block's id (src/xfer.h): its bytes, the symbol's bits under the source block's, the control source block, the
+   * ai: TOI's first byte and its bytes; a sender's source block size where it names none (2^24) */
+  snprintf(b, sizeof b, "\"ID_BYTES\":%d,\"ESI_BITS\":%d,\"CONTROL\":%d,\"ID_TOI\":%d,\"TOI_BYTES\":%d,\"LOG2_DEFAULT\":%d,\"DELAY_MAX\":%d,\"RINGS\":[",
+           XFER_ID_BYTES, XFER_ESI_BITS, XFER_CONTROL, XFER_ID_TOI, XFER_TOI_BYTES, XFER_LOG2_DEFAULT, OB_FMT_DELAY_MAX);
+  at = jput(out, cap, at, b);
+  for (r = 0; r < LIZARD_RINGS; r++) { snprintf(b, sizeof b, "%s%d", r ? "," : "", LIZARD_RING[r]); at = jput(out, cap, at, b); }
+  at = jput(out, cap, at, "],\"SPANS\":[");
+  for (r = 0; r < LIZARD_RINGS; r++) { snprintf(b, sizeof b, "%s%d", r ? "," : "", 2 * LIZARD_RING[r]); at = jput(out, cap, at, b); }
+  at = jput(out, cap, at, "],\"MODULES\":[");
+  for (r = 0; r < LIZARD_RINGS; r++) { snprintf(b, sizeof b, "%s%d", r ? "," : "", liz_ring_modules(r)); at = jput(out, cap, at, b); }
+  at = jput(out, cap, at, "],\"BLOCK_SLOTS\":{");
+  for (i = 0; i < 4; i++) {
+    static const int RATES[4] = {6, 4, 3, 2};
+    snprintf(b, sizeof b, "%s\"%d\":%d", i ? "," : "", RATES[i], lizard_block_slots(RATES[i]));
+    at = jput(out, cap, at, b);
+  }
+  at = jput(out, cap, at, "},\"PICTURE_SIZES\":[");
+  for (i = 0; i < LIZARD_NPICTURES; i++) { snprintf(b, sizeof b, "%s%d", i ? "," : "", LIZARD_PICTURES[i]); at = jput(out, cap, at, b); }
+  at = jput(out, cap, at, "],\"pxm\":[");
+  for (i = 0; i < LIZARD_NPICTURES; i++) {
+    for (r = 0; r < LIZARD_RINGS; r++) {
+      snprintf(b, sizeof b, "%s%d", r ? "," : i ? ",[" : "[", lizard_pxm_for(LIZARD_PICTURES[i], 2 * LIZARD_RING[r]));
+      at = jput(out, cap, at, b);
+    }
+    at = jput(out, cap, at, "]");
+  }
+  at = jput(out, cap, at, "],\"versions\":[");
+  for (v = OB_FMT_VERSION_MIN; v <= OB_FMT_VERSION_MAX; v++) {
+    const int subch = LIZARD_STEP * v;
+    lizard_tier_t tier[LIZARD_TIERS];
+    const int tiers = lizard_tiers_for(subch, tier);
+    snprintf(b, sizeof b, "%s{\"n\":%d,\"blocks\":%d,\"max\":%d,\"radius\":%.17g,\"tiers\":[", v > OB_FMT_VERSION_MIN ? "," : "",
+             lizard_n_for(subch), lizard_blocks_for(subch), lizard_blocks_max_for(subch), liz_radius_for(v));
+    at = jput(out, cap, at, b);
+    for (i = 0; i < tiers; i++) {
+      snprintf(b, sizeof b, "%s[%d,%d,%d]", i ? "," : "", tier[i].rate, tier[i].blocks, tier[i].slots);
+      at = jput(out, cap, at, b);
+    }
+    at = jput(out, cap, at, "],\"room\":[");
+    for (r = 0; r < LIZARD_RINGS; r++) { snprintf(b, sizeof b, "%s%.17g", r ? "," : "", liz_room_for(v, r)); at = jput(out, cap, at, b); }
+    at = jput(out, cap, at, "],\"camera\":[");
+    for (r = 0; r < LIZARD_RINGS; r++) { snprintf(b, sizeof b, "%s%.17g", r ? "," : "", liz_camera_for(v, r)); at = jput(out, cap, at, b); }
+    at = jput(out, cap, at, "]}");
+  }
+  return jput(out, cap, at, "]}");
 }

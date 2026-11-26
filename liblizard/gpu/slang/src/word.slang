@@ -1,5 +1,5 @@
 // F8, the format word: the band read through the final map, each word cell against its track pairs' grey;
-// the word by Gauss-Jordan over GF(256) from its most reliable bytes (../wordcode.mjs); the side-aware gate, held to
+// the word by Gauss-Jordan over GF(256) from its most reliable bytes; the side-aware gate, held to
 // the C's false-word rate; the word's index split into the configuration (its version from the Word uniform's
 // before, its counts across the workgroup's lanes, each a 6/7 count's configurations) and the clock; sel written (the
 // configuration; none for a frame whose word is not read, which is not decoded: nothing carries from frame to frame)
@@ -8,13 +8,14 @@
 // where no word is taken. One
 // workgroup of 256 a frame.
 // The Word and Lattice uniforms are std140, every member an array of uint4 or float4; the uniform's layout and
-// tables come from ../plan/word.mjs. No private array is indexed at run
+// tables come from core/dec/build.cpp WordTables. No private array is indexed at run
 // time (the S26's Adreno returned zeros from one): the code's rows, GF(256)'s tables and the generator's columns are
 // read from the uniform, the lattice too.
-// Defines (word.mjs): the Word uniform's lengths W_CODE, W_TOPS, W_GATE, W_GF, W_COLS, W_BEFORE, RING_COUNT,
-// LATTICE_VECS (../plan/word.mjs LAYOUT); MIDS_MAX, WMAX, BYTES_MAX, TOP, SETS, ROWS, VECS, GATE, UNKNOWN, SWAP, MAGIC,
+// Defines (core/dec/build.cpp WordPlan): the Word uniform's lengths W_CODE, W_TOPS, W_GATE, W_GF, W_COLS, W_BEFORE, RING_COUNT,
+// LATTICE_VECS (core/dec/build.cpp WordPlan); MIDS_MAX, WMAX, BYTES_MAX, TOP, SETS, ROWS, VECS, GATE, UNKNOWN, SWAP, MAGIC,
 // WORDS_HI and WORDS_LO (the words' count as two u32), CLOCKS, DELAY_MAX, VERSION_MIN, VERSION_MAX, VERSION_SLOTS,
-// UNIT and UNIT0 to UNIT3 (uint); TAU, SIDE_KEEP, CON_MIN (float); RESID (lib/lens.slang); lib/cfg.slang's.
+// UNIT and UNIT0 to UNIT3, SLOT_COUNT (the picture slots, the Word uniform's tops one past the first each) (uint); TAU,
+// SIDE_KEEP, CON_MIN (float); RESID (lib/lens.slang); lib/cfg.slang's.
 #include "lib/sync.slang"
 #include "lib/frame.slang"
 #include "lib/convert.slang"
@@ -107,7 +108,7 @@ uint2 splitIndex(uint2 c) {
 }
 // The configurations in index order (src/fmt.c ob_fmt_index), in units of UNIT slots (640; the blocks UNIT0 to UNIT3,
 // 7, 8, 9, 12): a version's room; the (t, c) that fit r units (src/fmt_tables.h FMT_P2, by its closed form,
-// ../wordcode.mjs p2Of: the sum over c = 3k + j of floor((r - 3j) / 9) - 4k - j + 1); the (b, t, c) that fit (FMT_P3).
+// src/fmt_tables.h's closed form: the sum over c = 3k + j of floor((r - 3j) / 9) - 4k - j + 1); the (b, t, c) that fit (FMT_P3).
 uint roomOf(uint v) { return v * VERSION_SLOTS / UNIT; }
 uint p2Of(uint r) {
   int cm = int(r / 12u);
@@ -162,9 +163,9 @@ uint leastSide(float4 s, uint skip) {
 uint gateAt(uint r, uint m) { uint k = r * GATE + (m >> 1u); return (W.gate[k >> 2u][k & 3u] >> (16u * (m & 1u))) & 0xffffu; }
 // the picture slot a version decodes in (the Word uniform's tops)
 uint slotOf(uint v) {
-  return 0u
-#include "gen/slot_steps"
-  ;
+  uint s = 0u;
+  [ForceUnroll] for (int k = 0; k < int(SLOT_COUNT) - 1; k++) { const uint4 t = W.tops[k >> 2]; s = s + (v > t[k & 3] ? 1u : 0u); }
+  return s;
 }
 float2 imgAt(uint f, float M[16], float2 m) { float2 p = toImage(M, m); return p + lensAt(lensOf(f), p); }
 void reduce(uint li) {

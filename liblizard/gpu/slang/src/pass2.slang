@@ -1,8 +1,8 @@
 // Pass 2 of the back half's transform: a workgroup of N / 8 a (row, listed frame): row v of one frame along x (row 0
 // pass 1's column means), its compact disc row stored to S (the rows table's (start, length, first run, gap)), the
 // detrend (reduce's surface) taken off. Built a batch size, a picture size and a precision each; f16 reads Y and writes
-// S as half2 (16-bit storage, storage buffers only). Defines (back_transform.mjs pass2Source): F16 (0 or
-// 1), LANES (N / 8, int), PICTURE_N, BATCH, LISTS_ROWS (uint); gen/fft the row FFT's stages for the picture's size.
+// S as half2 (16-bit storage, storage buffers only). Defines (core/dec/build.cpp backHalf): F16 (0 or
+// 1), LANES (N / 8, int), PICTURE_N, BATCH, LISTS_ROWS (uint); the row FFT's stages lib/fft_body.slang's, from the picture's size.
 #if F16
 #define STORE_T half2
 #define LD(X) float2(X)
@@ -30,6 +30,9 @@ static const uint LS = BATCH + 1u;
 static const uint ROWS_AT = LISTS_ROWS;
 groupshared STORE_T buf[N];
 #include "lib/butterflies.slang"
+#define FFT_LANES_2 0
+#define FFT_BUF0 buf
+#include "lib/fft.slang"
 [numthreads(LANES, 1, 1)]
 void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
   uint3 wg = wid;
@@ -44,7 +47,8 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
     uint ybase = f * P.yStride + (vv - 1u) * N;
     for (uint r = 0u; r < 8u; r++) { v[r] = LD(yb[ybase + tid + r * T]); }
   }
-#include "gen/fft"
+#define FFT_V0 v
+#include "lib/fft_body.slang"
   uint4 row = rows.r[vv];
   float4 c0 = coef[f * 2u];
   float4 c1 = coef[f * 2u + 1u];

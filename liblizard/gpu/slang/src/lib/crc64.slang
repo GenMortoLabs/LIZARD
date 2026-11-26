@@ -1,5 +1,5 @@
 // The split CRC-64 (CRC-64/LIZARD) over a block's payload, the LDPC's check (tldpc.slang) and the paint's
-// (send_paint.slang; ../../back/ref_ldpc.mjs crcPowers). crcOf(i) is called by every lane of the
+// (send_paint.slang; its powers core/dec/codes.h crcPowers). crcOf(i) is called by every lane of the
 // workgroup with its lane index (it holds two barriers) once the 472 payload bytes sit in the workgroup array packw
 // (four bytes a word in memory order, words 0 to 117), and returns the CRC to every lane as (high, low): a lane a
 // 4-byte chunk, its CRC from a zero register, times its power from CRC_PW (chunk w's two words at CRC_PW[w / 2], .xy

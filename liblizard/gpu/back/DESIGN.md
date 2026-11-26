@@ -9,7 +9,7 @@ negative control; never on parity with the C. The tables named below come from t
 `sim/ob.mjs`, section 8).
 
 Every block is 472 payload bytes, the first 12 the block id (the 40-bit bare id, the 48-bit TOI and a reserved byte). The pictures are 384, 512, 768, 1024, 1152, 1280 and
-1536 (`plan/common.mjs` `SIZES`, the sizes of `sim/lizard_pick.mjs` `PICTURE_SIZES` a format has; tops 80, 128, 320,
+1536 (the picture sizes a format has, `src/lizard_phy.h` `LIZARD_PICTURES`; tops 80, 128, 320,
 560, 720, 880 and 1024 sub-channels). The code
 rate follows the
 frequency (`src/lizard_phy.h` `lizard_tiers_for`): from the lowest frequencies out, 6/7 blocks of 4480 slots (n 4608, 4480
@@ -17,8 +17,8 @@ sent), 3/4 of 5120 (n 5120, k 3840, m 1280, 10 block rows of 13 or 14 data slots
 and 1/2 of 7680 (n 7680, 30 block rows), every code at z = 128, the blocks packed one after another from the frame's
 first data slot whatever the sub-channels, the slots past the last block padded (the whitening alone). The pilots are
 apart from the blocks: in every sub-channel coefficient 0 is a count pilot and coefficient 160 a reference pilot, and
-the blocks take the other 318 coefficients in order (636 data slots a sub-channel; `src/lizard_phy.c` `pb_fcoef`). The soft values and the LDPC are the rule stage (`back/tiers.mjs`;
-the kernels `slang/back_tiers.mjs`, TAB's layout and the codes' shapes `plan/back_tiers.mjs`): a frame's profile is a row of its table by the frame's version, and the arithmetic of sections
+the blocks take the other 318 coefficients in order (636 data slots a sub-channel; `src/lizard_phy.c` `pb_fcoef`). The soft values and the LDPC are the rule stage (the host's
+`core/dec/build.cpp` `Rule` and `backHalf`; the kernels `slang/src/t*.slang`, TAB's layout and the codes' shapes): a frame's profile is a row of its table by the frame's version, and the arithmetic of sections
 1 and 4 to 7 runs a code at a time, each code with its own block rows and its own learned stop. Where a section gives
 one code's numbers, they are the 3/4 code's.
 
@@ -83,13 +83,13 @@ decision-directed second pass and burst accumulation. The GPU reads every frame 
 
 Frame f of a batch of B (frames may differ in picture size; every stage reads `sel[f]` and `frames[f].valid` as
 the sampler does). `sel[f]` is a vec4u: (ring, 1 + configuration's first word, picture slot, its 1/2 count). PICK (F6)
-writes (ring, found, 0, 0); F8 (`gpu/slang/word.mjs`) then (ring, 1 + g.x, slot, g.y) for the configuration g its own
+writes (ring, found, 0, 0); F8 (`slang/src/word.slang`) then (ring, 1 + g.x, slot, g.y) for the configuration g its own
 word states (`slang/src/lib/cfg.slang`: g.x the version << 24 | the 6/7, 3/4 and 2/3 counts, g.y the 1/2 count), else y
 0. A frame is sampled and listed when y >= 2; z indexes the picture sizes.
 
 | name | writer -> reader | element and order |
 |---|---|---|
-| LISTS, ARGS | gate -> all | u32 [SLOTS sizes][1 + B] (SLOTS = 7, the picture sizes, `plan/common.mjs`): count, then frame indices, then each frame's (w, h), each frame's configuration (the one F8 read in sel.y = 1 + g; a frame without one is not listed; the rule stage runs its layout), each frame's row count (`listsRows`: the disc rows that count takes, section 3 "Rows a frame"), then each frame's ring (`listsRing`), then every listed frame (`listsAll`), then each frame's 1/2 count, its configuration's second word (`listsHalf`); u32 [SLOTS][12] indirect args, (x, y, z) for pass 1, reduce, pass 2 (the most rows a listed frame of the size takes) and tsoft (the chunks of the size's most listed version; talign and tblocks on reduce's), then u32 [4][3] each code's LDPC (`argsLdpc`: the code's most blocks over the listed frames' versions, the listed frames, 1); (SLOTS (1 + B) + 7 B) words, `listsWords`; 96 words (384 B), `argsWords` |
+| LISTS, ARGS | gate -> all | u32 [SLOTS sizes][1 + B] (SLOTS = 7, the picture sizes): count, then frame indices, then each frame's (w, h), each frame's configuration (the one F8 read in sel.y = 1 + g; a frame without one is not listed; the rule stage runs its layout), each frame's row count (`listsRows`: the disc rows that count takes, section 3 "Rows a frame"), then each frame's ring (`listsRing`), then every listed frame (`listsAll`), then each frame's 1/2 count, its configuration's second word (`listsHalf`); u32 [SLOTS][12] indirect args, (x, y, z) for pass 1, reduce, pass 2 (the most rows a listed frame of the size takes) and tsoft (the chunks of the size's most listed version; talign and tblocks on reduce's), then u32 [4][3] each code's LDPC (`argsLdpc`: the code's most blocks over the listed frames' versions, the listed frames, 1); (SLOTS (1 + B) + 7 B) words, `listsWords`; 96 words (384 B), `argsWords` |
 | PART | A1 -> reduce, A2 | f32 [n][4] a column: (sum z, sum z cx[y], sum z qx[y], the column mean) |
 | COEF | reduce -> A2 | f32 [8]: px, py, pxy, pxx, pyy, 0, 0, 0 |
 | Y | A1 -> A2 | complex, v major: (v, x) at (v - 1) n + x, 1 <= v < V; f16x2 (f32x2 on the 4090); V rows of room a frame |
@@ -112,7 +112,7 @@ taken in order of r^2, then v, then u, the first subch * 320 (`init` in lizard_p
 A frame needs the rows v < V = vmax + 1, vmax = floor(R) (umax(0) the same).
 
 S layout: row v at off[v], v = 0 holds u = 1..umax(0), v > 0 holds u = 0..umax(v) then u = -umax(v)..-1, with
-umax(v) = floor(sqrt(R^2 - v^2)) capped so the count is exactly subch * 320 (`discLayout` in `disc.mjs`
+umax(v) = floor(sqrt(R^2 - v^2)) capped so the count is exactly subch * 320 (`../../core/dec/build.cpp` `Disc`
 builds off, umax and the coefficient-to-entry table from pos; every entry of pos maps to exactly one entry of S).
 
 Order: along y first, then x, as the C does. Both orders cost the same FFTs: n / 2 real pairs of length n, then V
@@ -133,9 +133,8 @@ lines). Pass 2 reads a row of Y contiguous (the v = 0 row from Y0 as f32) and wr
 a pass for each of the seven n, dispatched indirectly from ARGS over LISTS; a workgroup for a frame of another size
 returns before its first barrier.
 
-Rows a frame. Every size is built at its top (`gpu/tables.mjs` PICTURES) and a frame decodes the version its word
-names, a prefix of the top's coefficients, so it needs only the rows its blocks' coefficients reach. `disc.mjs
-rowsByCount` gives rowsBy[c], the rows the first c 8-sub-channel chunks take (chunk b is pos[2560 b .. 2560 b +
+Rows a frame. Every size is built at its top (the host's pictures, `core/dec/build.cpp`) and a frame decodes the version its word
+names, a prefix of the top's coefficients, so it needs only the rows its blocks' coefficients reach. `Disc`'s rowsBy[c] gives the rows the first c 8-sub-channel chunks take (chunk b is pos[2560 b .. 2560 b +
 2559], sub-channels 8b to 8b + 7, whatever slots the rate profile's blocks take; a version is two chunks, 16
 sub-channels),
 from the top's own pos table, and `rowsOfVersion` a version's, rowsBy[2v]; `scripts/gpu/back/check_rows.mjs` holds
@@ -156,7 +155,8 @@ landing on bins 0 and 2^s) sits within about 25 dB of the data on the v = 0 row 
 With each column's mean taken out ahead of pass 1 and the v = 0 row kept in f32 through both passes, the f16
 floor is about 50 dB under the strongest ring, and blur takes the outer rings 20 to 30 dB down from there.
 
-As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `slang/back_transform.mjs`, the layouts `plan/back_transform.mjs`):
+As built (`core/dec/build.cpp` `Disc` and `backHalf`; the kernels `slang/src/gate`, `pass1`, `reduce`, `pass2`; the layouts
+`core/dec/plan.h`):
 - Per frame strides are the largest built size's: `t.sStride` (S entries), `t.yStride` (Y entries, V n), `t.partStride`
   (the column means ride in PART's w, so there is no Y0); `t.cbytes` is 4 (f16x2) or 8 (f32x2). Frame f's disc starts
   at `f * t.sStride` entries into the lane's S; row v of it at `tables[size].off[v]`, entry e of the row is u = e for
@@ -188,7 +188,7 @@ As built (`back/transform.mjs`, `back/disc.mjs`; the kernels `slang/back_transfo
   capture spanning about 650 pixels read at 768 a third of the blocks it reads at 1024.
 ## 4. Soft values
 
-Formula and moments: section 1. The rule stage's soft pass, a dispatch a picture slot each (`slang/back_tiers.mjs`):
+Formula and moments: section 1. The rule stage's soft pass, a dispatch a picture slot each (`slang/src/tnoise`, `talign`, `tsoft`, `tblocks`):
 - **tnoise**, a workgroup an 8-sub-channel chunk of a frame (tsoft's grid), 32 lanes a sub-channel, lane l the
   coefficients l + 32 k (k 0 to 9): the second and fourth moments of |y|^2 over the sub-channel's 320 coefficients
   (a turn and the whitening leave |y|), reduced over the 32 lanes; a2 = sqrt(max(2 m2^2 - m4, 0)), N = m2 - a2, at
@@ -237,7 +237,7 @@ which the shape rules allow. The gate is a format decoder rule the C sets, measu
 captures the iterations it saves are among the LDPC's largest costs.
 ## 6. LDPC
 
-The rate profile's kernel (`tldpcSource`, `slang/back_tiers.mjs`; a dispatch a code: (the code's most blocks in a
+The rate profile's kernel (`slang/src/tldpc.slang`, its recipe `core/dec/build.cpp` `Rule::ldpcRecipe`; a dispatch a code: (the code's most blocks in a
 served version, frames)) runs layered min-sum a code at a time: the code's n, k, z and slots are the module's
 constants, its block rows (unequal at 2/3 and 1/2) and data slots (col | shift << 16) come from its uniform, its bit
 map from TAB over L whitened (section 4), the bits past the 472-byte payload and its CRC (3,840: at 6/7 alone) are known zeros at
@@ -280,13 +280,13 @@ rule makes a wrong block verify, and what a rule costs is the blocks it gives up
   product with the output weight, a barrier, and lane 0 sums the H products in unit order and gives up when the sum is
   under T. No stall test, and nothing of the channel's estimate: est went (a codeword the soft stage under-rates, a
   blurred or mixed capture, was given up after iteration 1; research STATUS "The learned LDPC stop retrained on the
-  decoder's own state"). The net's H^2 + 9 H + 1 words (H 32: 1,313 words, 5.3 KB; `stop/rule.mjs` `netWords`, each
+  decoder's own state"). The net's H^2 + 9 H + 1 words (H 32: 1,313 words, 5.3 KB; `../../core/dec/build.cpp` `Stop::words`, each
   layer input-major so the lanes read consecutive words) sit in TAB's NET, so the stage keeps its 8 storage buffers;
   4 (6 + 2 H) + 4 B of workgroup memory. The nets, their trainer and their files are
   `stop/` (`scripts/gpu/back/stop/README.md`). Each code of the rate profile has its own net, trained the same way
   on that code's neutral channel to its plateau (`stop/stop.safetensors` the 3/4 code's, `stop_67.safetensors`,
-  `stop_23.safetensors` and `stop_12.safetensors`, picked by the code's checks, `stop/rule.mjs` `ruleUrlFor`), their
-  words one after another in the rule stage's table (`back/tiers.mjs` `ruleContents`).
+  `stop_23.safetensors` and `stop_12.safetensors`, picked by the code's checks, `core/dec/plan.h` `STOPS`), their
+  words one after another in the rule stage's table (`core/dec/build.cpp` `Rule`).
 
 The question each net answers: given what lane 0 can hold after an iteration, is the codeword hopeless? It is
 answered on neutral codewords only (`scripts/gpu/back/stop/neutral.py`: the code through a generic channel and the
@@ -302,15 +302,15 @@ first layer in float64 (one rounding to float32) and the output bias into T; the
 arithmetic by the criterion: the largest T whose lost clearing codewords stay at or under the budget times val's
 clearing codewords. The budget is 1 in 1,000.
 
-The arithmetic. Float32 in one order everywhere (the kernel, `stop/rule.mjs` `scoreF32` for the JS mirror,
+The arithmetic. Float32 in one order everywhere (the kernel, `scripts/gpu/back/stop/check_rule.mjs` `scoreF32` on the host's words,
 `scripts/gpu/back/stop/net.py` `score` for the tables); grow is an integer, exact on every device. An H-term sum cannot promise equal decisions on every state
 against float64, nor under a compiler that fuses each multiply-add; the flips sit within float32 rounding of T.
-`scripts/gpu/back/stop/check_rule.mjs` holds `rule.mjs` to `fit.py`'s words and scores bit for bit.
+`scripts/gpu/back/stop/check_rule.mjs` holds the host's fold (`lizard_gpu_tree stops`) to `fit.py`'s words and scores bit for bit.
 
 ## 7. CRC-64, compaction, the result record
 
 On a clear syndrome the workgroup packs the systematic bits (a posterior < 0 is a 1) MSB first into the 120 words of
-`packw`. The CRC-64 is split over 118 lanes (`slang/back_tiers.mjs`, as the sender's paint's, both `slang/src/lib/crc64.slang`; `back/ref_ldpc.mjs` `crcPowers`),
+`packw`. The CRC-64 is split over 118 lanes (tldpc, as the sender's paint's, both `slang/src/lib/crc64.slang`; the powers `core/dec/codes.h` `crcPowers`),
 a 64-bit value as two u32 (high, low): lane w runs the reflected CRC over its 4-byte chunk from a zero state, multiplies
 by x^(8 * bytes after it) mod P (a 64-step carry-less multiply against a 240-word table in the code's uniform, two words
 a chunk) and XORs into two workgroup atomics; the initial state's term and the final inversion are one folded constant.
@@ -344,32 +344,32 @@ time.
 | LDPC dims and schedule | `M._lizard_ldpc_tables(tier, pDims, pLay)` (pLay = 0 sizes it), `Lizard.ldpcCode().code` (tier 0: the profile's innermost code) | dims at 3/4: n 5120, k 3840, m 1280, z 128, zp 128, mb 10, kb 30, norm 13, slotsMax 16, slotsTotal 152, slots 132; lay 275 i32 |
 | block bytes | the return of `M._lizard_setup(...)`, `Lizard.blockBytes` | 472 |
 | a version's profile | `M._lizard_tiers_for(subch, pTiers)` | up to 4 tiers of (rate, blocks, slots a block) |
-| perm, inv, white | not exported; regenerated in JS from section 1 (`bitmap.mjs`) and held to what the C paints by `scripts/gpu/back/check_tiers.mjs` | perm nt; white a bit a slot |
+| perm, inv, white | the hosts' `../../core/dec/codes.h` (`lizard_gpu_tree codes` for the lab), held to what the C paints by `scripts/gpu/back/check_tiers.mjs` | perm nt; white a bit a slot |
 | g0, step | `M._lizard_grid_out(p)` | 2 f32 |
 | CRC-64 | `M._ob_test_crc_hash(p, len, out)` (its 8 bytes into out, MSB first) | |
 | decline bar, verdicts | `M._ob_test_crc_gate_out(est, blkEst, bar, declined)` | blocks each |
-| truth stream | `streamBlock(id, len)` (sim/ob.mjs, `_stream_fill`); `sourceFor(spec.stream)` (sim/phy.mjs) | |
+| truth stream | `streamBlock(id, len)` (sim/ob.mjs, `_stream_fill`); a frame's blocks `frameBlocks` (sim/ob.mjs) | |
 | the C's spectrum | `Lizard.measure(true)` then `read()`: 2 * 320 * subch f32, the detrended coefficients in pos order | |
 | the C's verdicts | `Lizard.rxFinish().ok`; `Lizard.blockStats()` its (-2 declined, -3 stall, -1 cap, > 0 iterations) and est | blocks |
 | a grid from the C's registration | `M._ob_test_sample(img, iw, ih, 1, dims, state, grid)` | n x n f32 row major, pitch n |
 | finish from soft values, verdicts | `Lizard.llrView()` + `rxLdpc(est)` | |
 | the exact symbols sent | `Lizard.measure(true)`, `encode(blocks)`, `sent()` | 640 subch int8, +1 / -1 |
 
-Not exported and not needed: the bit map and whitening tables (the JS regeneration is held to the C's paint) and
+Not exported and not needed: the bit map and whitening tables (the host's regeneration, `core/dec/codes.h`, is held to the C's paint) and
 the C's slot-order LLRs after a finish (`scripts/gpu/back/ref_soft.mjs` gives them from `read()`).
 ## 9. As composed
 
-`back.mjs` is the chain behind the front half. `BackHalf` owns the transform, the soft and LDPC stages' tables and
-the rule stage, and one set of per-frame strides from `dims.mjs derived(sizes, { B })`, which `soft.mjs` and
-`ldpc.mjs` also size a lane's buffers from, so no two stages disagree on where frame f's slots sit. The native host
-(`core/dec/front.cpp`) makes the lanes and records the chain from the setup `gen/gen.mjs` exports (`exportBack`).
+`core/dec/build.cpp` `backHalf` makes the chain behind the front half at a batch size: the transform, the soft and LDPC
+stages' tables and the rule stage, with one set of per-frame strides (`Dims`), which every stage sizes a lane's buffers
+from, so no two stages disagree on where frame f's slots sit. The native host (`core/dec/front.cpp`) makes the lanes
+and records the chain from the tree's `backs[B]`.
 
 ### What the wiring calls
 
 ```
-const bh = await BackHalf.build(device, { B, sizes, precision, picture, log });   // on gen's recording device
+// the tree's backs[B] (build.cpp backHalf at B, its sizes, precision and rings; Tree::back makes another B)
 // the native host, per lane: backLane (LISTS, ARGS, PART, Y, S, BCOUNTS, L, BLK, PILOT, EP, V, ITS, REC and the
-// bind groups), encodeBack (the six dispatches), and the readback: REC, V, ITS, BCOUNTS, PILOT, bh.readBytes a batch
+// bind groups), encodeBack (the six dispatches), and the readback: REC, V, ITS, BCOUNTS, PILOT, the back half's bytes a batch
 //   records: { frame, block, its, id, payload (472 B, id first) }, the verified blocks only
 //   a frame: verdict, its (blocksMax each), counts (COUNT: columns, rows, stored, tried, verified, records, subch,
 //   iterations), pilots (the frame's two readings and their errors), shift (the grid's)
@@ -377,7 +377,7 @@ const bh = await BackHalf.build(device, { B, sizes, precision, picture, log }); 
 
 - `sizes`: the decoder's seven, at the size index `sel[f].z`, each `{ n, subch }` (the picture at its top) or null for a
   size not built. blocksMax, and with it every stride and the readback, is the largest built size's: the most blocks a layout of
-  its sub-channels may state (`back/dims.mjs`, `sim/lizard_pick.mjs` `blocksMaxFor`; 149 at 1072 sub-channels).
+  its sub-channels may state (`core/dec/build.cpp` `Dims`, the C's `lizard_blocks_max_for`; 149 at 1072 sub-channels).
 - `picture`: the front half's rings, `[{ span, margin, lattice }]`, from which PIC holds each ring's grid for a picture
   and its lattice.
 - `arecBuf`: the front half's anchors records, which pass 1 reads (section 10).
@@ -424,7 +424,7 @@ round trip.
 Pass 1 samples each picture itself: no grid is written or read.
 
 - Each sample: module (g0 + x step, g0 + y step) through `toImage` (`slang/src/lib/map.slang`: REFIT's homography), plus
-  the lens about the camera's axis (`slang/register.mjs` LENS, ANCH_REFIT's record) and the anchors' mesh, read by
+  the lens about the camera's axis (`slang/src/lib/lens.slang`, ANCH_REFIT's record) and the anchors' mesh, read by
   `bilinH` (`slang/src/lib/lumh.slang`: one fetch through the texture unit's linear filter, the position clamped to the
   frame's outer texel centres, so a read past the frame takes its edge texel as `bilin0`'s clamp to the frame's own w, h
   does; the weights the device's fixed point), in the same order a thread loads its 8 rows of a column quad. (Until
@@ -432,7 +432,7 @@ Pass 1 samples each picture itself: no grid is written or read.
 - Bindings: 8 storage buffers (LISTS, twiddles, PART, Y, BCOUNTS, maps, resid, and the anchors' records), the frame
   texture and the linear sampler its bilinear reads go through (binding 11: one filtered fetch a sample, the position
   clamped to the frame's outer texel centres), and two uniforms:
-  the params and PIC (a size's grid in each ring, `gpu/tables.mjs` gridOf, and the rings' lattices). The gate writes
+  the params and PIC (a size's grid in each ring, g0 = margin + 0.5 span / n, step span / n, and the rings' lattices). The gate writes
   every frame's (w, h) and ring into LISTS, and the pass reads the edge clamp and the ring from there.
 - `sel[f]` is written by PICK (F6) in find mode, cleared at the head of every find batch, or by the host when it hands
   the maps over; F8 sets its version and picture. The pass samples exactly the frames the gate lists. BCOUNTS column 0

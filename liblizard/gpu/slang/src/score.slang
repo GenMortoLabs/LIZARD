@@ -1,5 +1,5 @@
 // F6a: every hypothesis through the track read, a workgroup each.
-// Defines (finder.mjs): HYP, K, NEAR, ORIENT, RING_COUNT, ZEROS_9.
+// Defines (core/dec/build.cpp Finder): HYP, K, NEAR, ORIENT, RING_COUNT, ZEROS_9.
 #include "lib/sync.slang"
 #include "lib/frame.slang"
 #include "lib/convert.slang"

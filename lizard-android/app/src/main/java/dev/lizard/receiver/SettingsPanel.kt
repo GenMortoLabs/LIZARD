@@ -1,6 +1,6 @@
 package dev.lizard.receiver
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import dev.lizard.readout.Readout
 import java.util.Locale
 import kotlinx.serialization.json.JsonNull
@@ -55,7 +55,7 @@ internal fun MainActivity.devReadout(): String {
         val word = j.obj("word")
         val v = word?.int("version")?.toInt() ?: 0
         put("code", "found ${f(100 * j.num("foundShare"), 0)}%" + (if (j.num("side") > 0) ", symbol ${f(j.num("side"), 0)} px" else "") +
-                (if (v > 0) ", LIZARD-${Pick.STEP * v}" else ", no word yet"),
+                (if (v > 0) ", LIZARD-${Ladder.STEP * v}" else ", no word yet"),
             "${Readout.rate(j.num("goodputKBs"))}, ${j.int("blocks")} blocks in ${f(j.num("windowSecs"), 2)} s" +
                 (j.obj("totals")?.let { t -> "; total ${t.int("blocks")} blocks in ${t.int("frames")} frames" } ?: ""))
         val file = j.obj("file")

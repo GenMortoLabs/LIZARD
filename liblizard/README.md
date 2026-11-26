@@ -11,7 +11,7 @@ One C API (`include/lizard.h`), three bindings over it:
 | | what | where |
 |---|---|---|
 | C | the shared library: `liblizard.so` (Linux, Android), `lizard.dll` (Windows: cross-built from Linux, not yet run) | `include/`, `api/` |
-| WebAssembly | one ES module and its `.wasm` in two builds (WebAssembly SIMD with wasm exceptions; WebAssembly 1.0 for engines without them), no threads, no GPU | `bindings/wasm/` |
+| WebAssembly | one ES module and its `.wasm` in two builds (WebAssembly SIMD with wasm exceptions; WebAssembly 1.0 for engines without them), no threads, no GPU (the web app's own threaded module beside it: Build) | `bindings/wasm/` |
 | Kotlin | a JVM library (desktops; its natives Linux x86-64 only), and an AAR (Android, arm64, the GPU files in it) | `bindings/kotlin/` |
 
 macOS has no preset.
@@ -21,9 +21,10 @@ session's natives (`api/jni_session.cpp`, registered at its load), so `dev.lizar
 app.
 
 Beside them, `kotlin/` holds plain-JVM code the apps use, compiled into both the Android app and the desktop app with
-their shared UI (`../lizard-ui`): `Tar.kt`, how several files or a folder become one transfer (a tar,
-`research/SPEC.md` 9.6) and how a receiver unpacks one; `Readout.kt`, the receive screen's words and figures; and
-`Pick.kt` (`dev.lizard.pick`), the sender's ladder, rings and rates.
+their shared UI (`../lizard-ui`): `Lib.kt` (`dev.lizard.lib`), the C's format numbers (`Ladder`) and the senders'
+bundle and its reader (`Bundle`, `tarEach`, `untar`: `api/tar.cpp`), how several files or a folder become one transfer
+(a tar, `research/SPEC.md` 9.6) and how a receiver unpacks one, through the natives each app's library registers
+(`api/jni_lib.cpp`); and `Readout.kt`, the receive screen's words and figures.
 
 ## Layers
 
@@ -40,11 +41,14 @@ their shared UI (`../lizard-ui`): `Tar.kt`, how several files or a folder become
    2:1 region), to its verified blocks, at the layout its own word states; nothing carries from frame to frame.
 3. **The transfer.** `liz_tx`: a file (or the test stream) to each frame's blocks. `liz_rx`: a frame's verified blocks
    in, the file out once every source block is decoded and the file's BLAKE3 root checked (a file that fails is
-   refused whole and received again), in memory or under a directory.
+   refused whole and received again), in memory or under a directory. Refresh, for a sender that paints frames of its
+   own: `liz_refresh_places` lays the four rates' delays on a format's block places, and `liz_refresh_held` says which
+   blocks of a frame repeat the frame before's (the rule `liz_sender` follows).
 4. **The engines** (native builds): `liz_receiver` decodes camera frames on its own threads (the GPU decoder through
-   Vulkan in batches, else the C on a pool) into a transfer; `liz_sender` paints frames ahead on its own threads (the
-   GPU's encoder, else the C). The GPU paths read their kernels and nets from an assets directory (`share/lizard` as
-   installed); with none, or no Vulkan device that runs them, the CPU does the work. Vulkan is loaded at run time.
+   Vulkan in batches, or Metal on Apple's systems, else the C on a pool) into a transfer; `liz_sender` paints frames
+   ahead on its own threads (the GPU's encoder, else the C). The GPU paths read their kernels and nets from an assets
+   directory (`share/lizard` as installed: SPIR-V for Vulkan, the Metal Shading Language for Metal); with none, or no
+   GPU device that runs them, the CPU does the work. Vulkan is loaded at run time; Metal is the system's.
 5. **The receive session** (desktop systems and Android; `core/rx/session.h`, the cameras in `core/cam/`):
    `liz_session` drives a camera of the system's (UVC through V4L2, Media Foundation or AVFoundation; GenICam cameras,
    USB3 Vision and GigE Vision, through Aravis 0.8 loaded at run time on the desktop systems, `LIZ_ARAVIS`, else the
@@ -98,7 +102,7 @@ needs Node and the wasm module (`./build.sh`, with emsdk: it writes `bindings/wa
 the path the repository's tools import it by, which re-exports it); the GPU files installed under
 `share/lizard` are the generated tree `out/` (`../lizard-android/build.sh tools`, then `gen`).
 
-Options: `LIZ_GPU` (the Vulkan engines; off in wasm), `LIZ_JNI`, `LIZ_TESTS`, `LIZ_SAN`, `LIZ_WASM_MVP` (the wasm build as
+Options: `LIZ_GPU` (the GPU engines, Vulkan's or on Apple's systems Metal's; off in wasm), `LIZ_JNI`, `LIZ_TESTS`, `LIZ_SAN`, `LIZ_WASM_MVP` (the wasm build as
 WebAssembly 1.0, the `wasm-mvp` preset), `LIZ_WASM_DIST` (where the wasm build writes its module, `bindings/wasm/dist`
 by default), `LIZ_VERIFY_POINTS` (a lab build: the border finder's point scans checked against the plain scan they
 replaced, `./build.sh verify`), `LIZ_GPU_TREE` (the generated GPU
@@ -126,7 +130,16 @@ cd bindings/kotlin && ./gradlew :lizard-android:assembleRelease # the AAR
 
 Beside the codec's module the default `./build.sh` makes the web receiver's file reader, `dist/lizard-media.mjs` and its
 `.wasm` (`lizard_media`, `LIZ_WASM_MEDIA`: the file camera's reader, `core/cam/media_source.cpp`, over FFmpeg built for
-WebAssembly by `ffmpeg/build.sh wasm`); it is the web app's, not part of the package below.
+WebAssembly by `ffmpeg/build.sh wasm`), and the web app's threaded module, `dist/lizard-mt.mjs` and its `.wasm`
+(`LIZ_WASM_THREADS`; `./build.sh mt` alone): every object built `-pthread` (threads as Web Workers over one
+SharedArrayBuffer heap, so a page that loads it is cross-origin isolated; one worker made at load, WasmFS's OPFS thread,
+and every other as the C starts a thread), WasmFS with its OPFS backend, and beside the
+codec's exports the web receiver's engine (`bindings/wasm/engine.cpp`: `core/cpu/pool.h`'s decode threads into
+`core/rx/xfer_rx.h`'s transfer, its store on OPFS) and the web sender's transfer over a picked file read where it lies
+(`bindings/wasm/send.cpp`: `liz_tx_new_read`, the pack and the spill on OPFS). Both are the web app's, not part of the
+package below. Every build of the codec's module also carries the GPU sender's tables for its codec
+(`bindings/wasm/tables.cpp` over `core/tx/send_tables.cpp`, the native painter's), which the web's WebGPU encoder
+paints from.
 
 The wasm package holds two builds of one module. `dist/lizard.mjs` runs the codec's vector paths on WebAssembly SIMD
 and throws C++ exceptions as wasm's own (wasm exception handling); `dist/lizard-mvp.mjs` is WebAssembly 1.0 with no

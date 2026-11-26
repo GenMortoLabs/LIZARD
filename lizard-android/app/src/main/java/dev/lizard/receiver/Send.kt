@@ -1,6 +1,6 @@
 package dev.lizard.receiver
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import dev.lizard.readout.Readout
 import android.content.Context
 import androidx.compose.ui.unit.Dp
@@ -12,10 +12,10 @@ import android.os.ParcelFileDescriptor
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
-import dev.lizard.tar.Bundle
-import dev.lizard.tar.Stoppable
-import dev.lizard.tar.Stopped
-import dev.lizard.tar.TarEntry
+import dev.lizard.lib.Bundle
+import dev.lizard.lib.Stoppable
+import dev.lizard.lib.Stopped
+import dev.lizard.lib.TarEntry
 import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
@@ -79,7 +79,7 @@ class SendState(private val a: MainActivity) {
 
     private val prefs = a.getSharedPreferences("lizard", Context.MODE_PRIVATE)
     // ai: What Start sends (2026-10-16): one file as itself, or several files or a folder as one tar
-    // ai: (liblizard/kotlin/Tar.kt Bundle, the web sender's rule); `reading` while a pick wanted is walked and sized or
+    // ai: (liblizard/kotlin/Lib.kt Bundle, the C's, the web sender's rule); `reading` while a pick wanted is walked and sized or
     // ai: the bundle is made
     var choice by mutableStateOf<Bundle?>(null)
     var reading by mutableStateOf(false)
@@ -198,26 +198,26 @@ class SendState(private val a: MainActivity) {
     val exportSize: String get() {
         exportNow?.takeIf { it.optBoolean("done") }?.let { return Readout.bytes(it.optLong("bytes")) }
         val bytes = if (compressed > 0) compressed else size
-        val subch = Pick.STEP * blocks
-        val side = runCatching { Native.frameSide(subch, Pick.span(ringIndex)) }.getOrDefault(0)
+        val subch = Ladder.STEP * blocks
+        val side = runCatching { Native.frameSide(subch, Ladder.span(ringIndex)) }.getOrDefault(0)
         val est = SendRows.exportEstimate(cycles, bytes, codes * runCatching { Native.blocksFor(subch) }.getOrDefault(0), codes.toLong() * side * side)
         return if (est > 0) Readout.bytes(est) else ""
     }
     // ai: The format's size (2026-10-02), the web sender's slider (send.html #blocks): a version 4 to 64 (16
-    // ai: sub-channels a step, Pick.STEP), painted as set whatever the square (the web's too), Pick.VERSION_DEFAULT
+    // ai: sub-channels a step, Ladder.STEP), painted as set whatever the square (the web's too), Ladder.VERSION_DEFAULT
     // ai: (LIZARD-480) unless chosen; no auto since 2026-11-07 (0 was the largest the square held: a kept 0 reads as the
     // ai: default); kept, as the web's #subch is ("sendVersion" since the versions went to 16 sub-channels, 2026-10-29:
     // ai: the "sendBlocks" before counted 8). picked: the sub-channels the last configure took.
-    var blocks by mutableStateOf(prefs.getInt("sendVersion", Pick.VERSION_DEFAULT).let { if (it in Pick.VERSION_MIN..Pick.VERSION_MAX) it else Pick.VERSION_DEFAULT })
+    var blocks by mutableStateOf(prefs.getInt("sendVersion", Ladder.VERSION_DEFAULT).let { if (it in Ladder.VERSION_MIN..Ladder.VERSION_MAX) it else Ladder.VERSION_DEFAULT })
     var picked by mutableStateOf(0)
     // ai: VSync (2026-10-23, on by default, the desktop sender's): the rate voted on both surfaces (the window's and the
     // ai: ring's, jni.cpp), so the panel moves to a mode the rate divides; off, no vote, the system's choice. Kept.
     var vsyncOn by mutableStateOf(prefs.getBoolean("sendVsync", true))
     // ai: Pictures a second (2026-10-02), the web's #fps: 60 unless set (the word states it; a rate the display's refresh
     // ai: does not divide holds pictures unevenly); kept, as the web's is. "Receiving with" (the app 60, a browser 24) went
-    // ai: the same day. Under VSync Pick.FPS's chips (2026-10-23; a kept rate read as the nearest), without it a 1 to 60
+    // ai: the same day. Under VSync SendRows.FPS's chips (2026-10-23; a kept rate read as the nearest), without it a 1 to 60
     // ai: slider; VSync turned on takes a slider's rate to the nearest of the chips'.
-    var rate by mutableStateOf(prefs.getInt("sendFps", 60).let { if (vsyncOn) Pick.fpsOf(it) else it.coerceIn(1, 60) })
+    var rate by mutableStateOf(prefs.getInt("sendFps", 60).let { if (vsyncOn) SendRows.fpsOf(it) else it.coerceIn(1, 60) })
     // ai: The screen's brightness while sending (2026-10-02): 0 the phone's own (System, at every launch since
     // ai: 2026-10-27: forcing 100 at each Start, the default from 2026-10-03, was a nuisance and did not always hold), or
     // ai: 1 to 100% once the slider is moved, the window's own override, so the phone's setting is left as it was once
@@ -232,14 +232,14 @@ class SendState(private val a: MainActivity) {
     // ai: apart (0 to 64, 12 unless set); kept. Each code is painted in its share of the box (roomOf).
     var codes by mutableStateOf(prefs.getInt("sendCodes", 1).coerceIn(1, 2))
     var gap by mutableStateOf(prefs.getInt("sendGap", 12).coerceIn(0, 64))
-    // ai: the ring (2026-10-31, as the desktop's): an index into Pick.RINGS, -1 the default (the 128); kept
-    var ring by mutableStateOf(prefs.getInt("sendRing", -1).let { if (it in Pick.RINGS.indices) it else -1 })
-    val ringIndex get() = if (ring in Pick.RINGS.indices) ring else Pick.RING_DEFAULT
+    // ai: the ring (2026-10-31, as the desktop's): an index into Ladder.RINGS, -1 the default (the 128); kept
+    var ring by mutableStateOf(prefs.getInt("sendRing", -1).let { if (it in Ladder.RINGS.indices) it else -1 })
+    val ringIndex get() = if (ring in Ladder.RINGS.indices) ring else Ladder.RING_DEFAULT
     // ai: Margin (2026-10-27; the web's and the desktop's since 2026-10-23):
-    // ai: the light between a code's ring and the box's edge, modules, its quiet zone (Pick.QUIET) at least and
+    // ai: the light between a code's ring and the box's edge, modules, its quiet zone (Ladder.QUIET) at least and
     // ai: MARGIN_MAX at most, MARGIN_DEFAULT unless set; kept (sendMargin). Not painted: the box keeps it round the code's
     // ai: surface (CodeBox), as the desktop's presenter keeps it round the frame.
-    var margin by mutableStateOf(prefs.getInt("sendMargin", MARGIN_DEFAULT).coerceIn(Pick.QUIET, MARGIN_MAX))
+    var margin by mutableStateOf(prefs.getInt("sendMargin", MARGIN_DEFAULT).coerceIn(Ladder.QUIET, MARGIN_MAX))
     // ai: Refresh (2026-11-17, the desktop's; lizard-ui rateRefreshSettings; Rate refresh of 2026-11-12 before): each code
     // ai: rate's delay, its blocks new every n-th picture, 6/7, 3/4, 2/3, 1/2, 1 to REFRESH_MAX; handed
     // ai: to the sender as it is made and at each change, kept
@@ -259,8 +259,8 @@ class SendState(private val a: MainActivity) {
         prefs.edit().putInt("sendInk", ink).putInt("sendPaper", paper).apply()
         if (h != 0L) Native.txColours(h, ink, paper)
     }
-    private val sideModules get() = Pick.modules(playMeta?.ring ?: ringIndex) + 2.0 * Pick.QUIET   // ai: a painted symbol's side, its quiet zone in
-    private val past get() = (margin - Pick.QUIET).toDouble()           // ai: the margin past that quiet zone, modules
+    private val sideModules get() = Ladder.modules(playMeta?.ring ?: ringIndex) + 2.0 * Ladder.QUIET   // ai: a painted symbol's side, its quiet zone in
+    private val past get() = (margin - Ladder.QUIET).toDouble()           // ai: the margin past that quiet zone, modules
     // ai: the painted frame's width over its height: the codes and the gaps between them, each code as tall as the frame
     // ai: (a gap of `gap` modules a share of one code's side: the web's gapFrac)
     private val frameAspect get() = playMeta?.aspect ?: (codes + (codes - 1) * gap / sideModules)
@@ -428,11 +428,11 @@ class SendState(private val a: MainActivity) {
     // ai: configure is a new format, its first frames tens of ms away, and one a drag step kept the code flashing
     private var unsettled = false
     fun settle() { if (unsettled) { unsettled = false; if (phase == Phase.On) reconfigure() } }
-    fun chooseBlocks(b: Int) { if (b !in Pick.VERSION_MIN..Pick.VERSION_MAX || b == blocks) return; blocks = b; prefs.edit().putInt("sendVersion", blocks).apply(); unsettled = true }
+    fun chooseBlocks(b: Int) { if (b !in Ladder.VERSION_MIN..Ladder.VERSION_MAX || b == blocks) return; blocks = b; prefs.edit().putInt("sendVersion", blocks).apply(); unsettled = true }
     fun chooseRate(r: Int, now: Boolean = true) { rate = r.coerceIn(1, 60); prefs.edit().putInt("sendFps", rate).apply(); unsettled = true; if (now) settle() }
     fun chooseVsync(on: Boolean) {
         vsyncOn = on
-        if (on && rate !in Pick.FPS) rate = Pick.fpsOf(rate)
+        if (on && rate !in SendRows.FPS) rate = SendRows.fpsOf(rate)
         prefs.edit().putBoolean("sendVsync", on).putInt("sendFps", rate).apply()
         if (phase == Phase.On) reconfigure()
     }
@@ -444,13 +444,13 @@ class SendState(private val a: MainActivity) {
     fun pause(p: Boolean) { if (phase == Phase.On) paused = p }
     // ai: what the code offers at most, KB/s: blocks a frame x 460 B x pictures a second x the share of blocks new in a
     // ai: frame (Rate refresh's repeats none: the stats' fresh, 1 before them); null before the first configure
-    val capacityKBs get() = if (picked > 0) codes * (if (stats.blocks > 0) stats.blocks else Native.blocksFor(picked)) * Pick.PAYLOAD.toDouble() * rate * stats.fresh / 1000 else null
+    val capacityKBs get() = if (picked > 0) codes * (if (stats.blocks > 0) stats.blocks else Native.blocksFor(picked)) * Ladder.PAYLOAD.toDouble() * rate * stats.fresh / 1000 else null
     fun choosePainter(p: String) { painter = p; prefs.edit().putString("sendPainter", p).apply(); if (phase == Phase.On) reconfigure() }
     fun chooseCodes(c: Int) { codes = c.coerceIn(1, 2); prefs.edit().putInt("sendCodes", codes).apply(); if (phase == Phase.On) reconfigure() }
-    fun chooseRing(v: Int) { ring = if (v in Pick.RINGS.indices) v else -1; prefs.edit().putInt("sendRing", ring).apply(); if (phase == Phase.On) reconfigure() }
+    fun chooseRing(v: Int) { ring = if (v in Ladder.RINGS.indices) v else -1; prefs.edit().putInt("sendRing", ring).apply(); if (phase == Phase.On) reconfigure() }
     fun chooseGap(g: Int) { gap = g.coerceIn(0, 64); prefs.edit().putInt("sendGap", gap).apply(); unsettled = true }
     // ai: at the slider's release (the box resized once: a resize mid-send reconfigures where the room changed)
-    fun chooseMargin(m: Int) { margin = m.coerceIn(Pick.QUIET, MARGIN_MAX); prefs.edit().putInt("sendMargin", margin).apply() }
+    fun chooseMargin(m: Int) { margin = m.coerceIn(Ladder.QUIET, MARGIN_MAX); prefs.edit().putInt("sendMargin", margin).apply() }
     // ai: a group's delay (its code rates), applied at once (the sender's next frame; no configure)
     fun chooseRefresh(rate: Int, v: Int) {
         if (refresh[rate] == v) return
@@ -627,9 +627,9 @@ class SendState(private val a: MainActivity) {
         if (h == 0L || (room <= 0 && !blind)) return
         // ai: a stream's format is its own (the native side takes it from the file)
         val pm = if (runPlay) playMeta else null
-        val subch = Pick.STEP * (pm?.blocks ?: blocks)
+        val subch = Ladder.STEP * (pm?.blocks ?: blocks)
         val threads = min(4, maxOf(1, Runtime.getRuntime().availableProcessors() - 2))
-        val err = Native.txConfigure(h, subch, Pick.span(pm?.ring ?: ringIndex), fps, threads, if (pm != null) 0 else when (painter) { "cpu" -> 0; "gpu" -> 1; else -> 2 },
+        val err = Native.txConfigure(h, subch, Ladder.span(pm?.ring ?: ringIndex), fps, threads, if (pm != null) 0 else when (painter) { "cpu" -> 0; "gpu" -> 1; else -> 2 },
             assets, pm?.codes ?: codes, gap, vsynced, vsyncOn)
         if (err.isNotEmpty()) { phase = Phase.Error(err); stop(); return }
         configured = maxOf(1, room)
@@ -836,8 +836,8 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
         FoldKey.SendCode to listOfNotNull(
             // ai: the slider sets the format's size (its version, sub-channels / 16); its title the blocks that size
             // ai: carries, Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
-            greyedUnless(!held, Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * vBlocks), stats), vBlocks.toFloat(),
-                Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) }),
+            greyedUnless(!held, Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Ladder.STEP * vBlocks), stats), vBlocks.toFloat(),
+                Ladder.VERSION_MIN.toFloat()..Ladder.VERSION_MAX.toFloat(), Ladder.VERSION_MAX - Ladder.VERSION_MIN - 1, { s.settle() }) { v -> s.chooseBlocks(v.roundToInt()) }),
             greyedUnless(!held, ChipChoice("Ring", sm?.ring ?: s.ringIndex, SendRows.rings(stats)) { s.chooseRing(it) }),
             // ai: one code, or two side by side for a receiver's 2:1 crop (the web's #codes)
             greyedUnless(!held, ChipChoice("Codes", vCodes, SendRows.CODES) { s.chooseCodes(it) }),
@@ -847,14 +847,14 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
             greyedUnless(vCodes == 2 && !held, Slide("Spacing", "${s.gap + SPACING_PAST} modules", (s.gap + SPACING_PAST).toFloat(), SPACING_PAST.toFloat()..(64f + SPACING_PAST), 63, { s.settle() }) { v ->
                 val g = v.roundToInt() - SPACING_PAST; if (g != s.gap) s.chooseGap(g) }),
             // ai: the light round the code (SendState.margin), its label live and the box resized at the release
-            Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Pick.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Pick.QUIET - 1,
+            Slide("Margin", "${marginDrag ?: s.margin} modules", (marginDrag ?: s.margin).toFloat(), Ladder.QUIET.toFloat()..MARGIN_MAX.toFloat(), MARGIN_MAX - Ladder.QUIET - 1,
                 { marginDrag?.let { s.chooseMargin(it) }; marginDrag = null }) { v -> marginDrag = v.roundToInt() },
             // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once (a stream's too)
             Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips with VSync on, a slider off), then Rate refresh, a slider a code rate (lizard-ui
         // ai: rateRefreshSettings); a stream's greyed
         FoldKey.SendRefresh to (listOf(
-            if (s.vsyncOn) ChipChoice("FPS", vFps, (Pick.FPS + vFps).distinct().map { it to "$it" }) { s.chooseRate(it) }
+            if (s.vsyncOn) ChipChoice("FPS", vFps, (SendRows.FPS + vFps).distinct().map { it to "$it" }) { s.chooseRate(it) }
             else Slide("FPS", "$vFps", vFps.toFloat(), 1f..60f, 58, { s.settle() }) { v -> val r = v.roundToInt(); if (r != s.rate) s.chooseRate(r, now = false) }) +
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) }).map { if (held) greyed(it) else it },
         // ai: Control (2026-11-18; Stream that day until renamed; lizard-ui controlSettings)
@@ -948,7 +948,7 @@ internal class AndroidSend(private val a: MainActivity) : SendHost {
 
     companion object {
         // ai: Spacing (2026-10-31, the desktop's and the web's name): the gap between two codes' rings plus their two quiet zones
-        const val SPACING_PAST = 2 * Pick.QUIET
+        val SPACING_PAST get() = 2 * Ladder.QUIET
     }
 }
 

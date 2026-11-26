@@ -1010,13 +1010,13 @@ static int layers_parity_w4(const ldpc_t *c, int16_t *const *vw, int count, int 
 }
 #endif
 
-// The learned stop (ldpc_stop.h, gen/ldpc_stop.mjs): one small net a code gives up on a codeword that will not clear,
+// The learned stop (ldpc_stop.h, written by core/tools/ldpc_stop.cpp): one small net a code gives up on a codeword that will not clear,
 // read after every iteration but the last on the decoder's state alone: the violated checks now (bad), their running
 // minimum (low), after iteration 1 (first) and after the iteration before (prev), the iteration t, and the posteriors'
 // growth, min(256 S_t / S_1, 65535) in integers, S the sum over the n posteriors of min(|L|, 1016). Two ReLU layers,
 // each hidden unit from its bias adding weight times input in input order (a multiply, then an add), the output's
 // products added in unit order; given up where the score is under the code's T. The same floats on every target, the
-// GPU kernel's arithmetic (gpu/slang/back_tiers.mjs). Trained to a cap of 60 (LDPC_STOP_CAP) at a budget of one clearing
+// GPU kernel's arithmetic (gpu/slang/src/tldpc.slang). Trained to a cap of 60 (LDPC_STOP_CAP) at a budget of one clearing
 // codeword lost in 1,000; the decline gate before it is the caller's.
 static const ldpc_stop_t *stop_for(const ldpc_t *c) {
   for (int i = 0; i < 4; i++) if (LDPC_STOPS[i].m == c->m) return &LDPC_STOPS[i];
@@ -1200,7 +1200,7 @@ int ldpc_decode_stall(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_
 }
 int ldpc_decode_stop(const ldpc_t *c, const int8_t *llr, uint8_t *out, int max_iter) { return decode_run(c, llr, out, max_iter, 0, 0, stop_for(c)); }
 
-// The code's shape and its block-row tables, for a decoder running somewhere else (gpu/back/ldpc.mjs).
+// The code's shape and its block-row tables, for a decoder running somewhere else (the GPU's hosts: core/dec/codes.h).
 // dims: n, k, m, z, zp, mb, kb, norm, slots_max, slots_total, edges. lay: lay_ptr[mb + 1], then lay_col and
 // lay_shift interleaved, one pair per slot of lay_ptr[mb]. Pass lay = 0 to size the buffers first.
 void ldpc_tables(const ldpc_t *c, int32_t *dims, int32_t *lay) {

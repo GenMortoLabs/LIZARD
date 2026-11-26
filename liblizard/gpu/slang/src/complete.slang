@@ -26,10 +26,11 @@
 // place there, 2026-11-13). A system that leaves a direction free (its least pivot under FIT_PIVOT of its largest
 // diagonal: no ruler where the far side needs one) completes nothing; a completed quad is kept when convex, and SCORE
 // judges it as every quad. A quad the same as one before it in its frame is left: that one is completed. Defines
-// (finder.mjs): LANES (2 STATIONS, int), ALONG0_HI, ALONG0_LO, ALONG1_HI, ALONG1_LO, FIT_LINE, FIT_MARK, FIT_PIVOT,
+// (core/dec/build.cpp Finder): LANES (2 STATIONS, int), ALONG0_HI, ALONG0_LO, ALONG1_HI, ALONG1_LO, FIT_LINE, FIT_MARK, FIT_PIVOT,
 // FIT_ROWS, FIT_RULER_CELL, K, NCC_MIN, PROFILE, PROF_LEN, REACH0, RULER_CELLS0, RULER_DEPTH0, RULER_DEPTH_STEP,
 // RULER_DMAX, RULER_HI, RULER_LOG_LO, RULER_N0, RULER_N1, RULER_ND, RULER_NDEP, RULER_NP, RULER_STEP0, RULER_STEP0C,
-// RULER_STEP1, STATIONS; gen/passes the later passes (PASS_AFTER).
+// RULER_STEP1, STATIONS; the later passes' PASS0_EXT, PASS1_EXT (modules of the corner's) and PASS0_REACH, PASS1_REACH,
+// PASS2_REACH (Finder's PASS_*).
 #include "lib/sync.slang"
 #include "lib/frame.slang"
 #include "lib/round.slang"
@@ -37,7 +38,7 @@
 #include "lib/level_bindings.slang"
 #include "lib/levels.slang"
 // A later pass about the side's fitted line: its stations over EXT (modules of the corner's own module size from the
-// first station, at most the run, or the whole run) at a reach of REACH modules (finder.mjs PASSES, gen/passes).
+// first station, at most the run, or the whole run) at a reach of REACH modules (Finder's PASS_*).
 #define PASS_AFTER(EXT, REACH) \
 { \
     float3 hit = float3(0.0); \
@@ -440,7 +441,11 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
       GroupMemoryBarrierWithGroupSync();
     }
     
-#include "gen/passes"
+    // the later passes (Finder's PASS_*): over PASS0_EXT and PASS1_EXT modules of the corner's from the first
+    // station (at most the run), then the whole run
+    PASS_AFTER(min(PASS0_EXT * u0, t1 - t0), PASS0_REACH)
+    PASS_AFTER(min(PASS1_EXT * u0, t1 - t0), PASS1_REACH)
+    PASS_AFTER((t1 - t0), PASS2_REACH)
 
   }
   if (li == 0u) {

@@ -287,6 +287,14 @@ static int kernel(Ctx& c, const std::string& v, const std::string& dir) {
   auto& d = *c.dev;
   auto s = Setup::load(d, readDir(c.out), v);
   auto isId = [](const std::string& x, char k) { return x.size() > 1 && x[0] == k && std::all_of(x.begin() + 1, x.end(), ::isdigit); };
+  // ai: a back half a step or buffer names by its tree path (backs.<B>. ...) made first, none of it built
+  std::function<void(const json&)> backsIn = [&](const json& j) {
+    if (j.is_string()) {
+      const std::string& x = j.get_ref<const std::string&>();
+      if (x.rfind("backs.", 0) == 0) s->backTree(atoi(x.c_str() + 6));
+    } else if (j.is_array() || j.is_object()) for (const auto& y : j) backsIn(y);
+  };
+  backsIn(job);
   // ai: each step's pipeline and layout, by a tree path's { p, bgl } or a pipeline's id
   struct Step { std::string p, bgl; std::vector<std::string> bind; std::array<uint32_t, 3> dispatch; };
   std::vector<Step> steps;
@@ -295,7 +303,7 @@ static int kernel(Ctx& c, const std::string& v, const std::string& dir) {
     Step x;
     const std::string pipe = st.at("pipe");
     if (isId(pipe, 'p')) {
-      const auto& o = s->objects["pipelines"].at(pipe);
+      const auto& o = s->made.pipelines.at(pipe);
       x.p = pipe; x.bgl = o["groups"][0];
     } else {
       const json* pb = treeAt(s->tree, pipe);
@@ -306,12 +314,12 @@ static int kernel(Ctx& c, const std::string& v, const std::string& dir) {
     s->makeOne(x.p);
     if (!s->built(x.p)) throw wg::Error(pipe + " (" + x.p + "): left out on this device (its workgroup past the device's invocations)");
     for (auto& b : st.at("bind")) x.bind.push_back(b);
-    const auto& kinds = s->objects["bgls"].at(x.bgl);
+    const auto& kinds = s->made.bgls.at(x.bgl);
     if (kinds.size() != x.bind.size()) throw wg::Error(pipe + ": " + std::to_string(x.bind.size()) + " bindings for a layout of " + std::to_string(kinds.size()));
     for (size_t i = 0; i < kinds.size(); i++) if (kinds[i] == "uniform") uniform.insert(x.bind[i]);
     for (int k = 0; k < 3; k++) x.dispatch[k] = st.at("dispatch").size() > (size_t)k ? st["dispatch"][k].get<uint32_t>() : 1;
     steps.push_back(x);
-    const auto& o = s->objects["pipelines"].at(x.p);
+    const auto& o = s->made.pipelines.at(x.p);
     printf("step %zu: %s pipeline %s, module %s, layout %s, dispatch %u x %u x %u\n", steps.size() - 1, pipe.c_str(), x.p.c_str(), o["module"].get<std::string>().c_str(), x.bgl.c_str(), x.dispatch[0], x.dispatch[1], x.dispatch[2]);
   }
   // ai: the buffers and textures, by name
@@ -353,7 +361,7 @@ static int kernel(Ctx& c, const std::string& v, const std::string& dir) {
   std::vector<std::shared_ptr<wg::BindGroup>> groups;
   for (size_t k = 0; k < steps.size(); k++) {
     const auto& st = steps[k];
-    const auto& kinds = s->objects["bgls"].at(st.bgl);
+    const auto& kinds = s->made.bgls.at(st.bgl);
     std::vector<wg::Resource> res;
     for (size_t i = 0; i < st.bind.size(); i++) {
       const std::string& name = st.bind[i];
@@ -915,7 +923,7 @@ static int replay(Ctx& c, const std::string& run, int limit, std::string v, bool
                fo.records.size(), fo.anchors, fo.hasWord ? fo.word.version : 0, jv.bad,
                fo.pilotSubch ? fo.pilotR : NAN, fo.pilotSubch ? fo.pilotSd : NAN, fo.pilotSubch ? fo.pilotR2 : NAN, fo.pilotSubch ? fo.pilotSd2 : NAN, fo.pilotSubch,
                fo.word.count[0], fo.word.count[1], fo.word.count[2], fo.word.count[3], fo.word.fps, fo.word.delay);
-        // ai: the back half's counts (BCOUNTS, slang/back_tiers.mjs): codewords the LDPC ran (blocks not declined), their
+        // ai: the back half's counts (BCOUNTS, tblocks.slang and tldpc.slang): codewords the LDPC ran (blocks not declined), their
         // ai: iterations, verified by the CRC (2026-11-08)
         if (fo.backCounts.size() > 7) printf("back %llu ldpc %u its %u verified %u\n", (unsigned long long)fo.tag, fo.backCounts[3], fo.backCounts[7], fo.backCounts[4]);
         // ai: LIZ_BLOCKS=1 (2026-11-08): each verified block's iterations by its index in the frame, and the blocks of the

@@ -1,4 +1,4 @@
-// ai: wg over Vulkan (wg.h). What each WebGPU rule costs here: a buffer's zero fill and a texture's clear and layout
+// ai: wg over Vulkan (wg.h; its Metal twin wg_metal.mm, the build's one or the other). What each WebGPU rule costs here: a buffer's zero fill and a texture's clear and layout
 // ai: change are recorded when it is made and run at the head of the next submit (`inits`), with the queue's writes
 // ai: (`writes`, vkCmdUpdateBuffer in pieces of 64 KB or less); a global memory barrier sits before every command
 // ai: of an encoder but its first (`hazard`), and after the head. Nothing waits on the device but Ticket::wait,
@@ -140,9 +140,10 @@ std::unique_ptr<Device> Device::create(const std::string& want, bool validate, s
   VkPhysicalDeviceProperties props;
   vkGetPhysicalDeviceProperties(pick, &props);
   d->name = props.deviceName;
-  d->type = props.deviceType;
+  d->kind = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? Kind::Cpu : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? Kind::Discrete
+          : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? Kind::Integrated : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU ? Kind::Virtual : Kind::Other;
   // ai: the hang's bound: none on a software device, whose batches take seconds (wg.h HANG_MS)
-  d->hangMs = d->type == VK_PHYSICAL_DEVICE_TYPE_CPU ? 0 : HANG_MS;
+  d->hangMs = d->kind == Kind::Cpu ? 0 : HANG_MS;
   if (const char* h = getenv("LIZ_HANG_MS")) d->hangMs = (uint32_t)std::max(0, atoi(h));
   d->apiVersion = std::min(props.apiVersion, app.apiVersion);
   d->vendorId = props.vendorID;
@@ -684,6 +685,32 @@ std::shared_ptr<Pipeline> Device::createPipeline(const std::vector<uint32_t>& sp
   return p;
 }
 
+std::shared_ptr<Pipeline> Device::createPipeline(const Module& m, std::shared_ptr<BindGroupLayout> bgl, const std::string& id, const std::string& label, const std::vector<uint32_t>& spec) {
+  if (m.spirv.empty()) throw Error("module " + m.name + " has no SPIR-V");
+  return createPipeline(m.spirv, std::move(bgl), id, label, spec);
+}
+
+// ai: gen's SPIR-V (<folder>/name.spv)
+Module readModule(const Read& read, const std::string& name, const std::string& folder) {
+  const std::string path = (folder.empty() ? std::string("spv") : folder) + "/" + name + ".spv";
+  std::vector<uint8_t> b;
+  try { b = read(path); } catch (const std::exception&) {}
+  if (b.size() < 20 || b.size() % 4) throw Error(path + ": " + (b.empty() ? "missing" : "not SPIR-V"));
+  Module m;
+  m.name = name;
+  m.spirv.resize(b.size() / 4);
+  memcpy(m.spirv.data(), b.data(), b.size());
+  return m;
+}
+
+// ai: by its UTF-8 path (fs::u8path: Windows reads a narrow one in the ANSI code page)
+Module readModule(const std::string& dir, const std::string& name) {
+  return readModule([&](const std::string& rel) {
+    std::ifstream f(std::filesystem::u8path(dir + "/" + rel), std::ios::binary);
+    return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  }, name);
+}
+
 Pipeline::~Pipeline() {
   if (!dev || dev->abandoned) return;
   if (pipe) vkDestroyPipeline(dev->dev, pipe, nullptr);
@@ -1008,6 +1035,66 @@ std::shared_ptr<Ticket> Device::submit(Encoder& enc, VkSemaphore wait, uint64_t 
   t->keep = std::move(staging);
   staging.clear();
   return t;
+}
+
+// ai: on queue2 from pool2, both under their locks (pool2Mu, queue2Mu: the presenter shares the queue), the fence waited
+// ai: for outside them; a copy not done in hangMs keeps its command buffer and fence (wg's rule for a hung submit)
+void Device::copyOnQueue2(const Buffer& src, uint64_t srcOff, const Buffer& dst, uint64_t dstOff, uint64_t size) {
+  VkCommandBuffer cb = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  bool submitted = false;
+  const auto release = [&] {
+    std::lock_guard<std::mutex> p(pool2Mu);
+    if (fence) vkDestroyFence(dev, fence, nullptr);
+    if (cb) vkFreeCommandBuffers(dev, pool2, 1, &cb);
+  };
+  try {
+    {
+      std::lock_guard<std::mutex> p(pool2Mu);
+      VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+      cai.commandPool = pool2;
+      cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+      cai.commandBufferCount = 1;
+      check(vkAllocateCommandBuffers(dev, &cai, &cb), "vkAllocateCommandBuffers (queue2 copy)");
+      VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+      bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+      vkBeginCommandBuffer(cb, &bi);
+      const VkBufferCopy bc{srcOff, dstOff, size};
+      vkCmdCopyBuffer(cb, src.buf, dst.buf, 1, &bc);
+      check(vkEndCommandBuffer(cb), "vkEndCommandBuffer (queue2 copy)");
+    }
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    check(vkCreateFence(dev, &fci, nullptr, &fence), "vkCreateFence (queue2 copy)");
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cb;
+    {
+      std::lock_guard<std::mutex> p(pool2Mu);
+      std::lock_guard<std::mutex> q2(queue2Mu());
+      check(vkQueueSubmit(queue2, 1, &si, fence), "vkQueueSubmit (queue2 copy)");
+      submitted = true;
+    }
+    const VkResult r = vkWaitForFences(dev, 1, &fence, VK_TRUE, hangMs ? uint64_t{hangMs} * 1000000 : UINT64_MAX);
+    if (r == VK_TIMEOUT) throw Error("a copy on the second queue did not finish in " + std::to_string(hangMs) + " ms");
+    check(r, "vkWaitForFences (queue2 copy)");
+  } catch (...) {
+    if (!submitted) release();
+    throw;
+  }
+  release();
+}
+
+void Device::waitQueue2() {
+  std::lock_guard<std::mutex> q2(queue2Mu());
+  vkQueueWaitIdle(queue2);
+}
+
+void Device::flushMapped(Buffer& b) {
+  if (b.coherent || !b.mem) return;
+  VkMappedMemoryRange mr{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+  mr.memory = b.mem;
+  mr.size = VK_WHOLE_SIZE;
+  vkFlushMappedMemoryRanges(dev, 1, &mr);
 }
 
 void Device::flush() {

@@ -5,17 +5,19 @@
 // half spectrum stored to Y. Built a batch size, a picture size and a precision each. Every workgroup variable is
 // written before the barrier that precedes its reads, so none is zeroed. Every listed frame's anchors record is on
 // (ANCH_FIT writes it for every frame it finds), so the anchors' mesh, erase and gain are read on every one. The
-// arithmetic: ../../back/DESIGN.md 1 to 3 and 10. Defines (back_transform.mjs pass1Source): F16 (0 or 1), LANES (N / 8,
+// arithmetic: ../../back/DESIGN.md 1 to 3 and 10. Defines (core/dec/build.cpp backHalf): F16 (0 or 1), LANES (N / 8,
 // int), PICTURE_N, BATCH, LISTS_HEAD, LISTS_ROWS, LISTS_RING, ANCH_SIDE, ANCH_ROWS, ANCH_REC, ANCH_SURF, ANCH_GAIN
-// (uint), ANCH_ERASE (int), RING_COUNT, LATTICE_VECS, RESID, LUMH_BINDING; gen/fft the column FFT's stages for the
-// picture's size.
+// (uint), ANCH_ERASE (int), RING_COUNT, LATTICE_VECS, RESID, LUMH_BINDING; the column FFT's stages lib/fft_body.slang's,
+// from the picture's size.
 #if F16
 #define STORE_T half2
 #define LD(X) float2(X)
+#define ST(X) half2(X)
 #define YB_T uint4
 #else
 #define STORE_T float2
 #define LD(X) X
+#define ST(X) X
 #define YB_T float4
 #endif
 struct ParamsBlock { uint yStride; uint partStride; uint size; float m2; float sx2; float sq2; uint sStride; };
@@ -94,6 +96,10 @@ float2 anchMesh(AnchHerm h, uint col) {
   return h.w.x * anE[o] + h.w.y * anE[o + 1u] + h.w.z * anE[o + 2u] + h.w.w * anE[o + 3u];
 }
 #include "lib/butterflies.slang"
+#define FFT_LANES_2 1
+#define FFT_BUF0 buf0
+#define FFT_BUF1 buf1
+#include "lib/fft.slang"
 // Row y = tid + R T of the quad's four columns: read between its two nodes, the squares filled and the gain applied,
 // into z[R] and the columns' sums.
 #define ROW(R) \
@@ -143,7 +149,7 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
   float gstep = pr.y;
   Lens lz = lensOf(f);
   LUMH_HEAD(fw, fh)
-  // the squares' fill (ANCH_FIT's surface, ../../plan/back_transform.mjs ANCH_SURF): u = m sk + so of a module
+  // the squares' fill (ANCH_FIT's surface, core/dec/plan.h ANCH_SURF): u = m sk + so of a module
   // coordinate m
   uint ab = f * ANCH_REC;
   float4 ahd = arec[ab];
@@ -239,7 +245,9 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
     v1[6] = z[6].zw - mean.zw;
     v0[7] = z[7].xy - mean.xy;
     v1[7] = z[7].zw - mean.zw;
-#include "gen/fft"
+#define FFT_V0 v0
+#define FFT_V1 v1
+#include "lib/fft_body.slang"
     // the half spectrum: each complex lane two real columns, split by symmetry, stored to Y four columns a row
     for (uint vv = 1u + tid; vv < rowsF; vv += T) {
       float2 z0 = LD(buf0[vv]);

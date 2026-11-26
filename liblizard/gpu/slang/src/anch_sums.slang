@@ -1,11 +1,11 @@
 // ANCH_SUMS (2026-11-20): the squares' fill's six sums (the surface's basis 1, u, u^2, w, w^2, u w times the picture at
 // each of the ANCH_FILL x ANCH_FILL points in no square), a workgroup an (ANCH_GS-th of the points, frame): each lane
-// FILL_PER points of its slice, reduced in workgroup memory, the slice's sums written as two float4 where fillSums puts
-// them; ANCH_FIT adds the slices. On ANCH_FIND's layout and group (anch read and written). Its reads through the final
-// map, after ANCH_REFIT.
-// Defines (anchors.mjs): FILL_PER (uint); lib/anch_head.slang's and lib/anch_fill.slang's.
+// FILL_PER points of its slice, reduced in workgroup memory, the slice's sums written as two float4 into fill where
+// fillSums puts them; ANCH_FIT adds the slices. On ANCH_FIND's layout and group (fill its binding 8). Its reads through
+// the final map, after ANCH_REFIT.
+// Defines (core/dec/build.cpp Anchors): FILL_PER (uint); lib/anch_head.slang's and lib/anch_fill.slang's.
 #include "lib/anch_head.slang"
-[[vk::binding(7, 0)]] RWStructuredBuffer<float4> anch;
+[[vk::binding(8, 0)]] RWStructuredBuffer<float4> fill;
 #include "lib/anch_fill.slang"
 groupshared float red[6 * 64];
 [numthreads(64, 1, 1)]
@@ -63,7 +63,7 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
   GroupMemoryBarrierWithGroupSync();
   if (li == 0u) {
     uint o = fillSums(f) + 2u * g;
-    anch[o] = float4(red[0], red[64], red[128], red[192]);
-    anch[o + 1u] = float4(red[256], red[320], 0.0, 0.0);
+    fill[o] = float4(red[0], red[64], red[128], red[192]);
+    fill[o + 1u] = float4(red[256], red[320], 0.0, 0.0);
   }
 }

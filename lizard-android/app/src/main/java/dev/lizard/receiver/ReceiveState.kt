@@ -19,7 +19,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.lizard.Session
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -671,7 +671,7 @@ class ReceiveState(private val a: MainActivity) {
         val version = w?.num("version")?.toInt() ?: 0
         if (version == 0 || blocks.size < 8 || 2 * blocks.size < all) return
         val byBlocks = blocks.sortedDescending()
-        val least = maxOf(1, (byBlocks[minOf(2, byBlocks.size - 1)] + 1) / 2, (Native.blocksFor(Pick.STEP * version) + 7) / 8)
+        val least = maxOf(1, (byBlocks[minOf(2, byBlocks.size - 1)] + 1) / 2, (Native.blocksFor(Ladder.STEP * version) + 7) / 8)
         val clean = blocks.filter { it >= least }
         val repeated = blocks.indices.count { blocks[it] >= least && fresh[it] == 0 }
         val gpuMs = j.num("gpuMs")
@@ -682,7 +682,7 @@ class ReceiveState(private val a: MainActivity) {
         // ai: its short side), and the share of frames found
         val crop = cam?.size?.let { s -> if (a.settings.layout == "2:1") minOf(maxOf(s.width, s.height) / 2, minOf(s.width, s.height)) else minOf(s.width, s.height) } ?: 0
         Log.i(TAG, "rx: %s, LIZARD-%d, goodput %.0f KB/s, %d of %d captures clean, %.1f blocks a clean capture, ceiling %.0f KB/s, %d frames a second, symbol %.0f px of a %d crop, found %.0f%%, %d repeated, %d dropped, %s".format(
-            j.str("state"), Pick.STEP * version, j.num("goodputKBs"), clean.size, blocks.size, each, each * Pick.PAYLOAD * camera / 1000, j.num("processedFps").toInt(),
+            j.str("state"), Ladder.STEP * version, j.num("goodputKBs"), clean.size, blocks.size, each, each * Ladder.PAYLOAD * camera / 1000, j.num("processedFps").toInt(),
             j.num("side"), crop, 100 * j.num("foundShare"), repeated, j.num("dropped").toInt(), cost))
     }
 

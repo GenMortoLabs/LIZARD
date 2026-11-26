@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "android_env.h"
+#include "jni_lib.h"
 #include "jni_session.h"
 #include "jni_text.h"
 #include "pack.h"
@@ -72,11 +73,12 @@ using lizard::applyDebugEnv;   // ai: android_env.h: debug.lizard.env's LIZ_* sw
 }  // namespace
 
 // ai: the receive session's natives registered on dev.lizard.SessionNative (the binding's Session), so the app's
-// ai: Session calls land here; the sender's are found by their Java_ names
+// ai: Session calls land here; the sender's are found by their Java_ names; the format's numbers and
+// ai: the bundle's on dev.lizard.lib.LibNative (liblizard/api/jni_lib.cpp)
 extern "C" JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void*) {
   JNIEnv* e = nullptr;
   if (vm->GetEnv(reinterpret_cast<void**>(&e), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
-  if (!lizard::jni::registerSession(e)) return JNI_ERR;
+  if (!lizard::jni::registerSession(e) || !lizard::jni::registerLib(e)) return JNI_ERR;
   return JNI_VERSION_1_6;
 }
 
@@ -862,7 +864,7 @@ extern "C" JNIEXPORT jstring JNICALL Java_dev_lizard_receiver_Native_txConfigure
 }
 
 // ai: Refresh (Sender::setRefresh, 2026-11-17; Rate refresh 2026-11-12): the delays of the code rates 6/7, 3/4, 2/3 and
-// ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to Sender::REFRESH_MAX, each its own slider),
+// ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to refresh::MAX, core/tx/refresh.h, each its own slider),
 // ai: the picture before's repeated between; from the next frame made, kept across configures
 extern "C" JNIEXPORT void JNICALL Java_dev_lizard_receiver_Native_txRefresh(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   const int every[4] = {a, b, c, d};

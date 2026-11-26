@@ -1,10 +1,11 @@
 // F7's REFIT: the homography over the border's nodes by Gauss-Newton (8 parameters, an 8 x 9 elimination), each node
 // weighted by its correlation, a Huber weight past DELTA modules; the map's radial slot left 0 and the lens record
 // cleared (ANCH_REFIT fits the lens over the border and the anchors). A workgroup of 64 a frame. Every solve is
-// straight-line with literal indices, generated in JS (register.mjs: the S26's Adreno returned zeros from a private
+// straight-line with literal indices (lib/solve.slang, unrolled: the S26's Adreno returned zeros from a private
 // array indexed at run time). Every workgroup variable is written before it is read.
-// Defines (register.mjs): REFIT_ITERS (int), NODES_MAX, LENS_SLOTS, RESID (uint), WMIN, DELTA (float), ZEROS_<n>.
+// Defines (core/dec/build.cpp refitRecipe): REFIT_ITERS (int), NODES_MAX, LENS_SLOTS, RESID (uint), WMIN, DELTA (float), ZEROS_<n>.
 #include "lib/frame.slang"
+#include "lib/solve.slang"
 #include "lib/convert.slang"
 #include "lib/map.slang"
 [[vk::binding(0, 0)]] StructuredBuffer<Frame> frames;
@@ -42,8 +43,11 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
   float m0[16] = maps[f].m;
   if (li == 0u) {
     float h[9] = ZEROS_9;
-    #include "gen/start"
-    #include "gen/theta"
+    [ForceUnroll] for (int j = 0; j < 3; j++) {
+      float s = j < 2 ? Mod : 1.0;
+      h[j] = (m0[j] - c.x * m0[6 + j]) / S * s; h[3 + j] = (m0[3 + j] - c.y * m0[6 + j]) / S * s; h[6 + j] = m0[6 + j] * s;
+    }
+    [ForceUnroll] for (int j = 0; j < 8; j++) th[j] = h[j] / h[8];
   }
   GroupMemoryBarrierWithGroupSync();
   for (int it = 0; it < ITERS; it++) {
@@ -60,8 +64,19 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
       float rr = length(r);
       float hw = DELTA * du / rr;
       float w = e.z * (rr > DELTA * du ? hw : 1.0);
-      #include "gen/jacobian"
-      #include "gen/accumulate"
+      // each parameter's derivative by central differences, then the normal equations' sums (jj the upper triangle)
+      float2 J[8];
+      [ForceUnroll] for (int k = 0; k < 8; k++) {
+        float tp[8] = t, tm[8] = t;
+        tp[k] = t[k] + 1e-3;
+        tm[k] = t[k] - 1e-3;
+        J[k] = (fwd(tp, m, c, S) - fwd(tm, m, c, S)) / (2.0 * 1e-3);
+      }
+      int q = 0;
+      [ForceUnroll] for (int a = 0; a < 8; a++) {
+        jr[a] += w * dot(J[a], r);
+        [ForceUnroll] for (int b = a; b < 8; b++) { jj[q] += w * dot(J[a], J[b]); q++; }
+      }
     }
     JJ[li] = jj;
     Jr[li] = jr;
@@ -76,17 +91,21 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
     if (li == 0u) {
       float A[36] = ZEROS_36;
       float g[8] = ZEROS_8;
-      #include "gen/sums"
-      #include "gen/rhs"
+      [ForceUnroll] for (int q = 0; q < 36; q++) A[q] = Ag[q];
+      [ForceUnroll] for (int a = 0; a < 8; a++) g[a] = Ag[36 + a];
       float N[8][9] = ZEROS_8_9;
       float D[8] = ZEROS_8;
-      #include "gen/normal"
-      #include "gen/scale"
-      #include "gen/scaled"
+      int q = 0;
+      [ForceUnroll] for (int a = 0; a < 8; a++) [ForceUnroll] for (int b = a; b < 8; b++) { N[a][b] = A[q]; N[b][a] = A[q]; q++; }
+      [ForceUnroll] for (int a = 0; a < 8; a++) D[a] = 1.0 / sqrt(max(N[a][a], 1e-30));
+      [ForceUnroll] for (int a = 0; a < 8; a++) {
+        [ForceUnroll] for (int b = 0; b < 8; b++) N[a][b] *= D[a] * D[b];
+        N[a][a] = N[a][a] * 1.001 + 1e-9; N[a][8] = g[a] * D[a];
+      }
       bool okSolve = true;
-      #include "gen/solve"
+      gaussJordan(N, 1e-20, okSolve);
       if (okSolve) {
-#include "gen/step"
+        [ForceUnroll] for (int a = 0; a < 8; a++) th[a] += D[a] * N[a][8] / N[a][a];
       }
     }
     GroupMemoryBarrierWithGroupSync();
@@ -94,7 +113,10 @@ void main(uint3 wid : SV_GroupID, uint lix : SV_GroupIndex) {
   if (li == 0u) {
     float mo[16] = ZEROS_16;
     float t[9] = { th[0], th[1], th[2], th[3], th[4], th[5], th[6], th[7], 1.0 };
-    #include "gen/map"
+    [ForceUnroll] for (int j = 0; j < 3; j++) {
+      float s = j < 2 ? 1.0 / Mod : 1.0;
+      mo[j] = (S * t[j] + c.x * t[6 + j]) * s; mo[3 + j] = (S * t[3 + j] + c.y * t[6 + j]) * s; mo[6 + j] = t[6 + j] * s;
+    }
     // the radial slot, mo[9] to mo[12], stays 0: the map past REFIT is its homography (toImage reads no axis at k 0;
     // ANCH_REFIT fits the lens again over the border and the anchors)
     maps[f].m = mo;

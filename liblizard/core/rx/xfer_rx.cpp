@@ -24,7 +24,7 @@ XferRx::XferRx(const std::string& storeDir, std::function<void(const std::string
   constexpr unsigned SOLVERS_MAX = 4;
   const char* ns = getenv("LIZ_SOLVERS");
   const unsigned solvers = ns && *ns ? unsigned(atoi(ns)) : std::min(physicalCores(), SOLVERS_MAX);
-  rx_ = std::make_unique<XferRxCore>(fileStore(storeDir + "/lizard-xfer"), log_, solvers, [this] {
+  rx_ = std::make_unique<XferRxCore>(storeDir.empty() ? memoryStore(0) : fileStore(storeDir + "/lizard-xfer"), log_, solvers, [this] {
     { std::lock_guard<std::mutex> lk(mu_); settle_ = true; }
     cv_.notify_one();
   });

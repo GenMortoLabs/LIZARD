@@ -1,9 +1,9 @@
 // ai: The native transfer's check: the stream liblizard/gen/xfer_stream.mjs wrote (a 9 MB file of
-// ai: 3 source blocks from the web's sender, 20% of blocks lost, frames repeated, blocks and frames reordered) through XferRx in
-// ai: frames of 40 blocks, the file rebuilt byte-exact and its BLAKE3 root verified, every count against the web's own
-// ai: chain on the same stream (ref.json); the same stream again after clear(); the stream with one wrong block (the root
-// ai: not made, the file refused whole and collected again, the counts against the web's again: exact with LIZ_SOLVERS=0,
-// ai: the fraction at most the web's on solver threads); and the BLAKE3 test stream, every frame
+// ai: 3 source blocks from the wasm build of the C, 20% of blocks lost, frames repeated, blocks and frames reordered) through XferRx in
+// ai: frames of 40 blocks, the file rebuilt byte-exact and its BLAKE3 root verified, every count against the wasm build's
+// ai: receiving chain on the same stream (ref.json); the same stream again after clear(); the stream with one wrong block (the root
+// ai: not made, the file refused whole and collected again, the counts against the wasm's again: exact with LIZ_SOLVERS=0,
+// ai: the fraction at most the wasm's on solver threads); and the BLAKE3 test stream, every frame
 // ai: judged test, its one wrong block bad, nothing passed to the transfer. A reader thread polls progress() throughout.
 // ai: Since 2026-10-22 (a transfer kept across receivers, store.h): half the stream into one receiver and the other half
 // ai: into the next on the same folder, the file whole (a fresh receiver given that half alone is not done); a parked
@@ -68,12 +68,12 @@ static Run feed(XferRx& rx, const std::vector<uint8_t>& s) {
 }
 
 static int fails = 0;
-// ai: solves on the worker (LIZ_SOLVERS=0) keep the JS chain's order exactly; on solver threads a file refused at its
+// ai: solves on the worker (LIZ_SOLVERS=0) keep the wasm chain's order exactly; on solver threads a file refused at its
 // ai: root (the wrong-block stream) is reset when the last solve commits, the blocks fed meanwhile lost to it, so its
-// ai: fraction then is held at most the JS's (`atMost`)
+// ai: fraction then is held at most the wasm's (`atMost`)
 static bool inlineSolves() { const char* ns = getenv("LIZ_SOLVERS"); return ns && *ns && atoi(ns) == 0; }
 static void compare(const char* what, const json& got, const json& ref, bool atMost = false) {
-  printf("  %-18s %14s %14s\n", "", "native", "js");
+  printf("  %-18s %14s %14s\n", "", "native", "wasm");
   for (auto& [k, v] : got.items()) {
     const json& w = ref.contains(k) ? ref[k] : json(nullptr);
     const bool same = k == "fraction" ? w.is_number() && (atMost ? v.get<double>() <= w.get<double>() + 1e-9 : std::abs(v.get<double>() - w.get<double>()) < 1e-9) : v == w;

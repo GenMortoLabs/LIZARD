@@ -1,10 +1,6 @@
-// ai: The GPU decoder's host, ported from the WebGPU host (liblizard/gpu/decoder.mjs FrontHalf and Batcher; the back
-// ai: half's lanes and dispatches from liblizard/gpu/back/{back,transform,soft,ldpc}.mjs; the proposer's from
-// ai: liblizard/gpu/bank_fcn2.mjs). What create() builds comes from the setup (setup.h), which those JS modules still
-// ai: make (gen.mjs); their run-time half, which this file ports name for name (lanes, ensure, batch, the Batcher,
-// ai: measureTwins), left the library with the WGSL decoder on 2026-10-31, and the names here are its.
-// ai: Not ported: the probe, F9 and the grid (the fused pass 1 samples the frame), told frames (maps: the receiver is
-// ai: blind), the wasm back half.
+// ai: The GPU decoder's host: FrontHalf (its lanes, ensure, batch, measureTwins) and the Batcher, over the setup the
+// ai: host makes (setup.h; core/dec/build.cpp: the front, the anchors, the back halves, the proposer's parts). No probe,
+// ai: F9 or grid (the fused pass 1 samples the frame) and no told frames (maps: the receiver is blind).
 //
 // ai: One thread drives it (the decoder's). A batch is recorded and submitted by run(), and its readback parsed by
 // ai: finish() once its ticket is done, so two lanes can be in flight as on the web.
@@ -33,7 +29,7 @@ struct Consts {
   uint32_t TILE, B_CEIL;
   double CAP_MS;
   uint32_t TWIN_FRAMES, TWIN_ROUNDS, VERSION_MIN, VERSION_MAX, SLOTS, ARGS_WORDS, argsWords, COUNTS, REC_BYTES, PAYLOAD;
-  // ai: the anchors' (gpu/slang/anchors.mjs): anchors a frame, and vec4f a frame of its record
+  // ai: the anchors' (anch_*.slang): anchors a frame, and vec4f a frame of its record
   uint32_t ANCH_K = 0, ANCH_REC = 0, ANCH_GS = 0;
   std::map<std::string, uint32_t> ARGS_SLOT;
   static Consts of(const json& c);
@@ -42,13 +38,13 @@ struct Consts {
 using BufP = std::shared_ptr<wg::Buffer>;
 using GroupP = std::shared_ptr<wg::BindGroup>;
 
-// ai: The back half's lane (back.mjs lane: transform.lane, soft.lane, ldpc.lane, bindGate; bindPicture).
+// ai: The back half's lane: the transform's, the soft values' and the LDPC's buffers, the gate's group, pass 1's.
 struct BackLane {
   BufP lists, args, part, coef, y, s, counts, L, BLK, V, ITS, REC, PILOT;
   std::vector<BufP> params;   // ai: a size slot each (null where the size is not built)
   GroupP gate, ldpc;
   std::vector<GroupP> p1f, red, p2, soft;
-  // ai: the format's rate profile's stage (gpu/back/tiers.mjs exportFor): its lane buffer and its steps' groups, in the
+  // ai: the format's rate profile's stage (the tree's backs[B].rule): its lane buffer and its steps' groups, in the
   // ai: tree's order (the soft stage's and the LDPC's in their places)
   BufP EP;
   std::vector<GroupP> rsoft, rldpc;
@@ -67,13 +63,13 @@ struct Lane {
   // ai: the anchors (SPEC 6.13): ANCH_FIND's records (a vec4f an anchor) and ANCH_FIT's (ANCH_REC vec4f a frame,
   // ai: which pass 1 reads), no clear (every one a batch reads is written in it); their groups bind the texture
   // ai: (ensure's); ANCH_REFIT's does not (made with the lane)
-  BufP anchBuf, arecBuf;
+  BufP anchBuf, fillBuf, arecBuf;
   GroupP anchFindGroup, anchFitGroup, anchRefitGroup, anchNodesGroup;
-  // ai: the finder's second round (decoder.mjs, gpu/slang/finder.mjs REDO): its frame records and its groups over them
+  // ai: the finder's second round (REDO, redo.slang): its frame records and its groups over them
   BufP frames2Buf;
   GroupP pickGroup2, redoGroup, selGroup2, classifyGroup2, scoreGroup2, voteGroup2, peaksGroup2, gatherGroup2, completeGroup2, traceGroup2;
-  // ai: PEAKS's list (PEAK_LIST vec4f a frame) and its counts (decoder.mjs vlistBuf, vcountBuf); the second round's
-  // ai: grids, REDO's args and their one-frame template (decoder.mjs args2Buf, r2Uni; gpu/slang/finder.mjs R2)
+  // ai: PEAKS's list (PEAK_LIST vec4f a frame) and its counts; the second round's grids, REDO's args and their one-frame
+  // ai: template (R2_N entries)
   BufP vlistBuf, vcountBuf, args2Buf, r2Uni;
   std::shared_ptr<wg::QuerySet> qs, qsProfile;
   BufP qsBuf, qsProfileBuf;
@@ -94,7 +90,7 @@ struct Lane {
   std::vector<wg::Resource> lvEntries(bool second = false) const;
 };
 
-// ai: A frame staged on the ring (decoder.mjs Slot): layer `id` holds its w x h at the origin until a batch copies it.
+// ai: A frame staged on the ring: layer `id` holds its w x h at the origin until a batch copies it.
 struct Slot {
   int id = -1;
   uint32_t w = 0, h = 0;
@@ -115,7 +111,7 @@ struct Slot {
   uint32_t axis = 0;
 };
 
-// ai: The axis word (gpu/plan/common.mjs axisWord): x and y in half pixels, each + 32768 in 16 bits, x low; 0 the
+// ai: The axis word: x and y in half pixels, each + 32768 in 16 bits, x low; 0 the
 // ai: frame's centre.
 inline uint32_t axisWord(double x, double y) {
   auto h = [](double v) { const double t = std::floor(2 * v + 0.5) + 32768; return (uint32_t)(t < 0 ? 0 : t > 65535 ? 65535 : t); };
@@ -159,7 +155,7 @@ struct BatchOut {
 
 class FrontHalf;
 
-// ai: The batch controller behind B auto (decoder.mjs Batcher), unchanged in its rules: lanes sized by memory for
+// ai: The batch controller behind B auto: lanes sized by memory for
 // ai: Bmax; the stream starts at Bmax; a batch over the cap halves the size, three over 90% halve it, sixteen with
 // ai: room for a double grow it back toward Bmax; a lane's first batch is watched for the cap alone.
 struct Batcher {
@@ -226,7 +222,7 @@ class FrontHalf {
   Pipe classify, floatClassify;
   BufP weightsBuf, floatWeights;
   json twinForms;   // ai: the twins still to measure (null once measured)
-  // ai: the LDPC kernel's form in use (gpu/back/tiers.mjs exportFor: 0 the rule's "ldpc" steps, k its "ldpcAlts"[k - 1]),
+  // ai: the LDPC kernel's form in use (the tree's backs[B].rule: 0 its "ldpc" steps, k its "ldpcAlts"[k - 1]),
   // ai: and whether the forms are still to be timed on the first batch
   int ldpcForm = 0;
   bool ldpcPending = false;
@@ -255,7 +251,7 @@ class FrontHalf {
   std::vector<std::string> timing;   // ai: the forms being timed, while their submit runs
   // ai: when the decoder was made: now()'s zero (the receiver keeps one across the decoders it makes)
   std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
-  // ai: The anchors (SPEC 6.13; gpu/slang/anchors.mjs, the tree's `anch`): ANCH_FIND, ANCH_PREDICT (on ANCH_REFIT's
+  // ai: The anchors (SPEC 6.13; anch_*.slang, the tree's `anch`): ANCH_FIND, ANCH_PREDICT (on ANCH_REFIT's
   // ai: layout and group), the border's second search (anchNodes: F7's NODES centred, on its layout, its own round's
   // ai: group, anchNodesGroup), ANCH_REFIT and ANCH_FIT after F7's REFIT in its refit's pass, the C's order; a
   // ai: batch with no F7 runs ANCH_FIND and ANCH_FIT alone. Pass 1 reads their records.
@@ -307,7 +303,7 @@ class FrontHalf {
   Lane* freeLane();
   // ai: A batch of staged slots on a free lane: recorded and submitted, each frame decoded at its own word's
   // ai: configuration (none read: not decoded).
-  // ai: profile: a pass and a timestamp pair a stage group (decoder.mjs batch's profile: STAGES), so the batch's
+  // ai: profile: a pass and a timestamp pair a stage group (STAGES), so the batch's
   // ai: out.stageMs says which stage costs what; its gpuMs is their sum. keep: the batch's first `keep` frames read
   // ai: back as the ring holds them (FrameOut::luma), for a replay.
   std::unique_ptr<InFlight> run(const std::vector<Slot*>& slots, bool profile = false, int keep = 0);

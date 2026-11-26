@@ -3,7 +3,7 @@
 // most 88). cfgCounts: the four codes' blocks in CODES' order (6/7, 3/4, 2/3, 1/2); cfgOk: a frame (a version of the
 // ladder, the blocks within its VERSION_SLOTS data slots, 16 sub-channels of 636: the pilots apart; src/fmt.c
 // ob_fmt_layout). Every term an integer; no array indexed at run time.
-// Defines (common.mjs CFG_DEFS): CODE0_SLOTS to CODE3_SLOTS (each code's sent bits, uint), CFG_VERSION_MIN,
+// Defines (core/dec/build.cpp addCfg): CODE0_SLOTS to CODE3_SLOTS (each code's sent bits, uint), CFG_VERSION_MIN,
 // CFG_VERSION_MAX, CFG_VERSION_SLOTS (uint).
 uint cfgVersion(uint2 g) { return g.x >> 24u; }
 uint4 cfgCounts(uint2 g) { return uint4((g.x >> 16u) & 255u, (g.x >> 8u) & 255u, g.x & 255u, g.y); }

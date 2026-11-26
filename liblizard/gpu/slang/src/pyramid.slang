@@ -1,6 +1,6 @@
 // F1, the pyramid: level l + 1 the 2 x 2 mean of level l, levels 1 to 4 from one 64 x 64 block of a frame's layer a
-// workgroup, each mean summed from 0 in one order, so every device's levels are the same bit for bit (../pyramid.mjs:
-// the block, plan/pyramid.mjs PYRAMID_BLOCK, is 64).
+// workgroup, each mean summed from 0 in one order, so every device's levels are the same bit for bit (the
+// block, core/dec/plan.h PYRAMID_BLOCK, is 64).
 // Bindings: 0 the frame texture (r8unorm 2D array, read by Load without a sampler: SPIR-V's OpImageFetch on a sampled
 // image), 1 the
 // frames, 2 to 5 levels 1 to 4 (f32), 6 the levels' (stride, rows). Every workgroup variable is written before the

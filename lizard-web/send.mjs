@@ -1,16 +1,13 @@
 // Sender: paints the chosen code at a whole number of device pixels per cell.
 // ai: Standalone (2026-09-26): it picks its format,
 // ai: encodes and paints the test stream or a file picked from this device with no server.
-// ai: For a user the page is a file, several or a folder (bundled as one tar, tar.mjs): choose or drop them, Start,
+// ai: For a user the page is a file, several or a folder (bundled as one tar, the C's: sim/ob.mjs bundle): choose or drop them, Start,
 // ai: Fullscreen, Stop, the version picked from the window over
 // ai: the whole ladder (up to LIZARD-560 until 2026-09-29, APP_TOP). The lab's switches are in the folds (Code, Refresh,
 // ai: Performance, Developer Tools; Layout merged into Code 2026-11-13), their ids the URL presets.
-import { init as initOb } from "../liblizard/sim/ob.mjs";
-import { PAYLOAD } from "../liblizard/sim/xfer.mjs";
-import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP } from "../liblizard/sim/lizard_pick.mjs";
-import { GAP_MODULES } from "../liblizard/gpu/encoder.mjs";
-import { bundle } from "./tar.mjs";
-import { everyOf, ratesFor } from "./refresh.mjs";
+import { init as initOb, bundle } from "../liblizard/sim/ob.mjs";
+import { VERSIONS, NAME, SAMPLES, SPAN, N_FOR, RINGS, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, STEP, BLOCKS_DEFAULT, PAYLOAD, GAP_MODULES } from "../liblizard/sim/ob.mjs";
+import { everyOf, refreshPlaces } from "../liblizard/sim/ob.mjs";
 import { remember, persist, say, bytes, rate, registerApp, collapser, sideResizer, scrollbarRoom, icon, nameParts, slider, details, chips, greyOut } from "./ui.mjs";
 // ai: the sliders filled to their values as the apps draw them (ui.mjs slider), before the codec's load
 for (const el of document.querySelectorAll('input[type="range"]')) slider(el);
@@ -20,7 +17,7 @@ for (const sel of document.querySelectorAll("select[data-chips]")) chips(sel);
 // The room a format needs holds the codec's margin (src/lizard_phy.h LIZARD_QUIET), and only the codec knows it.
 await initOb();
 let offeredKBs = 0;
-let fileBytes = 0, sentBytes = 0;   // ai: the file's bytes and the bytes the transfer carries (packed where that paid, sim/pack.mjs), the block's Size and Compressed
+let fileBytes = 0, sentBytes = 0;   // ai: the file's bytes and the bytes the transfer carries (packed where that paid, core/tx/pack.h), the block's Size and Compressed
 // ai: the run's test stream or not, its bundle's files, and the last second's pass time (sendDetails)
 let runTest = false, runFiles = 1, passTime = 0;
 // ai: What goes, as elements from Start until Stop (ui.mjs details, 2026-11-07; the apps' lizard-ui SendRows.details;
@@ -45,7 +42,7 @@ const $ = (id) => document.getElementById(id), canvas = $("c"), ctx = canvas.get
 // blocksPerFrame changes when repick() swaps the layout mid-stream: seq * blocksPerFrame would
 // then jump backwards onto ids already sent, and every one of them would read as a repeat.
 // ai: cfg: what is painted. running: from Start until Stop (preparing, then sending); live: a frame is painted.
-// ai: cycle: a file's data blocks a cycle (sim/xfer.mjs), 0 for the test stream; dataSent: data blocks painted this run.
+// ai: cycle: a file's data blocks a cycle (lizard.h liz_tx_info), 0 for the test stream; dataSent: data blocks painted this run.
 let timer = 0, seq = 0, nextId = 0, image = null, painted = 0, paintMs = 0, encMs = 0, lastReport = 0, cfg = null, shown = null;
 let running = false, live = false, cycle = 0, dataSent = 0, dataWin = 0;
 // ai: Paused (2026-10-02): the run kept, nothing asked or
@@ -203,8 +200,8 @@ async function gpuConfigure(s, codes, gap) {
     for (let i = 0; i < blocks.length; i++) blocks[i] = (7 * i + (i >> 9)) & 255;
     let r;
     try { r = await e.check(blocks, 1, cfg); } catch (err) { e.release(cfg); throw err; }
-    if (!r.ok) { e.release(cfg); throw new Error(`its frame is not the C's: ${r.borderDiff} border pixels differ, the picture by up to ${r.squareMax} levels${e.lost ? `, device lost: ${e.lost}` : e.error ? `, ${e.error}` : ""}`); }
-    console.log(`sender: the GPU encoder at ${cfg.label}: the border the C's, the picture within ${r.squareMax} level (${r.squareDiff} of ${r.pixels} px differ)`);
+    if (!r.ok) { e.release(cfg); throw new Error(`its frame does not hold: ${r.borderDiff} border pixels differ from the C's, the picture's RMS ${r.squareRms.toFixed(2)} levels${e.lost ? `, device lost: ${e.lost}` : e.error ? `, ${e.error}` : ""}`); }
+    console.log(`sender: the GPU encoder at ${cfg.label}: the border the C's, the picture's RMS ${r.squareRms.toFixed(3)} levels off the C's (${r.squareDiff} of ${r.pixels} px, at most ${r.squareMax})`);
     checked.add(key);
   }
   return cfg;
@@ -222,10 +219,10 @@ function gpuGiveUp(e) {
 }
 
 // ai: The format's size, a slider (2026-10-01): every version from 1 to 67, 16 sub-channels a step (src/lizard_phy.h
-// ai: LIZARD_STEP, sim/lizard_pick.mjs STEP), which is what the format word names, so every step is a symbol every
+// ai: LIZARD_STEP, sim/ob.mjs STEP), which is what the format word names, so every step is a symbol every
 // ai: receiver reads (steps of 8 sub-channels from 2026-10-01 to 2026-10-29). #subch holds what the page reads, the
 // ai: sub-channels; the slider (#blocks) is a view over it, kept out of the saved settings. No auto since 2026-11-07 (its
-// ai: first step from 2026-10-05: the largest the room held, sim/lizard_pick.mjs pickVersion). The slider commits on
+// ai: first step from 2026-10-05: the largest the room held, sim/ob.mjs pickVersion). The slider commits on
 // ai: release (a re-pick for every step dragged would rebuild the encoder each time).
 function showBlocks() {
   const b = +$("subch").value / STEP;
@@ -236,7 +233,7 @@ function showBlocks() {
 // ai: "54, 25.3 KB": the blocks a frame of the slider's size carries (the format's rate profile, 2026-10-07: 54 at
 // ai: its 30, LIZARD-480) and what they hold, under the title "Blocks" (2026-10-05; "60 blocks, ..." before); with Show
 // ai: statistics off (2026-11-07) the title "Density" and the bytes alone, "25.3 KB"; send.html's inline script draws the
-// ai: same before the first paint
+// ai: same before the first paint, from build/blocks.js (the C's counts, written beside build/format.mjs)
 const statsOn = () => $("stats").value === "1";
 const blocksText = (v) => { const b = blocksFor(STEP * v), kb = `${((b * PAYLOAD) / 1000).toFixed(1)} KB`; return statsOn() ? `${b}, ${kb}` : kb; };
 // ai: The labels Show statistics sets (2026-11-07): on, Blocks and the ring by its cells, 64, 128, 256; off, Density and
@@ -259,27 +256,27 @@ $("subch").addEventListener("change", showBlocks);
 // ai: itself since 2026-10-02 (#subch 480, #fps 60: set here, after the page was drawn, they flashed auto first). A
 // ai: setting the user changed is kept over these (persist, below), and a URL preset over that.
 
-// A LIZARD file goes as a chunked transfer (sim/xfer.mjs): source blocks of 2^chunk bytes (?chunk=10..24, 16 MiB unless
+// A LIZARD file goes as a chunked transfer (the C's, lizard.h liz_tx): source blocks of 2^chunk bytes (?chunk=10..24, 16 MiB unless
 // ai: asked), a fountain each, the header in the light, and only there: the receiver reads it blind
 // ai: (2026-09-26).
 const URLP = new URLSearchParams(location.search), SB_LOG2 = +URLP.get("chunk") || null;   // ai: null: src/xfer.h xfer_sb_log2_for's
+// ai: ?cores=<n>: the C's sending end's workers (the lab's: a phone's count on a desktop); the worker's rule without it
+const CORES_ASKED = Math.max(0, Math.floor(+URLP.get("cores") || 0)) || undefined;
 // ai: The size on screen and the surround, test-only menus until 2026-10-01, URL parameters since: fit=stretch|whole|fit,
 // ai: bg=none|noise|text|photo|checker|squares|mixed.
 const FIT = URLP.get("fit") ?? "stretch", SURROUND = URLP.get("bg") ?? "none";
 
-// Which generator fills a test block (sim/phy.mjs STREAMS), in the spec the worker builds its codec from.
-// ai: The receiver judges it from the light (liblizard/src/xfer.h stream_fill), so it is BLAKE3 and nothing else.
-const STREAM = "blake3";
-
+// ai: The spec the worker builds its codec from and the GPU encoder configures by: n, subch, span, bitmap. A test
+// ai: block's payload is BLAKE3 of its id (liblizard/src/xfer.h stream_fill, sim/ob.mjs frameBlocks), which the receiver
+// ai: judges from the light.
 function spec() {
   // ai: The format's rate profile (the codec's, from the sub-channel count: src/lizard_phy.c lizard_tiers_for, four rates
   // ai: since 2026-10-08), equal power, soft LDPC: the power tilt and RS(80,64) lost (research/10).
-  // n is derived from the version (N_FOR in sim/lizard_pick.mjs) and is never chosen here.
+  // n is derived from the version (N_FOR in sim/ob.mjs) and is never chosen here.
   const subch = +$("subch").value, n = N_FOR(subch);
-  // ai: The span of the ring Code names, or of the default ring, the same for every picture (sim/lizard_pick.mjs
+  // ai: The span of the ring Code names, or of the default ring, the same for every picture (sim/ob.mjs
   // ai: RING_DEFAULT).
-  return { phy: "lizard", n, subch, mode: 1, span: SPAN(n, ringChosen() ?? RING_DEFAULT), bitmap: LIZARD_BITMAP,
-    variants: [{ name: "rx" }], stream: STREAM };
+  return { n, subch, span: SPAN(n, ringChosen() ?? RING_DEFAULT), bitmap: LIZARD_BITMAP };
 }
 
 // How large a LIZARD symbol to paint. Nothing comes back from the receiver: a back channel would make the optical
@@ -287,7 +284,7 @@ function spec() {
 // 2026-11-07); the size on screen is the room's.
 //
 // The symbol is the picture resampled into its ring's span (SPAN) plus a 15-module border a side
-// (sim/lizard_pick.mjs OB_MARGIN), so SAMPLES(n) samples, and the margin the codec paints outside that (src/lizard_phy.h
+// (sim/ob.mjs OB_MARGIN), so SAMPLES(n) samples, and the margin the codec paints outside that (src/lizard_phy.h
 // LIZARD_QUIET), which ROOM_FOR counts. Downscaling a format below the room it needs throws the outer rings away,
 // which is the whole payload above the first few, so the canvas stretches up to fill the room (an upscale only
 // interpolates; research/09 measures smoothed fractional scaling at 2% of the mean and 11% at worst), and a format
@@ -382,7 +379,7 @@ function paintGPU(fr) {
   return true;
 }
 
-// ai: What Start sends: the payload chosen (tar.mjs bundle: one file as itself, several files or a folder as one tar),
+// ai: What Start sends: the payload chosen (sim/ob.mjs bundle: one file as itself, several files or a folder as one tar),
 // ai: or the test stream. A pick through #file or #folder, or a drop, sets it; nothing else does.
 let chosen = null;
 const isTest = () => $("payload").value === "test";
@@ -416,14 +413,16 @@ function setPaused(p) {
 // ai: animation frames where fewer (drawFps, measured each second while sending; since 2026-10-04, so an external
 // ai: limiter shows in the MB/s: Edge's efficiency mode drew 30 of 60 while the rail offered 60's capacity).
 let railKey = "", drawFps = 0;
-// ai: a symbol's new blocks a frame on average under Rate refresh (a block of a rate refreshed every k frames counts 1 / k;
-// ai: all of them at 1, the default)
+// ai: a symbol's new blocks a frame on average under Refresh (a block at a place of delay k counts 1 / k; all of them at
+// ai: 1, the default): the places' delays the C's (ob.mjs refreshPlaces), read again only when the format or the delays move
+let freshKey = "", freshN = 0;
 function freshBlocks() {
-  const rates = shown ? ratesFor(shown.subch, cfg.blocksPerFrame) : null, every = refreshOf();
-  if (!rates) return cfg.blocksPerFrame;
-  let n = 0;
-  for (const r of rates) n += 1 / every[r];
-  return n;
+  const every = refreshOf(), key = shown ? `${shown.subch}|${cfg.blocksPerFrame}|${every}` : "";
+  if (key !== freshKey) {
+    const places = shown ? refreshPlaces(shown.subch, cfg.blocksPerFrame, every) : null;
+    freshKey = key; freshN = places ? places.reduce((n, e) => n + 1 / e, 0) : cfg.blocksPerFrame;
+  }
+  return freshN;
 }
 function showRail() {
   const asked = Math.max(1, +$("fps").value), shows = drawFps ? Math.min(asked, Math.round(drawFps)) : asked;
@@ -506,18 +505,17 @@ async function start() {
   // ai: on disk the read is refused (NotReadableError, in the browser's own words "permission problems that have
   // ai: occurred after a reference to a file was acquired"). The page says what to do about it.
   // ai: the file's transfer is the worker's, made at the pick's first Start (prepare, 2026-11-01; at the pick before,
-  // ai: every source block compressed for picks never sent) and kept through stops; one whose making failed is read and made
-  // ai: here, which says why
+  // ai: every source block compressed for picks never sent) and kept through stops; one whose making failed says why (a
+  // ai: file the browser no longer reads: changed since it was chosen), and the next Start prepares it again
   if (!test) { file.posted ??= prepare(file); await file.posted; }
   if (my !== gen) return;
-  const bytes = test || !file.failed ? null : await readOf(file, () => my === gen);
-  if (my !== gen) return;   // ai: stopped, or started again, while the file was read
-  // ai: The spec after the read, so the room is the one the preparing controls left.
-  const s = spec(), xfer = bytes ? { name: file.name, sbLog2: SB_LOG2 } : null;
+  if (!test && file.failed) { const e = file.failed; file.posted = null; file.failed = null; throw /could not be read/.test(e.message) ? alone(`File changed: choose ${file.bundled ? "the files" : "it"} again`) : e; }
+  // ai: The spec after the prepare, so the room is the one the preparing controls left.
+  const s = spec();
   // The worker holds the codec and, for a file, the fountain: the page keeps neither.
   swInit();
   ahead.clear(); inflight = 0; reqSeq = 0; spare = []; respecPending = false; behind = 0;
-  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file && !file.failed ? file.pick : null, bytes: bytes ? bytes.slice().buffer : null, xfer, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf(), clock: clockOf(), colours: [inkOf(), paperOf()] });
+  const codes = codesOf(), gap = gapOf(), made = await swCall({ type: "start", spec: s, pick: file ? file.pick : null, codes, gap, seed: test ? null : seedOf($("seed").value), every: refreshOf(), clock: clockOf(), colours: [inkOf(), paperOf()] });
   // ai: The GPU encoder for this run, where the menu asks for it and it builds (WebGPU by name: its failure is the start's).
   // ai: Its configuration is this run's only if the run is still this one when it comes back.
   if (wantGpu()) {
@@ -537,7 +535,7 @@ async function start() {
   shown = s; cycle = made.xfer?.cycle ?? 0; dataSent = 0; dataWin = 0; fileBytes = file?.size ?? 0; sentBytes = made.xfer?.length ?? 0;
   showEnc();
   showBlocks();
-  // ai: length: the bytes the transfer carries, the file packed where that paid (sim/pack.mjs)
+  // ai: length: the bytes the transfer carries, the file packed where that paid (core/tx/pack.h)
   const xferLine = made.xfer ? `\nfile ${file.size} B${made.xfer.length !== file.size ? `, ${made.xfer.length} B packed (zstd)` : ""}: ${made.xfer.sourceBlocks} chunk${made.xfer.sourceBlocks === 1 ? "" : "s"} of 2^${made.xfer.sbLog2}, BLAKE3 ${made.xfer.root.slice(0, 16)}..., seed ${made.xfer.seed}, header in the light` : "";
   // What the window chose, so the guess is visible rather than implied. The capture is an assumption, not a measurement.
   const auto = () => {
@@ -547,7 +545,7 @@ async function start() {
   };
   // ai: The test stream starts at a random id each start (under 2^30, clear of the control ids), so a receiver that saw an
   // ai: earlier start reads the new one as new without being told: the blind receiver's dedupe has no other signal. A
-  // ai: file's ids are its transfer's (sim/xfer.mjs), told apart by its header's root.
+  // ai: file's ids are its transfer's (src/xfer.h), told apart by its header's root.
   seq = 0; nextId = cfg.mode === "test" ? Math.floor(Math.random() * 2 ** 30) : 0; image = null; painted = 0; paintMs = encMs = 0; lastReport = performance.now(); lastTick = 0; lastPaint = 0; held.fill(0); rafGaps.length = 0; drawFps = 0;
   let next = performance.now(), samples = 0;
   const tick = (now) => {
@@ -708,7 +706,7 @@ $("pause").onclick = () => setPaused(!paused);
 const playPause = () => (running ? setPaused(!paused) : $("go").disabled ? undefined : go());
 $("railSend").onclick = playPause;
 // ai: The selection (2026-10-23; until then a pick replaced the last): items added by each pick, drop or share, in
-// ai: order, each a file or a folder with its entries under its own name (tar.mjs bundle's), so files and folders mix.
+// ai: order, each a file or a folder with its entries under its own name (sim/ob.mjs bundle's), so files and folders mix.
 // ai: The payload is their bundle (one file alone is itself, else one tar). An item already listed is not added again
 // ai: (a file by its name, size and time, a folder by its name, files and bytes). Every change stops a run first; its
 // ai: transfer is made at the next Start (prepare: the file packed where that pays); a reply for a selection since changed is
@@ -742,44 +740,19 @@ function changed() {
   else ++picks;
   showReady();
 }
-// ai: the chosen file's bytes, read a piece at a time so a prepare cancelled meanwhile stops there (`live`, STOPPED),
-// ai: with the page's words for one the browser no longer reads: a file saved again, moved or replaced since it was
-// ai: chosen is refused (Chrome's stream a TypeError "network error", arrayBuffer a NotReadableError), and one that
-// ai: reads longer or shorter than it was has changed too
-async function readOf(file, live = () => true) {
-  const changed = () => alone(`File changed: choose ${file.bundled ? "the files" : "it"} again`);
-  const out = new Uint8Array(file.blob.size), r = file.blob.stream().getReader();
-  let at = 0;
-  for (;;) {
-    let got;
-    try { got = await r.read(); } catch { throw changed(); }
-    if (got.done) break;
-    if (!live()) { r.cancel().catch(() => {}); throw STOPPED; }
-    if (at + got.value.length > out.length) { r.cancel().catch(() => {}); throw changed(); }
-    out.set(got.value, at); at += got.value.length;
-  }
-  if (at !== out.length) throw changed();
-  return out;
-}
-// ai: A pick's transfer being prepared (2026-11-16): `prepping` while its file is read here and then made in the worker
-// ai: (packed, its source blocks hashed by the pool), until the worker's "prepared". Stop or a new selection meanwhile cancels
-// ai: it (cancelPrep, from stop): the read stops at its next piece, and the worker, told "cancel" with the prepare's
-// ai: number, stops at its next frame of the pack or source block of the hash (it takes its messages between them); the next
-// ai: Start prepares anew. Kept through a stop once prepared, as before.
-async function prepare(p) {
+// ai: A pick's transfer being prepared (2026-11-16): `prepping` while the worker makes it (2026-11-25: the C's, the file
+// ai: read where it lies, a range at a time, never whole in memory: send-worker.mjs Tx.prepare), until its "prepared".
+// ai: Stop or a new selection meanwhile cancels it (cancelPrep, from stop): the worker, told "cancel" with the prepare's
+// ai: number, stops the pack at its next round of frames and the hash at its next source block; the next Start prepares
+// ai: anew. Kept through a stop once prepared, as before. The file goes to the worker as itself (a Blob, a reference).
+function prepare(p) {
   const my = ++prepGen;
-  prepping = { pick: p.pick, worker: false, my };
-  let b;
-  try { b = await readOf(p, () => my === prepGen); } catch (e) {
-    if (my !== prepGen) return;   // ai: cancelled
-    prepping = null; p.failed = e; return;   // ai: said at Start, which reads it again
-  }
-  if (my !== prepGen) return;
-  if (p !== chosen) { prepping = null; return; }
+  prepping = { pick: p.pick, worker: true, my };
   swInit();
-  prepping.worker = true;
-  sw.postMessage({ type: "prepare", pick: p.pick, prep: my, bytes: b.buffer, xfer: { name: p.name, sbLog2: SB_LOG2 } }, [b.buffer]);
+  sw.postMessage({ type: "prepare", pick: p.pick, prep: my, blob: p.blob, xfer: { name: p.name, sbLog2: SB_LOG2, cores: CORES_ASKED } });
+  return new Promise((ok) => prepWaits.set(my, ok));   // ai: settled by its answer (madeFor), prepared, failed or cancelled
 }
+const prepWaits = new Map();
 function cancelPrep() {
   if (!prepping) return;
   const p = prepping;
@@ -799,12 +772,14 @@ function madeAll(m) {
 }
 function madeFor(m) {
   if (prepping?.my === m.prep) prepping = null;
-  if (m.cancelled) return;
-  const p = chosen;
-  if (!p || p.pick !== m.pick) return;
-  if (m.error) { p.failed = new Error(m.error); return; }
-  p.sent = m.sent;
-  if (!running) showReady();
+  const p = chosen, ok = prepWaits.get(m.prep);
+  prepWaits.delete(m.prep);
+  if (p?.pick === m.pick && !m.cancelled) {
+    if (m.error) p.failed = new Error(m.error);
+    else p.sent = m.sent;
+  }
+  ok?.();
+  if (p?.pick === m.pick && !m.cancelled && !m.error && !running) showReady();
 }
 // ai: The file upload over <main> (#pick, 2026-10-26, LocalSend's geometry) while no send paints and the payload is a
 // ai: file: the File and Folder tiles, and under them the selection's card (#sel), always (2026-11-07; while it held
@@ -895,7 +870,7 @@ async function pickDir() {
 $("clearPick").onclick = (e) => { e.stopPropagation(); clearPick(); };
 $("pick").addEventListener("click", (e) => e.stopPropagation());   // ai: a tap on the list is not a tap on <main>
 $("payload").onchange = () => { if (running) stop(); showReady(); };
-// ai: Seed (Developer Tools, 2026-11-14): a file's schedule (sim/xfer.mjs XferSender seed: each source block's first symbol, each
+// ai: Seed (Developer Tools, 2026-11-14): a file's schedule (lizard.h liz_tx_seed: each source block's first symbol, each
 // ai: round's order of the source blocks, each frame's shuffle) drawn from it at each Start, so a send can be repeated; empty, a
 // ai: random one each send. Kept as typed (#settings' persist, ?seed= a preset); a value that is no unsigned 32-bit
 // ai: number is refused, the field back to the last that was (this listener before persist's, so that one is kept).
@@ -1039,7 +1014,7 @@ $("subch").onchange = $("ring").onchange = () => roomChanged();
 const showFps = () => { $("fpsOut").textContent = `${+$("fps").value}`; };   // ai: "FPS" over the bare count (2026-10-05; "Pictures a second", "60 a second" before)
 for (const ev of ["input", "change"]) $("fps").addEventListener(ev, showFps);
 $("fps").addEventListener("change", () => sendClock());
-// ai: Refresh's delays (2026-11-17; refresh.mjs; the native sender's setRefresh; Rate refresh's four 1-to-4 sliders
+// ai: Refresh's delays (2026-11-17; the C's rule, ob.mjs Refresh over core/tx/refresh.h; the native sender's setRefresh; Rate refresh's four 1-to-4 sliders
 // ai: of 2026-11-12 before): FPS is the clock, and four sliders 1 to 60 the pictures between new blocks of 6/7, 3/4, 2/3
 // ai: and 1/2 (6/7 and 3/4 on one from 2026-11-17 to 11-22, while their tails carried the pilots), each label the bare
 // ai: count as FPS's; kept as the other settings (send:<id>). A release tells the worker the four, which applies them
@@ -1217,11 +1192,12 @@ $("inkTile").onclick = () => openPicker("ink");
 $("paperTile").onclick = () => openPicker("paper");
 showColours();
 // ai: A preset that is no format (?subch=24, ?subch=1088, ?subch=auto) is no symbol: back to the page's default,
-// ai: LIZARD-480 (#subch's own), and say so, rather than paint it; a kept "auto" (the slider's first step until
+// ai: LIZARD-480 (the library's default size, lizard.h LIZ_BLOCKS_DEFAULT; #subch's own), and say so, rather than paint it; a kept "auto" (the slider's first step until
 // ai: 2026-11-07) goes back to it quietly.
 if (!VERSIONS.includes(+$("subch").value)) {
-  if (URLP.has("subch")) $("tx").textContent = `${$("subch").value} sub-channels is no format (a multiple of 16 from 16 to 1072): showing LIZARD-480`;
-  $("subch").value = "480";
+  const d = STEP * BLOCKS_DEFAULT;
+  if (URLP.has("subch")) $("tx").textContent = `${$("subch").value} sub-channels is no format (a multiple of ${STEP} from ${VERSIONS[0]} to ${VERSIONS.at(-1)}): showing ${NAME(d)}`;
+  $("subch").value = String(d);
 }
 showStatsLabels();
 showEnc();

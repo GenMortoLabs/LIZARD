@@ -293,7 +293,7 @@ FN(jstring, txConfigure)(JNIEnv* e, jclass, jlong h, jint subch, jint span, jint
 }
 
 // ai: Refresh (Sender::setRefresh, 2026-11-17; Rate refresh 2026-11-12): the delays of the code rates 6/7, 3/4, 2/3 and
-// ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to Sender::REFRESH_MAX, each its own slider),
+// ai: 1/2, their blocks new in every a-th, b-th, c-th and d-th picture (1 to refresh::MAX, core/tx/refresh.h, each its own slider),
 // ai: the picture before's repeated between; from the next frame made, kept across configures
 FN(void, txRefresh)(JNIEnv*, jclass, jlong h, jint a, jint b, jint c, jint d) {
   const int every[4] = {a, b, c, d};

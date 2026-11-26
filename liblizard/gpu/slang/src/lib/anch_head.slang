@@ -1,7 +1,7 @@
 // What the anchors' stages (ANCH_FIND, ANCH_SUMS, ANCH_FIT) bind first, 0 to 6, and the map at a module point: REFIT's
 // homography and the lens record (none for ANCH_FIND, which runs before ANCH_REFIT writes it: the anchors searched
 // through the homography alone). The Anchors uniform: a ring's knots (k, three float4 a ring), the fill's normal
-// matrix's inverse (g, nine a ring) and (its grid a side, the anchors its geometry takes) (s); ../../plan/anchors.mjs
+// matrix's inverse (g, nine a ring) and (its grid a side, the anchors its geometry takes) (s); core/dec/build.cpp
 // anchUniform. Defines: RING_COUNT, LATTICE_VECS, RESID (lib/lens.slang).
 #include "lib/frame.slang"
 #include "lib/convert.slang"
@@ -17,7 +17,7 @@ struct LatticeBlock { uint4 at[RING_COUNT]; float4 lat[LATTICE_VECS]; };
 struct AnchorsBlock { float4 k[3 * RING_COUNT]; float4 g[9 * RING_COUNT]; float4 s[RING_COUNT]; };
 [[vk::binding(6, 0)]] ConstantBuffer<AnchorsBlock> A;
 float knot(uint r, uint i) { return A.k[3u * r + (i >> 2u)][i & 3u]; }
-// ring r's grid a side (3, 5, 7) and the anchors its geometry takes (plan/anchors.mjs anchMin)
+// ring r's grid a side (3, 5, 7) and the anchors its geometry takes (core/dec/build.cpp ANCH_MIN)
 uint gridOf(uint r) { return f2u(A.s[r].x); }
 uint gridMin(uint r) { return f2u(A.s[r].y); }
 #include "lib/lens.slang"

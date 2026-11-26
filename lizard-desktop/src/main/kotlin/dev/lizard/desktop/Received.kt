@@ -1,8 +1,8 @@
 package dev.lizard.desktop
 
 import dev.lizard.Session
-import dev.lizard.tar.isTar
-import dev.lizard.tar.untar
+import dev.lizard.lib.isTar
+import dev.lizard.lib.untar
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -31,7 +31,7 @@ import dev.lizard.ui.*
 // ai: then filed from there into the Downloads folder and its take let go (Session.placed): file, into LIZ_DOWNLOADS,
 // ai: else Linux's XDG_DOWNLOAD_DIR from user-dirs.dirs, else ~/Downloads, under a name free there ("name (1).ext"),
 // ai: each file marked as downloaded
-// ai: (mark); a tar (several files or a folder sent as one, Tar.kt; told by its name, isTar: the description carries no
+// ai: (mark); a tar (several files or a folder sent as one, Lib.kt over the C's reader; told by its name, isTar: the description carries no
 // ai: media type) is unpacked there whole into a folder (one folder
 // ai: alone at its top is the bundle's, else the tar's name less .tar), one that does not unpack whole filed as the file.
 // ai: What Downloads does not take stays in the app's folder, listed from there, and is filed again later (retry), as is
@@ -256,7 +256,7 @@ object Received {
         return dir
     }
 
-    // ai: A take's tar unpacked into Downloads whole or not at all: into a hidden folder of its own there (Tar.kt untar,
+    // ai: A take's tar unpacked into Downloads whole or not at all: into a hidden folder of its own there (Lib.kt untar,
     // ai: which refuses links, paths out of it and damaged headers; the one an unpack cut short left, removed first), each
     // ai: file marked, then that folder, or the one folder alone at its top, renamed to a free name in the same folder
     // ai: (one rename: the bundle is there whole, or nothing is), its files made durable first and the bundle listed with

@@ -1,6 +1,6 @@
 package dev.lizard.desktop
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import kotlinx.coroutines.delay
 import kotlin.system.exitProcess
 import dev.lizard.ui.*
@@ -10,7 +10,7 @@ import dev.lizard.ui.*
 // ai: default (the kept ones neither read nor written: Prefs.forget), the ones named applied; sending starts once the
 // ai: code area has a size, and after secs (8 unless named) of presenting the last presenter and sender stats are
 // ai: printed to stdout as one JSON line {"present": {...}, "sender": {...}} and the app exits 0. Any failure prints
-// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 1 to 67 (Pick.VERSION_MIN to VERSION_MAX); fps 1 to
+// ai: "FAIL <why>" and exits 1. Keys: secs; codes 1 or 2; enc auto, gpu or cpu; blocks 1 to 67 (Ladder.VERSION_MIN to VERSION_MAX); fps 1 to
 // ai: 60; size 25 to 100 (%); spacing 4 to 68 and margin 2 to 34 (modules); ring auto, 64, 128 or 256; full 0 or 1 (the
 // ai: window manager's full screen); vsync 0 or 1 (1 unless named); file=<path>[:<path>...] (files or folders in place
 // ai: of the test stream, as a pick or a drop gives them: one file as itself, else one tar, 2026-10-16; the paths split
@@ -79,13 +79,13 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
         }
         int("codes", 1..2)?.let { s.codes = it }
         kv["enc"]?.let { if (it in setOf("auto", "gpu", "cpu")) s.enc = it else fail("LIZ_SENDER_TEST: enc=$it") }
-        int("blocks", Pick.VERSION_MIN..Pick.VERSION_MAX)?.let { s.blocks = it }
+        int("blocks", Ladder.VERSION_MIN..Ladder.VERSION_MAX)?.let { s.blocks = it }
         int("fps", 1..60)?.let { s.fps = it }
         int("vsync", 0..1)?.let { s.vsync = it == 1 }
         int("size", 25..100)?.let { s.size = it }
         int("spacing", Room.SPACING_MIN..Room.SPACING_MAX)?.let { s.spacing = it }
-        int("margin", Pick.QUIET..Room.MARGIN_MAX)?.let { s.margin = it }
-        kv["ring"]?.let { v -> s.ring = if (v == "auto") -1 else Pick.RINGS.indexOf(v.toIntOrNull() ?: 0).takeIf { it >= 0 } ?: fail("LIZ_SENDER_TEST: ring=$v") }
+        int("margin", Ladder.QUIET..Room.MARGIN_MAX)?.let { s.margin = it }
+        kv["ring"]?.let { v -> s.ring = if (v == "auto") -1 else Ladder.RINGS.indexOf(v.toIntOrNull() ?: 0).takeIf { it >= 0 } ?: fail("LIZ_SENDER_TEST: ring=$v") }
         // ai: Refresh's delays (2026-11-17; Rate refresh 2026-11-12): four values 1 to REFRESH_MAX, 6/7 to 1/2, as the setting
         // ai: keeps them ("4,4,4,1")
         kv["refresh"]?.let { v ->
@@ -109,7 +109,6 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
     // ai: on the UI thread (Main.kt's LaunchedEffect)
     suspend fun run(s: SendState) {
         running = s
-        if (s.loadError.isNotEmpty()) fail(s.loadError)
         if (int("full", 0..1) == 1) s.full.toggle()
         // ai: a pick is walked off the UI thread (SendState.pick): Start once it is in
         val t0 = System.nanoTime()
@@ -215,9 +214,9 @@ class SenderTest private constructor(private val secs: Double, private val kv: M
             "start" -> { s.start(); return stopped }
             "size" -> { s.chooseSize(n(25..100)); s.commitSize() }
             "spacing" -> { s.chooseSpacing(n(Room.SPACING_MIN..Room.SPACING_MAX)); s.repick() }
-            "margin" -> { s.chooseMargin(n(Pick.QUIET..Room.MARGIN_MAX)); s.repick() }
+            "margin" -> { s.chooseMargin(n(Ladder.QUIET..Room.MARGIN_MAX)); s.repick() }
             "codes" -> s.chooseCodes(n(1..2))
-            "blocks" -> { val b = n(Pick.VERSION_MIN..Pick.VERSION_MAX); s.chooseBlocks(b); s.repick() }
+            "blocks" -> { val b = n(Ladder.VERSION_MIN..Ladder.VERSION_MAX); s.chooseBlocks(b); s.repick() }
             "fps" -> { s.chooseFps(n(1..60)); s.commitFps() }
             "vsync" -> s.chooseVsync(n(0..1) == 1)
             "scaling" -> if (v in SendState.SCALINGS) s.chooseScaling(v) else fail("LIZ_SENDER_TEST: step $act")

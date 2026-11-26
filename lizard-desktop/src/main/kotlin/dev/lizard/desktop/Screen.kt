@@ -2,7 +2,7 @@
 
 package dev.lizard.desktop
 
-import dev.lizard.pick.Pick
+import dev.lizard.lib.Ladder
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -60,8 +60,7 @@ class DesktopSend(private val app: App) : SendHost {
     // ai: what goes as elements (SendState.details: Show statistics, Receive's own setting, names the rows it adds), the
     // ai: error a popup (2026-11-07; the state line before); a pick being read is its tile's on the card (CodeArea)
     override val details get() = s.details(app.recv.showStats)
-    // ai: no native library: nothing sends; said in the popup each time Send opens (2026-11-07; a cover before)
-    override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: s.loadError
+    override val error get() = (s.phase as? SendState.Phase.Error)?.why ?: ""
     override fun clearError() { if (s.phase is SendState.Phase.Error) s.phase = SendState.Phase.Idle }
     override val heat: Warn? = null
     override val railCapacity get() = s.capacityKBs
@@ -75,15 +74,15 @@ class DesktopSend(private val app: App) : SendHost {
         val streamed = s.playing
         val held = streamed || s.exportDetails != null && s.sending
         val vBlocks = sm?.blocks ?: s.blocks
-        val vRing = sm?.ring ?: (if (s.ring == -1) Pick.RING_DEFAULT else s.ring)
+        val vRing = sm?.ring ?: (if (s.ring == -1) Ladder.RING_DEFAULT else s.ring)
         val vCodes = sm?.codes ?: s.codes
         val vFps = sm?.fps ?: s.fps
         return mapOf(
         FoldKey.SendCode to listOfNotNull(
             // ai: Blocks a frame (send.html #blocks): a version 4 to 64, committed on release (its first step auto until
             // ai: 2026-11-07); Blocks or Density and the ring's names by Show statistics (lizard-ui SendRows, 2026-11-07)
-            greyedUnless(!held, Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Pick.STEP * vBlocks), stats), vBlocks.toFloat(),
-                Pick.VERSION_MIN.toFloat()..Pick.VERSION_MAX.toFloat(), Pick.VERSION_MAX - Pick.VERSION_MIN - 1, done = { s.repick() }) { s.chooseBlocks(it.roundToInt()) }),
+            greyedUnless(!held, Slide(SendRows.blocksTitle(stats), SendRows.blocksText(Native.blocksFor(Ladder.STEP * vBlocks), stats), vBlocks.toFloat(),
+                Ladder.VERSION_MIN.toFloat()..Ladder.VERSION_MAX.toFloat(), Ladder.VERSION_MAX - Ladder.VERSION_MIN - 1, done = { s.repick() }) { s.chooseBlocks(it.roundToInt()) }),
             // ai: the rings alone (2026-10-05): none chosen shows the default
             greyedUnless(!held, ChipChoice("Ring", vRing, SendRows.rings(stats)) { s.chooseRing(it) }),
             // ai: two codes side by side for the receiver's 2:1 crop (send.html #codes)
@@ -92,14 +91,14 @@ class DesktopSend(private val app: App) : SendHost {
             // ai: greyed with one code (lizard-ui greyed), and for a stream (its spacing its own)
             greyedUnless(vCodes == 2 && !held, Slide("Spacing", "${s.spacing} modules", s.spacing.toFloat(), Room.SPACING_MIN.toFloat()..Room.SPACING_MAX.toFloat(),
                 Room.SPACING_MAX - Room.SPACING_MIN - 1, done = { s.repick() }) { s.chooseSpacing(it.roundToInt()) }),
-            Slide("Margin", "${s.margin} modules", s.margin.toFloat(), Pick.QUIET.toFloat()..Room.MARGIN_MAX.toFloat(), Room.MARGIN_MAX - Pick.QUIET - 1,
+            Slide("Margin", "${s.margin} modules", s.margin.toFloat(), Ladder.QUIET.toFloat()..Room.MARGIN_MAX.toFloat(), Room.MARGIN_MAX - Ladder.QUIET - 1,
                 done = { s.repick() }) { s.chooseMargin(it.roundToInt()) },
             // ai: the code's ink and paper (lizard-ui Colours, 2026-11-16), applied at once (a stream's too)
             Colours(s.ink, s.paper) { i, p -> s.chooseColours(i, p) }),
         // ai: FPS (chips under VSync, a slider without it), then Rate refresh, a slider a code rate (lizard-ui
         // ai: rateRefreshSettings); a stream's greyed
         FoldKey.SendRefresh to (listOf(
-            if (s.vsync) ChipChoice("FPS", vFps, (Pick.FPS + vFps).distinct().map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
+            if (s.vsync) ChipChoice("FPS", vFps, (SendRows.FPS + vFps).distinct().map { it to "$it" }) { s.chooseFps(it); s.commitFps() }
             else Slide("FPS", "$vFps", vFps.toFloat(), 1f..60f, 58, done = { s.commitFps() }) { s.chooseFps(it.roundToInt()) }) +
             rateRefreshSettings(s.refresh) { r, v -> s.chooseRefresh(r, v) }).map { if (held) greyed(it) else it },
         // ai: Control (2026-11-18; Stream that day until renamed; lizard-ui controlSettings)

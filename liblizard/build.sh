@@ -2,10 +2,15 @@
 # ./build.sh          -> the codec's WebAssembly module (needs emsdk, source <emsdk>/emsdk_env.sh, and CMake 3.22 or later):
 #   the library's wasm target (CMakeLists.txt; the vector paths on WebAssembly SIMD) in build-native/wasm, written to
 #   bindings/wasm/dist/lizard.mjs and lizard.wasm: the C API and the codec's own exports (src/wasm.c), RaptorQ and zstd
-#   inside. build/ob.mjs, the path the tree imports the codec by (sim/ob.mjs, the native generator), re-exports it.
+#   inside. build/ob.mjs, the path the tree imports the codec by (sim/ob.mjs, the native generator), re-exports it;
+#   build/format.mjs, the format's arithmetic the C gives (gen/format.mjs: sim/ob.mjs's face reads it with no instance),
+#   and build/blocks.js, its blocks a frame by version as a classic script (a page's inline script before its first paint).
 #   Beside it the web's file camera, dist/lizard-media.mjs and lizard-media.wasm (CMakeLists.txt lizard_media: the apps'
 #   reader over FFmpeg), FFmpeg built for it first where build/ffmpeg/wasm is missing (ffmpeg/build.sh wasm: the pinned
 #   release fetched and checked, a few minutes once)
+#   Beside them the web's threaded module, dist/lizard-mt.mjs and lizard-mt.wasm (CMakeLists.txt LIZ_WASM_THREADS:
+#   pthreads over one shared heap, WasmFS on OPFS, the web receiver's engine, bindings/wasm/engine.cpp), which the pages
+#   load (a cross-origin isolated page's); `./build.sh mt` builds it alone.
 # ./build.sh mvp      -> the same module as WebAssembly 1.0 (dist/lizard-mvp.mjs and .wasm), the library's fallback for an
 #   engine without SIMD
 # ./build.sh scalar   -> build/nosimd/lizard.mjs: the module with the codec's scalar twins in place of its vector paths, for a
@@ -40,7 +45,7 @@ if [ "$1" = native ]; then
   # core/CMakeLists.txt builds it on this machine. No threads.
   SRC="src/ldpc.c src/layout.c src/acquire.c src/fft.c src/rs.c src/fmt.c src/lizard_phy.c src/any.c src/xfer.c src/rq.c src/wasm.c vendor/blake3/blake3.c vendor/blake3/blake3_dispatch.c vendor/blake3/blake3_portable.c vendor/blake3/blake3_sse41_x86-64_unix.S vendor/blake3/blake3_avx2_x86-64_unix.S"
   B3="-Ivendor/blake3 -DBLAKE3_NO_SSE2 -DBLAKE3_NO_AVX512 -DBLAKE3_USE_NEON=0"
-  gcc -O2 -g -ffp-contract=off -Wall -Wextra -fsanitize=address,undefined $B3 -c $SRC && rm -f ./*.o
+  gcc -O2 -g -ffp-contract=off -Wall -Wextra -fsanitize=address,undefined -Iinclude $B3 -c $SRC && rm -f ./*.o
   exit 0
 fi
 # wasm <build tree> <out dir> <cache settings>: the module configured and built (emcmake, as the wasm presets' tree is);
@@ -54,21 +59,26 @@ wasm() {
 case "$1" in
   ""|wirehair|zstd)
     [ -f build/ffmpeg/wasm/lib/libavcodec.a ] || bash ffmpeg/build.sh wasm
-    wasm build-native/wasm "$PWD/bindings/wasm/dist" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=ON
+    wasm build-native/wasm "$PWD/bindings/wasm/dist" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=ON -DLIZ_WASM_THREADS=OFF
+    wasm build-native/wasm-mt "$PWD/bindings/wasm/dist" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=OFF -DLIZ_WASM_THREADS=ON
     mkdir -p build
     printf '%s\n%s\n' "// The codec's module (bindings/wasm/dist/lizard.mjs, liblizard/build.sh) at the path the tree imports it by." \
       'export { default } from "../bindings/wasm/dist/lizard.mjs";' > build/ob.mjs
-    ls -l bindings/wasm/dist/lizard.wasm bindings/wasm/dist/lizard-media.wasm ;;
+    node gen/format.mjs
+    ls -l bindings/wasm/dist/lizard.wasm bindings/wasm/dist/lizard-mt.wasm bindings/wasm/dist/lizard-media.wasm ;;
+  mt)
+    wasm build-native/wasm-mt "$PWD/bindings/wasm/dist" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=OFF -DLIZ_WASM_THREADS=ON
+    ls -l bindings/wasm/dist/lizard-mt.wasm ;;
   mvp)
-    wasm build-native/wasm-mvp "$PWD/bindings/wasm/dist" -DLIZ_WASM_MVP=ON -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=OFF
+    wasm build-native/wasm-mvp "$PWD/bindings/wasm/dist" -DLIZ_WASM_MVP=ON -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=OFF -DLIZ_WASM_THREADS=OFF
     ls -l bindings/wasm/dist/lizard-mvp.wasm ;;
   scalar)
-    wasm build-native/wasm-scalar "$PWD/build/nosimd" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=ON -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=OFF
+    wasm build-native/wasm-scalar "$PWD/build/nosimd" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=ON -DLIZ_VERIFY_POINTS=OFF -DLIZ_WASM_MEDIA=OFF -DLIZ_WASM_THREADS=OFF
     ls -l build/nosimd/lizard.wasm ;;
   verify)
     # The border finder's point scans next to the plain scan they replaced, which aborts on any difference: scripts/exp/points_check.mjs.
-    wasm build-native/wasm-verify "$PWD/build/verify" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=ON -DLIZ_WASM_MEDIA=OFF
-    wasm build-native/wasm-verify-scalar "$PWD/build/verify-scalar" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=ON -DLIZ_VERIFY_POINTS=ON -DLIZ_WASM_MEDIA=OFF
+    wasm build-native/wasm-verify "$PWD/build/verify" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=OFF -DLIZ_VERIFY_POINTS=ON -DLIZ_WASM_MEDIA=OFF -DLIZ_WASM_THREADS=OFF
+    wasm build-native/wasm-verify-scalar "$PWD/build/verify-scalar" -DLIZ_WASM_MVP=OFF -DLIZ_SCALAR=ON -DLIZ_VERIFY_POINTS=ON -DLIZ_WASM_MEDIA=OFF -DLIZ_WASM_THREADS=OFF
     ls -l build/verify/lizard.wasm build/verify-scalar/lizard.wasm ;;
-  *) echo "build.sh: no build $1 (none, mvp, scalar, verify, native, app; wirehair and zstd the default)" >&2; exit 2 ;;
+  *) echo "build.sh: no build $1 (none, mt, mvp, scalar, verify, native, app; wirehair and zstd the default)" >&2; exit 2 ;;
 esac

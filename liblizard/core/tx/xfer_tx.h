@@ -1,11 +1,11 @@
-// ai: The transfer's sending end (2026-10-01): liblizard/sim/xfer.mjs XferSender ported name for name, over
+// ai: The transfer's sending end (2026-10-01; the web's JS sender, sim/xfer.mjs XferSender, ported name for name, its twin until 2026-11-25), over
 // ai: liblizard/src/xfer.c (the source blocks' chaining values, their root, the header) and RaptorQ (liblizard/src/rq.h), as
 // ai: the receiving end (rx/xfer_rx.h) takes them. A file goes in 2^sb_log2 source blocks (16 MiB, xfer_sb_log2_for; a
 // ai: file to 65,535 source blocks, about 1 TiB), a RaptorQ source block over each source block's own bytes (the transfer compresses
 // ai: nothing, a client packs a file before it, pack.h); the session header on a control slot about every eighth of a
 // ai: cycle (no manifest since 2026-11-21); data blocks by the carousel, shuffled in a frame.
 // ai: The TOIs (src/xfer.h): the file's its content's (xfer_toi_of), whatever the seed, so every sender's blocks of the
-// ai: same file are one object's; the session header's the session's, drawn from the seed (sessionToi, sim/xfer.mjs's).
+// ai: same file are one object's; the session header's the session's, drawn from the seed (sessionToi).
 // ai: frameIds gives bare ids, toiFor each one's TOI.
 // ai: The carousel's seed (2026-11-14): each source block's symbols' order (each pass of its 2^24 ids its own, 2026-11-15), each round's order of the source blocks and each frame's
 // ai: shuffle are drawn from it, a random one a sender unless set before the first frame (reseed), so no send repeats
@@ -20,7 +20,7 @@
 // ai: source blocks made so far in turn before, which left those made first ahead for the whole transfer); then the
 // ai: carousel, every source block starting it level. A receiver solves each source block as its symbols come, so it
 // ai: needs nothing new. A file of one source block is made before the constructor returns, and so
-// ai: is every file under emscripten (no threads).
+// ai: is every file in the plain wasm module (no threads; the threaded one, the web's, makes them as natively).
 // ai: Deferred (2026-11-16, the sender's blocks on the GPU): with `defer` the constructor makes no source block, opens no spill
 // ai: and starts no worker; the sender's first configure starts them (makeOnCpu), with a sink where the GPU streams the
 // ai: blocks (core/tx/gpu_stream.h): each source block's encoder as it is made, then let go (no spill, nothing held
@@ -53,8 +53,8 @@ extern "C" {
 
 namespace lizard {
 
-// ai: the prepare's workers: one a physical core (the hardware threads where the system does not say; 1 under
-// ai: emscripten); the client's pack (pack.h) takes as many
+// ai: the prepare's workers: one a physical core (the hardware threads where the system does not say, and in the
+// ai: threaded wasm module; 1 in the plain one); the client's pack (pack.h) takes as many
 unsigned physicalCores();
 
 struct XferDesc;
@@ -75,6 +75,14 @@ class XferTx {
   // ai: stream, pack.h). Every send is one file (several go as one tar): its description, the file's one CBOR map,
   // ai: in its session header (a 255-byte name always fits).
   XferTx(const uint8_t* data, size_t length, const std::string& name, int sbLog2 = -1, const std::string& spillDir = "",
+         const std::function<bool()>& stopped = {}, bool defer = false, uint8_t compression = 0);
+  // ai: The file's bytes read as the transfer asks for them (2026-11-25, a file past what memory holds: the web's picked
+  // ai: file through the threaded wasm module): read(off, n, into) puts the n bytes of the file at off into `into`, true
+  // ai: when whole; called from the transfer's threads, several at once. Each reads one source block at a time into a
+  // ai: buffer of its own (the hash's, a make's, the spill's), so with a spill the memory is a source block a thread, not
+  // ai: the file. A read that fails is the hash's failure (the constructor throws) or a make's (fault). The rest as above.
+  using Reader = std::function<bool(uint64_t off, size_t n, uint8_t* into)>;
+  XferTx(Reader read, uint64_t length, const std::string& name, int sbLog2 = -1, const std::string& spillDir = "",
          const std::function<bool()>& stopped = {}, bool defer = false, uint8_t compression = 0);
   ~XferTx();
   // ai: The carousel and the TOIs drawn from seed in place of the random one; before the first frame only (false
@@ -116,7 +124,7 @@ class XferTx {
   void makeOnCpu(Sink sink = {});
   uint32_t madeCount() const { return made_.load(std::memory_order_acquire); }
   size_t sbSize() const { return size_; }        // ai: 2^sb_log2: source block c starts at c sbSize() in the file
-  size_t length() const { return length_; }        // ai: the file's bytes
+  uint64_t length() const { return length_; }        // ai: the file's bytes
   size_t sbBytes(uint32_t c) const { return len_[c]; }
   uint32_t controls() const { return 1; }   // ai: the header, the one control block
   // ai: the header's 460 bytes; the source symbols over every source block (sum of K)
@@ -126,7 +134,7 @@ class XferTx {
   xfer_toi_t headerToi() const;
 
  private:
-  xfer_id_t next();   // ai: the carousel's next data id (sim/xfer.mjs Carousel.next)
+  xfer_id_t next();   // ai: the carousel's next data id
   void seedWith(uint32_t seed);   // ai: each source block's first symbol and the rounds' generator from seed
   void drawTois();                // ai: the file's TOI from its content (xfer_toi_of); once the root is known
   void newRound();    // ai: the next round's order of the source blocks
@@ -141,9 +149,15 @@ class XferTx {
   void writeSegment(uint32_t c, const rq_enc_t* enc, uint64_t n, uint32_t base);   // ai: segment n's symbols from base into its slot
   void spiller();                    // ai: the spill's thread: segments asked for, in order
 
-  size_t size_, length_ = 0;
+  XferTx(const uint8_t* data, Reader read, uint64_t length, const std::string& name, int sbLog2, const std::string& spillDir,
+         const std::function<bool()>& stopped, bool defer, uint8_t compression);
+  // ai: source block c's bytes: in place in the file (data_), else read into buf (read_)
+  const uint8_t* bytesOf(uint32_t c, std::vector<uint8_t>& buf) const;
+  size_t size_;
+  uint64_t length_ = 0;
   uint32_t sourceBlocks_ = 0;
-  const uint8_t* data_ = nullptr;
+  const uint8_t* data_ = nullptr;   // ai: the file in memory, or null where read_ reads it
+  Reader read_;
   std::atomic<uint32_t> cycle_{0};
   std::vector<uint8_t> cvs_;     // ai: every source block's chaining value (two source blocks or more)
   std::vector<size_t> len_;      // ai: a source block's own bytes
@@ -191,7 +205,7 @@ class XferTx {
   std::thread spillThread_;
 };
 
-// ai: A session's description (src/xfer.h, SPEC 7.7 and 7.11; sim/xfer.mjs Description): the send's one file's CBOR map
+// ai: A session's description (src/xfer.h, SPEC 7.7 and 7.11): the send's one file's CBOR map
 // ai: (src/xfer.h xfer_desc_write; no session-wide keys yet), in the session header, read from one block. Under the
 // ai: session's TOI (the sender's); the session header written once, here.
 struct XferDesc {

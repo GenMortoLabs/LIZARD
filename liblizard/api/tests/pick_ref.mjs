@@ -5,7 +5,7 @@
 import { init } from "../../sim/ob.mjs";
 
 await init();
-const { ROOM_FOR, pickVersion, MODULES, OB_QUIET, RINGS } = await import("../../sim/lizard_pick.mjs");
+const { ROOM_FOR, pickVersion, MODULES, OB_QUIET, RINGS } = await import("../../sim/ob.mjs");
 const out = [];
 for (let r = 0; r < RINGS.length; r++) for (let b = 4; b <= 64; b++) out.push(`room ${b} ${r} ${ROOM_FOR(16 * b, r).toPrecision(17)}`);
 for (const codes of [1, 2])

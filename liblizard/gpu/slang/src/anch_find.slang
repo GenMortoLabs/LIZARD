@@ -3,13 +3,13 @@
 // REFIT's homography: a reach of one square side each way, ANCH_TS points a square side; coarse at every second point
 // and step, then every point and step within FD of the coarse best; a square's point the mean of up to 4 x 4 reads
 // where a step spans more than 2 image px. Writes (the anchor's offset from where the map puts it, its peak, found).
-// Defines (anchors.mjs): ANCH_TS, ANCH_K, ANCH_SIDE (uint), ANCH_PEAK (float); the windows WC, W1C, OC (coarse) and WF,
+// Defines (core/dec/build.cpp Anchors): ANCH_TS, ANCH_K, ANCH_SIDE (uint), ANCH_PEAK (float); the windows WC, W1C, OC (coarse) and WF,
 // W1F, OF (fine) (uint), RC (int); each window's square pattern PC_* and PF_*; lib/anch_head.slang's.
 #include "lib/anch_head.slang"
 #define AL 128u
 // The square's score at offset (px, py) of a window, from the window's integral images I1 (values) and I2 (squares), W1
 // a row: normalised correlation with the square as painted (dark ring, light centre, light rim; its runs I25 + N25 and
-// I6 + N6 of the TS_ points a side, AREA = TS_^2, TM1 = 1 - its mean, TN its norm; anchors.mjs pattern).
+// I6 + N6 of the TS_ points a side, AREA = TS_^2, TM1 = 1 - its mean, TN its norm; core/dec/build.cpp Anchors' pattern).
 #define BOX(I, X, Y, SZ, W1) (I[(Y + SZ) * W1 + X + SZ] - I[Y * W1 + X + SZ] - I[(Y + SZ) * W1 + X] + I[Y * W1 + X])
 #define SCORE(NAME, I1, I2, W1, TS_, AREA, I25, N25, I6, N6, TM1, TN) \
 float NAME(uint px, uint py) { \

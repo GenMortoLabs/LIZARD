@@ -1,7 +1,7 @@
 // Reduce, the back half's transform between its passes: a listed frame's five surface coefficients (the detrend pass 2
 // takes off) from pass 1's column partials. A workgroup of 256 a listed frame. red is written whole before its first
 // read. Built a batch size and a picture size each.
-// Defines (back_transform.mjs reduceSource): PICTURE_N, BATCH (uint).
+// Defines (core/dec/build.cpp backHalf): PICTURE_N, BATCH (uint).
 struct ParamsBlock { uint yStride; uint partStride; uint size; float m2; float sx2; float sq2; uint sStride; };
 [[vk::binding(3, 0)]] ConstantBuffer<ParamsBlock> P;
 [[vk::binding(0, 0)]] StructuredBuffer<uint> lists;

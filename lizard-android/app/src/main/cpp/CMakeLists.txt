@@ -9,9 +9,10 @@ set(LZ ${CORE}/..)
 # ai: EXCLUDE_FROM_ALL: only what libliz links is built (not core's check tools)
 add_subdirectory(${CORE} core EXCLUDE_FROM_ALL)
 
-add_library(liz SHARED jni.cpp ${LZ}/api/session.cpp ${LZ}/api/jni_session.cpp ${LZ}/api/jni_text.cpp)
+add_library(liz SHARED jni.cpp ${LZ}/api/session.cpp ${LZ}/api/jni_session.cpp ${LZ}/api/jni_lib.cpp ${LZ}/api/jni_text.cpp)
 target_compile_features(liz PRIVATE cxx_std_17)
-target_compile_options(liz PRIVATE -Wall -Wextra -Wno-unused-parameter)
+# ai: the core's warnings (liblizard/core/CMakeLists.txt): a Vulkan struct written {sType} leaves the rest zero by design
+target_compile_options(liz PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
 # ai: optimised in Gradle's debug variant too, as core is (liblizard/core/CMakeLists.txt, LIZ_O0)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT LIZ_O0)
   target_compile_options(liz PRIVATE -O2)

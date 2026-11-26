@@ -1,11 +1,14 @@
-// ai: wg: the part of WebGPU the decoder's host uses, over Vulkan. The host was written
-// ai: against WebGPU (liblizard/gpu/decoder.mjs), so its port keeps WebGPU's rules here rather than in every caller:
+// ai: wg: the part of WebGPU the decoder's host uses, over Vulkan, or over Metal on Apple's systems (2026-11-25,
+// ai: wg_metal.mm, in place of Vulkan through MoltenVK: one backend a build, LIZ_VK or LIZ_METAL). The host keeps
+// ai: WebGPU's rules (it was first written for WebGPU) here rather than in every caller:
 // ai:   - every buffer and texture reads as zeros until written (a fill at creation);
 // ai:   - queue writes land before the commands of the next submit and after everything submitted before them;
 // ai:   - each dispatch sees everything the commands before it wrote (a memory barrier between commands; WebGPU on
 // ai:     Vulkan runs a pass's dispatches one after the other too, so this is the web's order, not a new one);
 // ai:   - textures are 2D arrays of r8unorm, sampled with textureLoad, kept in the GENERAL layout for their life;
 // ai:   - timestamps come back in nanoseconds.
+// ai: A kernel reaches either as gen writes it (liblizard/gen/gen.mjs, one Slang source): SPIR-V, or MSL with its
+// ai: binding map (readModule).
 // ai: Threads: one thread at a time records and submits (the decoder's: encoder(), an Encoder's commands, submit(),
 // ai: flush()), and the command pool is touched by that thread alone. Any thread may create and destroy buffers and
 // ai: textures, write a buffer and drop a Ticket: the pending writes and fills and the queue are under `mu`, and a
@@ -20,14 +23,23 @@
 // ai: ticket and, on the host-luma path, recorded and submitted its uploads, against the decoder thread on the
 // ai: same pool and queue; the 4090 lost the device once in a run of the receiver on it, Xid 69.)
 #pragma once
+#if defined(__APPLE__)
+#define LIZ_METAL 1
+#else
+#define LIZ_VK 1
+#endif
+#if LIZ_VK
 #if defined(__ANDROID__) && !defined(VK_USE_PLATFORM_ANDROID_KHR)
 #define VK_USE_PLATFORM_ANDROID_KHR 1
 #endif
 // ai: Vulkan loaded at run time (2026-10-03, for the library: third_party/volk): no link to libvulkan, so a machine with
-// ai: no Vulkan loads the code and decodes on the CPU, and Windows and macOS need no import library. Every vk* name is
-// ai: volk's pointer, set by Device::create (volkLoadInstance: device calls dispatch through the loader, so two devices
-// ai: share a process, the decoder's and the painter's).
+// ai: no Vulkan loads the code and decodes on the CPU, and Windows needs no import library. Every vk* name is volk's
+// ai: pointer, set by Device::create (volkLoadInstance: device calls dispatch through the loader, so two devices share a
+// ai: process, the decoder's and the painter's).
 #include "volk.h"
+#endif
+// ai: Metal (wg_metal.mm): the objects' handles are its Objective-C objects, held here as retained opaque pointers
+// ai: (void*), so plain C++ includes this header; only the .mm files touch them.
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -46,10 +58,11 @@ enum : uint32_t { MAP_READ = 1, MAP_WRITE = 2, COPY_SRC = 4, COPY_DST = 8, UNIFO
 // ai: the layout (Device::linearSampler), so a bind group takes no resource for it.
 enum class Bind : uint8_t { Tex, RO, RW, Uniform, Sampler };
 
-struct Error : std::runtime_error { using std::runtime_error::runtime_error; VkResult code = VK_SUCCESS; };
+// ai: code: the backend's own (Vulkan's VkResult, Metal's MTLCommandBufferError), 0 none
+struct Error : std::runtime_error { using std::runtime_error::runtime_error; int code = 0; };
 // ai: An allocation the device refused: the host halves its batch on this, as the web does on an out-of-memory scope.
 struct OutOfMemory : Error { using Error::Error; };
-// ai: The device lost (VK_ERROR_DEVICE_LOST) or taken as hung (a submit not done within Device::hangMs; 2026-10-31).
+// ai: The device lost (VK_ERROR_DEVICE_LOST, a Metal command buffer's error) or taken as hung (a submit not done within Device::hangMs; 2026-10-31).
 // ai: Nothing on it can be trusted after it: its user drops every object on it and the device, and makes another.
 struct Lost : Error { using Error::Error; };
 
@@ -74,12 +87,42 @@ struct Features {
   uint32_t subgroupSize = 0;
 };
 
+// ai: What a device is (2026-10-25: Cpu a software rasterizer on the host's cores, lavapipe or SwiftShader, which the
+// ai: receiver's auto passes over for the C, core/rx/receiver.cpp): Vulkan's physical device type, or Metal's device
+// ai: (Integrated where its memory is the host's, Virtual a hypervisor's paravirtual device).
+enum class Kind : uint8_t { Other, Integrated, Discrete, Virtual, Cpu };
+
+// ai: A kernel as a device takes it, gen's output (readModule): SPIR-V words (Vulkan), or MSL (Metal) with its binding
+// ai: map: the entry's name, the workgroup's size (Metal takes it at the dispatch), and for each Vulkan binding the Metal
+// ai: argument slots it takes ('b' a buffer, 't' a texture, 's' a sampler; liblizard/gen/gen.mjs slangMsl).
+struct Module {
+  std::string name;
+  std::vector<uint32_t> spirv;
+  std::string msl, entry;
+  uint32_t local[3] = {1, 1, 1};
+  struct Slot { char kind; uint32_t index; };
+  std::vector<std::vector<Slot>> bind;   // ai: by Vulkan binding; empty where the kernel declares none
+  bool hasPush = false;
+  Slot push{'b', 0};
+};
+// ai: gen's module `name`, read through `read` (a tree-relative path's bytes: the decoder's ReadFile, core/dec/setup.h):
+// ai: <folder>/name.spv on Vulkan, <folder>/name.metal and its map <folder>/name.json on Metal, the folder "spv" or
+// ai: "msl" unless named (LIZ_SPV, the lab's). Throws where it is missing or does not read. The second form reads the
+// ai: tree under `dir` (the assets: liblizard/out, or the app's copy), by UTF-8 paths.
+using Read = std::function<std::vector<uint8_t>(const std::string&)>;
+Module readModule(const Read& read, const std::string& name, const std::string& folder = "");
+Module readModule(const std::string& dir, const std::string& name);
+
 struct Device;
 
 struct Buffer {
   Device* dev = nullptr;
+#if LIZ_VK
   VkBuffer buf = VK_NULL_HANDLE;
   VkDeviceMemory mem = VK_NULL_HANDLE;
+#else
+  void* mtl = nullptr;   // ai: id<MTLBuffer>
+#endif
   uint64_t size = 0;
   uint32_t usage = 0;
   uint8_t* mapped = nullptr;   // ai: MAP_READ buffers, host-visible and mapped for life
@@ -90,9 +133,13 @@ struct Buffer {
 
 struct Texture {
   Device* dev = nullptr;
+#if LIZ_VK
   VkImage img = VK_NULL_HANDLE;
   VkDeviceMemory mem = VK_NULL_HANDLE;
   VkImageView view = VK_NULL_HANDLE;   // ai: the whole array, 2D_ARRAY, as texture_2d_array reads it
+#else
+  void* mtl = nullptr;   // ai: id<MTLTexture>, MTLTextureType2DArray
+#endif
   uint32_t w = 0, h = 0, layers = 0;
   bool storage = false;
   std::string id;
@@ -101,7 +148,9 @@ struct Texture {
 
 struct BindGroupLayout {
   Device* dev = nullptr;
+#if LIZ_VK
   VkDescriptorSetLayout dsl = VK_NULL_HANDLE;
+#endif
   std::vector<Bind> entries;
   std::string id;
   ~BindGroupLayout();
@@ -109,8 +158,14 @@ struct BindGroupLayout {
 
 struct Pipeline {
   Device* dev = nullptr;
+#if LIZ_VK
   VkPipeline pipe = VK_NULL_HANDLE;
   VkPipelineLayout layout = VK_NULL_HANDLE;
+#else
+  void* mtl = nullptr;   // ai: id<MTLComputePipelineState>
+  uint32_t local[3] = {1, 1, 1};
+  std::vector<std::vector<Module::Slot>> bind;
+#endif
   std::shared_ptr<BindGroupLayout> bgl;
   std::string id, label;
   ~Pipeline();
@@ -128,8 +183,15 @@ struct Resource {
 
 struct BindGroup {
   Device* dev = nullptr;
+#if LIZ_VK
   VkDescriptorSet set = VK_NULL_HANDLE;
   VkDescriptorPool pool = VK_NULL_HANDLE;
+#else
+  // ai: each binding's object in the layout's order (null at a Sampler binding: the device's), bound at each dispatch
+  // ai: where the pipeline's map puts it; the buffers and textures, which own their objects, outlive the group by the
+  // ai: host's rule as Vulkan's descriptors do
+  std::vector<void*> res;
+#endif
   std::shared_ptr<BindGroupLayout> bgl;
   std::string id;
   ~BindGroup();
@@ -137,17 +199,35 @@ struct BindGroup {
 
 struct QuerySet {
   Device* dev = nullptr;
+#if LIZ_VK
   VkQueryPool pool = VK_NULL_HANDLE;
+#endif
   uint32_t count = 0;
   std::string id;
   ~QuerySet();
 };
 
 // ai: A command buffer being recorded: WebGPU's command encoder and compute pass in one. A pass is only a timestamp
-// ai: pair's scope here (Vulkan has no compute pass); every command is behind a memory barrier.
+// ai: pair's scope here (Vulkan has no compute pass); every command is behind a memory barrier. On Metal the commands go
+// ai: into a concurrent compute encoder (a memory barrier before every command but an alongside one) or a blit encoder
+// ai: (the copies and fills), one after the other in the command buffer as they come.
 struct Encoder {
   Device* dev = nullptr;
+#if LIZ_VK
   VkCommandBuffer cb = VK_NULL_HANDLE;
+#else
+  void* cb = nullptr;    // ai: id<MTLCommandBuffer>, released by submit (or with an encoder never submitted)
+  void* enc = nullptr;   // ai: the open id<MTLComputeCommandEncoder> or id<MTLBlitCommandEncoder>
+  int open = 0;          // ai: 0 none, 1 compute, 2 blit
+  const struct BindGroup* group = nullptr;
+  bool bound = false;    // ai: the pipeline's and group's objects set on the open compute encoder
+  Encoder() = default;
+  Encoder(const Encoder&) = delete;
+  Encoder& operator=(const Encoder&) = delete;
+  Encoder(Encoder&& o) noexcept;
+  Encoder& operator=(Encoder&& o) noexcept;
+  ~Encoder();
+#endif
   int commands = 0;
   bool inPass = false;
   QuerySet* passQs = nullptr;
@@ -177,11 +257,18 @@ struct Encoder {
   void hazard();
 };
 
-// ai: A submitted command buffer's fence: done() polls it, wait() blocks on it.
+// ai: A submitted command buffer's fence: done() polls it, wait() blocks on it. On Metal the command buffer itself and a
+// ai: semaphore its completion handler signals (a bounded wait).
 struct Ticket {
   Device* dev = nullptr;
+#if LIZ_VK
   VkFence fence = VK_NULL_HANDLE;
   VkCommandBuffer cbs[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+#else
+  void* cb = nullptr;    // ai: id<MTLCommandBuffer>
+  void* sem = nullptr;   // ai: dispatch_semaphore_t
+  bool finished = false;
+#endif
   std::vector<std::shared_ptr<Buffer>> keep;   // ai: staging the head copied from
   double t0 = 0;   // ai: when it was submitted (steady ms), for the hang's bound
   // ai: done() and wait() throw Lost on a lost device or past the hang's bound (Device::hangMs)
@@ -196,6 +283,7 @@ struct Ticket {
 // ai: A host's extras for Device::create: instance and device extensions (a window surface, the swapchain, present_id
 // ai: and present_wait, whose features are enabled with them where the device has both), and a queue family that draws
 // ai: (the first family that both computes and draws is taken anyway; this refuses a device with none).
+// ai: Vulkan's alone: a Metal device has no extensions to ask for (its presenter's drawables need nothing of it).
 struct DeviceExtras {
   std::vector<std::string> instanceExts, deviceExts;
   bool graphics = false;
@@ -212,6 +300,7 @@ struct Device {
   // ai: memory stays until the process ends), so a hung kernel cannot block its user's teardown.
   uint32_t hangMs = 0;
   std::atomic<bool> lost{false}, abandoned{false};
+#if LIZ_VK
   VkInstance instance = VK_NULL_HANDLE;
   VkPhysicalDevice phys = VK_NULL_HANDLE;
   VkDevice dev = VK_NULL_HANDLE;
@@ -221,8 +310,18 @@ struct Device {
   // ai: presenter presents there and the stream copies a file's chunks there. Submits, presents and waits under queue2Mu().
   VkQueue queue2 = VK_NULL_HANDLE;
   VkCommandPool pool2 = VK_NULL_HANDLE;
+#else
+  void* mtl = nullptr;      // ai: id<MTLDevice>
+  void* queue = nullptr;    // ai: id<MTLCommandQueue>, the batches'
+  void* queue2 = nullptr;   // ai: id<MTLCommandQueue>, the second queue's work (copyOnQueue2)
+  void* linear = nullptr;   // ai: id<MTLSamplerState>, Bind::Sampler's
+  void* last2 = nullptr;    // ai: the last id<MTLCommandBuffer> committed to queue2 (waitQueue2), under pool2Mu
+  void* libs = nullptr;     // ai: NSMutableDictionary: each module's MSL compiled once (a library), by its name
+  std::mutex libMu;
+#endif
   bool twoQueues = false;
   bool lowPriority = false;   // ai: the queues made at the global priority LOW (DeviceExtras::lowPriority, where offered)
+#if LIZ_VK
   uint32_t family = 0;
   VkCommandPool pool = VK_NULL_HANDLE;
   VkPipelineCache cache = VK_NULL_HANDLE;
@@ -232,11 +331,10 @@ struct Device {
   VkSampler linear = VK_NULL_HANDLE;
   VkSampler linearSampler();
   VkPhysicalDeviceMemoryProperties mem{};
+#endif
   std::string name, driver;
   uint32_t apiVersion = 0, vendorId = 0, deviceId = 0, driverVersion = 0;
-  // ai: what the device is (2026-10-25): VK_PHYSICAL_DEVICE_TYPE_CPU a software rasterizer on the host's cores
-  // ai: (lavapipe, SwiftShader), which the receiver's auto passes over for the C (core/rx/receiver.cpp)
-  VkPhysicalDeviceType type = VK_PHYSICAL_DEVICE_TYPE_OTHER;
+  Kind kind = Kind::Other;
   Limits limits;
   Features features;
   double timestampPeriod = 1.0;   // ai: ns a tick
@@ -247,8 +345,12 @@ struct Device {
   // ai: queue2's submits, presents and waits where it is a queue of its own
   std::mutex mu2;
   std::mutex& queue2Mu() { return twoQueues ? mu2 : mu; }
+  // ai: pool2's (copyOnQueue2's callers, the stream's workers, record there one at a time)
+  std::mutex pool2Mu;
+#if LIZ_VK
   // ai: command buffers of dropped Tickets, freed by the recording thread at its next encoder()
   std::vector<VkCommandBuffer> retired;
+#endif
   std::function<void(const std::string&)> log;
   std::string cachePath;
 
@@ -257,7 +359,13 @@ struct Device {
   std::vector<Write> writes;
   // ai: fills and layout changes of new objects, by the object they are for (its destructor drops its own)
   // ai: phase 0 (fills, clears, layout changes) runs before phase 1 (uploads' copies), a barrier between.
-  struct Init { const void* owner; std::function<void(VkCommandBuffer)> f; int phase = 0; };
+  // ai: Cmd: Vulkan's command buffer, or Metal's blit encoder (an id<MTLBlitCommandEncoder>) the head records into
+#if LIZ_VK
+  using Cmd = VkCommandBuffer;
+#else
+  using Cmd = void*;
+#endif
+  struct Init { const void* owner; std::function<void(Cmd)> f; int phase = 0; };
   std::vector<Init> inits;
 
   // ai: want: a substring of the device name to pick (LIZ_VK_DEVICE), else the first discrete, else the first.
@@ -276,7 +384,10 @@ struct Device {
   std::shared_ptr<Texture> createTexture(uint32_t w, uint32_t h, uint32_t layers, const std::string& id = "", bool storage = false);
   std::shared_ptr<BindGroupLayout> createBindGroupLayout(const std::vector<Bind>& entries, const std::string& id = "");
   // ai: spec: values for specialisation constants 0, 1, ... (u32 each), the bench kernels' sizes (lizard_gpu_check bench)
+  std::shared_ptr<Pipeline> createPipeline(const Module& m, std::shared_ptr<BindGroupLayout> bgl, const std::string& id = "", const std::string& label = "", const std::vector<uint32_t>& spec = {});
+#if LIZ_VK
   std::shared_ptr<Pipeline> createPipeline(const std::vector<uint32_t>& spirv, std::shared_ptr<BindGroupLayout> bgl, const std::string& id = "", const std::string& label = "", const std::vector<uint32_t>& spec = {});
+#endif
   // ai: entries: a resource a binding in order, none for a Sampler binding (the layout holds it)
   std::shared_ptr<BindGroup> createBindGroup(std::shared_ptr<BindGroupLayout> bgl, const std::vector<Resource>& entries, const std::string& id = "");
   std::shared_ptr<QuerySet> createQuerySet(uint32_t count, const std::string& id = "");
@@ -288,23 +399,40 @@ struct Device {
   std::vector<std::shared_ptr<Buffer>> staging;
   Encoder encoder();
   // ai: The pending writes and inits first (their own command buffer, behind a barrier), then enc's commands; with
-  // ai: wait set, the submit waits for that timeline semaphore to reach waitValue (the camera ingest's) before it
-  // ai: copies anything.
+  // ai: wait set (Vulkan's), the submit waits for that timeline semaphore to reach waitValue (the camera ingest's)
+  // ai: before it copies anything.
+#if LIZ_VK
   std::shared_ptr<Ticket> submit(Encoder& enc, VkSemaphore wait = VK_NULL_HANDLE, uint64_t waitValue = 0);
+#else
+  std::shared_ptr<Ticket> submit(Encoder& enc);
+#endif
+  // ai: A copy on the second queue, waited for (bounded by hangMs; past it the copy's objects are left to the device and
+  // ai: this throws): the stream's chunks into its symbols (core/tx/gpu_stream.cpp), from any thread.
+  void copyOnQueue2(const Buffer& src, uint64_t srcOff, const Buffer& dst, uint64_t dstOff, uint64_t size);
+  // ai: Everything on the second queue done (the ring that the camera's ingest writes there let go).
+  void waitQueue2();
+  // ai: A host-written mapped buffer's bytes made the device's (Vulkan's non-coherent memory; nothing on Metal's
+  // ai: shared memory).
+  void flushMapped(Buffer& b);
   // ai: The pending writes and inits alone, waited for (the setup's uploads).
   void flush();
   void waitIdle();
   // ai: A MAP_READ buffer's bytes once its ticket is done (invalidated where the memory is not coherent).
   const uint8_t* read(Buffer& b, uint64_t off, uint64_t size);
 
+  // ai: The pipeline cache (Vulkan's; Metal keeps its compiled kernels in the system's own cache, so none there)
   void loadCache(const std::string& path);
   void saveCache();
 
+#if LIZ_VK
   uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags want, VkMemoryPropertyFlags avoid = 0);
+#endif
   std::atomic<int> nextId{0};
   std::string autoId(char kind);
 };
 
+#if LIZ_VK
 void check(VkResult r, const char* what);
+#endif
 
 }  // namespace wg

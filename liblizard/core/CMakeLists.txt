@@ -49,6 +49,15 @@ if(LIZ_SAN)
 endif()
 
 if(LIZ_GPU)
+if(APPLE)
+# ai: Metal on Apple's systems (2026-11-25, in place of Vulkan through MoltenVK): wg_metal.mm under ARC, the system's
+# ai: frameworks; the kernels gen's MSL (liblizard/out/msl), compiled by the system at run time
+add_library(wg STATIC wg/wg_metal.mm)
+set_source_files_properties(wg/wg_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_include_directories(wg PUBLIC wg)
+target_include_directories(wg SYSTEM PRIVATE ${TP})
+target_link_libraries(wg PUBLIC "-framework Metal" "-framework Foundation")
+else()
 # ai: Vulkan through volk (third_party/volk, 2026-10-03): loaded at run time, no libvulkan to link
 add_library(wg STATIC wg/wg.cpp ${TP}/volk/volk.c)
 set_source_files_properties(${TP}/volk/volk.c PROPERTIES COMPILE_OPTIONS "${LIZ_NOWARN}")
@@ -61,15 +70,26 @@ else()
   target_include_directories(wg SYSTEM PUBLIC ${TP}/vulkan-headers)
   target_link_libraries(wg PUBLIC ${CMAKE_DL_LIBS})
 endif()
+endif()
 
-add_library(dec STATIC dec/setup.cpp dec/front.cpp dec/trial.cpp ingest/camera.cpp ingest/develop.cpp)
+add_library(dec STATIC dec/setup.cpp dec/front.cpp dec/trial.cpp dec/build.cpp ingest/camera.cpp ingest/develop.cpp)
 target_include_directories(dec PUBLIC dec ingest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 target_include_directories(dec SYSTEM PUBLIC ${TP})
 # ai: the codec for its ring table: a setup is held to the rings the C reads (dec/front.cpp create)
 target_link_libraries(dec PUBLIC wg lizard_codec)
 
-add_executable(lizard_gpu_check tools/gpu_check.cpp)
-target_link_libraries(lizard_gpu_check PRIVATE dec lizard_rx)
+# ai: the tree the host makes, with no device: the recipes gen compiles (gen.mjs runs it), the decoder's and the
+# ai: sender's (lizard_tx's plan and tables), a made tree for the lab
+add_executable(lizard_gpu_tree tools/gpu_tree.cpp)
+target_link_libraries(lizard_gpu_tree PRIVATE dec lizard_tx)
+# ai: the C decoder's learned stop (src/ldpc_stop.h) from the stop files, through the fold the GPU's stops take
+add_executable(lizard_ldpc_stop tools/ldpc_stop.cpp)
+target_link_libraries(lizard_ldpc_stop PRIVATE dec)
+# ai: the GPU decoder's Vulkan checks and benches (specialisation constants, Vulkan's alone): not on Metal
+if(NOT APPLE)
+  add_executable(lizard_gpu_check tools/gpu_check.cpp)
+  target_link_libraries(lizard_gpu_check PRIVATE dec lizard_rx)
+endif()
 endif()
 
 # ai: The transfer (rx/xfer_rx.h): src's xfer (with the test stream, BLAKE3's since 2026-11-15; shake.c before) and rq (RaptorQ, RFC 6330, since 2026-11-14; Wirehair V2 before),
@@ -127,12 +147,15 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
     target_compile_options(lizard_xfer_core PRIVATE -march=x86-64-v2)
   endif()
 endif()
-if(NOT EMSCRIPTEN)
+# ai: the threaded receiving end (rx/xfer_rx.h) and the CPU decoder's threads (cpu/pool.h, below): natively, and in the
+# ai: web's threaded wasm module (LIZ_WASM_THREADS, ../CMakeLists.txt: Emscripten's pthreads, every object built -pthread)
+if(NOT EMSCRIPTEN OR LIZ_WASM_THREADS)
 find_package(Threads REQUIRED)
 target_link_libraries(lizard_xfer_core PUBLIC Threads::Threads)   # ai: the sender's chunk workers (tx/xfer_tx.cpp)
 add_library(lizard_xfer STATIC rx/xfer_rx.cpp)
 target_link_libraries(lizard_xfer PUBLIC lizard_xfer_core Threads::Threads)
-
+endif()
+if(NOT EMSCRIPTEN)
 add_executable(xfer_check tools/xfer_check.cpp)
 target_include_directories(xfer_check SYSTEM PRIVATE ${TP})
 target_link_libraries(xfer_check PRIVATE lizard_xfer)
@@ -180,12 +203,13 @@ if(NOT MSVC)
   target_link_libraries(lizard_codec PUBLIC m)
 endif()
 
-if(NOT EMSCRIPTEN)
+if(NOT EMSCRIPTEN OR LIZ_WASM_THREADS)
 # ai: the CPU decoder's threads (cpu/pool.h)
 add_library(lizard_cpu STATIC cpu/pool.cpp)
 target_include_directories(lizard_cpu PUBLIC cpu)
 target_link_libraries(lizard_cpu PUBLIC lizard_codec Threads::Threads)
-
+endif()
+if(NOT EMSCRIPTEN)
 add_executable(lizard_cpu_check tools/cpu_check.cpp)
 target_include_directories(lizard_cpu_check SYSTEM PRIVATE ${TP})
 target_link_libraries(lizard_cpu_check PRIVATE lizard_codec lizard_replay lizard_xfer_core Threads::Threads)
@@ -236,7 +260,7 @@ endif()
 # ai: are loaded at run time; Media Foundation's GUIDs (Windows), AVFoundation's frameworks (macOS) and Camera2's and the
 # ai: image reader's NDK libraries (Android) linked.
 if(LIZ_GPU AND NOT EMSCRIPTEN)
-  add_library(lizard_api_static STATIC ${LZ}/api/api.cpp ${LZ}/api/format.cpp ${LZ}/api/codec.cpp ${LZ}/api/xfer.cpp)
+  add_library(lizard_api_static STATIC ${LZ}/api/api.cpp ${LZ}/api/format.cpp ${LZ}/api/codec.cpp ${LZ}/api/xfer.cpp ${LZ}/api/tar.cpp)
   target_include_directories(lizard_api_static PUBLIC ${LZ}/include)
   target_compile_definitions(lizard_api_static PUBLIC LIZ_STATIC PRIVATE LIZ_VERSION_STRING="static")
   target_link_libraries(lizard_api_static PUBLIC lizard_codec lizard_xfer_core)

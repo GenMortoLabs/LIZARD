@@ -1,6 +1,6 @@
 // ai: The default client's compression (2026-11-14, header version 4: the transfer carries a file as it is and
-// ai: compresses nothing; how a client compresses is the client's). The apps' rule, the web's twin `sim/pack.mjs` byte for
-// ai: byte: a file goes as a zstd stream of independent frames, each of PACK_FRAME bytes of the file
+// ai: compresses nothing; how a client compresses is the client's). The apps' rule and the web's (the threaded wasm module's,
+// ai: since 2026-11-25; `sim/pack.mjs` its JS twin before): a file goes as a zstd stream of independent frames, each of PACK_FRAME bytes of the file
 // ai: (liblizard/zstd/shim.h, the level and parameters pinned, so every client packs a file to the same bytes and the
 // ai: same root), named <name>.zst and its description saying compression 1 (src/xfer.h XFER_COMP_ZSTD, an elective
 // ai: key), where it pays: a sample of the file (three slices of 1 MiB, its start, middle and end; the whole file
@@ -34,6 +34,12 @@ struct Packed {
 // ai: each round of frames (a worker's 4 MiB each): true stops the pack, its stream removed, std::runtime_error
 // ai: ("cancelled") thrown (a make the app let go, 2026-11-16).
 Packed pack(const std::string& path, const std::string& name, const std::string& dir, const std::function<bool()>& stopped = {});
+// ai: The same over a reader (2026-11-25, the web's picked file, which no path names): read(off, n, into) puts the n
+// ai: bytes of the file at off into `into`, true when whole, from the pack's threads, several at once (xfer_tx.h
+// ai: XferTx::Reader); length the file's bytes. path is the stream's where it pays, else "" (the file goes as it is,
+// ai: read as the caller reads it).
+Packed pack(const std::function<bool(uint64_t, size_t, uint8_t*)>& read, uint64_t length, const std::string& name, const std::string& dir,
+            const std::function<bool()>& stopped = {});
 
 // ai: The stream at `from` unpacked into a new file `to` (UTF-8 paths): "" or why not (a frame damaged or cut short,
 // ai: one not saying its bytes or holding more than PACK_FRAME_MAX, a write refused; `to` is removed then).

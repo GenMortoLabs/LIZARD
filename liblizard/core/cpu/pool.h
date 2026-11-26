@@ -1,4 +1,5 @@
-// ai: The CPU decoder's threads: the web's worker pool (lizard-web/pool.mjs, recv.mjs)
+// ai: The CPU decoder's threads (the web's worker pool natively, then since 2026-11-25 the web's decoders too, through the
+// ai: threaded wasm module's engine, bindings/wasm/engine.cpp)
 // ai: natively. A worker is a thread with a decoder of its own (codec.h); a frame goes to an idle worker or is lost,
 // ai: never queued; the pool starts at one worker and the policy (the web's PoolPolicy, its numbers) adds one when
 // ai: frames are being lost to busy workers and those frames would have carried new data, and gives one back after
@@ -17,7 +18,7 @@
 
 namespace lizard {
 
-// ai: lizard-web/pool.mjs PoolPolicy, its defaults: 4 frames lost before a worker is added; 10 slack seconds before
+// ai: the web's pool's policy (lizard-web/pool.mjs PoolPolicy until 2026-11-25), its defaults: 4 frames lost before a worker is added; 10 slack seconds before
 // ai: one is given back; above 15% repeats a lost frame was a duplicate and buys nothing; a second with up to 2 lost
 // ai: frames still counts as slack.
 struct PoolPolicy {

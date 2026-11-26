@@ -3,16 +3,17 @@ package dev.lizard.desktop
 import java.io.File
 
 // ai: The app's native side (lizard-desktop/native over liblizard/core): the sender (tx_jni.cpp over lizard_tx: a sender on
-// ai: a mapped file or the test stream, its painters, the C on the CPU or the Vulkan painter, liblizard/core/tx/
+// ai: a mapped file or the test stream, its painters, the C on the CPU or the GPU painter, liblizard/core/tx/
 // ai: gpu_painter), the presenter (presenter.cpp, which takes the sender's frames in order and shows them on the code
-// ai: area's canvas through its own Vulkan swapchain, FIFO), the desktop's file chooser and full screen; and the
+// ai: area's canvas through its own Vulkan swapchain, FIFO; presenter_metal.mm's layer on macOS), the desktop's file
+// ai: chooser and full screen; and the
 // ai: receive session's natives (liblizard/api/jni_session.cpp, dev.lizard.Session's: a camera into liblizard/core's
 // ai: Receiver, the GPU decoder or the C), registered as the library loads (jni_util.cpp JNI_OnLoad). load()
 // ai: first: it extracts the bundled library, the GPU painter's kernels and tables and the decoder's setups, blobs and
 // ai: modules (build.gradle.kts `bundle`) to a folder under the cache named by the hash the build wrote at the top of
 // ai: files.txt (Native.cache: ~/.cache/lizard-sender on Linux), loads the JDK's jawt (the presenter finds the canvas's
-// ai: window through it) and then the library. On macOS the bundle also carries MoltenVK, put beside the library, where
-// ai: the library's Vulkan loader finds it.
+// ai: window through it) and then the library. On macOS the library draws and paints on Metal itself (2026-11-25;
+// ai: MoltenVK carried beside it before), its kernels the bundle's msl/.
 object Native {
     // ai: the process's priority raised as far as a user's may (native/priority.cpp): what was done, "" nothing
     @JvmStatic external fun raisePriority(): String

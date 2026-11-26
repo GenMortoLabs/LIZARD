@@ -1,5 +1,6 @@
 // ai: The default client's compression (pack.h): a file packed as a zstd stream where that pays, and a packed file
-// ai: unpacked. sim/pack.mjs is its twin, byte for byte.
+// ai: unpacked. The web's too, through the threaded wasm module (bindings/wasm/send.cpp, engine.cpp; its JS twin
+// ai: sim/pack.mjs until 2026-11-25).
 #include "pack.h"
 
 #include <algorithm>
@@ -45,23 +46,44 @@ std::vector<uint8_t> frameOf(const uint8_t* p, size_t n) {
 }  // namespace
 
 Packed pack(const std::string& path, const std::string& name, const std::string& dir, const std::function<bool()>& stopped) {
-  const auto check = [&] { if (stopped && stopped()) throw std::runtime_error("cancelled"); };
-  Packed r;
-  r.path = path; r.name = name;
   std::ifstream f(fs::u8path(path), std::ios::binary);
   if (!f) throw std::runtime_error("the file could not be read");
   f.seekg(0, std::ios::end);
   const uint64_t L = static_cast<uint64_t>(f.tellg());
+  f.close();
+  // ai: the file read by each of the pack's threads through a stream of its own
+  const auto read = [&path](uint64_t at, size_t n, uint8_t* into) {
+    std::ifstream in(fs::u8path(path), std::ios::binary);
+    if (!in) return false;
+    in.seekg(static_cast<std::streamoff>(at));
+    in.read(reinterpret_cast<char*>(into), static_cast<std::streamsize>(n));
+    return static_cast<size_t>(in.gcount()) == n;
+  };
+  Packed r = pack(read, L, name, dir, stopped);
+  if (!r.packed) r.path = path;
+  return r;
+}
+
+Packed pack(const std::function<bool(uint64_t, size_t, uint8_t*)>& read, uint64_t L, const std::string& name, const std::string& dir,
+            const std::function<bool()>& stopped) {
+  const auto check = [&] { if (stopped && stopped()) throw std::runtime_error("cancelled"); };
+  const auto readAt = [&read](uint64_t at, size_t n) {
+    std::vector<uint8_t> b(n);
+    if (!read(at, n, b.data())) throw std::runtime_error("the file could not be read");
+    return b;
+  };
+  Packed r;
+  r.name = name;
   r.size = r.original = L;
   if (!L) return r;
   check();
   {
     // ai: the sample: three slices of 1 MiB (start, middle, end) as one frame, the whole file under 3 MiB
     std::vector<uint8_t> s;
-    if (L <= 3 * SAMPLE) s = readAt(f, 0, static_cast<size_t>(L));
+    if (L <= 3 * SAMPLE) s = readAt(0, static_cast<size_t>(L));
     else
       for (uint64_t at : {uint64_t{0}, L / 2 - SAMPLE / 2, L - SAMPLE}) {
-        const auto b = readAt(f, at, SAMPLE);
+        const auto b = readAt(at, SAMPLE);
         s.insert(s.end(), b.begin(), b.end());
       }
     if (static_cast<double>(frameOf(s.data(), s.size()).size()) > SAMPLE_MAX * static_cast<double>(s.size())) return r;
@@ -85,10 +107,8 @@ Packed pack(const std::string& path, const std::string& name, const std::string&
       std::vector<std::string> why(n);
       auto one = [&](unsigned k) {
         try {
-          std::ifstream in(fs::u8path(path), std::ios::binary);
-          if (!in) throw std::runtime_error("the file could not be read");
           const uint64_t at = (b + k) * PACK_FRAME;
-          const auto plain = readAt(in, at, static_cast<size_t>(std::min<uint64_t>(PACK_FRAME, L - at)));
+          const auto plain = readAt(at, static_cast<size_t>(std::min<uint64_t>(PACK_FRAME, L - at)));
           z[k] = frameOf(plain.data(), plain.size());
         } catch (const std::exception& x) {
           why[k] = x.what();

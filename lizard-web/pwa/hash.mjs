@@ -6,7 +6,7 @@
 // ai:   - ES modules: import specifiers, new URL("...", import.meta.url), and a backtick literal with no ${} are
 // ai:     references like any quoted string;
 // ai:   - two bases:
-// ai:       referrer-relative   "../liblizard/sim/phy.mjs", "./recv-worker.mjs"
+// ai:       referrer-relative   "../liblizard/sim/ob.mjs", "./recv-worker.mjs"
 // ai:       a bare name         "lizard.wasm" in the emscripten glue: a file in the referrer's own folder
 // ai:   - verify also reads a template literal's head: `./recv-worker.mjs${q}` names a file the rewrite cannot reach
 // ai:     (a literal with ${} is no reference), so it fails the build here rather than 404ing on a phone. A path built

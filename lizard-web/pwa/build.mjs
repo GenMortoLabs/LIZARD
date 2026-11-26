@@ -6,7 +6,7 @@
 // ai:      left out so a path in one ships nothing; the codec's module (BUILT, liblizard/build.sh's output, RaptorQ and
 // ai:      zstd inside) among them, or no app;
 // ai:   2. copy: the pages to the root, their references re-pointed, and every other file under assets/ at its path under
-// ai:      the project's root (assets/lizard-web/recv.mjs, assets/liblizard/sim/phy.mjs,
+// ai:      the project's root (assets/lizard-web/recv.mjs, assets/liblizard/sim/ob.mjs,
 // ai:      assets/liblizard/gpu/back/stop/stop_67.safetensors), so the modules' relative references hold as they are;
 // ai:      into each page's head the manifest, the theme colour and the build;
 // ai:   3. strip comments (strip.mjs; not the emscripten glue), then parse every module again (node --check);
@@ -31,15 +31,21 @@ const PAGES = ["lizard-web/index.html", "lizard-web/send.html", "lizard-web/recv
 const SHIP = new Set([".html", ".css", ".mjs", ".js", ".svg", ".wasm", ".safetensors", ".json", ".woff2"]);
 const SCAN = new Set([".html", ".css", ".mjs", ".js", ".svg"]);
 // ai: emscripten's output (-O3): no comments, and its own string literals are the bare names it loads (lizard.wasm,
-// ai: lizard-media.wasm)
-const GLUE = new Set(["liblizard/bindings/wasm/dist/lizard.mjs", "liblizard/bindings/wasm/dist/lizard-media.mjs"]);
+// ai: lizard-media.wasm, lizard-mt.wasm)
+const GLUE = new Set(["liblizard/bindings/wasm/dist/lizard.mjs", "liblizard/bindings/wasm/dist/lizard-media.mjs", "liblizard/bindings/wasm/dist/lizard-mt.mjs"]);
+// ai: The threaded module's glue starts each thread's worker from its own file, new URL("lizard-mt.mjs", import.meta.url):
+// ai: a module naming itself, which no content address can hold (its name would be its own bytes'). The copy shipped
+// ai: names itself by import.meta.url, the same URL, so the reference is gone before the hash.
+const SELF = { "liblizard/bindings/wasm/dist/lizard-mt.mjs": ['new URL("lizard-mt.mjs",import.meta.url)', "new URL(import.meta.url)"] };
 // ai: liblizard/build.sh's output, built and not in git: the crawl drops a name whose file is not there, so before
 // ai: 2026-10-04 an app was built without the codec and the fountain where they were not built. Each must ship: the
 // ai: path the tree imports the codec by (build/ob.mjs) and the module it names, the fountain and zstd inside since
 // ai: 2026-10-25. The library's WebAssembly 1.0 fallback (dist/lizard-mvp.mjs) is its loader's (bindings/wasm/index.mjs),
 // ai: which no page imports: the app is SIMD-only. The file camera's module (dist/lizard-media.mjs, FFmpeg's reader;
-// ai: since 2026-11-07), reached by the receiver's media worker.
-const BUILT = { "liblizard/build/ob.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.wasm": "liblizard/build.sh",
+// ai: since 2026-11-07), reached by the receiver's media worker. The threaded module (dist/lizard-mt.mjs, since
+// ai: 2026-11-25), the receiver's engine, reached by its engine worker.
+const BUILT = { "liblizard/build/ob.mjs": "liblizard/build.sh", "liblizard/build/format.mjs": "liblizard/build.sh", "liblizard/build/blocks.js": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard.wasm": "liblizard/build.sh",
+  "liblizard/bindings/wasm/dist/lizard-mt.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard-mt.wasm": "liblizard/build.sh",
   "liblizard/bindings/wasm/dist/lizard-media.mjs": "liblizard/build.sh", "liblizard/bindings/wasm/dist/lizard-media.wasm": "liblizard/build.sh" };
 const fail = (msg) => { console.error(`build: ${msg}`); process.exit(1); };
 const isFile = (p) => { try { return statSync(p).isFile(); } catch { return false; } };
@@ -62,6 +68,7 @@ while (queue.length) {
   const ext = posix.extname(rel);
   if (!SCAN.has(ext)) continue;
   let text = readFileSync(join(ROOT, rel), "utf8");
+  if (SELF[rel]) text = text.split(SELF[rel][0]).join(SELF[rel][1]);
   if (!GLUE.has(rel)) try { text = strip(text, ext); } catch (e) { fail(`${rel}: ${e.message}`); }
   for (const t of findTokens(rel, text)) {
     const hit = sourceRef(rel, t.value);
@@ -78,7 +85,10 @@ rmSync(OUT, { recursive: true, force: true });
 for (const rel of shipped) {
   if (PAGES.includes(rel)) continue;
   mkdirSync(join(OUT, "assets", posix.dirname(rel)), { recursive: true });
-  copyFileSync(join(ROOT, rel), join(OUT, "assets", rel));
+  if (!SELF[rel]) { copyFileSync(join(ROOT, rel), join(OUT, "assets", rel)); continue; }
+  const text = readFileSync(join(ROOT, rel), "utf8"), [from, to] = SELF[rel];
+  if (text.split(from).length !== 2) fail(`${rel}: "${from}" is not there exactly once (emscripten's glue changed: see SELF)`);
+  writeFileSync(join(OUT, "assets", rel), text.replace(from, to));
 }
 const HEAD = `<link rel="manifest" href="manifest.webmanifest"><meta name="theme-color" content="#ffffff"><meta name="lizard-build" content="${built} ${cacheName}">`;
 for (const rel of PAGES) {
@@ -129,11 +139,13 @@ for (const [mark, line] of fill) {
   sw = sw.replace(mark, () => line);
 }
 writeFileSync(join(OUT, "service-worker.js"), sw);
-// ai: Cloudflare Pages' headers (2026-10-03, the app deployed there as a static folder): the
-// ai: content-addressed assets kept a year without asking again (a name is its bytes); the pages, the manifest and the
-// ai: worker left to Pages' default, revalidated on every load. Pages reads the file and does not serve it, and nothing
-// ai: loads it, so it is outside the worker's shell. Other hosts ignore it.
-writeFileSync(join(OUT, "_headers"), "/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n");
+// ai: Cloudflare Pages' headers (2026-10-03, the app deployed there as a static folder): every answer cross-origin
+// ai: isolated (2026-11-25: COOP same-origin, COEP require-corp, so a page and its workers have SharedArrayBuffer for the
+// ai: threaded module; the app loads nothing from another origin), the service worker's copies keeping them (it stores
+// ai: a response's headers with its bytes); the content-addressed assets kept a year without asking again (a name is its
+// ai: bytes); the pages, the manifest and the worker left to Pages' default, revalidated on every load. Pages reads the
+// ai: file and does not serve it, and nothing loads it, so it is outside the worker's shell. Other hosts ignore it.
+writeFileSync(join(OUT, "_headers"), "/*\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n");
 // ai: The licenses the app ships under, one text beside the pages, outside the worker's shell as _headers is: its wasm
 // ai: carries the codec, RaptorQ (the project's own, src/rq.c), BLAKE3 and Zstandard (BSD 3-Clause, which asks for its
 // ai: notice with a binary),

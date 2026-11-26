@@ -1,5 +1,5 @@
 // F5b: every peak of a frame's merged rings, a lane a cell. Dispatched (ceil(gx gy / 256), frames).
-// Defines (finder.mjs): CELL, PEAK_LIST, RING_COUNT, SUPPRESS.
+// Defines (core/dec/build.cpp Finder): CELL, PEAK_LIST, RING_COUNT, SUPPRESS.
 #include "lib/frame.slang"
 
 [[vk::binding(0, 0)]] StructuredBuffer<Frame> frames;

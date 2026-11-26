@@ -75,7 +75,7 @@ export declare function layoutRects(w: number, h: number, layout?: 1 | 2): { x: 
 export declare function streamFill(id: number): Uint8Array;
 
 export interface TxInfo {
-  test: boolean; length: number; sourceBlocks: number; cycle: number; root: string;
+  test: boolean; length: number; sourceBlocks: number; cycle: number; root: string; seed: number; sbLog2: number;
 }
 export declare class Tx {
   static file(bytes: Uint8Array, name?: string, zstd?: boolean): Tx;
@@ -88,7 +88,7 @@ export declare class Tx {
 export interface Verdict { seen: number; bad: number; judged: number; fresh: number; test: boolean }
 export interface Progress {
   header: boolean; done: boolean; length: number; bytesIn: number; fraction: number;
-  sourceBlocks: number; verified: number; rejected: number; solveMs: number;
+  sourceBlocks: number; verified: number; rejected: number; solveMs: number; forwarded: number; doneAt: number; refused: number; over: number;
 }
 export declare class Rx {
   constructor(options?: { maxBytes?: number });

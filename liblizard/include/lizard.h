@@ -70,7 +70,9 @@ enum {
   LIZ_RINGS = 3,           /* ai: the borders: rings of 64, 128 or 256 cells a side */
   LIZ_RING_DEFAULT = -1,   /* ai: the senders' default ring, the 128 */
   LIZ_GAP_MODULES = 12,    /* ai: two codes side by side are this many modules apart */
-  LIZ_QUIET = 2            /* ai: the margin painted round a symbol, in modules */
+  LIZ_QUIET = 2,           /* ai: the margin painted round a symbol, in modules */
+  LIZ_STEP = 16,           /* ai: the sub-channels a size: a symbol of b blocks is LIZARD-(16 b), its word's version b */
+  LIZ_BLOCKS_DEFAULT = 30  /* ai: the senders' size unless one is chosen (LIZARD-480) */
 };
 
 typedef enum {
@@ -104,10 +106,19 @@ typedef struct {
 
 /* ai: the cells a side of ring r (0 to LIZ_RINGS - 1; LIZ_RING_DEFAULT the default's), or LIZ_E_ARG */
 LIZ_API int liz_ring_cells(int ring);
+/* ai: a symbol's modules a side in ring r, its quiet margin not counted: the picture's span (2 x the ring's cells) and
+ * ai: the border, 15 modules deep, on either side; or LIZ_E_ARG */
+LIZ_API int liz_ring_modules(int ring);
 LIZ_API int liz_geometry_of(const liz_format *format, liz_geometry *out);
 /* ai: The pixels a side a symbol of this many blocks needs on a display for its outer coefficients to keep 2.7 pixels
  * ai: a cycle (the web sender's ROOM_FOR); a negative error for an argument out of range. */
 LIZ_API double liz_room_for(int blocks, int ring);
+/* ai: The radius, in coefficients, of the half-disc a symbol's sub-channels fill (320 coefficients each), and the
+ * ai: camera pixels across a symbol it needs: 2.12 a cycle of that radius at the symbol's width over its picture's
+ * ai: (fitted on the simulator, SPEC 3.5: a fact about the format, no camera's); a negative error for an argument out
+ * ai: of range. */
+LIZ_API double liz_radius_for(int blocks);
+LIZ_API double liz_camera_for(int blocks, int ring);
 /* ai: The blocks a symbol of a format's size (blocks, 1 to 67) carries: the default senders' layout's count; 0 outside. */
 LIZ_API int liz_blocks_for(int blocks);
 /* ai: Where block b (0 to liz_blocks_for(blocks) - 1) of a symbol of a format's size lies: its code rate (0 6/7, 1 3/4,
@@ -185,12 +196,29 @@ enum { LIZ_TX_COPY = 1, LIZ_TX_ZSTD = 2 };
  * ai: source block starts the schedule level. The file's TOI is its content's (src/xfer.h xfer_toi_of); the session
  * ai: header's is drawn from the send's seed. */
 LIZ_API liz_tx *liz_tx_new(const uint8_t *data, size_t length, const char *name, int flags);
+/* ai: liz_tx_new in source blocks of 2^sb_log2 bytes (10 to 24) in place of xfer_sb_log2_for's for the length (16 MiB
+ * ai: for every file the format carries): a sender's choice, the format's header saying it (a test's smaller source
+ * ai: blocks, the web sender's ?chunk=). */
+LIZ_API liz_tx *liz_tx_new_sized(const uint8_t *data, size_t length, const char *name, int flags, int sb_log2);
 /* ai: A file read from a path (into memory); name NULL takes the path's last part; flags LIZ_TX_ZSTD as above. */
 LIZ_API liz_tx *liz_tx_new_path(const char *path, const char *name, int flags);
+/* ai: A file read as the transfer asks for it, never whole (2026-11-25: a file past what memory holds, the web's picked
+ * ai: file): read(user, offset, n, into) puts the n bytes of the file at offset into `into` and returns 1, else 0 (the
+ * ai: transfer then fails: liz_tx_new_read's error, or liz_tx_next's LIZ_E_TOOBIG); it is called from the transfer's own
+ * ai: threads, several at once, a source block at a time each. spill_dir: a folder for the spill (no source block keeps
+ * ai: its encoder in memory: its symbols in one file there, about 0.75 times the file's size; NULL none, every encoder
+ * ai: kept, about 1.02 times the file in memory). length the file's bytes; name, flags as liz_tx_new's; sb_log2 as
+ * ai: liz_tx_new_sized's, or -1 xfer_sb_log2_for's. */
+typedef int (*liz_read_fn)(void *user, uint64_t offset, size_t n, uint8_t *into);
+LIZ_API liz_tx *liz_tx_new_read(liz_read_fn read, void *user, uint64_t length, const char *name, int flags, int sb_log2, const char *spill_dir);
 /* ai: The test stream from first_id (0: a random one), under a random TOI of its own as any send's: each block the
  * ai: stream's payload for its id. */
 LIZ_API liz_tx *liz_tx_new_test(uint32_t first_id);
 LIZ_API void liz_tx_free(liz_tx *t);
+/* ai: A file's schedule drawn from seed in place of the random one liz_tx_new draws (each source block's first symbol,
+ * ai: each round's order of the source blocks, each frame's shuffle, the session header's TOI), so a send repeats:
+ * ai: before the first frame (LIZ_E_STATE after, and for the test stream), as liz_sender_seed. */
+LIZ_API int liz_tx_seed(liz_tx *t, uint32_t seed);
 /* ai: The next frame's n blocks (n x LIZ_BLOCK bytes): a frame asked for twice is two frames. Returns how many of
  * ai: them carry the file's data (the others its header); LIZ_E_TOOBIG where a source block could
  * ai: not be made. */
@@ -202,6 +230,8 @@ typedef struct {
   uint32_t source_blocks;       /* ai: its source blocks (16 MiB each, xfer_sb_log2_for; a file to 65,535 of them, about 1 TiB) */
   uint32_t cycle;          /* ai: data blocks a cycle of the schedule (0 until every source block is made, behind liz_tx_new) */
   uint8_t root[32];      /* ai: BLAKE3 of the file (b3sum's) */
+  uint32_t seed;         /* ai: the schedule's seed in use (liz_tx_seed's, else the random one) */
+  uint32_t sb_log2;      /* ai: the source block size's power of two (the header's k) */
 } liz_tx_info;
 LIZ_API int liz_tx_info_get(const liz_tx *t, liz_tx_info *out);
 
@@ -239,6 +269,10 @@ typedef struct {
   double fraction;       /* ai: bytes_in over length */
   uint32_t source_blocks, verified, rejected;
   double solve_ms;       /* ai: the fountain's and the hash's time so far */
+  uint64_t forwarded;    /* ai: blocks the judge passed on to the transfer (its headers in, repeats out) */
+  uint64_t done_at;      /* ai: forwarded when the file was whole (0 before) */
+  uint32_t refused;      /* ai: session headers refused (a description that does not read) */
+  uint32_t over;         /* ai: source blocks RaptorQ wanted a symbol more than K for */
 } liz_progress;
 LIZ_API int liz_rx_progress(liz_rx *r, liz_progress *out);
 /* ai: each source block's state into per (at most cap): 0 to 99 the share in, 255
@@ -252,6 +286,64 @@ LIZ_API const char *liz_rx_meta(liz_rx *r, int which);
 LIZ_API int liz_rx_data(liz_rx *r, const uint8_t **data, size_t *length);
 /* ai: The transfer and every file received let go, so the same file still in the light is received again. */
 LIZ_API void liz_rx_clear(liz_rx *r);
+
+/* ai: The senders' bundle (each app's and the web page's): a choice of files and folders as one payload. One file
+ * ai: alone at the top is itself; anything else is one POSIX tar: ustar headers (the name, and the prefix field where a
+ * ai: path is long), a pax extended header (typeflag x) carrying the path where it fits neither field or is not plain
+ * ai: ASCII and the size past ustar's 8 GiB; folders their own entries (typeflag 5, so an empty folder survives); files
+ * ai: mode 644, folders 755, owner 0; two zero blocks at the end. It is named after its one top folder ("<folder>.tar")
+ * ai: or its first item and how many more ("<first> and N more.tar"), the stem cut on a character so the name fits the
+ * ai: session header's 255 bytes. Each file's folders are added where missing, a path given twice is numbered ("b
+ * ai: (2).txt"), a folder given no time takes the newest of what it holds (an empty one the newest of the choice), and
+ * ai: the entries go in the order of their paths (as UTF-16 code units). The archive is laid out, not written: for each
+ * ai: entry the caller writes its head, then its item's bytes (size of them), then pad zero bytes, and after the last
+ * ai: entry LIZ_TAR_END zero bytes, so a file's bytes never pass through the library. */
+typedef struct liz_bundle liz_bundle;
+enum { LIZ_TAR_END = 1024 };
+LIZ_API liz_bundle *liz_bundle_new(void);
+LIZ_API void liz_bundle_free(liz_bundle *b);
+/* ai: An item of the choice: its path, relative, '/' between its parts (UTF-8); a folder (dir 1, size 0) or a file of
+ * ai: size bytes; its time, seconds since 1970 (NaN: none given). Returns its index, from 0. */
+LIZ_API int liz_bundle_add(liz_bundle *b, const char *path, int dir, int64_t size, double mtime);
+typedef struct {
+  int64_t size;  /* ai: the payload's bytes: the archive's, or the one file's */
+  int single;    /* ai: the item sent as itself (one file alone at the top), or -1 for a tar */
+  int files;     /* ai: the files chosen */
+  int entries;   /* ai: the tar's entries (0 for one file alone) */
+} liz_bundle_info;
+/* ai: The choice made one payload; now: seconds since 1970, the time of an entry given none. LIZ_E_ARG for an empty
+ * ai: choice or a path that is not relative. */
+LIZ_API int liz_bundle_make(liz_bundle *b, double now, liz_bundle_info *out);
+/* ai: the payload's name (valid until the next call on b), "" before liz_bundle_make */
+LIZ_API const char *liz_bundle_name(liz_bundle *b);
+typedef struct {
+  int64_t size;  /* ai: the bytes after the head: the item's (0 for a folder) */
+  int item;      /* ai: the choice's item whose bytes those are, or -1 (a folder) */
+  int pad;       /* ai: zero bytes after them */
+  int head_len;  /* ai: the head's bytes */
+} liz_bundle_entry;
+/* ai: Entry e (0 to entries - 1) in order: its head's bytes (head_len of them, valid until the next call on b), NULL
+ * ai: for an e out of range. */
+LIZ_API const uint8_t *liz_bundle_entry_get(liz_bundle *b, int e, liz_bundle_entry *out);
+
+/* ai: A tar read entry by entry (the apps' receivers unpacking a bundle): plain files and folders, pax (x, g) and GNU
+ * ai: long-name (L) headers read for the path and size, ustar's prefix; anything else (a link, a device, a FIFO), a
+ * ai: path that is absolute, holds "..", has no part or names a drive, a damaged header or a tar cut short refused.
+ * ai: The reader asks for the bytes it reads (liz_untar_want) and is handed them (liz_untar_take); an entry's own bytes
+ * ai: are the caller's to read or skip from its stream. */
+typedef struct liz_untar liz_untar;
+enum { LIZ_UNTAR_END = 0, LIZ_UNTAR_MORE = 1, LIZ_UNTAR_ENTRY = 2 };
+LIZ_API liz_untar *liz_untar_new(void);
+LIZ_API void liz_untar_free(liz_untar *u);
+/* ai: the bytes the reader takes next: a header's 512, an extended header's body and its padding, an entry's padding */
+LIZ_API int64_t liz_untar_want(const liz_untar *u);
+/* ai: The next bytes, exactly want's unless the stream ended there (fewer): LIZ_UNTAR_MORE (read on), LIZ_UNTAR_ENTRY
+ * ai: (an entry, liz_untar_entry says which: the caller reads or skips its size bytes from the stream before the next
+ * ai: take), LIZ_UNTAR_END (the archive's end, or the stream's at a header), or LIZ_E_FORMAT (liz_last_error why). */
+LIZ_API int liz_untar_take(liz_untar *u, const uint8_t *bytes, size_t n);
+/* ai: the entry the last take named: its path's parts joined by '/' (UTF-8, valid until the next call on u), dir 1
+ * ai: for a folder (size 0), its bytes */
+LIZ_API const char *liz_untar_entry(const liz_untar *u, int *dir, int64_t *size);
 
 /* ---- 4. engines: threads, the GPU (Vulkan) where a device runs it, else the CPU; native builds only --------------- */
 /* ai: What the native apps run: a receiver decoding camera frames on its own threads (the GPU decoder in batches, or
@@ -335,6 +427,15 @@ LIZ_API int liz_sender_refresh(liz_sender *s, const int every[4]);
 /* ai: per block place b of the configured format's symbol, n = liz_blocks_for(the format's blocks), every code alike
  * ai: (LIZ_E_ARG for another count); a configure to a format of another block count ends it, each place its rate's again */
 LIZ_API int liz_sender_refresh_blocks(liz_sender *s, const int *every, int n);
+/* ai: The rule itself, for a sender of its own (the web's: liz_tx's ids, its own paint), the native sender's
+ * ai: (core/tx/refresh.h). The places' delays of a format's `blocks` places from the four rates' (`every`: 6/7, 3/4, 2/3,
+ * ai: 1/2, each held to 1 .. LIZ_REFRESH_MAX), laid by the default senders' layout (lizard_tiers_for: the tiers from the
+ * ai: inside out): place[p] place p's. LIZ_E_ARG where subch is no format's or its layout lays other than `blocks`. */
+LIZ_API int liz_refresh_places(int subch, int blocks, const int every[4], int *place);
+/* ai: The frame painted seq-th of `total` blocks (codes x a symbol's `blocks` places, place[] their delays): held[t] 1
+ * ai: where block t repeats the frame before's at its place (`before` nonzero: there is a frame before of the same
+ * ai: blocks; the place's delay past 1 and seq no multiple of it), 0 where it takes a new block. The new blocks' count. */
+LIZ_API int liz_refresh_held(const int *place, int blocks, int total, uint64_t seq, int before, uint8_t *held);
 /* ai: A file's schedule drawn from seed in place of the random one liz_sender_new draws (each source block's first symbol, each
  * ai: round's order of the source blocks, each frame's shuffle), so a run can be repeated: before the first frame is made
  * ai: (LIZ_E_STATE after, and for the test stream). The seed in use is the stats' "seed". */

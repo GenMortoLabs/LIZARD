@@ -410,9 +410,9 @@ processor has it):
 ### Receiving on the GPU (`liblizard/gpu/`)
 
 Designed from the format for the GPU, not ported from the C. Its kernels are written in Slang; its setup (the kernels'
-sizes, tables and nets) is built by its JavaScript host in `liblizard/gpu/`, and the kernels are compiled to SPIR-V by
-slangc and run by a C++ Vulkan host (`liblizard/core/`) in the Android and desktop apps; in the Android app it takes
-camera frames with no copy. The web receiver decodes with the C alone. Frames go in batches: one
+sizes, tables and nets) is built by its JavaScript host in `liblizard/gpu/`, and the kernels are compiled by slangc to
+SPIR-V and to the Metal Shading Language and run by a C++ host (`liblizard/core/`) in the Android and desktop apps, on
+Vulkan, or on Metal on macOS; in the Android app it takes camera frames with no copy. The web receiver decodes with the C alone. Frames go in batches: one
 batch is one submission and one readback. The nets and kernels run in int8 where a device supports it, else f16, else
 f32.
 
@@ -441,7 +441,8 @@ header. It then paints each frame:
 - Paint the anchors over it and put the border round it.
 
 The C paints on the CPU: in a web worker, or on threads in the native senders. The GPU encoder paints the same
-symbol in WebGPU on the web page, and as the same kernels on Vulkan in the Android app and the desktop sender. The
+symbol in WebGPU on the web page, and as the same kernels on Vulkan in the Android app and the desktop sender (Metal
+on macOS). The
 native senders paint about a second of frames ahead on the GPU and present them on a fixed schedule. A symbol from
 either painter decodes the same; the GPU's picture is within a grey level of the C's.
 
@@ -468,7 +469,7 @@ a filter over the code), and the sending screen has to show every picture once, 
 camera matters most: phone cameras through a native app work best, browser cameras on laptops and webcams poorly.
 
 Built and measured mostly on Linux x86-64; the desktop app has also run on Windows hardware. On macOS (Apple Silicon,
-through MoltenVK) it is built and checked on a build service's machine, not yet on a real Mac. The desktop app's
+on Metal) it is built and checked on a build service's machine, not yet on a real Mac. The desktop app's
 receiver (UVC cameras through V4L2, Media Foundation or AVFoundation) is checked against fake camera devices and a
 simulated camera filming a simulated screen, and has read the real cameras above. A webcam cannot delay a single frame,
 so no phase lock helps one (Settings' Phase lock is greyed for it): a sender for one paints at most half the webcam's
@@ -549,11 +550,11 @@ a file that compresses as zstd frames before it enters, and an application that 
 
 | folder | what it is |
 |---|---|
-| `liblizard/` | the library: the C codec (`src/`, the format's reference), the GPU decoder's and sender's Slang kernels, the decoder's setup and the sender's WebGPU encoder (`gpu/`), the native engine (`core/`: the decoder on Vulkan, the C on the CPU, the transfer, the sender), the generator that compiles the GPU decoder for Vulkan (`gen/`), and a C API with WebAssembly and Kotlin bindings (`include/`, `api/`, `bindings/`) |
+| `liblizard/` | the library: the C codec (`src/`, the format's reference), the GPU decoder's and sender's Slang kernels, the decoder's setup and the sender's WebGPU encoder (`gpu/`), the native engine (`core/`: the decoder on Vulkan or Metal, the C on the CPU, the transfer, the sender), the generator that compiles the GPU decoder for Vulkan (`gen/`), and a C API with WebAssembly and Kotlin bindings (`include/`, `api/`, `bindings/`) |
 | `lizard-web/` | the web app: sender and receiver pages, installable as a PWA |
 | `lizard-android/` | the Android app: receiver and sender, native Vulkan decoding |
 | `lizard-ui/` | the Android and desktop apps' screens, in Compose Multiplatform, written once: Home, Send and Receive, their theme, icons and parts, each screen over an interface the app implements with its own platform views; built by each app's own Gradle build as its `:lizard-ui` |
-| `lizard-desktop/` | the desktop app: sender and receiver, a Compose Desktop app drawing the code through a native Vulkan presenter and reading a camera (V4L2, Media Foundation or AVFoundation), a phone's stream or a `.lizard` replay into the native decoders |
+| `lizard-desktop/` | the desktop app: sender and receiver, a Compose Desktop app drawing the code through a native presenter (Vulkan; Metal on macOS) and reading a camera (V4L2, Media Foundation or AVFoundation), a phone's stream or a `.lizard` replay into the native decoders |
 
 Comments and docs also cite the project's lab files (`scripts/`, `archive/`, `research/` with the written
 specification `SPEC.md` and `STATUS.md`, the per-folder notes, and its phone and rig tools), which are not published; the checks that need its recordings
@@ -634,10 +635,10 @@ corrupts the heap when a thread holding one exits (`x86_64-w64-mingw32-nm` finds
 Then, on Windows, with `build/win/lizard_desktop.dll` copied to `build/native/`, `gradlew.bat packageMsi` writes an
 installer (WiX, which Gradle fetches) with its own Java runtime. Windows needs a GPU driver with Vulkan.
 
-On macOS (Apple Silicon, macOS 12 or later) the code is presented through MoltenVK: `libMoltenVK.dylib` from a
-[MoltenVK release](https://github.com/KhronosGroup/MoltenVK/releases) (`MoltenVK/dynamic/dylib/macOS/`) and its
-`LICENSE`, as `MoltenVK.LICENSE`, go in `build/native/` beside the library CMake builds there (Xcode's command line
-tools); then `./gradlew packageDmg`.
+On macOS (Apple Silicon, macOS 12 or later) the GPU work and the presents are Metal's, with no translation layer: the
+library CMake builds in `build/native/` (Xcode's command line tools) links the system's Metal, and the app carries the
+kernels as Metal Shading Language (`liblizard/out/msl/`, which gen writes beside the SPIR-V), compiled by the system
+at run time; then `./gradlew packageDmg`.
 
 `.github/workflows/desktop.yml` builds all three packages from a clean checkout.
 

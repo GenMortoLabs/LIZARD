@@ -8,11 +8,11 @@
 // ai: the right half's word the same and none of its ids the left's (no browser decodes two codes; the C here reads
 // ai: each half as a native receiver would), and LIZARD-480 again, its density changed while it runs (below). The
 // ai: canvas is read at its own pixels, so a format larger than the window reads the same. Each time the page's canvas is
-// ai: read back as luma, padded with white as the page's surround is, and decoded by the C told nothing (sim/phy.mjs
-// ai: makeBlind): the word must name the version painted (it states no rate), the blocks must verify, the state line
+// ai: read back as luma, padded with white as the page's surround is, and decoded by the C told nothing (sim/ob.mjs
+// ai: LizardAny, its blocks judged from the light by blockJudge): the word must name the version painted (it states no rate), the blocks must verify, the state line
 // ai: must say what is sent, and for the file one of the frames read must carry its header block, whose name, length and
-// ai: BLAKE3 root (sim/xfer.mjs XferReceiver's parse) are the file's, or its packed stream's where the page packed it
-// ai: (sim/pack.mjs, the default client's compression, held to here). Then the server's log: no request under /api (the
+// ai: BLAKE3 root (the C's receiving end's read, sim/ob.mjs Receiver) are the file's, or, for prose the page packs (the
+// ai: C's pack, core/tx/pack.h), its packed stream's, received whole and unpacked by the C back to the prose. Then the server's log: no request under /api (the
 // ai: sender posts no development log since 2026-10-22). Exit 1 on any failure. About 10 s; 21 s with ENC=gpu (SwiftShader).
 // ai: The encoder (2026-09-29, gpu/encoder.mjs): plain, Chrome has no WebGPU adapter and the page's auto must fall back
 // ai: to the wasm path and say why (#tx "encoder: wasm in the worker (WebGPU off: ...)"); ENC=gpu gives Chrome
@@ -48,9 +48,9 @@
 // ai: twenty-odd grabs could meet: a grab on the
 // ai: way with no word is decoded told at the old and new versions, and read so it is printed as missed, not failed; a frame no decoder reads still fails. The first five
 // ai: cases judge one grab each blind, a missed one read told and grabbed again (below).
-// ai: Bundles (2026-10-16, tar.mjs): two files through the file input (one transfer, "check-send.bin and 1 more.tar")
+// ai: Bundles (2026-10-16; the C's since 2026-11-25, sim/ob.mjs bundle over lizard.h liz_bundle_*): two files through the file input (one transfer, "check-send.bin and 1 more.tar")
 // ai: and a folder of two, one in a subfolder, through the folder input (check-folder.tar), each case's header the
-// ai: name, length and root of the tar tar.mjs makes in node of the same files and times.
+// ai: name, length and root of the tar the C lays out in node of the same files and times.
 // ai: Spacing and Margin (2026-10-23, send.html's sliders; a gap slider from 2026-10-03): LIZARD-480 with one code at a
 // ai: margin of 20; two codes again at spacings 4 and 44 (&spacing=), each canvas's
 // ai: gap between the painted squares spacing - 4 modules within half a module and both halves read blind; then the
@@ -64,15 +64,10 @@ import { readFileSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSy
 import { tmpdir } from "node:os";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { makePhy, blindSpec } from "../liblizard/sim/phy.mjs";
-import { init as initOb } from "../liblizard/sim/ob.mjs";
-import { init as initWh, Decoder, Encoder } from "../liblizard/sim/fountain.mjs";
-import { init as initZstd, Z } from "../liblizard/sim/zstd.mjs";
-import { pack } from "../liblizard/sim/pack.mjs";
-import { XferSender, XferReceiver, MemoryStore, ID_HEADER, PAYLOAD, blake3, hex, isControlId, idSbn } from "../liblizard/sim/xfer.mjs";
-import { N_FOR, NAME, SPAN, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, subchOf, versionOf } from "../liblizard/sim/lizard_pick.mjs";
+import { init as initOb, bundle, Lizard, LizardAny, blockJudge, streamMatches, idGet, ID_BYTES } from "../liblizard/sim/ob.mjs";
+import { Sender, Receiver, ID_HEADER, PAYLOAD, BLOCK, blake3, hex, isControlId, idSbn, idPut } from "../liblizard/sim/ob.mjs";
+import { N_FOR, NAME, SPAN, RING_DEFAULT, LIZARD_BITMAP, MODULES, OB_QUIET, blocksFor, subchOf, versionOf } from "../liblizard/sim/ob.mjs";
 import { tabs, open, evaluate, navigate } from "./phone.mjs";
-import { bundle } from "./tar.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("./..", import.meta.url))), PAD = 32, FPS = 24, FILE_BYTES = 50000, GRABS = 60, GPU = process.env.ENC === "gpu";
 const MIME = { ".html": "text/html; charset=utf-8", ".mjs": "text/javascript", ".js": "text/javascript", ".wasm": "application/wasm", ".json": "application/json", ".svg": "image/svg+xml", ".css": "text/css" };
@@ -89,7 +84,8 @@ const server = createServer((req, res) => {
   }
   log.push(`${req.method} ${p} ${status}`);
   if (status !== 200) { res.writeHead(status); return res.end(); }
-  res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": "no-store" });
+  // ai: cross-origin isolated, as the rig and the app serve the pages (SharedArrayBuffer for the threaded module)
+  res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream", "cache-control": "no-store", "cross-origin-opener-policy": "same-origin", "cross-origin-embedder-policy": "require-corp" });
   res.end(readFileSync(file));
 });
 await new Promise((ok) => server.listen(0, "127.0.0.1", ok));
@@ -99,12 +95,12 @@ const scratch = mkdtempSync(join(tmpdir(), "lizard-send-")), filePath = join(scr
 const fileBytes = new Uint8Array(FILE_BYTES);
 for (let i = 0, v = 7; i < fileBytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; fileBytes[i] = v >>> 16; }
 writeFileSync(filePath, fileBytes);
-// ai: a file of four source blocks (the last 12,345 B), so the page's pool of workers makes its transfer (xfer-pool.mjs, 2026-11-06):
-// ai: every data block read is held to the serial sender's block of that id (sim/xfer.mjs XferSender)
+// ai: a file of four source blocks (the last 12,345 B), so the C's sending end makes its transfer on the threaded module's threads (send-worker.mjs Tx, 2026-11-25; a pool of workers, xfer-pool.mjs, from 2026-11-06):
+// ai: every data block read is held to the serial sender's block of that id (the C's on the plain module, sim/ob.mjs Sender, under the page's seed)
 const bigPath = join(scratch, "check-big.bin"), bigBytes = new Uint8Array(3 * 2 ** 24 + 12345);
 for (let i = 0, v = 11; i < bigBytes.length; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bigBytes[i] = v >>> 16; }
 writeFileSync(bigPath, bigBytes);
-// ai: prose, which the page packs (sim/pack.mjs, the default client's compression): its header is the packed stream's
+// ai: prose, which the page packs (core/tx/pack.h, the default client's compression): its header is the packed stream's
 const prosePath = join(scratch, "check-prose.txt"), proseBytes = new TextEncoder().encode(Array.from({ length: 40000 }, (_, i) => ["lizard ", "frame ", "block ", "the ", "ring ", "reads ", "a ", "\n"][(Math.imul(i + 1, 2654435761) >>> 13) % 8]).join(""));
 writeFileSync(prosePath, proseBytes);
 // ai: the bundles' files: a second one beside it, and a folder of the file and a text one level down
@@ -113,6 +109,7 @@ writeFileSync(twoPath, "the second file\n");
 mkdirSync(join(dirPath, "sub"), { recursive: true });
 writeFileSync(join(dirPath, "a.bin"), fileBytes);
 writeFileSync(join(dirPath, "sub", "b.txt"), "one level down\n");
+await initOb();   // ai: the bundle is the C's, through the wasm
 const entryOf = (path, disk) => ({ path, blob: new Blob([readFileSync(disk)]), mtime: Math.floor(statSync(disk).mtimeMs) / 1000 });
 const BUNDLES = {
   files: { input: "#file", paths: [filePath, twoPath], made: bundle([entryOf("check-send.bin", filePath), entryOf("check-two.txt", twoPath)]) },
@@ -131,8 +128,24 @@ for (let t = 0; t < 50 && !s; t++) { try { const list = await tabs(DEVTOOLS); if
 if (!s) { cleanup(); throw new Error("no DevTools session on the local Chrome"); }
 
 const M = await initOb();
-await Promise.all([initWh(), initZstd()]);
-const phy = await makePhy(blindSpec());
+// ai: the threaded module for its unpack (engine.cpp lizw_unpack, core/tx/pack.h's), the packed prose read back
+const MT = await (await import("../liblizard/bindings/wasm/dist/lizard-mt.mjs")).default();
+function unpacked(bytes) {
+  const p = MT._malloc(Math.max(1, bytes.length)), lp = MT._malloc(8);
+  MT.HEAPU8.set(bytes, p);
+  const q = MT._lizw_unpack(p, bytes.length, lp), n = new Float64Array(MT.wasmMemory.buffer)[lp >> 3];
+  const out = q ? new Uint8Array(MT.wasmMemory.buffer).slice(q, q + n) : null;
+  if (q) MT._free(q);
+  MT._free(p); MT._free(lp);
+  return out;
+}
+// ai: The receiver told nothing (sim/ob.mjs LizardAny: every ring, the word required, the picture the word names, to
+// ai: the ladder's top), its blocks judged from the light (blockJudge): { got, seen, bad, test, judged, found, n, ring, fmt }
+const blind = new LizardAny(), judge = blockJudge(blind.blockBytes - ID_BYTES);
+function readBlind(img, W, H) {
+  const r = blind.decode(img, W, H);
+  return { ...judge.frame(r.ok, r.blocks), found: r.found, n: r.pictureN, ring: r.ring, fmt: r.fmt };
+}
 
 // ai: The page's canvas as luma (the rig's formula, src/acquire.c), with the #tx line that says what was painted. The
 // ai: canvas shown: #c (2D) or the GPU encoder's #cg, read through a 2D canvas it is drawn into.
@@ -160,17 +173,26 @@ async function readOnce(codes = 1) {
   for (let k = 0; k < codes; k++) {
     const img = new Uint8Array(W * H).fill(255);
     for (let y = 0; y < g.h; y++) img.set(px.subarray(y * g.w + k * (side + gap), y * g.w + k * (side + gap) + side), (y + PAD) * W + PAD);
-    halves.push(phy.decode(img, W, H, null)[0]); imgs.push(img);
+    halves.push(readBlind(img, W, H)); imgs.push(img);
   }
   return { g, r: halves[0], halves, img: imgs[0], imgs, W, H };
 }
-// ai: A grab the blind decoder read no word on, decoded told (sim/phy.mjs makeLizard, the test stream's generator) at
+// ai: A grab the blind decoder read no word on, decoded told (sim/ob.mjs Lizard; each verified block held to the test
+// ai: stream's bytes of its id, streamMatches, a session header uncompared: seen those that hold, bad the rest) at
 // ai: each sub-channel count in subs, in the default ring: the first whose blocks verify, { sub, r }, or null. One told
 // ai: codec at a time (the wasm holds one; the blind receiver's are its own), freed after.
 async function readTold(x, subs) {
   for (const sub of subs) {
-    const n = N_FOR(sub), p = await makePhy({ phy: "lizard", n, subch: sub, mode: 1, span: SPAN(n, RING_DEFAULT), bitmap: LIZARD_BITMAP, stream: "blake3" });
-    try { const r = p.decode(x.img, x.W, x.H, null)[0]; if (r.seen > 0) return { sub, r }; } finally { p.free(); }
+    const n = N_FOR(sub), fc = new Lizard(n, sub, 1, { span: SPAN(n, RING_DEFAULT), bitmap: LIZARD_BITMAP });
+    try {
+      const d = fc.decode(x.img, x.W, x.H), r = { seen: 0, bad: 0 };
+      for (let k = 0; k < fc.blocks; k++) {
+        if (!d.ok[k]) continue;
+        const o = k * BLOCK, id = idGet(d.blocks, o);
+        if (isControlId(id) || streamMatches(id, d.blocks.subarray(o + ID_BYTES, o + BLOCK))) r.seen++; else r.bad++;
+      }
+      if (r.seen > 0) return { sub, r };
+    } finally { fc.free(); }
   }
   return null;
 }
@@ -218,7 +240,7 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   // ai: told at the version painted: read so with 0 bad it is counted as missed and another grab taken, at most four
   // ai: (2026-09-29: one blind grab a case failed a good run about 2% of the time). Read by neither, it is
   // ai: judged as it is and fails.
-  let out = null, header = null, fileTag = 0, headerComp = 0, frames = 0, blocks = 0, missed = 0;
+  let out = null, header = null, received = null, fileTag = 0, frames = 0, blocks = 0, missed = 0;
   const read = [];
   for (let k = 0; k < (c.file ? GRABS : 1) + missed; k++) {
     out = await readOnce(codes); frames++;
@@ -228,21 +250,34 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
       if (t && t.r.bad === 0) { missed++; console.log(`  a grab missed blind${codes > 1 ? ` (half ${miss})` : ""}, read told: ${t.r.seen} blocks, 0 bad; grabbed again`); continue; }
     }
     blocks += out.r.seen; read.push(...out.r.got);
+    // ai: the session header read by the C's receiving end (sim/ob.mjs Receiver: liz_rx), with every block read so far: its
+    // ai: name, root and length; a file of one block whole with it (the packed prose); fileTag, the TOI its data blocks
+    // ai: go under (the session header's is the session's)
     const h = out.r.got.find((b) => b.id === ID_HEADER);
-    // ai: the session header (under its extension's TOI) lists the file under a TOI of its own: fileTag
-    if (h) { const rx = new XferReceiver({ M, Decoder, store: new MemoryStore() }); await rx.add(ID_HEADER, h.toi, h.bytes); header = rx.progress().header; fileTag = rx.files()[0]?.hdr.toi ?? 0; headerComp = rx.files()[0]?.hdr.compression ?? 0; break; }
+    if (h) {
+      const rx = new Receiver(), all = new Uint8Array(read.length * BLOCK);
+      read.forEach((b, k) => { idPut(all, k * BLOCK, b.id, b.toi); all.set(b.bytes, k * BLOCK + 12); });
+      rx.frame(all);
+      header = rx.header; received = rx.data;
+      fileTag = read.find((b) => !isControlId(b.id))?.toi ?? 0;
+      rx.free();
+      break;
+    }
   }
   // ai: the word states the version and, since 2026-11-22, the sender's clock: the page's FPS and its largest Refresh delay (1 here)
   const { g, r } = out, v = versionOf(subch), wordOk = r.fmt?.version === v && r.fmt?.fps === +FPS && r.fmt?.delay === 1, blocksOk = r.seen > 0 && r.bad === 0;
-  // ai: a file's header is the file's, or its packed stream's where packing pays (sim/pack.mjs): random bytes do not shrink
+  // ai: a file's header is the file's, or its packed stream's where packing pays (core/tx/pack.h): random bytes do not shrink
   // ai: its figures kept whole by no-break spaces (send.mjs sizeText, 2026-10-23), read as spaces here
   // ai: the block (2026-11-07; "Sending <name>, <sizes>" before): the file's name, its Size, a bundle's Files; the test
   // ai: stream its name and Speed; no spinner once it paints, no error line
   const rows = g.dt?.rows ?? {}, wantName = bun ? bun.made.name : c.big ? "check-big.bin" : c.prose ? "check-prose.txt" : c.file ? "check-send.bin" : "Test stream";
   const stateOk = g.state === "" && g.dt?.name === wantName && !g.dt.spin && (c.file ? !!rows.Size && (!bun || rows.Files === String(bun.made.files)) && (bun || c.big || c.prose || /^50\sKB$/.test(rows.Size)) : Object.keys(rows).join() === "Speed");
   const want = bun ? { name: bun.made.name, bytes: bun.bytes } : c.big ? { name: "check-big.bin", bytes: bigBytes } : c.prose ? { name: "check-prose.txt", bytes: proseBytes } : { name: "check-send.bin", bytes: fileBytes };
-  const pk = c.file ? pack(want.bytes, want.name, Z) : null, sent = pk?.packed ? { name: pk.name, bytes: pk.bytes, compression: pk.compression } : { ...want, compression: 0 };
-  const root = hex(blake3(M, sent.bytes)), headerOk = !c.file || (header && header.name === sent.name && header.length === sent.bytes.length && header.root === root && headerComp === sent.compression);
+  // ai: the prose packed by the page (the C's pack, core/tx/pack.h): its header the packed stream's (<name>.zst), the
+  // ai: stream received whole (one block) and unpacked by the C to the prose; any other file its own header
+  const back = c.prose && received ? unpacked(received) : null;
+  const packedOk = !c.prose || (!!header && header.name === `${want.name}.zst` && !!back && Buffer.compare(Buffer.from(back), Buffer.from(want.bytes)) === 0 && header.root === hex(blake3(received)) && header.length === received.length);
+  const headerOk = !c.file || (header && (c.prose ? packedOk : header.name === want.name && header.length === want.bytes.length && header.root === hex(blake3(want.bytes))));
   console.log(`${name}: canvas ${g.w} x ${g.h}, picture n = ${r.n} (want ${N_FOR(subch)}), word ${r.fmt ? `version ${r.fmt.version}, clock ${r.fmt.fps} / ${r.fmt.delay}` : "not read"}, ${r.seen} blocks verified, ${r.bad} bad${c.file ? `; ${frames} frames read, ${blocks} blocks, header ${header ? `${header.name}, ${header.length} B, root ${header.root.slice(0, 16)}...` : "not read"}` : ""}`);
   const enc = encoderOf(g);
   console.log(pageLine(g));
@@ -253,13 +288,17 @@ for (const c of [{ subch: 96 }, { subch: 64 }, { subch: 496 }, { subch: 96, file
   if (!stateOk) faults.push(`${name}: the block says ${JSON.stringify(g.dt)}${g.state ? `, the state line "${g.state}"` : ""}`);
   if (c.big) {
     // ai: the file's data blocks alone (under the TOI its description lists it by)
-    const ref = new XferSender(bigBytes, { name: "check-big.bin", M, Encoder }), x = new Uint8Array(PAYLOAD), data = read.filter((b) => !isControlId(b.id) && b.toi === fileTag);
-    const sourceBlocks = new Set(data.map((b) => idSbn(b.id))), differ = data.filter((b) => { ref.block(b.id, x); return b.bytes.some((v, i) => v !== x[i]); }).length;
+    // ai: the serial sender (the C on the plain module, every source block made before its first frame) under the page's
+    // ai: seed (its readout's), its frames until every id read is among them: a block's bytes are its id's whatever the frame
+    const seed = +(/seed (\d+)/.exec(g.tx)?.[1] ?? NaN), data = read.filter((b) => !isControlId(b.id) && b.toi === fileTag), want = new Map(data.map((b) => [b.id, null]));
+    const ref = new Sender(bigBytes, { name: "check-big.bin", seed }), x = new Uint8Array(PAYLOAD);
+    for (let f = 0, left = want.size; left && f < 200000; f++) for (const id of ref.frameIds(64)) if (want.get(id) === null) { want.set(id, ref.block(id, new Uint8Array(PAYLOAD))); left--; }
+    const sourceBlocks = new Set(data.map((b) => idSbn(b.id))), differ = data.filter((b) => { const r = want.get(b.id); return !r || b.bytes.some((v, i) => v !== r[i]); }).length;
     ref.free();
     console.log(`  the pool's blocks: ${data.length} data blocks of ${sourceBlocks.size} chunks held to the serial sender's, ${differ} differ`);
     if (!data.length || sourceBlocks.size < 2 || differ) faults.push(`${name}: ${data.length} data blocks of ${sourceBlocks.size} chunks read, ${differ} not the serial sender's`);
   }
-  if (c.prose && !pk?.packed) faults.push(`${name}: the prose did not pack (sim/pack.mjs)`);
+  if (c.prose && !packedOk) faults.push(`${name}: the prose's packed stream (the C's pack) not read back to the prose`);
   if (!headerOk) faults.push(`${name}: the header read is not the file's (want ${sent.name}, ${sent.bytes.length} B, root ${root.slice(0, 16)}..., compression ${sent.compression})`);
   // ai: Two codes: the right half read on its own as well, its word the same, its blocks verified and none of its ids
   // ai: the left's (the page gives the second symbol the frame's next blocksPerFrame ids).
@@ -396,7 +435,7 @@ async function midStream(subch0, r0) {
 }
 s.close();
 cleanup();
-phy.free();
+blind.free();
 
 const api = log.filter((l) => / \/api\//.test(l));
 console.log(`static server: ${log.length} requests; under /api: ${api.length} (${[...new Set(api)].join(", ") || "none"})`);

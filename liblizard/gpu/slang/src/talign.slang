@@ -3,7 +3,7 @@
 // then again about the first answer: the C's pilot_align, each pilot's terms weighted by 1 / N of its sub-channel
 // (least squares with the noise each pilot reads), tnoise's, EP's fourth float. Unweighted, a sub-channel a
 // glare's blob swells (the innermost, where the blob's spectrum lies) counts most where it reads least.
-// Defines (back_tiers.mjs talignSource): F16 (0 or 1), TIER_BLOCKS, STEP, PILOT_READ, SLOT_COUNT (uint), TWO_PI
+// Defines (core/dec/build.cpp backHalf): F16 (0 or 1), TIER_BLOCKS, STEP, PILOT_READ, SLOT_COUNT (uint), TWO_PI
 // (float); lib/tab.slang's.
 #if F16
 #define S_T half2

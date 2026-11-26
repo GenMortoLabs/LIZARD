@@ -15,7 +15,7 @@
 // columns (a data block its tuple's, a control block its payload's one symbol; none past the file: zeros), then 30
 // lanes XORing 16 bytes each, then all 32 writing the shifted words from workgroup memory. Every workgroup variable is
 // written before the barrier that precedes its reads.
-// Defines (../send.mjs rqBlocksSource): TAB_DEG, TAB_PLANS, TAB_PLAN, OUT_WORDS (uint).
+// Defines (core/tx/send_plan.h): TAB_DEG, TAB_PLANS, TAB_PLAN, OUT_WORDS (uint).
 [[vk::binding(0, 0)]] StructuredBuffer<uint4> sym;
 [[vk::binding(1, 0)]] StructuredBuffer<uint2> ids;
 [[vk::binding(2, 0)]] StructuredBuffer<uint> tab;

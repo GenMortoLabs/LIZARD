@@ -72,7 +72,7 @@ constexpr double FILL_MS = 500;
 
 // ai: Where the camera's optical axis falls in crop k: the frame's centre less the crop's corner (the lens's own
 // ai: centre is the array's within a few pixels on the S26's calibration). A 2:1 half's is the middle of its inner
-// ai: edge, a 1:1 square's its centre; both decoders fit the lens about it (liblizard/src/acquire.c, register.mjs LENS).
+// ai: edge, a 1:1 square's its centre; both decoders fit the lens about it (liblizard/src/acquire.c, gpu/slang/src/refit.slang).
 inline void axisOf(const CameraFrame& f, const Crops& c, int k, float* a) { a[0] = 0.5f * f.width - c.x[k]; a[1] = 0.5f * f.height - c.y[k]; }
 Crops cropsOf(const CameraFrame& f, const std::string& layout) { return lizard::cropsOf(f.width, f.height, layout == "2:1", f.whole); }
 
@@ -292,7 +292,7 @@ bool GpuReceiver::start(std::string& why, bool software) {
   // ai: by far: auto takes the C there, before any pipeline is built (2026-10-25: the PC receiver's auto on a machine
   // ai: whose one Vulkan device is llvmpipe, the Windows test VM's, took 11.6 s for a batch of one frame and the screen
   // ai: read nothing). gpu still runs on it, as the checks ask.
-  if (!software && dev->type == VK_PHYSICAL_DEVICE_TYPE_CPU) {
+  if (!software && dev->kind == wg::Kind::Cpu) {
     why = "a software Vulkan device: " + dev->name;
     return false;
   }
@@ -750,7 +750,7 @@ void GpuReceiver::forget(const std::string& root) { xfer->forget(root); }
 // ai: frame is lost, never queued; each worker decodes blind on its own decoder, each frame on its own; a frame's
 // ai: verified blocks go into the transfer one frame at a time. The camera's buffer is handed
 // ai: back inside push, once the crop is copied.
-constexpr int CPU_NMAX = 1536;   // ai: every picture of the ladder (sim/phy.mjs BLIND_NMAX)
+constexpr int CPU_NMAX = 1536;   // ai: every picture of the ladder (LIZARD_PICTURES' largest)
 
 class CpuReceiver : public Receiver {
  public:

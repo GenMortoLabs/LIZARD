@@ -32,11 +32,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tabs, open, evaluate, navigate, screenshot } from "./phone.mjs";
-import { makePhy } from "../liblizard/sim/phy.mjs";
-import { init as initOb } from "../liblizard/sim/ob.mjs";
-import { init as initWh, Encoder } from "../liblizard/sim/fountain.mjs";
-import { XferSender, DEFAULT_LOG2, PAYLOAD } from "../liblizard/sim/xfer.mjs";
-import { N_FOR } from "../liblizard/sim/lizard_pick.mjs";
+import { init as initOb, Sender, LOG2_DEFAULT, PAYLOAD, Lizard, frameBlocks, BLOCK } from "../liblizard/sim/ob.mjs";
+import { N_FOR, blocksFor } from "../liblizard/sim/ob.mjs";
+// ai: LIZARD-480's size label as the C counts its blocks (57 under the default senders' layout since 2026-11-23), 460 B each
+const B480 = blocksFor(480), KB480 = `${((B480 * 460) / 1000).toFixed(1)} KB`;
 
 const at = (p) => fileURLToPath(new URL(p, import.meta.url));
 const DIR = process.env.APP ? "lizard-web/app" : "lizard-web", OUT = at(process.env.APP ? "../research/build/ui/app" : "../research/build/ui"), PORT = 8700 + (process.pid % 200);
@@ -205,27 +204,30 @@ const SIZES = [
       // ai: the page's defaults, LIZARD-480 at 60 (2026-10-01)
       const defaults = await evaluate(s, `[document.getElementById("subch").value, document.getElementById("fps").value].join()`);
       check(defaults === "480,60", `send ${z.name}: the defaults LIZARD-480 at 60 (${defaults})`);
-      // ai: the blocks label at the first paint, before send.mjs has its codec (DOMContentLoaded, the module still
-      // ai: awaiting the wasm), and after: LIZARD-480's 58 blocks under the rate profile both times
-      await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstBlocks = document.getElementById("blocksOut")?.textContent ?? null; });` });
+      // ai: the blocks label and the size slider's fill at the first paint, before send.mjs has its codec
+      // ai: (DOMContentLoaded, the module still awaiting the wasm; the inline script's, from build/blocks.js), and the
+      // ai: label after: LIZARD-480's blocks under the default senders' layout both times, the fill version 30 of 1 to 67
+      await s.send("Page.addScriptToEvaluateOnNewDocument", { source: `document.addEventListener("DOMContentLoaded", () => { window.__firstBlocks = document.getElementById("blocksOut")?.textContent ?? null; window.__firstFill = document.getElementById("blocks")?.style.getPropertyValue("--f") ?? null; });` });
       // ai: Show statistics off (the default): Density and the bytes alone, the ring Thin, Medium, Thick (the 256, 128, 64);
       // ai: on (the receiver's key, recv:stats, one switch for both pages): Blocks with the count, the ring by its cells
       const labels = `[window.__firstBlocks, document.getElementById("blocksOut").textContent, document.getElementById("blocksTitle").textContent,
         [...document.getElementById("ring").options].map((o) => o.value + ":" + o.text).join(" "), [...document.getElementById("codes").options].map((o) => o.text).join(" ")].join(" / ")`;
       await navigate(s, SEND);
-      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "26.7 KB"`, 10000, "the density label").catch(() => {});
+      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "${KB480}"`, 10000, "the density label").catch(() => {});
       const off = await evaluate(s, labels);
-      check(off === "26.7 KB / 26.7 KB / Density / 256:Thin 128:Medium 64:Thick / 1 2", `send ${z.name}: Show statistics off, the labels before the first paint and after the codec, LIZARD-480 (${off})`);
+      check(off === `${KB480} / ${KB480} / Density / 256:Thin 128:Medium 64:Thick / 1 2`, `send ${z.name}: Show statistics off, the labels before the first paint and after the codec, LIZARD-480 (${off})`);
+      const fill0 = await evaluate(s, `window.__firstFill`);
+      check(Math.abs(+fill0 - 29 / 66) < 1e-9, `send ${z.name}: the size slider's fill drawn before the first paint, LIZARD-480 (${fill0})`);
       await evaluate(s, `localStorage.setItem("recv:stats", "1")`);
       await navigate(s, SEND);
-      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "58, 26.7 KB"`, 10000, "the blocks label").catch(() => {});
+      await until(s, `typeof window.__firstBlocks === "string" && document.getElementById("blocksOut").textContent === "${B480}, ${KB480}"`, 10000, "the blocks label").catch(() => {});
       const on = await evaluate(s, labels + ` + " / " + document.getElementById("stats").value`);
-      check(on === "58, 26.7 KB / 58, 26.7 KB / Blocks / 64:64 128:128 256:256 / 1 2 / 1", `send ${z.name}: Show statistics on (the receiver's key), the labels before the first paint and after the codec (${on})`);
+      check(on === `${B480}, ${KB480} / ${B480}, ${KB480} / Blocks / 64:64 128:128 256:256 / 1 2 / 1`, `send ${z.name}: Show statistics on (the receiver's key), the labels before the first paint and after the codec (${on})`);
       const ringWas = await evaluate(s, `document.getElementById("ring").value`);   // ai: the kept ring (remembered above leaves one)
       await evaluate(s, `(() => { const e = document.getElementById("stats"); e.value = "0"; e.dispatchEvent(new Event("change")); })()`);
       const back = await evaluate(s, `[localStorage.getItem("recv:stats"), document.getElementById("blocksTitle").textContent, document.getElementById("blocksOut").textContent, document.getElementById("ring").value].join(" / ")`);
-      check(back === `0 / Density / 26.7 KB / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
-      // ai: Refresh's delays (2026-11-17, refresh.mjs; Rate refresh 2026-11-12): four sliders 1 to 30 in Refresh after
+      check(back === `0 / Density / ${KB480} / ${ringWas}`, `send ${z.name}: Show statistics turned off on the sender, kept under the receiver's key, the labels redrawn, the ring kept at ${ringWas} (${back})`);
+      // ai: Refresh's delays (2026-11-17, the C's rule through ob.mjs; Rate refresh 2026-11-12): four sliders 1 to 30 in Refresh after
       // ai: FPS (6/7, 3/4, 2/3, 1/2; 6/7 and 3/4 one until 2026-11-22), 1 each by default; one moved to 13 kept over a reload (send:refresh67), its
       // ai: label 13 before the first paint (the inline script's) and after the codec; set back to 1 for the steps after
       const REF = `["refresh67", "refresh34", "refresh23", "refresh12"].map((id) => { const e = document.getElementById(id), o = document.getElementById(id + "Out"); return e ? [e.closest("details")?.id, e.type, e.min, e.max, e.value, o?.textContent].join(":") : "none"; }).join(" ")`;
@@ -540,10 +542,12 @@ const SIZES = [
 // ai: sample, as check_rates.mjs builds them. First the test stream (2.5 s, looped), then a file (a cycle and 8%).
 {
   const CW = 1920, CH = 1080, FD = 24, FC = 30, SUBCH = 96, LEN = 300000, NAME = "holiday-photo.jpg";
-  await initWh();
   const M = await initOb(), bytes = new Uint8Array(LEN);
   for (let i = 0, v = 7; i < LEN; i++) { v = (Math.imul(v, 1103515245) + 12345) >>> 0; bytes[i] = v >>> 16; }
-  const phy = await makePhy({ phy: "lizard", stream: "blake3", n: N_FOR(SUBCH), subch: SUBCH, mode: 1, fps: FD, variants: [{ name: "rx" }] }), B = phy.blocksPerFrame;
+  // ai: the C's paint (sim/ob.mjs: a frame's blocks by frameBlocks, the test stream's under TOI 1 unless src names a
+  // ai: file's; the pilots' count the painted count mod 4): { w, h, drive }
+  const fc = new Lizard(N_FOR(SUBCH), SUBCH, 1), B = fc.blocks, blocks = new Uint8Array(B * BLOCK);
+  const frame = (seq, ids = seq * B, src = {}) => { fc.setParity(seq & 3); return { w: fc.side, h: fc.side, drive: fc.encode(frameBlocks(ids, B, src, blocks)) }; };
   async function clip(path, frameOf, n) {
     const fd = openSync(path, "w"), y = Buffer.alloc(CW * CH), chroma = Buffer.alloc((CW * CH) / 2, 128);
     writeSync(fd, `YUV4MPEG2 W${CW} H${CH} F${FC}:1 Ip A1:1 C420jpeg\n`);
@@ -561,11 +565,10 @@ const SIZES = [
     closeSync(fd);
   }
   const testPath = join(scratch, "test.y4m");
-  await clip(testPath, (seq) => phy.frame(seq), 75);
-  const xs = new XferSender(bytes, { name: NAME, sbLog2: DEFAULT_LOG2, M, Encoder });
-  phy.setSource((id, out) => xs.block(id, out), xs);
-  const frames = Math.ceil((xs.carousel.cycle * 1.08) / (B - 1)) + 24, clipFrames = Math.ceil((frames * FC) / FD), path = join(scratch, "file.y4m");
-  await clip(path, (seq) => phy.frame(seq, xs.frameIds(B)), clipFrames);
+  await clip(testPath, (seq) => frame(seq), 75);
+  const xs = new Sender(bytes, { name: NAME, sbLog2: LOG2_DEFAULT }), file = { toi: (id) => xs.toiFor(id), payload: (id, out) => xs.block(id, out) };
+  const frames = Math.ceil((xs.info.cycle * 1.08) / (B - 1)) + 24, clipFrames = Math.ceil((frames * FC) / FD), path = join(scratch, "file.y4m");
+  await clip(path, (seq) => frame(seq, xs.frameIds(B), file), clipFrames);
   console.log(`     clips: the test stream, 75 frames; a ${LEN} B file, ${clipFrames} frames (${frames} display frames of LIZARD-${SUBCH})`);
 
   const t = await chrome("test", [`--use-file-for-fake-video-capture=${testPath}`]);

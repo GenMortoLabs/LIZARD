@@ -1,5 +1,5 @@
 // ai: The wasm binding end to end (2026-10-03), node --test from bindings/wasm:
-// ai:   1. the format arithmetic against the web sender's own (sim/lizard_pick.mjs), every row of the C test's table,
+// ai:   1. the format arithmetic against the web sender's own (sim/ob.mjs), every row of the C test's table,
 // ai:      where liblizard/build.sh has built the codec's wasm (else skipped, saying so);
 // ai:   2. the test stream in every ring, one code and two (a 2:1 canvas read by its halves), every block back, none bad;
 // ai:   3. the C test's 5 MB file (its generator, byte for byte) through two codes into a memory store: whole, its bytes,
@@ -24,7 +24,7 @@ test("version and vector paths", () => {
   assert.equal(liz.blocksFor(0), 0);
   assert.equal(liz.blocksFor(liz.MAX_BLOCKS + 1), 0);
   assert.equal(liz.blocksFor(1), 2);
-  assert.equal(liz.blocksFor(3), 6);
+  assert.equal(liz.blocksFor(3), 5);   // ai: LIZARD-48: 6/7 x 1, 3/4 x 2, 2/3 x 1, 1/2 x 1 (lizard_tiers_for since 2026-11-23)
   assert.equal(liz.blocksFor(4), 7);
   assert.equal(liz.simd(), BUILD !== "mvp", BUILD === "mvp" ? "the MVP build's scalar paths" : "the codec's vector paths in the wasm build");
 });
@@ -32,12 +32,12 @@ test("version and vector paths", () => {
 // ai: the web sender's arithmetic is liblizard/sim's, over the codec's own wasm (build/ob.mjs, liblizard/build.sh's), not
 // ai: the wasm preset's
 const sim = new URL("../../../sim/", import.meta.url);
-const noSim = !existsSync(new URL("lizard_pick.mjs", sim)) ? "no liblizard/sim/ (a copy of the binding without the tree)"
+const noSim = !existsSync(new URL("ob.mjs", sim)) ? "no liblizard/sim/ (a copy of the binding without the tree)"
   : !existsSync(new URL("../build/ob.mjs", sim)) ? "no liblizard/build/ob.mjs: run liblizard/build.sh" : false;
 
 test("the format arithmetic is the web sender's", { skip: noSim }, async () => {
   await (await import(new URL("ob.mjs", sim))).init();
-  const { ROOM_FOR, pickVersion, MODULES, OB_QUIET, N_FOR } = await import(new URL("lizard_pick.mjs", sim));
+  const { ROOM_FOR, pickVersion, MODULES, OB_QUIET, N_FOR } = await import(new URL("ob.mjs", sim));
   let rows = 0;
   for (let r = 0; r < liz.RINGS; r++)
     for (let b = liz.MIN_BLOCKS; b <= liz.MAX_BLOCKS; b++) {

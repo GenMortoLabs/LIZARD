@@ -1,5 +1,6 @@
 // ai: The presenter's surface on macOS (macos.mm): a CAMetalLayer of its own laid over the code area's canvas, added to
-// ai: the AWT window's layer tree through JAWT's surface layers, and presented by MoltenVK (VK_EXT_metal_surface). AWT
+// ai: the AWT window's layer tree through JAWT's surface layers, and presented by presenter_metal.mm (MoltenVK's
+// ai: VK_EXT_metal_surface until 2026-11-25). AWT
 // ai: on macOS gives a component no native view, so the layer is placed by hand: at the canvas's bounds in the window's
 // ai: content, in points, its pixels the window's backing scale.
 #pragma once

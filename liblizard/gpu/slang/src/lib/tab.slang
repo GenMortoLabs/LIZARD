@@ -1,11 +1,11 @@
 // TAB's readers and a frame's layout, for the rule stage (TAB the buffer named TAB; its layout
-// ../../plan/back_tiers.mjs tabLayout). The four codes' constants: nOf the sent bits, slotsOf a block's slots (its sent
+// core/dec/build.cpp Rule). The four codes' constants: nOf the sent bits, slotsOf a block's slots (its sent
 // bits: the pilots apart from the blocks), barOf the decline bar (a float's bits). A frame's layout from its
 // configuration g (the gate's list, lib/cfg.slang): blocksOf its blocks, ttOf a code's (first block, first data slot,
 // blocks, 0), blockAt a block's (code, index in it), each from the four counts by fixed comparisons (no array indexed
 // at run time). fcoefIn: a sub-channel's data coefficient r (0 to DCOEF - 1), its coefficient there, past the count
 // pilot (0) and the reference (PB_REF) (src/lizard_phy.c pb_fcoef); whiteOf: coefficient c of sub-channel j's two
-// whitening bits (x, then y), the frame's slots 640 j + 2 c and the next. Defines (back_tiers.mjs): TAB_WHITE_AT,
+// whitening bits (x, then y), the frame's slots 640 j + 2 c and the next. Defines (core/dec/build.cpp Rule::tabDefs): TAB_WHITE_AT,
 // TAB_PB_REF, TAB_SUB_SLOTS, TAB_NCODES, CODE0_N to CODE3_N, CODE0_BAR to CODE3_BAR (uint); lib/cfg.slang's (CODE0_SLOTS
 // to CODE3_SLOTS among them).
 static const uint WHITE_AT = TAB_WHITE_AT;

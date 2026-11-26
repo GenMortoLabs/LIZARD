@@ -30,8 +30,9 @@ if(NOT MSVC)
   set(LIZ_DESKTOP_WARN -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
 endif()
 
-# ai: the presenter: X11 (XRandR for the mode's refresh) on Linux; Win32 under _WIN32; on macOS a CAMetalLayer over
-# ai: the canvas (macos.mm) for MoltenVK's surface
+# ai: the presenter: on Vulkan (presenter.cpp) X11 (XRandR for the mode's refresh) on Linux, Win32 under _WIN32; on
+# ai: macOS Metal's (presenter_metal.mm, 2026-11-25; MoltenVK's surface before) into a CAMetalLayer over the canvas
+# ai: (macos.mm); the window helpers (window.cpp) beside either
 if(UNIX AND NOT APPLE)
   find_package(X11 REQUIRED)
   if(NOT X11_Xrandr_FOUND)
@@ -58,13 +59,17 @@ else()
     set(JAVA_AWT_LIBRARY "")
   endif()
 endif()
-add_library(lizard_presenter STATIC presenter.cpp)
+if(APPLE)
+  add_library(lizard_presenter STATIC presenter_metal.mm window.cpp)
+else()
+  add_library(lizard_presenter STATIC presenter.cpp window.cpp)
+endif()
 target_include_directories(lizard_presenter PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(lizard_presenter PRIVATE ${LIZ_DESKTOP_WARN})
 target_link_libraries(lizard_presenter PUBLIC lizard_tx)
 if(APPLE)
   target_sources(lizard_presenter PRIVATE macos.mm)
-  set_source_files_properties(macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  set_source_files_properties(macos.mm presenter_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   target_include_directories(lizard_presenter SYSTEM PRIVATE ${JNI_INCLUDE_DIRS})
   target_link_libraries(lizard_presenter PUBLIC "-framework AppKit" "-framework QuartzCore" "-framework CoreGraphics" "-framework Metal")
 endif()
@@ -81,7 +86,7 @@ endif()
 set(LZ ${CMAKE_CURRENT_SOURCE_DIR}/../../liblizard)
 
 # ai: portal.cpp the file chooser; jni_util.cpp the error channel and the load; priority.cpp the launch's priority
-add_library(lizard_desktop SHARED tx_jni.cpp jni_util.cpp portal.cpp priority.cpp ${LZ}/api/session.cpp ${LZ}/api/jni_session.cpp ${LZ}/api/jni_text.cpp)
+add_library(lizard_desktop SHARED tx_jni.cpp jni_util.cpp portal.cpp priority.cpp ${LZ}/api/session.cpp ${LZ}/api/jni_session.cpp ${LZ}/api/jni_lib.cpp ${LZ}/api/jni_text.cpp)
 target_include_directories(lizard_desktop PRIVATE ${LZ}/api)
 if(WIN32)
   set_target_properties(lizard_desktop PROPERTIES PREFIX "")   # ai: lizard_desktop.dll, the name the Gradle bundle takes
@@ -98,8 +103,8 @@ target_link_libraries(lizard_desktop PRIVATE lizard_presenter lizard_tx lizard_s
 # ai: no RUNPATH to the builder's JDK (a JDK in a home folder named it in the bundled library); the app's JVM has
 # ai: loaded jawt before this library (Native.kt)
 set_target_properties(lizard_desktop PROPERTIES SKIP_BUILD_RPATH ON)
-# ai: macOS: the folder the library is in searched for the libMoltenVK.dylib Native.kt puts beside it (volk's dlopen by
-# ai: leaf name, after a system Vulkan loader)
+# ai: macOS: the folder the library is in searched for what the package carries beside it (the extras' libraries; the
+# ai: libMoltenVK.dylib volk opened by leaf name until 2026-11-25, Metal's backend taking its place)
 if(APPLE)
   target_link_options(lizard_desktop PRIVATE "-Wl,-rpath,@loader_path")
 endif()

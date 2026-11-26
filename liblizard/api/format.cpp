@@ -1,20 +1,22 @@
-// ai: Layer 1, the format's arithmetic (lizard.h): a format's geometry as lizard_init paints it, and the room a symbol
-// ai: needs and the largest that fits one, ported from the web sender's (sim/lizard_pick.mjs ROOM_FOR, pickVersion;
-// ai: two codes' gap as lizard-web/send.mjs gapFrac and desktop Pick.kt). The library is where this arithmetic lives now;
-// ai: tests/pick_ref.mjs holds it to the JS.
+// ai: Layer 1, the format's arithmetic (lizard.h): a format's geometry as lizard_init paints it, the room a symbol
+// ai: needs on a display and across a camera, and the largest that fits a room. The one copy: the apps reach it through
+// ai: JNI (jni_lib.cpp), the web through the wasm (src/wasm.c lizard_format_json, written into build/format.mjs at the
+// ai: build, sim/ob.mjs's face).
 #include <algorithm>
 #include <cmath>
 
 #include "api.hpp"
 
 extern "C" {
+#include "layout.h"
 #include "lizard_phy.h"
 }
 
 namespace liz {
 
-static constexpr int OB_MARGIN = 15;   // ai: the border's depth in modules (the 12-module corner mark and LIZARD_CP's 3)
-static constexpr double T_DISPLAY_CYCLE = 2.7, PI = 3.14159265358979323846;
+// ai: display px a cycle of the top ring a symbol must keep (scripts/exp/display_scale.mjs's floor, 2.7 clearing every
+// ai: version), and camera px a cycle (fitted on the resolution-limited cells of the simulator, 2026-09-20; SPEC 3.5)
+static constexpr double T_DISPLAY_CYCLE = 2.7, T_CAMERA_CYCLE = 2.12, PI = 3.14159265358979323846;
 
 static int ringIndex(int ring) {
   if (ring == LIZ_RING_DEFAULT) return LIZARD_RING_DEFAULT;
@@ -22,7 +24,7 @@ static int ringIndex(int ring) {
   return ring;
 }
 static int spanOf(int r) { return 2 * LIZARD_RING[r]; }
-static int modulesOf(int r) { return spanOf(r) + 2 * OB_MARGIN; }
+static int modulesOf(int r) { return spanOf(r) + 2 * OB_MARGIN; }   // ai: the border 15 deep (layout.h)
 static void needBlocks(int blocks) { need(blocks >= LIZ_MIN_BLOCKS && blocks <= LIZ_MAX_BLOCKS, "blocks is " + std::to_string(LIZ_MIN_BLOCKS) + " to " + std::to_string(LIZ_MAX_BLOCKS) + " (LIZARD-16 to LIZARD-1072), not " + std::to_string(blocks)); }
 
 liz_geometry geometryOf(const liz_format& f) {
@@ -42,10 +44,12 @@ liz_geometry geometryOf(const liz_format& f) {
   return g;
 }
 
-// ai: ROOM_FOR: the symbol's width over the picture's, times 2.7 display pixels a cycle of the top ring's radius
+// ai: the radius subch x 320 coefficients reach as a half-disc: 2 x 320 x subch / pi = R^2
+static double radiusOf(int blocks) { return std::sqrt(2.0 * LIZARD_SUB * LIZARD_STEP * blocks / PI); }
+// ai: the room: the symbol's width with its quiet margin over the picture's, times 2.7 display pixels a cycle of the top
+// ai: ring's radius
 static double roomFor(int blocks, int r) {
-  const double radius = std::sqrt(2.0 * LIZARD_SUB * LIZARD_STEP * blocks / PI);
-  return double(modulesOf(r) + 2 * LIZARD_QUIET) / spanOf(r) * T_DISPLAY_CYCLE * radius;
+  return double(modulesOf(r) + 2 * LIZARD_QUIET) / spanOf(r) * T_DISPLAY_CYCLE * radiusOf(blocks);
 }
 
 }  // namespace liz
@@ -55,6 +59,7 @@ using namespace liz;
 extern "C" {
 
 LIZ_API int liz_ring_cells(int ring) { return guard([&] { return LIZARD_RING[ringIndex(ring)]; }); }
+LIZ_API int liz_ring_modules(int ring) { return guard([&] { return modulesOf(ringIndex(ring)); }); }
 
 LIZ_API int liz_geometry_of(const liz_format* format, liz_geometry* out) {
   return guard([&] {
@@ -67,6 +72,24 @@ LIZ_API int liz_geometry_of(const liz_format* format, liz_geometry* out) {
 LIZ_API double liz_room_for(int blocks, int ring) {
   double v = 0;
   const int rc = guard([&] { needBlocks(blocks); v = roomFor(blocks, ringIndex(ring)); return LIZ_OK; });
+  return rc < 0 ? rc : v;
+}
+
+LIZ_API double liz_radius_for(int blocks) {
+  double v = 0;
+  const int rc = guard([&] { needBlocks(blocks); v = radiusOf(blocks); return LIZ_OK; });
+  return rc < 0 ? rc : v;
+}
+
+// ai: the symbol's width over the picture's (its quiet margin not counted), times 2.12 camera pixels a cycle of the radius
+LIZ_API double liz_camera_for(int blocks, int ring) {
+  double v = 0;
+  const int rc = guard([&] {
+    needBlocks(blocks);
+    const int r = ringIndex(ring);
+    v = double(modulesOf(r)) / spanOf(r) * T_CAMERA_CYCLE * radiusOf(blocks);
+    return LIZ_OK;
+  });
   return rc < 0 ? rc : v;
 }
 
@@ -106,7 +129,7 @@ LIZ_API int liz_pick(double w, double h, int codes, int ring, int top) {
     const int r = ringIndex(ring);
     const double gapFrac = codes > 1 ? (codes - 1) * double(LIZ_GAP_MODULES) / (modulesOf(r) + 2 * LIZARD_QUIET) : 0;
     const double room = std::max(64.0, std::min(w / (codes + gapFrac), h));
-    // ai: no room for even the smallest: LIZARD-64, as the web sender's pickVersion
+    // ai: no room for even the smallest: LIZARD-16
     int best = LIZ_MIN_BLOCKS;
     for (int b = LIZ_MIN_BLOCKS; b <= top; b++) if (roomFor(b, r) <= room) best = b;
     return best;

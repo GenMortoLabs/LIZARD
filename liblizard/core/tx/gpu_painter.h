@@ -1,8 +1,8 @@
 // ai: The sender's painter on the GPU (2026-10-02; the CPU's four painters already held 60 a second at LIZARD-1024 on
 // ai: the S26, about 1.5 cores busy): liblizard/gpu/encoder.mjs natively, on the app's Vulkan host (core/wg). Its
-// ai: kernels are the web's, compiled by liblizard/gen (gen/sender.mjs: out/spv/send_*.spv, setup/send.json); its
-// ai: tables the C's (send_tables.h). An encode is up to frames() frames' blocks in, one submission (paint, irows,
-// ai: ipic, rsv unless the taps are copies, rsh), their grey W x W pixels read back: on a phone's shared
+// ai: kernels are the web's, compiled by liblizard/gen from the recipes send_plan.h lists (out/spv/send_*.spv, their
+// ai: index setup/send.json); its tables the C's (send_tables.h). An encode is up to frames() frames' blocks in, one submission (paint, irows,
+// ai: ipic, rsh: the resample unless the taps are copies, else the border), their grey W x W pixels read back: on a phone's shared
 // ai: memory a copy, not a transfer. The square is within a grey level of the C's (the transform's rounding), the
 // ai: border the C's to the byte; check() holds a device to that, as the web's auto does before it takes the GPU
 // ai: (2026-09-29: a sender's symbol need only decode). The anchors' squares inside the square (SPEC 6.13) are the C's
@@ -21,9 +21,13 @@ namespace wg { struct Device; struct DeviceExtras; struct Buffer; struct BindGro
 
 namespace lizard {
 
+// ai: The tree's sender modules (setup/send.json, gen's index) held to this host's recipes (send_plan.h): throws
+// ai: std::runtime_error naming the first that differs (a tree another host's gen wrote), before any is loaded
+void checkSendTree(const std::string& assets);
+
 class GpuPainter {
  public:
-  // ai: assets: liblizard/out's tree as the app ships it (filesDir/lizard: setup/send.json, blobs/, spv/send_*.spv). The
+  // ai: assets: liblizard/out's tree as the app ships it (filesDir/lizard: setup/send.json, spv/send_*.spv). The
   // ai: device: the one named like `device` (a substring of its name), else LIZ_VK_DEVICE's, else the first discrete,
   // ai: else the first. Throws std::runtime_error saying why there is none.
   // ai: extras: what the host asks of the device beyond the kernels (the desktop presenter's surface and swapchain).
@@ -92,10 +96,10 @@ class GpuPainter {
   double finish(Pending& p);
   // ai: a ring slot's frame read back (width() x side() grey), a submission of its own, waited for (the checks')
   void readSlot(int slot, std::vector<uint8_t>& out);
-  // ai: LIZ_SEND_STAGES=1 (lab, 2026-11-24): each stage its own timestamp pair (paint, irows, ipic, rsv, rsh); the
+  // ai: LIZ_SEND_STAGES=1 (lab, 2026-11-24): each stage its own timestamp pair (paint, irows, ipic, rsh); the
   // ai: GPU ms each stage took since the last call, summed over the encodes finished, and those encodes' count
-  static constexpr int STAGES = 5;
-  static constexpr const char* STAGE_NAMES[STAGES] = {"paint", "irows", "ipic", "rsv", "rsh"};
+  static constexpr int STAGES = 4;
+  static constexpr const char* STAGE_NAMES[STAGES] = {"paint", "irows", "ipic", "rsh"};
   bool staged() const { return staged_; }
   std::array<double, STAGES> takeStageMs(int* encodes = nullptr) {
     auto r = stageMs_;
@@ -109,7 +113,11 @@ class GpuPainter {
   // ai: their ids alone (encode's test), the C from their bytes, so the device's stream is held to the library's too: the border's pixels equal, the square's
   // ai: within one grey level (gpu/encoder.mjs checkNow's rule), the anchors' squares' pixels equal: anchorPx compared,
   // ai: anchorDark of them 0 here (their dark rings: the anchors are there), anchorDiff apart.
-  struct Check { bool ok = false; long borderDiff = 0, squareDiff = 0, anchorPx = 0, anchorDark = 0, anchorDiff = 0; int squareMax = 0; };
+  // ai: check: count frames of the given blocks painted and held to the C's paint of them: the border and the anchors'
+  // ai: squares to the byte, and every symbol read blind by the C (cpu/codec.h) with all its blocks verified and its own;
+  // ai: the square need not be the C's (the GPU's arithmetic is its own: Y in halves, 2026-11-24), its pixels off the C
+  // ai: counted, the largest and the RMS in grey levels, for the record alone
+  struct Check { bool ok = false; long borderDiff = 0, squareDiff = 0, squarePx = 0, anchorPx = 0, anchorDark = 0, anchorDiff = 0, readBad = 0, readBlocks = 0; int squareMax = 0; double squareRms = 0; };
   Check check(const uint8_t* blocks, int count);
 
  private:
@@ -124,13 +132,13 @@ class GpuPainter {
   SendTables t_;
   int frames_ = 0, fps_ = 0, depth_ = 0;
   bool ringOnly_ = false;
-  std::shared_ptr<wg::BindGroupLayout> bglPaint_, bglIrows_, bglIpic_, bglIpicFrame_, bglRsv_, bglRsh_;
-  std::shared_ptr<wg::Pipeline> paint_, rsv_, rsh_, rshBorder_, irows_, ipic_, ipicFrame_;
+  std::shared_ptr<wg::BindGroupLayout> bglPaint_, bglIrows_, bglIpic_, bglIpicFrame_, bglRsh_;
+  std::shared_ptr<wg::Pipeline> paint_, rsh_, rshBorder_, irows_, ipic_, ipicFrame_;
   int pipesN_ = 0;
   std::shared_ptr<wg::Buffer> TAB_;   // ai: the paint's codes and whitening (send_tables.h SendConsts tab), made at create
   // ai: a configuration's buffers and groups
-  std::shared_ptr<wg::Buffer> BLOCKS_, UV_, S_, PU_, TW_, ROWS_, SU_, Y_, TMP_, PIC_, TAPS_, BORDER_, GU_, FRAME_, READ_;
-  std::shared_ptr<wg::BindGroup> gPaint_, gIrows_, gIpic_, gRsv_, gRsh_;
+  std::shared_ptr<wg::Buffer> BLOCKS_, INV_, SD_, PU_, TW_, ROWS_, SU_, Y_, PIC_, TAPS_, BORDER_, GU_, FRAME_, READ_;
+  std::shared_ptr<wg::BindGroup> gPaint_, gIrows_, gIpic_, gRsh_;
   // ai: each flight's timestamp queries and their readback (submit's, round robin)
   std::shared_ptr<wg::QuerySet> qs_[FLIGHTS_MAX];
   std::shared_ptr<wg::Buffer> time_[FLIGHTS_MAX];

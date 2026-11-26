@@ -1,9 +1,9 @@
 // ai: The transfer's receiving end with no thread of its own (2026-10-03, for the library, which runs it on the caller's
 // ai: thread and in a wasm build with no threads at all; xfer_rx.h is the app's threaded form over the same two parts):
-// ai:   XferRxCore  lizard-web/fountain-worker.mjs take (the live-header rule, the held ring) and sim/xfer.mjs XferReceiver
+// ai:   XferRxCore  the receiving end (the live-header rule, the held ring; the web's JS twin, fountain-worker.mjs and sim/xfer.mjs XferReceiver, until 2026-11-25)
 // ai:               (source block states, bans, a new transfer on a header with other bytes): CRC-verified blocks in, a file out,
 // ai:               each source block checked against the file's BLAKE3 root, kept in a Store (store.h: files or memory)
-// ai:   XferJudge   sim/phy.mjs blockJudge (a frame is the test stream's when a verified data block carries its id's
+// ai:   XferJudge   the web's blockJudge (sim/ob.mjs; a frame is the test stream's when a verified data block carries its id's
 // ai:               BLAKE3, and its other data blocks are then bad) and lizard-web/recv.mjs take (the dedupe: two rotating id
 // ai:               sets of 65,536, control ids always passed on, a test frame's blocks never; an id is its file's, by its
 // ai:               TOI, so nothing clears them but a Clear)
@@ -66,7 +66,7 @@ struct XferProgress {
   uint64_t length = 0;        // ai: the file's bytes
   uint32_t sourceBlocks = 0, verified = 0;
   std::vector<uint8_t> per;   // ai: each source block's share in hand, 0 to 99, 255 verified
-  double fraction = 0;        // ai: sim/xfer.mjs fractionDone: bytesIn over length, 0 to 1
+  double fraction = 0;        // ai: bytesIn over length, 0 to 1
   uint64_t bytesIn = 0;       // ai: the file's bytes in: a verified source block's all, another's blocks in hand to its length
   bool done = false;
   // ai: solving: source blocks whose K symbols are in, their solve waiting for a solver or running (with solvers; a source block
@@ -105,7 +105,8 @@ struct XferProgress {
 
 class XferRxCore {
  public:
-  // ai: solvers: threads that solve source blocks side by side (0: each on the caller's thread, inside block()); wake: called
+  // ai: solvers: threads that solve source blocks side by side, at most (each started with the first job it is needed for;
+  // ai: 0: each on the caller's thread, inside block()); wake: called
   // ai: from a solver's thread when a solve is done, so the caller's thread calls settle().
   XferRxCore(std::unique_ptr<Store> store, std::function<void(const std::string&)> log = nullptr, unsigned solvers = 0,
              std::function<void()> wake = nullptr);

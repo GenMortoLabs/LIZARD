@@ -11,7 +11,14 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { init as initRq, Encoder, Decoder } from "../sim/fountain.mjs";
 import { init as initZstd, compress, decompress } from "../sim/zstd.mjs";
-import { sameFile } from "../sim/xfer.mjs";
+// ai: two descriptions the same file (src/xfer.h xfer_same_file, through the wasm's _xfer_same_file_of)
+const sameFile = (M, a, b) => {
+  const pa = M._malloc(Math.max(1, a.length)), pb = M._malloc(Math.max(1, b.length));
+  M.HEAPU8.set(a, pa); M.HEAPU8.set(b, pb);
+  const r = M._xfer_same_file_of(pa, a.length, pb, b.length);
+  M._free(pa); M._free(pb);
+  return r === 1;
+};
 
 const M = await (await import(resolve(process.argv[2] ?? "build/ob.mjs"))).default();
 await initRq(); await initZstd();

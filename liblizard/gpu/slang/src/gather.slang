@@ -1,5 +1,5 @@
 // F5b's selection and F5c's quads, a workgroup a frame.
-// Defines (finder.mjs): CELL, CENTRE0, CENTRE1, GROUP, K, PEAK_LIST, RAY_HI, RAY_LO, RAY_SPREAD, RING_COUNT, SMIN.
+// Defines (core/dec/build.cpp Finder): CELL, CENTRE0, CENTRE1, GROUP, K, PEAK_LIST, RAY_HI, RAY_LO, RAY_SPREAD, RING_COUNT, SMIN.
 #include "lib/frame.slang"
 #include "lib/round.slang"
 #include "lib/convert.slang"

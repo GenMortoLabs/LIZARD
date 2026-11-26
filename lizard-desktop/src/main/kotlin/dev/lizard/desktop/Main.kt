@@ -46,12 +46,21 @@ fun main(args: Array<String>) {
     val given = args.drop(if (broadcast) 1 else 0).map { java.io.File(it).absoluteFile }.filter { it.exists() }
     val testing = sendTest != null || recvTest != null
     if (!testing && Instance.claim(given, broadcast)) return
+    // ai: the native library before the app's state: the format's numbers the screens start from are the C's, read
+    // ai: through it (liblizard/kotlin/Lib.kt Ladder), so without it there is no app to show: the reason in a dialog
+    val loadError = try { Native.load(); "" } catch (e: Throwable) { "Native library missing: ${e.message}" }
+    if (loadError.isNotEmpty()) {
+        System.err.println(loadError)
+        if (sendTest != null) SenderTest.fail(loadError)
+        if (recvTest != null) ReceiverTest.fail(loadError)
+        runCatching { javax.swing.JOptionPane.showMessageDialog(null, loadError, "LIZARD", javax.swing.JOptionPane.ERROR_MESSAGE) }
+        exitProcess(1)
+    }
     val app = App()
     val s = app.send
-    try { Native.load() } catch (e: Throwable) { app.loadError = "Native library missing: ${e.message}" }
     // ai: the launch's priority raised (native/priority.cpp) before the window's threads start, which inherit it;
     // ai: LIZ_PRIORITY=normal leaves it
-    if (app.loadError.isEmpty() && System.getenv("LIZ_PRIORITY") != "normal")
+    if (System.getenv("LIZ_PRIORITY") != "normal")
         runCatching { Native.raisePriority() }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { System.err.println("priority: $it") }
     sendTest?.apply(s)
     recvTest?.apply(app)

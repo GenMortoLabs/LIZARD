@@ -5,7 +5,7 @@
 // sub-channel's estimate (jinfo(A^2 / N), tblocks'), y its soft values' scale (0.7 x 2 sqrt(2 A^2) / N, tsoft's), w 1 /
 // N (talign's weight), each 0 where N is 0; tsoft writes y and z over with the two pilots' values. The moments made
 // once, on tsoft's grid (in talign's one workgroup a frame the 320 reads a sub-channel ran a lane's sub-channels one
-// after another, 0.4 ms a frame on the iGPU). Defines (back_tiers.mjs tnoiseSource): F16 (0 or 1), CHUNKS, SLOT_COUNT
+// after another, 0.4 ms a frame on the iGPU). Defines (core/dec/build.cpp backHalf): F16 (0 or 1), CHUNKS, SLOT_COUNT
 // (uint); lib/cfg.slang's.
 #if F16
 #define S_T half2
