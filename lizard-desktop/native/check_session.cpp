@@ -684,8 +684,13 @@ bool takesCase(Run& r) {
     return r.fail(c, "3: copied, but kept " + k.dump(), &log);
   done(s->stop(), why);
   if (!begin(*s, SCENE, fw, fh, why)) return r.fail(c, "3: another start: " + why, &log);
+  // ai: the store lets the copied file go at the start, on the session's thread: waited for (a CI runner took longer
+  // ai: than a fixed 300 ms), then 300 ms more in which it must not be taken again
+  for (const auto t3 = Clock::now(); since(t3) < 5 && !finishedIn(d3).empty();) sleepMs(50);
   sleepMs(300);
-  if (keptCount(d3) != 1 || !finishedIn(d3).empty()) return r.fail(c, "3: another start: " + std::to_string(keptCount(d3)) + " takes (one: not taken again)", &log);
+  if (keptCount(d3) != 1 || !finishedIn(d3).empty())
+    return r.fail(c, "3: another start: " + std::to_string(keptCount(d3)) + " takes (one: not taken again), " + std::to_string(finishedIn(d3).size()) +
+                         " finished files left in the store 5 s on (none: let go)", &log);
   s.reset();
   return r.ok(c, "refused into kept/ (\"" + refused + "\"), the file kept in the store and taken byte-equal at the next start; an empty take folder let go "
                  "at a start; left untaken by a session's end, kept through the next session's store open, taken by the session after; its move out "
