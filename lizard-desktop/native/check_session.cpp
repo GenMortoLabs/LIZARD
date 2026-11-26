@@ -734,7 +734,7 @@ bool partialCase(Run& r) {
 // ai: TOIs go: the same file is received again, as a second download of it is) and the camera started again, made
 // ai: again for 2:1 and back: a new transfer of it in the stats after each, not verified, the one take in kept/; back on
 // ai: 1:1 with the code in view the file comes whole a second time, byte-equal, its own take (two headers, two
-// ai: "verified" lines, the camera reading on).
+// ai: "verified" lines), and the camera stops for it as for the first.
 bool reconfigureCase(Run& r) {
   const char* c = "reconfigure";
   const fs::path src = randomFile(r.dir, "payload-1m.bin", 1'000'000, 2);
@@ -783,14 +783,21 @@ bool reconfigureCase(Run& r) {
   const auto t2 = Clock::now();
   while (since(t2) < 60 && keptCount(data) < 2) sleepMs(100);
   const double again = since(t2);
-  if (keptCount(data) != 2 || log.count(HEADER) != 2 || log.count(VERIFIED) != 2 || !s->streaming())
+  // ai: the camera stopped once the file is in again, as for the first take (the file case's rule)
+  json j = statsOf(*s);
+  for (const auto t3 = Clock::now(); since(t3) < 1 && (s->streaming() || text(j, "phase") != "idle");) {
+    sleepMs(50);
+    j = statsOf(*s);
+  }
+  if (keptCount(data) != 2 || log.count(HEADER) != 2 || log.count(VERIFIED) != 2 || s->streaming() || text(j, "phase") != "idle")
     return r.fail(c, "the file again after the restart and the reconfigures: " + std::to_string(keptCount(data)) + " takes, " + std::to_string(log.count(HEADER)) + " header lines, " +
-                         std::to_string(log.count(VERIFIED)) + " \"verified\" lines (two each: received again), " + (s->streaming() ? "streaming" : "not streaming"), &log);
+                         std::to_string(log.count(VERIFIED)) + " \"verified\" lines (two each: received again), the camera " +
+                         (s->streaming() ? "still streaming" : "stopped") + ", phase " + text(j, "phase"), &log);
   for (const std::string& take : keptPaths(data))
     if (slurp(fs::u8path(take)) != slurp(src)) return r.fail(c, take + " differs from the file sent", &log);
   return r.ok(c, fmt("%.0f", part * 100) + "% in on 1:1, then 2:1 for 1.5 s (the part kept, " + fmt("%.0f", kept * 100) + "%) and back: the transfer went on (one header, no resume), the file whole " +
                      fmt("%.1f", secs) + " s later, byte-equal in kept/; with the file in (its TOIs let go), started again, 2:1 and back: a new transfer each time, "
-                     "then the file whole again " + fmt("%.1f", again) + " s later, its own take, both byte-equal (simulated: " + spec.substr(0, spec.find(" file=")) + ", a 1,000,000 B file)");
+                     "then the file whole again " + fmt("%.1f", again) + " s later, its own take, both byte-equal, the camera stopped for it (simulated: " + spec.substr(0, spec.find(" file=")) + ", a 1,000,000 B file)");
 }
 
 // ai: a control's value as camera() last read it (NaN where the camera lists none)
